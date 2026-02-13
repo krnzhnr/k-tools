@@ -21,6 +21,7 @@ from app.scripts.metadata_cleaner import (
 from app.scripts.audio_converter import (
     AudioConverterScript,
 )
+from app.scripts.audio_speed_changer import AudioSpeedChangerScript
 from app.scripts.muxer import MuxerScript
 from app.ui.main_window import MainWindow
 
@@ -49,6 +50,7 @@ def _create_registry() -> ScriptRegistry:
     registry.register(MetadataCleanerScript())
     registry.register(ContainerConverterScript())
     registry.register(AudioConverterScript())
+    registry.register(AudioSpeedChangerScript())
     registry.register(MuxerScript())
 
     logger.info(
