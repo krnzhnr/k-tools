@@ -1,0 +1,487 @@
+# -*- coding: utf-8 -*-
+"""Рабочая панель — страница конкретного скрипта."""
+
+import logging
+from pathlib import Path
+from typing import Any
+
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtWidgets import (
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QLabel,
+)
+from qfluentwidgets import (
+    BodyLabel,
+    CaptionLabel,
+    CardWidget,
+    CheckBox,
+    ComboBox,
+    LineEdit,
+    PrimaryPushButton,
+    ProgressBar,
+    StrongBodyLabel,
+    SubtitleLabel,
+    FluentIcon,
+    InfoBar,
+    InfoBarPosition,
+    TextEdit,
+)
+
+from app.core.abstract_script import (
+    AbstractScript,
+    SettingField,
+    SettingType,
+)
+from app.ui.file_list_widget import FileListWidget
+from app.ui.muxing_table_widget import MuxingTableWidget
+
+logger = logging.getLogger(__name__)
+
+
+class ScriptWorker(QThread):
+    """Рабочий поток для выполнения скрипта.
+
+    Запускает скрипт в отдельном потоке, чтобы
+    не блокировать UI во время обработки.
+
+    Signals:
+        progress: (текущий, всего, сообщение).
+        finished: Список строк-результатов.
+        error: Текст ошибки.
+    """
+
+    progress = pyqtSignal(int, int, str)
+    finished = pyqtSignal(list)
+    error = pyqtSignal(str)
+
+    def __init__(
+        self,
+        script: AbstractScript,
+        files: list[Path],
+        settings: dict[str, Any],
+        parent: QWidget | None = None,
+    ) -> None:
+        """Инициализация рабочего потока.
+
+        Args:
+            script: Скрипт для выполнения.
+            files: Список файлов.
+            settings: Настройки скрипта.
+            parent: Родительский виджет.
+        """
+        super().__init__(parent)
+        self._script = script
+        self._files = files
+        self._settings = settings
+
+    def run(self) -> None:
+        """Выполнение скрипта в рабочем потоке."""
+        try:
+            results = self._script.execute(
+                files=self._files,
+                settings=self._settings,
+                progress_callback=self._on_progress,
+            )
+            self.finished.emit(results)
+        except Exception as exc:
+            logger.exception(
+                "Ошибка выполнения скрипта '%s'",
+                self._script.name,
+            )
+            self.error.emit(str(exc))
+
+    def _on_progress(
+        self,
+        current: int,
+        total: int,
+        message: str,
+    ) -> None:
+        """Callback прогресса выполнения.
+
+        Args:
+            current: Текущий обработанный файл.
+            total: Общее количество файлов.
+            message: Сообщение о статусе.
+        """
+        self.progress.emit(current, total, message)
+
+
+class ScriptPage(QWidget):
+    """Страница отдельного скрипта.
+
+    Содержит описание, настройки, список файлов,
+    прогресс-бар и кнопку выполнения.
+    """
+
+    def __init__(
+        self,
+        script: AbstractScript,
+        parent: QWidget | None = None,
+    ) -> None:
+        """Инициализация страницы скрипта.
+
+        Args:
+            script: Скрипт для отображения.
+            parent: Родительский виджет.
+        """
+        super().__init__(parent)
+        self._script = script
+        self._settings_widgets: dict[str, QWidget] = {}
+        self._settings_rows: dict[str, QWidget] = {}
+        self._worker: ScriptWorker | None = None
+
+        self._init_ui()
+        logger.info(
+            "Страница скрипта '%s' создана",
+            script.name,
+        )
+
+    def _init_ui(self) -> None:
+        """Инициализация пользовательского интерфейса."""
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(16)
+
+        # Заголовок и описание
+        self._add_header(layout)
+
+        # Настройки скрипта
+        if self._script.settings_schema:
+            self._add_settings(layout)
+
+        # Список файлов
+        self._add_file_list(layout)
+
+        # Лог выполнения
+        self._add_log_area(layout)
+
+        # Прогресс бар и кнопка
+        self._add_bottom_bar(layout)
+
+    def _add_header(self, layout: QVBoxLayout) -> None:
+        """Добавить заголовок и описание скрипта.
+
+        Args:
+            layout: Родительский layout.
+        """
+        title = SubtitleLabel(self._script.name, self)
+        layout.addWidget(title)
+
+        desc = BodyLabel(self._script.description, self)
+        desc.setWordWrap(True)
+        layout.addWidget(desc)
+
+    def _add_settings(self, layout: QVBoxLayout) -> None:
+        """Добавить секцию настроек скрипта.
+
+        Args:
+            layout: Родительский layout.
+        """
+        settings_card = CardWidget(self)
+        card_layout = QVBoxLayout(settings_card)
+        card_layout.setContentsMargins(16, 12, 16, 12)
+        card_layout.setSpacing(10)
+
+        settings_title = StrongBodyLabel(
+            "Настройки", settings_card
+        )
+        card_layout.addWidget(settings_title)
+
+        for field in self._script.settings_schema:
+            row_widget = QWidget(settings_card)
+            row_layout = QHBoxLayout(row_widget)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+
+            widget = self._create_setting_widget(
+                field, settings_card
+            )
+            self._settings_widgets[field.key] = widget
+
+            # Подключение сигналов для динамической видимости
+            if isinstance(widget, ComboBox):
+                widget.currentTextChanged.connect(
+                    lambda _: self._update_visibility()
+                )
+            elif isinstance(widget, CheckBox):
+                widget.stateChanged.connect(
+                    lambda _: self._update_visibility()
+                )
+
+            if field.setting_type == SettingType.CHECKBOX:
+                row_layout.addWidget(widget)
+            else:
+                label = BodyLabel(
+                    field.label, settings_card
+                )
+                label.setMinimumWidth(150)
+                row_layout.addWidget(label)
+                row_layout.addWidget(widget)
+
+            card_layout.addWidget(row_widget)
+            self._settings_rows[field.key] = row_widget
+
+        self._update_visibility()
+        layout.addWidget(settings_card)
+
+    def _create_setting_widget(
+        self,
+        field: SettingField,
+        parent: QWidget,
+    ) -> QWidget:
+        """Создать виджет настройки по типу поля.
+
+        Args:
+            field: Описание поля настройки.
+            parent: Родительский виджет.
+
+        Returns:
+            Виджет настройки.
+        """
+        if field.setting_type == SettingType.TEXT:
+            widget = LineEdit(parent)
+            widget.setText(str(field.default))
+            widget.setPlaceholderText(field.label)
+            return widget
+
+        if field.setting_type == SettingType.COMBO:
+            widget = ComboBox(parent)
+            widget.addItems(field.options)
+            if field.default in field.options:
+                widget.setCurrentText(str(field.default))
+            return widget
+
+        if field.setting_type == SettingType.CHECKBOX:
+            widget = CheckBox(field.label, parent)
+            widget.setChecked(bool(field.default))
+            return widget
+
+        # Fallback для неизвестных типов
+        widget = LineEdit(parent)
+        widget.setText(str(field.default))
+        return widget
+
+    def _update_visibility(self) -> None:
+        """Обновить видимость настроек."""
+        current_settings = self._get_current_settings()
+
+        for field in self._script.settings_schema:
+            if not field.visible_if:
+                continue
+
+            is_visible = True
+            for key, allowed_values in field.visible_if.items():
+                current_value = current_settings.get(key)
+                if current_value not in allowed_values:
+                    is_visible = False
+                    break
+
+            if row := self._settings_rows.get(field.key):
+                row.setVisible(is_visible)
+
+    def _add_file_list(self, layout: QVBoxLayout) -> None:
+        """Добавить секцию списка файлов.
+
+        Args:
+            layout: Родительский layout.
+        """
+        files_label = StrongBodyLabel("Файлы", self)
+        layout.addWidget(files_label)
+
+        if self._script.use_custom_widget and isinstance(self._script.name, str) and "Муксер" in self._script.name:
+            # TODO: Сделать более универсально, если появится другой кастомный виджет
+            self._file_list = MuxingTableWidget(self)
+        else:
+            self._file_list = FileListWidget(
+                allowed_extensions=(
+                    self._script.file_extensions
+                ),
+                parent=self,
+            )
+        
+        layout.addWidget(self._file_list, stretch=1)
+
+    def _add_log_area(self, layout: QVBoxLayout) -> None:
+        """Добавить область лога выполнения.
+
+        Args:
+            layout: Родительский layout.
+        """
+        log_label = StrongBodyLabel("Результат", self)
+        layout.addWidget(log_label)
+
+        self._log_area = TextEdit(self)
+        self._log_area.setReadOnly(True)
+        self._log_area.setMaximumHeight(100)
+        self._log_area.setPlaceholderText(
+            "Здесь появятся результаты выполнения..."
+        )
+        layout.addWidget(self._log_area)
+
+    def _add_bottom_bar(
+        self, layout: QVBoxLayout
+    ) -> None:
+        """Добавить прогресс-бар и кнопку выполнения.
+
+        Args:
+            layout: Родительский layout.
+        """
+        self._progress = ProgressBar(self)
+        self._progress.setVisible(False)
+        layout.addWidget(self._progress)
+
+        self._status_label = CaptionLabel("", self)
+        self._status_label.setVisible(False)
+        layout.addWidget(self._status_label)
+
+        self._execute_btn = PrimaryPushButton(
+            FluentIcon.PLAY,
+            "Выполнить",
+            self,
+        )
+        self._execute_btn.setMinimumHeight(38)
+        self._execute_btn.clicked.connect(
+            self._on_execute_clicked
+        )
+        layout.addWidget(self._execute_btn)
+
+    def _get_current_settings(self) -> dict[str, Any]:
+        """Собрать текущие значения настроек.
+
+        Returns:
+            Словарь {ключ: значение} настроек.
+        """
+        settings: dict[str, Any] = {}
+
+        for key, widget in self._settings_widgets.items():
+            if isinstance(widget, LineEdit):
+                settings[key] = widget.text()
+            elif isinstance(widget, ComboBox):
+                settings[key] = widget.currentText()
+            elif isinstance(widget, CheckBox):
+                settings[key] = widget.isChecked()
+            else:
+                settings[key] = ""
+
+        return settings
+
+    def _on_execute_clicked(self) -> None:
+        """Обработчик нажатия кнопки «Выполнить»."""
+        files = self._file_list.get_file_paths()
+
+        if not files:
+            InfoBar.warning(
+                title="Нет файлов",
+                content="Добавьте файлы для обработки",
+                parent=self,
+                position=InfoBarPosition.TOP,
+                duration=3000,
+            )
+            return
+
+        self._log_area.clear()
+        self._execute_btn.setEnabled(False)
+        self._progress.setVisible(True)
+        self._status_label.setVisible(True)
+        self._progress.setValue(0)
+
+        settings = self._get_current_settings()
+
+        logger.info(
+            "Запуск скрипта '%s' с %d файлом(ами)",
+            self._script.name,
+            len(files),
+        )
+
+        self._worker = ScriptWorker(
+            script=self._script,
+            files=files,
+            settings=settings,
+            parent=self,
+        )
+        self._worker.progress.connect(
+            self._on_progress
+        )
+        self._worker.finished.connect(
+            self._on_finished
+        )
+        self._worker.error.connect(
+            self._on_error
+        )
+        self._worker.start()
+
+    def _on_progress(
+        self,
+        current: int,
+        total: int,
+        message: str,
+    ) -> None:
+        """Обработка прогресса выполнения.
+
+        Args:
+            current: Текущий файл.
+            total: Всего файлов.
+            message: Сообщение о статусе.
+        """
+        percent = int((current / total) * 100)
+        self._progress.setValue(percent)
+        self._status_label.setText(
+            f"{current}/{total}: {message}"
+        )
+
+    def _on_finished(self, results: list[str]) -> None:
+        """Обработка завершения выполнения.
+
+        Args:
+            results: Список строк-результатов.
+        """
+        self._execute_btn.setEnabled(True)
+        self._progress.setValue(100)
+        self._log_area.setPlainText("\n".join(results))
+
+        success_count = len(
+            [r for r in results if r.startswith("✅")]
+        )
+        total = len(results)
+
+        InfoBar.success(
+            title="Выполнено",
+            content=(
+                f"Успешно: {success_count}/{total}"
+            ),
+            parent=self,
+            position=InfoBarPosition.TOP,
+            duration=4000,
+        )
+
+        logger.info(
+            "Скрипт '%s' завершён: %d/%d успешно",
+            self._script.name,
+            success_count,
+            total,
+        )
+
+    def _on_error(self, error_text: str) -> None:
+        """Обработка ошибки выполнения.
+
+        Args:
+            error_text: Текст ошибки.
+        """
+        self._execute_btn.setEnabled(True)
+        self._progress.setVisible(False)
+        self._status_label.setVisible(False)
+
+        InfoBar.error(
+            title="Ошибка",
+            content=error_text,
+            parent=self,
+            position=InfoBarPosition.TOP,
+            duration=5000,
+        )
+
+        logger.error(
+            "Ошибка выполнения скрипта '%s': %s",
+            self._script.name,
+            error_text,
+        )
