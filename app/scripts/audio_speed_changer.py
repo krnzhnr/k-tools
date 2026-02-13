@@ -92,22 +92,17 @@ class AudioSpeedChangerScript(AbstractScript):
         eac3to_args = []
         suffix = ""
 
-        if mode == "Slowdown (25.000 -> 23.976)":
+        if mode == "Slowdown (25.000 → 23.976)":
             eac3to_args.append("-slowdown")
             suffix = "_slowdown"
-        elif mode == "Speedup (23.976 -> 25.000)":
+        elif mode == "Speedup (23.976 → 25.000)":
             eac3to_args.append("-speedup")
             suffix = "_speedup"
-        elif mode == "Custom (24.000 -> 23.976)":
+        elif mode == "Custom (24.000 → 23.976)":
             eac3to_args.append("-24.000")
-            eac3to_args.append("-slowdown") # eac3to логика: -24.000 замедляет 24 до 23.976? 
-            # Согласно документации eac3to:
-            # -slowdown converts 25.000/24.000 -> 23.976
-            # Но если исходник 24.000, нужно ли указывать -24.000 явно?
-            # Обычно -slowdown достаточно, eac3to сам определяет.
-            # Но пользователь просил: -24.000 -slowdown
+            eac3to_args.append("-slowdown") 
             suffix = "_24_to_23"
-        elif mode == "Custom (25.000 -> 24.000)":
+        elif mode == "Custom (25.000 → 24.000)":
             eac3to_args.append("-25.000")
             eac3to_args.append("-changeTo24.000")
             suffix = "_25_to_24"
