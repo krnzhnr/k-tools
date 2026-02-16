@@ -7,7 +7,18 @@
 
 import logging
 import sys
+import os
 import ctypes
+from datetime import datetime
+
+# Регистрация AppUserModelID для корректного отображения иконки в таскбаре Windows
+# Это должно быть сделано ПЕРЕД созданием QApplication
+if sys.platform == 'win32':
+    try:
+        myappid = 'krnzhnr.ktools.app.v1'
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+    except Exception:
+        pass
 
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QIcon
@@ -15,24 +26,15 @@ from qfluentwidgets import setTheme, Theme
 
 from app.core.resource_utils import get_resource_path
 from app.core.script_registry import ScriptRegistry
-from app.scripts.container_converter import (
-    ContainerConverterScript,
-)
-from app.scripts.metadata_cleaner import (
-    MetadataCleanerScript,
-)
-from app.scripts.audio_converter import (
-    AudioConverterScript,
-)
+from app.scripts.container_converter import ContainerConverterScript
+from app.scripts.metadata_cleaner import MetadataCleanerScript
+from app.scripts.audio_converter import AudioConverterScript
 from app.scripts.audio_speed_changer import AudioSpeedChangerScript
 from app.scripts.muxer import MuxerScript
+from app.scripts.stream_manager import StreamManagerScript
 from app.ui.main_window import MainWindow
 
 logger = logging.getLogger(__name__)
-
-
-import os
-from datetime import datetime
 
 
 def _setup_logging() -> None:
@@ -82,6 +84,7 @@ def _create_registry() -> ScriptRegistry:
     registry.register(AudioConverterScript())
     registry.register(AudioSpeedChangerScript())
     registry.register(MuxerScript())
+    registry.register(StreamManagerScript())
 
     logger.info(
         "Зарегистрировано скриптов: %d",
@@ -92,13 +95,6 @@ def _create_registry() -> ScriptRegistry:
 
 def main() -> None:
     """Главная функция запуска приложения."""
-    # Регистрация AppUserModelID для корректного отображения иконки в таскбаре
-    myappid = 'krnzhnr.ktools.v1' # произвольная, но уникальная строка
-    try:
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
-    except Exception:
-        pass
-
     _setup_logging()
     logger.info("Запуск K-Tools")
 

@@ -5,7 +5,11 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import (
+    Qt,
+    QThread,
+    pyqtSignal,
+)
 from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -21,6 +25,7 @@ from qfluentwidgets import (
     LineEdit,
     PrimaryPushButton,
     ProgressBar,
+    SmoothScrollArea,
     StrongBodyLabel,
     SubtitleLabel,
     FluentIcon,
@@ -36,6 +41,7 @@ from app.core.abstract_script import (
 )
 from app.ui.file_list_widget import FileListWidget
 from app.ui.muxing_table_widget import MuxingTableWidget
+from app.ui.track_list_widget import TrackListWidget
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +137,7 @@ class ScriptPage(QWidget):
         self._settings_widgets: dict[str, QWidget] = {}
         self._settings_rows: dict[str, QWidget] = {}
         self._worker: ScriptWorker | None = None
+        self._track_widget: TrackListWidget | None = None
 
         self._init_ui()
         logger.info(
@@ -140,7 +147,22 @@ class ScriptPage(QWidget):
 
     def _init_ui(self) -> None:
         """Инициализация пользовательского интерфейса."""
-        layout = QVBoxLayout(self)
+        # Scroll area для прокрутки контента
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+
+        scroll = SmoothScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet(
+            "QScrollArea { background: transparent; "
+            "border: none; }"
+        )
+
+        container = QWidget()
+        container.setStyleSheet(
+            "background: transparent;"
+        )
+        layout = QVBoxLayout(container)
         layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(16)
 
@@ -159,6 +181,9 @@ class ScriptPage(QWidget):
 
         # Прогресс бар и кнопка
         self._add_bottom_bar(layout)
+
+        scroll.setWidget(container)
+        outer.addWidget(scroll)
 
     def _add_header(self, layout: QVBoxLayout) -> None:
         """Добавить заголовок и описание скрипта.
@@ -316,6 +341,37 @@ class ScriptPage(QWidget):
         if self._script.use_custom_widget and isinstance(self._script.name, str) and "Муксер" in self._script.name:
             # TODO: Сделать более универсально, если появится другой кастомный виджет
             self._file_list = MuxingTableWidget(self)
+        elif self._script.use_custom_widget and isinstance(self._script.name, str) and "поток" in self._script.name.lower():
+            # Скрипт управления потоками MKV
+            self._file_list = FileListWidget(
+                allowed_extensions=(
+                    self._script.file_extensions
+                ),
+                context_name=self._script.name,
+                parent=self,
+            )
+            layout.addWidget(self._file_list, stretch=1)
+
+            # Кнопка загрузки дорожек
+            self._load_tracks_btn = PrimaryPushButton(
+                FluentIcon.SYNC,
+                "Загрузить дорожки",
+                self,
+            )
+            self._load_tracks_btn.clicked.connect(
+                self._on_load_tracks_clicked
+            )
+            layout.addWidget(self._load_tracks_btn)
+
+            # Виджет-дерево дорожек
+            self._track_widget = TrackListWidget(self)
+            layout.addWidget(self._track_widget)
+
+            # При очистке списка файлов сбрасываем дерево дорожек
+            self._file_list.filesChanged.connect(
+                self._on_files_changed
+            )
+            return
         else:
             self._file_list = FileListWidget(
                 allowed_extensions=(
@@ -327,6 +383,39 @@ class ScriptPage(QWidget):
         
         layout.addWidget(self._file_list, stretch=1)
 
+    def _on_files_changed(self) -> None:
+        """Обработчик изменения списка файлов."""
+        if (
+            self._file_list is not None
+            and self._track_widget is not None
+        ):
+            # Синхронизируем дерево дорожек (удаляем ушедшие файлы)
+            self._track_widget.sync_with_files(
+                self._file_list.files
+            )
+
+    def _on_load_tracks_clicked(self) -> None:
+        """Обработчик кнопки «Загрузить дорожки»."""
+        if self._track_widget is None:
+            return
+        paths = self._file_list.get_file_paths()
+        if not paths:
+            InfoBar.warning(
+                title="Нет файлов",
+                content=(
+                    "Сначала добавьте MKV-файлы"
+                ),
+                parent=self,
+                position=InfoBarPosition.TOP,
+                duration=3000,
+            )
+            return
+        logger.info(
+            "[Управление потоками] Загрузка "
+            "дорожек для %d файлов",
+            len(paths),
+        )
+        self._track_widget.load_files(paths)
     def _add_log_area(self, layout: QVBoxLayout) -> None:
         """Добавить область лога выполнения.
 
@@ -420,6 +509,21 @@ class ScriptPage(QWidget):
         self._progress.setValue(0)
 
         settings = self._get_current_settings()
+
+        # Инъекция выбранных дорожек для скрипта потоков
+        if self._track_widget is not None:
+            per_file = (
+                self._track_widget
+                .get_selected_tracks_per_file()
+            )
+            settings["selected_tracks_per_file"] = (
+                per_file
+            )
+            logger.info(
+                "[Управление потоками] "
+                "Выбранные дорожки по файлам: %s",
+                per_file,
+            )
 
         logger.info(
             "Пользователь нажал кнопку 'Выполнить' для скрипта '%s'. "

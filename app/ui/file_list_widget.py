@@ -4,7 +4,7 @@
 import logging
 from pathlib import Path
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import QAbstractItemView, QListWidgetItem
 from qfluentwidgets import ListWidget, RoundMenu, Action, FluentIcon
 
@@ -18,6 +18,8 @@ class FileListWidget(ListWidget):
     фильтрует по допустимым расширениям и предоставляет
     контекстное меню для управления списком.
     """
+
+    filesChanged = pyqtSignal()
 
     PLACEHOLDER_TEXT = (
         "Перетащите файлы сюда\n"
@@ -119,6 +121,7 @@ class FileListWidget(ListWidget):
                 added_count += 1
         
         if added_count > 0:
+            self.filesChanged.emit()
             logger.info("[%s] В список успешно добавлено файлов (программно): %d", self._context_name, added_count)
         else:
             logger.warning("[%s] При попытке программного добавления ни один файл не прошел валидацию", self._context_name)
@@ -127,6 +130,7 @@ class FileListWidget(ListWidget):
         """Очистить список файлов."""
         self._file_paths.clear()
         self.clear()
+        self.filesChanged.emit()
         logger.info("[%s] Список файлов полностью очищен пользователем", self._context_name)
 
     def dragEnterEvent(self, event) -> None:
@@ -174,6 +178,7 @@ class FileListWidget(ListWidget):
                 self._context_name,
                 added_count,
             )
+            self.filesChanged.emit()
         else:
             logger.warning("[%s] Сброшенные файлы не прошли валидацию по расширению или не являются файлами", self._context_name)
         event.acceptProposedAction()
@@ -254,6 +259,9 @@ class FileListWidget(ListWidget):
                     self._context_name,
                     removed.name, row
                 )
+        
+        if selected_rows:
+            self.filesChanged.emit()
 
     def paintEvent(self, event) -> None:
         """Отрисовка placeholder-текста при пустом списке.
