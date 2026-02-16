@@ -17,11 +17,32 @@ class MockScript(AbstractScript):
     @property
     def settings_schema(self):
         return [SettingField("key", "Label", SettingType.TEXT)]
+    @property
+    def use_custom_widget(self):
+        return False
     
     def execute(self, files, settings, progress_callback=None):
         return ["Done"]
 
 # --- ScriptRegistry Tests ---
+
+def test_registry_empty():
+    registry = ScriptRegistry()
+    assert len(registry.scripts) == 0
+    assert len(registry) == 0
+
+def test_registry_registration():
+    registry = ScriptRegistry()
+    script = MockScript()
+    registry.register(script)
+    
+    assert len(registry) == 1
+    assert registry.scripts[0] == script
+    assert registry.find_by_name(script.name) == script
+
+def test_registry_get_nonexistent():
+    registry = ScriptRegistry()
+    assert registry.find_by_name("Unknown") is None
 
 def test_registry_register_and_get():
     registry = ScriptRegistry()

@@ -11,6 +11,7 @@ from app.core.abstract_script import (
     SettingField,
     SettingType,
 )
+from app.core.settings_manager import SettingsManager
 from app.infrastructure.ffmpeg_runner import FFmpegRunner
 
 logger = logging.getLogger(__name__)
@@ -99,59 +100,58 @@ class ContainerConverterScript(AbstractScript):
         delete_original = settings.get(
             "delete_original", False
         )
+        logger.info(
+            "Настройки конвертации: целевой контейнер=%s, удалять исходник=%s",
+            target_key, "ДА" if delete_original else "НЕТ"
+        )
         results: list[str] = []
         total = len(files)
 
         logger.info(
-            "Начало конвертации контейнера в %s: "
-            "%d файл(ов)",
-            target_key,
+            "Запуск конвертации контейнера для %d файл(ов) в формат %s",
             total,
+            target_key,
         )
 
         for idx, file_path in enumerate(files):
+            logger.info("Обработка файла [%d/%d]: '%s' (вход)", idx + 1, total, file_path.name)
             if file_path.suffix.lower() == target_ext:
                 msg = (
                     f"⏭ Пропущен (уже {target_key}): "
                     f"{file_path.name}"
                 )
                 results.append(msg)
-                logger.info(msg)
+                logger.info("Файл '%s' уже имеет расширение %s, пропуск", file_path.name, target_ext)
             else:
-                output_name = f"{file_path.stem}{target_ext}"
-                output_path = file_path.parent / output_name
+                output_path = file_path.with_suffix(target_ext)
+                logger.info("Формирование выходного пути: '%s'", output_path.name)
 
-                if output_path.exists():
-                    msg = (
-                        f"⏭ Пропущен (существует): "
-                        f"{output_name}"
-                    )
+                if output_path.exists() and not SettingsManager().overwrite_existing:
+                    msg = f"⏭ Пропущен (файл существует): {output_path.name}"
+                    logger.info("Пропуск: выходной файл '%s' уже существует", output_path.name)
                     results.append(msg)
-                    logger.info(msg)
+                    if progress_callback:
+                        progress_callback(idx + 1, total, msg)
+                    continue
+
+                logger.debug("Старт FFmpeg для смены контейнера (copy)")
+                success = self._ffmpeg.run(
+                    input_path=file_path,
+                    output_path=output_path,
+                    extra_args=["-c", "copy"],
+                )
+
+                if success:
+                    msg = f"✅ Конвертировано: {output_path.name}"
+                    logger.info("Успешная смена контейнера: '%s'", output_path.name)
+                    if delete_original:
+                        logger.info("Удаление оригинала: '%s'", file_path.name)
+                        self._delete_source(file_path, results)
                 else:
-                    success = self._ffmpeg.run(
-                        input_path=file_path,
-                        output_path=output_path,
-                        extra_args=["-c", "copy"],
-                    )
+                    msg = f"❌ Ошибка: {file_path.name}"
+                    logger.error("Ошибка при смене контейнера для файла: '%s'", file_path.name)
 
-                    if success:
-                        msg = (
-                            f"✅ Конвертировано: "
-                            f"{output_name}"
-                        )
-                        if delete_original:
-                            self._delete_source(
-                                file_path,
-                                results,
-                            )
-                    else:
-                        msg = (
-                            f"❌ Ошибка: "
-                            f"{file_path.name}"
-                        )
-
-                    results.append(msg)
+                results.append(msg)
 
             if progress_callback:
                 progress_callback(

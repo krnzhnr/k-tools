@@ -180,3 +180,7 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 /bin
+/setup_output
+/icons
+*.iss
+settings.ini

@@ -2,9 +2,11 @@
 """Модуль для запуска eac3to."""
 
 import logging
+import os
 import subprocess
 import shutil
 from pathlib import Path
+from app.core import path_utils
 
 logger = logging.getLogger(__name__)
 
@@ -14,30 +16,8 @@ class Eac3toRunner:
 
     def __init__(self):
         """Инициализация runner'а."""
-        self._executable = self._find_executable()
-
-    def _find_executable(self) -> Path | str:
-        """Найти исполняемый файл eac3to.
-        
-        Ищет в PATH и рядом с приложением.
-        """
-        # 1. Поиск в PATH
-        executable = shutil.which("eac3to")
-        if executable:
-            return executable
-
-        # 2. Поиск рядом с main.py (cwd)
-        local_path = Path("eac3to.exe")
-        if local_path.exists():
-            return local_path.absolute()
-            
-        # 3. Поиск в папке tools/ (если есть)
-        tools_path = Path("tools/eac3to.exe")
-        if tools_path.exists():
-            return tools_path.absolute()
-
-        # Если не найдено, возвращаем просто команду в надежде на чудо или кидаем ошибку при запуске
-        return "eac3to"
+        self._executable = path_utils.get_binary_path("eac3to")
+        logger.info("Eac3toRunner инициализирован. Путь к бинарнику: %s", self._executable)
 
     def run(self, args: list[str], cwd: Path | None = None) -> bool:
         """Запустить eac3to с аргументами.
@@ -52,19 +32,27 @@ class Eac3toRunner:
         cmd = [str(self._executable)] + [str(arg) for arg in args]
         cmd_str = " ".join(cmd)
         
-        logger.info(f"Запуск eac3to: {cmd_str}")
+        logger.info(f"Подготовка команды eac3to с {len(args)} аргументами")
+        logger.info(f"Выполнение команды eac3to: {cmd_str}")
+
+        # Подготовка окружения для загрузки DLL из папки bin
+        bin_dir = str(Path(self._executable).parent)
+        logger.debug("Рабочая директория eac3to: %s", bin_dir if not cwd else cwd)
+        env = os.environ.copy()
+        env["PATH"] = bin_dir + os.pathsep + env.get("PATH", "")
+        logger.debug("Переменная окружения PATH дополнена для eac3to")
 
         try:
             # eac3to пишет статус в stdout/stderr.
-            # Используем Popen для (потенциального) чтения вывода в реальном времени,
-            # но пока просто блокирующе.
             process = subprocess.run(
                 cmd,
-                cwd=cwd,
+                cwd=bin_dir if not cwd else cwd,
+                env=env,
                 capture_output=True,
                 text=True,
-                encoding="utf-8", # eac3to может быть капризным с кодировкой, но попробуем utf-8
-                errors="replace"
+                encoding="utf-8",
+                errors="replace",
+                creationflags=subprocess.CREATE_NO_WINDOW,
             )
 
             if process.returncode != 0:

@@ -2,8 +2,10 @@
 """Обёртка для запуска FFmpeg через subprocess."""
 
 import logging
+import os
 import subprocess
 from pathlib import Path
+from app.core import path_utils
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +17,10 @@ class FFmpegRunner:
     запуск процесса и обработку ошибок.
     """
 
-    FFMPEG_BINARY = "ffmpeg"
+    def __init__(self) -> None:
+        """Инициализация runner'а."""
+        self._ffmpeg_path = path_utils.get_binary_path("ffmpeg")
+        logger.info("FFmpegRunner инициализирован. Путь к бинарнику: %s", self._ffmpeg_path)
 
     def run(
         self,
@@ -33,10 +38,22 @@ class FFmpegRunner:
         Returns:
             True при успешном завершении, False при ошибке.
         """
+        from app.core.settings_manager import SettingsManager
+        
+        overwrite = SettingsManager().overwrite_existing
+        overwrite_flag = "-y" if overwrite else "-n"
+        logger.info(
+            "Подготовка команды FFmpeg. Файл на входе: '%s', файл на выходе: '%s'. "
+            "Режим перезаписи: %s (флаг: %s)",
+            input_path.name, output_path.name, 
+            "ВКЛ" if overwrite else "ВЫКЛ", overwrite_flag
+        )
+
         cmd = [
-            self.FFMPEG_BINARY,
+            self._ffmpeg_path,
             "-hide_banner",
             "-loglevel", "error",
+            overwrite_flag,
             "-i", str(input_path),
         ]
 
@@ -46,16 +63,27 @@ class FFmpegRunner:
         cmd.append(str(output_path))
 
         logger.info(
-            "Запуск FFmpeg: %s",
+            "Выполнение команды FFmpeg: %s",
             " ".join(cmd),
         )
+
+        # Подготовка окружения для загрузки DLL из папки bin
+        bin_dir = str(Path(self._ffmpeg_path).parent)
+        logger.debug("Рабочая директория процесса: %s", bin_dir)
+        env = os.environ.copy()
+        env["PATH"] = bin_dir + os.pathsep + env.get("PATH", "")
+        logger.debug("Переменная окружения PATH дополнена путем к бинарнику")
 
         try:
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 check=False,
+                cwd=bin_dir,
+                env=env,
                 creationflags=subprocess.CREATE_NO_WINDOW,
             )
 

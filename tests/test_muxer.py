@@ -70,6 +70,9 @@ def test_muxer_skip_existing(mocker, temp_dir):
     mocker.patch("pathlib.Path.exists", return_value=True) # Output exists
     mocker.patch("pathlib.Path.mkdir")
     
+    # Принудительно выключаем перезапись для теста пропуска
+    mocker.patch("app.core.settings_manager.SettingsManager.overwrite_existing", new_callable=mocker.PropertyMock, return_value=False)
+    
     results = script.execute(files, {})
     
     assert len(results) == 1

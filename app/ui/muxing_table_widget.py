@@ -216,7 +216,8 @@ class MuxingTableWidget(QTableWidget):
             if not file_path.is_file():
                 continue
 
-            stem = file_path.stem
+            # Улучшенное получение stem (до первой точки) для поддержки .rus.srt и т.д.
+            stem = file_path.name.split('.')[0]
             ext = file_path.suffix.lower()
 
             # Определение типа файла
@@ -268,7 +269,7 @@ class MuxingTableWidget(QTableWidget):
                 if item:
                     path_str = item.data(Qt.ItemDataRole.UserRole)
                     if path_str:
-                        path_stem = Path(path_str).stem
+                        path_stem = Path(path_str).name.split('.')[0]
                         if path_stem == stem:
                             return row
         return None

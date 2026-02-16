@@ -11,6 +11,7 @@ from app.core.abstract_script import (
     SettingField,
     SettingType,
 )
+from app.core.settings_manager import SettingsManager
 from app.infrastructure.ffmpeg_runner import FFmpegRunner
 
 logger = logging.getLogger(__name__)
@@ -77,7 +78,7 @@ class AudioConverterScript(AbstractScript):
         return [
             ".mp3", ".flac", ".wav", ".m4a", ".ogg",
             ".wma", ".aiff", ".alac", ".ape", ".opus",
-            ".ac3", ".eac3", ".dts", ".wv"
+            ".ac3", ".eac3", ".dts", ".wv", ".aac"
         ]
 
     @property
@@ -149,60 +150,61 @@ class AudioConverterScript(AbstractScript):
             "delete_original", False
         )
 
+        logger.info(
+            "Настройки аудио-конвертации: формат=%s, кодек=%s, битрейт=%s, сжатие=%s, удалять исходник=%s",
+            target_fmt_key, codec, bitrate, compression, "ДА" if delete_original else "НЕТ"
+        )
+
         results: list[str] = []
         total = len(files)
 
         logger.info(
-            "Начало конвертации в %s: %d файл(ов)",
-            target_fmt_key,
+            "Запуск аудио-конвертации для %d файл(ов) в формат %s",
             total,
+            target_fmt_key,
         )
 
         for idx, file_path in enumerate(files):
+            logger.info("Обработка аудио-файла [%d/%d]: '%s' (вход)", idx + 1, total, file_path.name)
             # Пропускаем, если файл уже в целевом формате
             if file_path.suffix.lower() == target_ext and \
                target_fmt_key not in LOSSY_FORMATS:
-                 # Для lossy можем захотеть пережать,
-                 # но для простоты пропустим если расширение совпадает
-                 # Можно улучшить логику позже
                  if file_path.suffix.lower() == target_ext:
                     msg = (
                         f"⏭ Пропущен (уже {target_fmt_key}): "
                         f"{file_path.name}"
                     )
                     results.append(msg)
-                    logger.info(msg)
+                    logger.info("Файл '%s' уже имеет формат %s, пропуск", file_path.name, target_fmt_key)
                     continue
 
-            output_name = f"{file_path.stem}{target_ext}"
-            output_path = file_path.parent / output_name
-
-            if output_path.exists():
-                msg = (
-                    f"⏭ Пропущен (файл существует): "
-                    f"{output_name}"
-                )
+            output_path = file_path.with_suffix(target_ext)
+            logger.debug("Целевой путь: '%s'", output_path.name)
+            
+            if output_path.exists() and not SettingsManager().overwrite_existing:
+                msg = f"⏭ Пропущен (файл существует): {output_path.name}"
+                logger.info("Пропуск: выходной файл '%s' уже существует", output_path.name)
                 results.append(msg)
-                logger.info(msg)
+                if progress_callback:
+                    progress_callback(idx + 1, total, msg)
+                continue
             else:
                 # Формируем аргументы в зависимости от формата
                 extra_args = ["-c:a", codec, "-map_metadata", "-1"]
 
                 if target_fmt_key in LOSSLESS_COMPRESSED:
-                    # FLAC, WavPack используют -compression_level
                     extra_args.extend([
                         "-compression_level", str(compression)
                     ])
                 elif target_fmt_key in LOSSY_FORMATS:
-                    # Большинство lossy используют -b:a
                     extra_args.extend([
                         "-b:a", bitrate
                     ])
                 
-                # DTS кодер (dca) является экспериментальным
                 if target_fmt_key == "DTS":
                     extra_args.extend(["-strict", "-2"])
 
+                logger.debug("Вызов FFmpeg для конвертации аудио")
                 success = self._ffmpeg.run(
                     input_path=file_path,
                     output_path=output_path,
@@ -210,11 +212,10 @@ class AudioConverterScript(AbstractScript):
                 )
 
                 if success:
-                    msg = (
-                        f"✅ Конвертировано: "
-                        f"{output_name}"
-                    )
+                    msg = f"✅ Конвертировано: {output_path.name}"
+                    logger.info("Успешная конвертация: '%s'", output_path.name)
                     if delete_original:
+                        logger.info("Удаление исходника: '%s'", file_path.name)
                         self._delete_source(
                             file_path,
                             results,
@@ -224,6 +225,7 @@ class AudioConverterScript(AbstractScript):
                         f"❌ Ошибка: "
                         f"{file_path.name}"
                     )
+                    logger.error("Ошибка при конвертации аудио для файла: '%s'", file_path.name)
 
                 results.append(msg)
 
@@ -234,9 +236,10 @@ class AudioConverterScript(AbstractScript):
                     results[-1],
                 )
 
+        success_count = len([r for r in results if r.startswith("✅")])
         logger.info(
-            "Конвертация завершена: %d/%d",
-            len([r for r in results if r.startswith("✅")]),
+            "Процесс аудио-конвертации завершен. Итог: %d успешно, %d всего",
+            success_count,
             total,
         )
 

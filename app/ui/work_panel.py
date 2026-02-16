@@ -243,6 +243,14 @@ class ScriptPage(QWidget):
             widget = LineEdit(parent)
             widget.setText(str(field.default))
             widget.setPlaceholderText(field.label)
+            
+            # Логирование изменения текстового поля
+            widget.textChanged.connect(
+                lambda text: logger.info(
+                    "[%s] Настройка '%s' (%s) изменена пользователем: '%s'",
+                    self._script.name, field.label, field.key, text
+                )
+            )
             return widget
 
         if field.setting_type == SettingType.COMBO:
@@ -250,11 +258,27 @@ class ScriptPage(QWidget):
             widget.addItems(field.options)
             if field.default in field.options:
                 widget.setCurrentText(str(field.default))
+            
+            # Логирование изменения комбобокса
+            widget.currentTextChanged.connect(
+                lambda text: logger.info(
+                    "[%s] Настройка '%s' (%s) изменена пользователем на: '%s'",
+                    self._script.name, field.label, field.key, text
+                )
+            )
             return widget
 
         if field.setting_type == SettingType.CHECKBOX:
             widget = CheckBox(field.label, parent)
             widget.setChecked(bool(field.default))
+            
+            # Логирование изменения чекбокса
+            widget.stateChanged.connect(
+                lambda state: logger.info(
+                    "[%s] Настройка '%s' (%s) изменена пользователем на: %s",
+                    self._script.name, field.label, field.key, "ВКЛ" if state else "ВЫКЛ"
+                )
+            )
             return widget
 
         # Fallback для неизвестных типов
@@ -297,6 +321,7 @@ class ScriptPage(QWidget):
                 allowed_extensions=(
                     self._script.file_extensions
                 ),
+                context_name=self._script.name,
                 parent=self,
             )
         
@@ -346,6 +371,14 @@ class ScriptPage(QWidget):
         )
         layout.addWidget(self._execute_btn)
 
+    def get_settings(self) -> dict[str, Any]:
+        """Получить текущие значения настроек со страницы.
+
+        Returns:
+            Словарь {ключ: значение} настроек.
+        """
+        return self._get_current_settings()
+
     def _get_current_settings(self) -> dict[str, Any]:
         """Собрать текущие значения настроек.
 
@@ -389,9 +422,11 @@ class ScriptPage(QWidget):
         settings = self._get_current_settings()
 
         logger.info(
-            "Запуск скрипта '%s' с %d файлом(ами)",
+            "Пользователь нажал кнопку 'Выполнить' для скрипта '%s'. "
+            "Количество файлов в очереди: %d. Текущие настройки: %s",
             self._script.name,
             len(files),
+            settings
         )
 
         self._worker = ScriptWorker(
@@ -425,6 +460,14 @@ class ScriptPage(QWidget):
             message: Сообщение о статусе.
         """
         percent = int((current / total) * 100)
+        logger.info(
+            "Прогресс выполнения скрипта '%s': %d%% (%d/%d). Статус: %s",
+            self._script.name,
+            percent,
+            current,
+            total,
+            message
+        )
         self._progress.setValue(percent)
         self._status_label.setText(
             f"{current}/{total}: {message}"
@@ -440,26 +483,50 @@ class ScriptPage(QWidget):
         self._progress.setValue(100)
         self._log_area.setPlainText("\n".join(results))
 
-        success_count = len(
-            [r for r in results if r.startswith("✅")]
-        )
+        success_count = len([r for r in results if r.startswith("✅")])
+        skipped_count = len([r for r in results if r.startswith("⏭")])
+        error_count = len([r for r in results if r.startswith("❌")])
         total = len(results)
 
-        InfoBar.success(
-            title="Выполнено",
-            content=(
-                f"Успешно: {success_count}/{total}"
-            ),
+        # Подготовка сообщения
+        stats = []
+        if success_count:
+            stats.append(f"Успешно: {success_count}")
+        if skipped_count:
+            stats.append(f"Пропущено: {skipped_count}")
+        if error_count:
+            stats.append(f"Ошибок: {error_count}")
+        
+        content = ", ".join(stats) if stats else "Результатов нет"
+
+        # Выбор типа уведомления и заголовка
+        if error_count > 0:
+            show_info = InfoBar.error
+            title = "Завершено с ошибками"
+        elif success_count == 0 and skipped_count > 0:
+            show_info = InfoBar.warning
+            title = "Обработка пропущена"
+        elif skipped_count > 0:
+            show_info = InfoBar.warning
+            title = "Выполнено частично"
+        else:
+            show_info = InfoBar.success
+            title = "Выполнено"
+
+        show_info(
+            title=title,
+            content=content,
             parent=self,
             position=InfoBarPosition.TOP,
-            duration=4000,
+            duration=5000,
         )
 
         logger.info(
-            "Скрипт '%s' завершён: %d/%d успешно",
+            "Скрипт '%s' завершён: %d успешно, %d пропущено, %d ошибок",
             self._script.name,
             success_count,
-            total,
+            skipped_count,
+            error_count,
         )
 
     def _on_error(self, error_text: str) -> None:

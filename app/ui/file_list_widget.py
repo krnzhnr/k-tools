@@ -27,27 +27,31 @@ class FileListWidget(ListWidget):
     def __init__(
         self,
         allowed_extensions: list[str] | None = None,
+        context_name: str = "Неизвестный скрипт",
         parent=None,
     ) -> None:
         """Инициализация виджета списка файлов.
 
         Args:
             allowed_extensions: Допустимые расширения.
+            context_name: Имя контекста (скрипта) для логирования.
             parent: Родительский виджет.
         """
         super().__init__(parent)
         self._allowed_extensions: list[str] = (
             allowed_extensions or []
         )
+        self._context_name = context_name
         self._file_paths: list[Path] = []
 
         self._setup_drag_drop()
         self._setup_context_menu()
 
         logger.info(
-            "Виджет списка файлов создан "
-            "(расширения: %s)",
-            self._allowed_extensions,
+            "[%s] Виджет списка файлов успешно инициализирован. "
+            "Список допустимых расширений: %s",
+            self._context_name,
+            self._allowed_extensions if self._allowed_extensions else "все файлы",
         )
 
     def _setup_drag_drop(self) -> None:
@@ -79,8 +83,9 @@ class FileListWidget(ListWidget):
             ext.lower() for ext in extensions
         ]
         logger.info(
-            "Обновлены допустимые расширения: %s",
-            self._allowed_extensions,
+            "[%s] Фильтр расширений обновлен пользователем: %s",
+            self._context_name,
+            self._allowed_extensions if self._allowed_extensions else "все файлы",
         )
 
     def get_file_paths(self) -> list[Path]:
@@ -91,11 +96,38 @@ class FileListWidget(ListWidget):
         """
         return list(self._file_paths)
 
+    @property
+    def files(self) -> list[Path]:
+        """Список путей к добавленным файлам.
+
+        Returns:
+            Копия списка путей к файлам.
+        """
+        return list(self._file_paths)
+
+    def add_files(self, paths: list[str | Path]) -> None:
+        """Программно добавить файлы в список.
+
+        Args:
+            paths: Список путей к файлам.
+        """
+        added_count = 0
+        for p in paths:
+            file_path = Path(p)
+            if self._is_valid_file(file_path):
+                self._add_file(file_path)
+                added_count += 1
+        
+        if added_count > 0:
+            logger.info("[%s] В список успешно добавлено файлов (программно): %d", self._context_name, added_count)
+        else:
+            logger.warning("[%s] При попытке программного добавления ни один файл не прошел валидацию", self._context_name)
+
     def clear_files(self) -> None:
         """Очистить список файлов."""
         self._file_paths.clear()
         self.clear()
-        logger.info("Список файлов очищен")
+        logger.info("[%s] Список файлов полностью очищен пользователем", self._context_name)
 
     def dragEnterEvent(self, event) -> None:
         """Обработка входа перетаскивания.
@@ -136,10 +168,14 @@ class FileListWidget(ListWidget):
                 self._add_file(file_path)
                 added_count += 1
 
-        logger.info(
-            "Добавлено файлов через drag-n-drop: %d",
-            added_count,
-        )
+        if added_count > 0:
+            logger.info(
+                "[%s] Успешно добавлено файлов через drag-n-drop: %d",
+                self._context_name,
+                added_count,
+            )
+        else:
+            logger.warning("[%s] Сброшенные файлы не прошли валидацию по расширению или не являются файлами", self._context_name)
         event.acceptProposedAction()
 
     def _is_valid_file(self, path: Path) -> bool:
@@ -166,8 +202,8 @@ class FileListWidget(ListWidget):
             path: Путь к файлу.
         """
         if path in self._file_paths:
-            logger.debug(
-                "Файл уже в списке: %s", path.name
+            logger.info(
+                "[%s] Файл пропущен (уже есть в списке): %s", self._context_name, path.name
             )
             return
 
@@ -175,7 +211,7 @@ class FileListWidget(ListWidget):
         item = QListWidgetItem(path.name)
         item.setToolTip(str(path))
         self.addItem(item)
-        logger.debug("Файл добавлен: %s", path.name)
+        logger.info("[%s] Новый файл успешно добавлен в список: %s (путь: %s)", self._context_name, path.name, path)
 
     def _show_context_menu(self, position) -> None:
         """Показать контекстное меню.
@@ -214,8 +250,9 @@ class FileListWidget(ListWidget):
                 removed = self._file_paths.pop(row)
                 self.takeItem(row)
                 logger.info(
-                    "Файл удалён из списка: %s",
-                    removed.name,
+                    "[%s] Пользователь удалил файл из списка: %s (индекс: %d)",
+                    self._context_name,
+                    removed.name, row
                 )
 
     def paintEvent(self, event) -> None:

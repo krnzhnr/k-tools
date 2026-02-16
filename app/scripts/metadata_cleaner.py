@@ -11,6 +11,7 @@ from app.core.abstract_script import (
     SettingField,
     SettingType,
 )
+from app.core.settings_manager import SettingsManager
 from app.infrastructure.ffmpeg_runner import FFmpegRunner
 
 logger = logging.getLogger(__name__)
@@ -89,11 +90,15 @@ class MetadataCleanerScript(AbstractScript):
         delete_original = settings.get(
             "delete_original", False
         )
+        logger.info(
+            "Получены настройки скрипта: суффикс='%s', удалять исходник=%s",
+            suffix, "ДА" if delete_original else "НЕТ"
+        )
         results: list[str] = []
         total = len(files)
 
         logger.info(
-            "Начало очистки метаданных: %d файл(ов)",
+            "Запуск процесса очистки метаданных для %d файл(ов)",
             total,
         )
 
@@ -102,12 +107,17 @@ class MetadataCleanerScript(AbstractScript):
                 f"{file_path.stem}{suffix}{file_path.suffix}"
             )
             output_path = file_path.parent / output_name
+            logger.info("Обработка файла [%d/%d]: '%s' -> '%s'", idx + 1, total, file_path.name, output_name)
 
-            if output_path.exists():
-                msg = f"⏭ Пропущен (уже существует): {output_name}"
+            if output_path.exists() and not SettingsManager().overwrite_existing:
+                msg = f"⏭ Пропущен (файл существует): {output_name}"
+                logger.info("Пропуск файла '%s': выходной файл уже существует и перезапись отключена", file_path.name)
                 results.append(msg)
-                logger.info(msg)
+                if progress_callback:
+                    progress_callback(idx + 1, total, msg)
+                continue
             else:
+                logger.debug("Вызов FFmpeg для удаления метаданных")
                 success = self._ffmpeg.run(
                     input_path=file_path,
                     output_path=output_path,
@@ -120,12 +130,15 @@ class MetadataCleanerScript(AbstractScript):
 
                 if success:
                     msg = f"✅ Очищены метаданные: {output_name}"
+                    logger.info("Успешно очищены метаданные для файла: '%s'", output_name)
                     if delete_original:
+                        logger.info("Запрошено удаление исходного файла: '%s'", file_path.name)
                         self._delete_source(
                             file_path, results
                         )
                 else:
                     msg = f"❌ Ошибка обработки: {file_path.name}"
+                    logger.error("Не удалось очистить метаданные для файла: '%s'", file_path.name)
 
                 results.append(msg)
 
@@ -136,9 +149,10 @@ class MetadataCleanerScript(AbstractScript):
                     results[-1],
                 )
 
+        success_count = len([r for r in results if r.startswith("✅")])
         logger.info(
-            "Очистка метаданных завершена: %d/%d",
-            len([r for r in results if r.startswith("✅")]),
+            "Весь процесс очистки метаданных завершен. Итог: %d успешно, %d всего",
+            success_count,
             total,
         )
 

@@ -52,6 +52,20 @@ class ScriptRegistry:
         """
         return self._scripts[index]
 
+    def find_by_name(self, name: str) -> AbstractScript | None:
+        """Найти скрипт по его имени.
+
+        Args:
+            name: Имя скрипта для поиска.
+
+        Returns:
+            Экземпляр скрипта или None, если не найден.
+        """
+        for script in self._scripts:
+            if script.name == name:
+                return script
+        return None
+
     def __len__(self) -> int:
         """Количество зарегистрированных скриптов."""
         return len(self._scripts)

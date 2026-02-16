@@ -2,10 +2,13 @@
 """Модуль для запуска mkvmerge (MKVToolNix)."""
 
 import logging
+import os
 import subprocess
 import shutil
 from pathlib import Path
 from typing import Any
+
+from app.core import path_utils
 
 logger = logging.getLogger(__name__)
 
@@ -15,30 +18,8 @@ class MKVMergeRunner:
 
     def __init__(self) -> None:
         """Инициализация runner'а."""
-        self._mkvmerge_path = self._find_mkvmerge()
-
-    def _find_mkvmerge(self) -> str:
-        """Найти исполняемый файл mkvmerge.
-
-        Returns:
-            Путь к mkvmerge или 'mkvmerge' если не найден.
-        """
-        # 1. Проверяем PATH
-        if shutil.which("mkvmerge"):
-            return "mkvmerge"
-
-        # 2. Проверяем стандартные пути установки Windows
-        common_paths = [
-            Path(r"C:\Program Files\MKVToolNix\mkvmerge.exe"),
-            Path(r"C:\Program Files (x86)\MKVToolNix\mkvmerge.exe"),
-        ]
-
-        for path in common_paths:
-            if path.exists():
-                return str(path)
-
-        # 3. Дефолт
-        return "mkvmerge"
+        self._mkvmerge_path = path_utils.get_binary_path("mkvmerge")
+        logger.info("MKVMergeRunner инициализирован. Путь к бинарнику: %s", self._mkvmerge_path)
 
     def run(
         self,
@@ -71,16 +52,30 @@ class MKVMergeRunner:
                 cmd.extend(inp["args"])
             cmd.append(str(inp["path"]))
 
-        logger.info("Запуск mkvmerge: %s", " ".join(cmd))
+        logger.info(
+            "Подготовка команды mkvmerge. Выходной файл: '%s'. Количество входов: %d. Глобальный заголовок: '%s'",
+            output_path.name, len(inputs), title or "нет"
+        )
+        logger.info("Выполнение команды mkvmerge: %s", " ".join(cmd))
+
+        # Подготовка окружения для загрузки DLL из папки bin
+        bin_dir = str(Path(self._mkvmerge_path).parent)
+        logger.debug("Рабочая директория mkvmerge: %s", bin_dir)
+        env = os.environ.copy()
+        env["PATH"] = bin_dir + os.pathsep + env.get("PATH", "")
+        logger.debug("Переменная окружения PATH дополнена для mkvmerge")
 
         try:
             # mkvmerge возвращает 0 (ок), 1 (warning), 2 (error)
             process = subprocess.run(
                 cmd,
+                cwd=bin_dir,
+                env=env,
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
+                creationflags=subprocess.CREATE_NO_WINDOW,
             )
 
             if process.returncode <= 1:

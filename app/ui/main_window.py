@@ -3,6 +3,7 @@
 
 import logging
 
+from PyQt6.QtGui import QIcon
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtWidgets import QApplication
 from qfluentwidgets import (
@@ -15,7 +16,9 @@ from qfluentwidgets import (
 
 from app.core.abstract_script import AbstractScript
 from app.core.script_registry import ScriptRegistry
+from app.core.resource_utils import get_resource_path
 from app.ui.work_panel import ScriptPage
+from app.ui.settings_page import SettingsPage
 
 logger = logging.getLogger(__name__)
 
@@ -47,15 +50,18 @@ class MainWindow(FluentWindow):
         self._setup_navigation()
 
         logger.info(
-            "Главное окно создано с %d скриптами",
+            "Главное окно инициализируется с %d скриптами в реестре",
             len(registry),
         )
 
     def _setup_window(self) -> None:
         """Настройка параметров окна."""
         self.setWindowTitle("K-Tools")
-        self.setMinimumSize(
-            QSize(self.WINDOW_WIDTH, self.WINDOW_HEIGHT)
+        icon_path = get_resource_path("app_icon.ico")
+        self.setWindowIcon(QIcon(icon_path))
+        logger.info(
+            "Установлен минимальный размер окна: %dx%d",
+            self.WINDOW_WIDTH, self.WINDOW_HEIGHT
         )
         self.resize(self.WINDOW_WIDTH, self.WINDOW_HEIGHT)
 
@@ -72,6 +78,13 @@ class MainWindow(FluentWindow):
                 // 2
             )
             self.move(x, y)
+            logger.info("Окно центрировано на экране в позиции (%d, %d)", x, y)
+
+    def resizeEvent(self, event) -> None:
+        """Логирование изменения размера окна."""
+        super().resizeEvent(event)
+        size = event.size()
+        logger.info("Размер окна изменен пользователем: %dx%d", size.width(), size.height())
 
 
 
@@ -92,10 +105,27 @@ class MainWindow(FluentWindow):
                 text=script.name,
             )
 
+        # Добавление страницы настроек вниз
+        self._settings_page = SettingsPage(self)
+        self.addSubInterface(
+            interface=self._settings_page,
+            icon=FluentIcon.SETTING,
+            text="Настройки",
+            position=NavigationItemPosition.BOTTOM
+        )
+
+        self.stackedWidget.currentChanged.connect(self._on_current_page_changed)
+
         logger.info(
-            "Навигация настроена: %d элементов",
+            "Навигационная панель успешно настроена. Всего элементов: %d (скрипты) + 1 (настройки)",
             len(self._script_pages),
         )
+
+    def _on_current_page_changed(self, index: int) -> None:
+        """Логирование переключения страниц."""
+        widget = self.stackedWidget.widget(index)
+        page_name = widget.objectName() if widget else "Неизвестно"
+        logger.info("Пользователь переключился на страницу: %s (индекс: %d)", page_name, index)
 
         # Автоматическая настройка ширины боковой панели
         fm = self.fontMetrics()
@@ -119,11 +149,13 @@ class MainWindow(FluentWindow):
             Соответствующая FluentIcon.
         """
         try:
-            return FluentIcon[icon_name]
+            icon = FluentIcon[icon_name]
+            logger.debug("Иконка '%s' успешно разрешена", icon_name)
+            return icon
         except KeyError:
             logger.warning(
-                "Иконка '%s' не найдена, "
-                "используется COMMAND_PROMPT",
+                "Иконка '%s' не найдена в FluentIcon, "
+                "используется значение по умолчанию COMMAND_PROMPT",
                 icon_name,
             )
             return FluentIcon.COMMAND_PROMPT

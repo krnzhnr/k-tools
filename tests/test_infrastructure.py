@@ -8,8 +8,9 @@ from app.infrastructure.mkvmerge_runner import MKVMergeRunner
 # --- FFmpegRunner Tests ---
 
 def test_ffmpeg_runner_init(mocker):
+    mocker.patch("app.core.path_utils.get_binary_path", return_value="ffmpeg")
     runner = FFmpegRunner()
-    assert runner.FFMPEG_BINARY == "ffmpeg"
+    assert runner._ffmpeg_path == "ffmpeg"
 
 def test_ffmpeg_run_success(mocker):
     runner = FFmpegRunner()
@@ -34,19 +35,13 @@ def test_ffmpeg_not_found(mocker):
 
 # --- Eac3toRunner Tests ---
 
-def test_eac3to_find_executable_path(mocker):
-    mocker.patch("shutil.which", return_value="path/to/eac3to")
+def test_eac3to_init(mocker):
+    mocker.patch("app.core.path_utils.get_binary_path", return_value="eac3to")
     runner = Eac3toRunner()
-    assert runner._executable == "path/to/eac3to"
-
-def test_eac3to_find_executable_local(mocker):
-    mocker.patch("shutil.which", return_value=None)
-    mocker.patch("pathlib.Path.exists", side_effect=lambda: True)
-    runner = Eac3toRunner()
-    assert str(runner._executable).endswith("eac3to.exe")
+    assert runner._executable == "eac3to"
 
 def test_eac3to_run_success(mocker):
-    mocker.patch("app.infrastructure.eac3to_runner.Eac3toRunner._find_executable", return_value="eac3to")
+    mocker.patch("app.core.path_utils.get_binary_path", return_value="eac3to")
     runner = Eac3toRunner()
     mocker.patch("subprocess.run", return_value=MagicMock(returncode=0, stdout="Success"))
     
@@ -54,7 +49,7 @@ def test_eac3to_run_success(mocker):
     assert result is True
 
 def test_eac3to_run_failure(mocker):
-    mocker.patch("app.infrastructure.eac3to_runner.Eac3toRunner._find_executable", return_value="eac3to")
+    mocker.patch("app.core.path_utils.get_binary_path", return_value="eac3to")
     runner = Eac3toRunner()
     mocker.patch("subprocess.run", return_value=MagicMock(returncode=1, stderr="Error"))
     
@@ -63,13 +58,13 @@ def test_eac3to_run_failure(mocker):
 
 # --- MKVMergeRunner Tests ---
 
-def test_mkvmerge_find_executable(mocker):
-    mocker.patch("shutil.which", return_value="mkvmerge")
+def test_mkvmerge_init(mocker):
+    mocker.patch("app.core.path_utils.get_binary_path", return_value="mkvmerge")
     runner = MKVMergeRunner()
     assert runner._mkvmerge_path == "mkvmerge"
 
 def test_mkvmerge_run_mux_success(mocker):
-    mocker.patch("app.infrastructure.mkvmerge_runner.MKVMergeRunner._find_mkvmerge", return_value="mkvmerge")
+    mocker.patch("app.core.path_utils.get_binary_path", return_value="mkvmerge")
     runner = MKVMergeRunner()
     mocker.patch("subprocess.run", return_value=MagicMock(returncode=0, stdout="Success"))
     
