@@ -33,8 +33,17 @@ def get_binary_path(binary_name: str) -> str:
 
     # 2. Определение потенциальных путей внутри bin/
     # Сначала ищем в подпапке с именем инструмента (напр. bin/ffmpeg/ffmpeg.exe)
-    # Для mkvmerge ищем в папке mkvtoolnix
-    subfolder_name = "mkvtoolnix" if "mkvmerge" in binary_name.lower() else binary_name.replace(".exe", "").lower()
+    # Маппинг: mkvmerge -> mkvtoolnix, ffprobe -> ffmpeg
+    base_name = binary_name.replace(
+        ".exe", ""
+    ).lower()
+    subfolder_map: dict[str, str] = {
+        "mkvmerge": "mkvtoolnix",
+        "ffprobe": "ffmpeg",
+    }
+    subfolder_name = subfolder_map.get(
+        base_name, base_name
+    )
     
     search_locations = [
         base_dir / "bin" / subfolder_name / binary_name,  # bin/ffmpeg/ffmpeg.exe

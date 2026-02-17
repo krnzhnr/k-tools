@@ -33,7 +33,7 @@ class MainWindow(FluentWindow):
     навигация слева, рабочая панель справа.
     """
 
-    WINDOW_WIDTH = 750
+    WINDOW_WIDTH = 781
     WINDOW_HEIGHT = 835
 
     def __init__(

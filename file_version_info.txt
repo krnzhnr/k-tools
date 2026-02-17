@@ -1,8 +1,8 @@
 # UTF-8
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(21, 0, 0, 0),
-    prodvers=(21, 0, 0, 0),
+    filevers=(23, 0, 0, 0),
+    prodvers=(23, 0, 0, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -23,7 +23,7 @@ VSVersionInfo(
            ),
            StringStruct(
                u'FileVersion',
-               u'build 021'
+               u'build 023'
            ),
            StringStruct(
                u'InternalName', u'KTools'
@@ -38,7 +38,7 @@ VSVersionInfo(
            ),
            StringStruct(
                u'ProductVersion',
-               u'1.0.21'
+               u'1.0.23'
            )])
       ]),
     VarFileInfo(

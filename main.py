@@ -32,6 +32,7 @@ from app.scripts.audio_converter import AudioConverterScript
 from app.scripts.audio_speed_changer import AudioSpeedChangerScript
 from app.scripts.muxer import MuxerScript
 from app.scripts.stream_manager import StreamManagerScript
+from app.scripts.stream_replacer import StreamReplacerScript
 from app.ui.main_window import MainWindow
 
 logger = logging.getLogger(__name__)
@@ -85,6 +86,7 @@ def _create_registry() -> ScriptRegistry:
     registry.register(AudioSpeedChangerScript())
     registry.register(MuxerScript())
     registry.register(StreamManagerScript())
+    registry.register(StreamReplacerScript())
 
     logger.info(
         "Зарегистрировано скриптов: %d",

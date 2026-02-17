@@ -42,6 +42,9 @@ from app.core.abstract_script import (
 from app.ui.file_list_widget import FileListWidget
 from app.ui.muxing_table_widget import MuxingTableWidget
 from app.ui.track_list_widget import TrackListWidget
+from app.ui.stream_replace_widget import (
+    StreamReplaceWidget,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +141,9 @@ class ScriptPage(QWidget):
         self._settings_rows: dict[str, QWidget] = {}
         self._worker: ScriptWorker | None = None
         self._track_widget: TrackListWidget | None = None
+        self._stream_replace_widget: (
+            StreamReplaceWidget | None
+        ) = None
 
         self._init_ui()
         logger.info(
@@ -338,10 +344,34 @@ class ScriptPage(QWidget):
         files_label = StrongBodyLabel("Файлы", self)
         layout.addWidget(files_label)
 
-        if self._script.use_custom_widget and isinstance(self._script.name, str) and "Муксер" in self._script.name:
-            # TODO: Сделать более универсально, если появится другой кастомный виджет
+        if (
+            self._script.use_custom_widget
+            and isinstance(self._script.name, str)
+            and "Подмена" in self._script.name
+        ):
+            # Скрипт подмены потоков MKV
+            self._stream_replace_widget = (
+                StreamReplaceWidget(self)
+            )
+            self._file_list = (
+                self._stream_replace_widget
+            )
+            layout.addWidget(
+                self._stream_replace_widget,
+                stretch=1,
+            )
+            return
+        elif (
+            self._script.use_custom_widget
+            and isinstance(self._script.name, str)
+            and "Муксер" in self._script.name
+        ):
             self._file_list = MuxingTableWidget(self)
-        elif self._script.use_custom_widget and isinstance(self._script.name, str) and "поток" in self._script.name.lower():
+        elif (
+            self._script.use_custom_widget
+            and isinstance(self._script.name, str)
+            and "поток" in self._script.name.lower()
+        ):
             # Скрипт управления потоками MKV
             self._file_list = FileListWidget(
                 allowed_extensions=(
@@ -523,6 +553,32 @@ class ScriptPage(QWidget):
                 "[Управление потоками] "
                 "Выбранные дорожки по файлам: %s",
                 per_file,
+            )
+
+        # Инъекция данных для скрипта подмены
+        if self._stream_replace_widget is not None:
+            container = (
+                self._stream_replace_widget
+                .get_container_path()
+            )
+            replacements = (
+                self._stream_replace_widget
+                .get_replacements()
+            )
+            if container:
+                settings["container_path"] = (
+                    str(container)
+                )
+            settings["replacements"] = {
+                str(k): str(v)
+                for k, v in replacements.items()
+            }
+            logger.info(
+                "[Подмена потоков] "
+                "Контейнер: '%s', замен: %d",
+                container.name if container
+                else "не указан",
+                len(replacements),
             )
 
         logger.info(
