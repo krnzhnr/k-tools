@@ -16,6 +16,7 @@ from app.core.abstract_script import (
     SettingType,
 )
 from app.core.settings_manager import SettingsManager
+from app.core.output_resolver import OutputResolver
 from app.infrastructure.mkvmerge_runner import (
     MKVMergeRunner,
 )
@@ -38,6 +39,7 @@ class StreamManagerScript(AbstractScript):
         """Инициализация скрипта."""
         self._runner = MKVMergeRunner()
         self._probe = MKVProbeRunner()
+        self._resolver = OutputResolver()
         logger.info(
             "Скрипт управления потоками MKV создан"
         )
@@ -88,6 +90,7 @@ class StreamManagerScript(AbstractScript):
         self,
         files: list[Path],
         settings: dict[str, Any],
+        output_path: str | None = None,
         progress_callback: (
             ProgressCallback | None
         ) = None,
@@ -207,18 +210,12 @@ class StreamManagerScript(AbstractScript):
 
             out_name = file_path.stem + ext
 
-            # Выходной путь
-            output_dir = (
-                file_path.parent / "Completed"
+            # Выходной путь через резолвер
+            target_dir = self._resolver.resolve(
+                file_path, output_path
             )
-            if not output_dir.exists():
-                output_dir.mkdir(exist_ok=True)
-                logger.info(
-                    "Создана директория: '%s'",
-                    output_dir,
-                )
-
-            output_path = output_dir / out_name
+            
+            output_file_path = target_dir / out_name
             logger.info(
                 "Выходной файл: '%s' "
                 "(типы: %s, расширение: '%s')",
@@ -228,18 +225,18 @@ class StreamManagerScript(AbstractScript):
             )
 
             if (
-                output_path.exists()
+                output_file_path.exists()
                 and not SettingsManager()
                 .overwrite_existing
             ):
                 msg = (
                     f"⏭ Пропущен (файл существует): "
-                    f"{output_path.name}"
+                    f"{output_file_path.name}"
                 )
                 logger.info(
                     "Пропуск: выходной файл '%s' "
                     "уже существует",
-                    output_path.name,
+                    output_file_path.name,
                 )
                 results.append(msg)
                 if progress_callback:
@@ -262,18 +259,18 @@ class StreamManagerScript(AbstractScript):
             ]
 
             success = self._runner.run(
-                output_path=output_path,
+                output_path=output_file_path,
                 inputs=inputs,
             )
 
             if success:
                 msg = (
                     f"✅ Обработано: "
-                    f"{output_path.name}"
+                    f"{output_file_path.name}"
                 )
                 logger.info(
                     "Файл успешно обработан: '%s'",
-                    output_path.name,
+                    output_file_path.name,
                 )
             else:
                 msg = (

@@ -12,6 +12,7 @@ from app.core.abstract_script import (
     SettingType,
 )
 from app.core.settings_manager import SettingsManager
+from app.core.output_resolver import OutputResolver
 from app.infrastructure.ffmpeg_runner import FFmpegRunner
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,7 @@ class MetadataCleanerScript(AbstractScript):
     def __init__(self) -> None:
         """Инициализация скрипта очистки метаданных."""
         self._ffmpeg = FFmpegRunner()
+        self._resolver = OutputResolver()
         logger.info("Скрипт очистки метаданных создан")
 
     @property
@@ -74,6 +76,7 @@ class MetadataCleanerScript(AbstractScript):
         self,
         files: list[Path],
         settings: dict[str, Any],
+        output_path: str | None = None,
         progress_callback: ProgressCallback | None = None,
     ) -> list[str]:
         """Очистить метаданные из списка файлов.
@@ -106,10 +109,13 @@ class MetadataCleanerScript(AbstractScript):
             output_name = (
                 f"{file_path.stem}{suffix}{file_path.suffix}"
             )
-            output_path = file_path.parent / output_name
+            target_dir = self._resolver.resolve(
+                file_path, output_path
+            )
+            output_file_path = target_dir / output_name
             logger.info("Обработка файла [%d/%d]: '%s' -> '%s'", idx + 1, total, file_path.name, output_name)
 
-            if output_path.exists() and not SettingsManager().overwrite_existing:
+            if output_file_path.exists() and not SettingsManager().overwrite_existing:
                 msg = f"⏭ Пропущен (файл существует): {output_name}"
                 logger.info("Пропуск файла '%s': выходной файл уже существует и перезапись отключена", file_path.name)
                 results.append(msg)
@@ -120,7 +126,7 @@ class MetadataCleanerScript(AbstractScript):
                 logger.debug("Вызов FFmpeg для удаления метаданных")
                 success = self._ffmpeg.run(
                     input_path=file_path,
-                    output_path=output_path,
+                    output_path=output_file_path,
                     extra_args=[
                         "-map_metadata", "-1",
                         "-c:v", "copy",

@@ -39,6 +39,7 @@ from app.core.abstract_script import (
     SettingField,
     SettingType,
 )
+from app.core.settings_manager import SettingsManager
 from app.ui.file_list_widget import FileListWidget
 from app.ui.muxing_table_widget import MuxingTableWidget
 from app.ui.track_list_widget import TrackListWidget
@@ -70,6 +71,7 @@ class ScriptWorker(QThread):
         script: AbstractScript,
         files: list[Path],
         settings: dict[str, Any],
+        output_path: str | None = None,
         parent: QWidget | None = None,
     ) -> None:
         """Инициализация рабочего потока.
@@ -78,12 +80,14 @@ class ScriptWorker(QThread):
             script: Скрипт для выполнения.
             files: Список файлов.
             settings: Настройки скрипта.
+            output_path: Опциональный путь сохранения.
             parent: Родительский виджет.
         """
         super().__init__(parent)
         self._script = script
         self._files = files
         self._settings = settings
+        self._output_path = output_path
 
     def run(self) -> None:
         """Выполнение скрипта в рабочем потоке."""
@@ -91,6 +95,7 @@ class ScriptWorker(QThread):
             results = self._script.execute(
                 files=self._files,
                 settings=self._settings,
+                output_path=self._output_path,
                 progress_callback=self._on_progress,
             )
             self.finished.emit(results)
@@ -144,12 +149,18 @@ class ScriptPage(QWidget):
         self._stream_replace_widget: (
             StreamReplaceWidget | None
         ) = None
+        self._settings_manager = SettingsManager()
 
         self._init_ui()
         logger.info(
             "Страница скрипта '%s' создана",
             script.name,
         )
+
+    def showEvent(self, event) -> None:
+        """Событие отображения страницы."""
+        super().showEvent(event)
+        self._update_path_placeholder()
 
     def _init_ui(self) -> None:
         """Инициализация пользовательского интерфейса."""
@@ -360,6 +371,9 @@ class ScriptPage(QWidget):
                 self._stream_replace_widget,
                 stretch=1,
             )
+            self._stream_replace_widget.filesChanged.connect(
+                self._update_path_placeholder
+            )
             return
         elif (
             self._script.use_custom_widget
@@ -367,6 +381,9 @@ class ScriptPage(QWidget):
             and "Муксер" in self._script.name
         ):
             self._file_list = MuxingTableWidget(self)
+            self._file_list.filesChanged.connect(
+                self._update_path_placeholder
+            )
         elif (
             self._script.use_custom_widget
             and isinstance(self._script.name, str)
@@ -379,6 +396,9 @@ class ScriptPage(QWidget):
                 ),
                 context_name=self._script.name,
                 parent=self,
+            )
+            self._file_list.filesChanged.connect(
+                self._update_path_placeholder
             )
             layout.addWidget(self._file_list, stretch=1)
 
@@ -410,6 +430,10 @@ class ScriptPage(QWidget):
                 context_name=self._script.name,
                 parent=self,
             )
+            self._file_list.filesChanged.connect(
+                self._update_path_placeholder
+            )
+
         
         layout.addWidget(self._file_list, stretch=1)
 
@@ -488,7 +512,76 @@ class ScriptPage(QWidget):
         self._execute_btn.clicked.connect(
             self._on_execute_clicked
         )
+
+        # Выбор пути сохранения
+        path_label = StrongBodyLabel("Путь сохранения", self)
+        layout.addSpacing(10)
+        layout.addWidget(path_label)
+
+        path_layout = QHBoxLayout()
+        path_layout.setSpacing(8)
+
+        self._output_path_edit = LineEdit(self)
+        self._update_path_placeholder()
+        self._output_path_edit.textChanged.connect(
+            lambda t: logger.info(
+                "[%s] Ручной путь сохранения изменен на: '%s'",
+                self._script.name, t
+            )
+        )
+        path_layout.addWidget(self._output_path_edit)
+
+        self._browse_output_btn = PrimaryPushButton(
+            FluentIcon.FOLDER,
+            "Обзор",
+            self,
+        )
+        self._browse_output_btn.setFixedWidth(100)
+        self._browse_output_btn.clicked.connect(
+            self._on_browse_output_clicked
+        )
+        path_layout.addWidget(self._browse_output_btn)
+
+        layout.addLayout(path_layout)
         layout.addWidget(self._execute_btn)
+
+    def _on_browse_output_clicked(self) -> None:
+        """Обработчик нажатия кнопки выбора папки."""
+        from PyQt6.QtWidgets import QFileDialog
+        
+        folder = QFileDialog.getExistingDirectory(
+            self,
+            "Выберите папку для сохранения",
+            str(Path.home()),
+        )
+        if folder:
+            self._output_path_edit.setText(folder)
+            logger.info(
+                "[%s] Пользователь выбрал папку: %s",
+                self._script.name, folder
+            )
+
+    def _update_path_placeholder(self) -> None:
+        """Обновить плейсхолдер пути сохранения на базе глобальных настроек."""
+        files = self._file_list.get_file_paths() if self._file_list else []
+        
+        # 1. Определяем базовую директорию
+        if files:
+            # Берем родительскую папку первого файла
+            base_dir = files[0].parent.absolute()
+        else:
+            base_dir = Path(".").absolute()
+
+        # 2. Определяем целевую папку
+        if self._settings_manager.use_auto_subfolder:
+            subfolder = self._settings_manager.default_output_subfolder
+            target_dir = base_dir / subfolder
+        else:
+            target_dir = base_dir
+        
+        # 3. Формируем текст (абсолютный путь)
+        placeholder = str(target_dir)
+        self._output_path_edit.setPlaceholderText(placeholder)
 
     def get_settings(self) -> dict[str, Any]:
         """Получить текущие значения настроек со страницы.
@@ -593,6 +686,7 @@ class ScriptPage(QWidget):
             script=self._script,
             files=files,
             settings=settings,
+            output_path=self._output_path_edit.text(),
             parent=self,
         )
         self._worker.progress.connect(

@@ -14,6 +14,7 @@ from app.core.abstract_script import (
     ProgressCallback,
 )
 from app.core.settings_manager import SettingsManager
+from app.core.output_resolver import OutputResolver
 from app.infrastructure.mkvmerge_runner import (
     MKVMergeRunner,
 )
@@ -56,6 +57,7 @@ class StreamReplacerScript(AbstractScript):
         self._probe = MKVProbeRunner()
         self._ffmpeg = FFmpegRunner()
         self._ffprobe = FFProbeRunner()
+        self._resolver = OutputResolver()
         logger.info(
             "Скрипт подмены потоков создан"
         )
@@ -93,6 +95,7 @@ class StreamReplacerScript(AbstractScript):
         self,
         files: list[Path],
         settings: dict[str, Any],
+        output_path: str | None = None,
         progress_callback: (
             ProgressCallback | None
         ) = None,
@@ -155,30 +158,26 @@ class StreamReplacerScript(AbstractScript):
             len(replacements),
         )
 
-        # Выходная директория
-        output_dir = container.parent / "Completed"
-        if not output_dir.exists():
-            output_dir.mkdir(exist_ok=True)
-            logger.info(
-                "Создана директория: '%s'",
-                output_dir,
-            )
-
+        # Выходной путь через резолвер
+        target_dir = self._resolver.resolve(
+            container, output_path
+        )
+        
         # Выходной путь с расширением оригинала
-        output_path = (
-            output_dir
+        output_file_path = (
+            target_dir
             / f"{container.stem}"
             f"{container.suffix}"
         )
 
         if (
-            output_path.exists()
+            output_file_path.exists()
             and not SettingsManager()
             .overwrite_existing
         ):
             msg = (
                 f"⏭ Пропущен (файл существует): "
-                f"{output_path.name}"
+                f"{output_file_path.name}"
             )
             results.append(msg)
             logger.info(msg)
@@ -193,7 +192,7 @@ class StreamReplacerScript(AbstractScript):
         if is_mp4:
             msg = self._do_execute_mp4(
                 container=container,
-                output_path=output_path,
+                output_path=output_file_path,
                 replacements=replacements,
                 progress_callback=(
                     progress_callback
@@ -202,7 +201,7 @@ class StreamReplacerScript(AbstractScript):
         else:
             msg = self._do_execute_mkv(
                 container=container,
-                output_path=output_path,
+                output_path=output_file_path,
                 replacements=replacements,
                 progress_callback=(
                     progress_callback

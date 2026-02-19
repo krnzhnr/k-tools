@@ -12,6 +12,7 @@ from app.core.abstract_script import (
     SettingType,
 )
 from app.core.settings_manager import SettingsManager
+from app.core.output_resolver import OutputResolver
 from app.infrastructure.ffmpeg_runner import FFmpegRunner
 
 logger = logging.getLogger(__name__)
@@ -52,6 +53,7 @@ class AudioConverterScript(AbstractScript):
     def __init__(self) -> None:
         """Инициализация аудио конвертера."""
         self._ffmpeg = FFmpegRunner()
+        self._resolver = OutputResolver()
         logger.info("Скрипт аудио конвертации создан")
 
     @property
@@ -125,6 +127,7 @@ class AudioConverterScript(AbstractScript):
         self,
         files: list[Path],
         settings: dict[str, Any],
+        output_path: str | None = None,
         progress_callback: ProgressCallback | None = None,
     ) -> list[str]:
         """Конвертировать аудиофайлы.
@@ -178,12 +181,17 @@ class AudioConverterScript(AbstractScript):
                     logger.info("Файл '%s' уже имеет формат %s, пропуск", file_path.name, target_fmt_key)
                     continue
 
-            output_path = file_path.with_suffix(target_ext)
-            logger.debug("Целевой путь: '%s'", output_path.name)
+            target_dir = self._resolver.resolve(
+                file_path, output_path
+            )
+            output_file_path = (
+                target_dir / file_path.with_suffix(target_ext).name
+            )
+            logger.debug("Целевой путь: '%s'", output_file_path.name)
             
-            if output_path.exists() and not SettingsManager().overwrite_existing:
-                msg = f"⏭ Пропущен (файл существует): {output_path.name}"
-                logger.info("Пропуск: выходной файл '%s' уже существует", output_path.name)
+            if output_file_path.exists() and not SettingsManager().overwrite_existing:
+                msg = f"⏭ Пропущен (файл существует): {output_file_path.name}"
+                logger.info("Пропуск: выходной файл '%s' уже существует", output_file_path.name)
                 results.append(msg)
                 if progress_callback:
                     progress_callback(idx + 1, total, msg)
@@ -207,13 +215,13 @@ class AudioConverterScript(AbstractScript):
                 logger.debug("Вызов FFmpeg для конвертации аудио")
                 success = self._ffmpeg.run(
                     input_path=file_path,
-                    output_path=output_path,
+                    output_path=output_file_path,
                     extra_args=extra_args,
                 )
 
                 if success:
-                    msg = f"✅ Конвертировано: {output_path.name}"
-                    logger.info("Успешная конвертация: '%s'", output_path.name)
+                    msg = f"✅ Конвертировано: {output_file_path.name}"
+                    logger.info("Успешная конвертация: '%s'", output_file_path.name)
                     if delete_original:
                         logger.info("Удаление исходника: '%s'", file_path.name)
                         self._delete_source(

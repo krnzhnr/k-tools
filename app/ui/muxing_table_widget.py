@@ -5,7 +5,7 @@ import logging
 import re
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QMimeData
+from PyQt6.QtCore import Qt, QMimeData, pyqtSignal
 from PyQt6.QtGui import QDragEnterEvent, QDropEvent
 from PyQt6.QtWidgets import (
     QTableWidget,
@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import (
     QHeaderView,
     QAbstractItemView,
     QApplication,
+    QFileDialog,
 )
 from qfluentwidgets import RoundMenu, Action, FluentIcon
 
@@ -85,6 +86,8 @@ class ElideMiddleDelegate(QStyledItemDelegate):
 class MuxingTableWidget(QTableWidget):
     """Таблица для управления файлами муксинга."""
 
+    filesChanged = pyqtSignal()
+
     COL_VIDEO = 0
     COL_AUDIO = 1
     COL_SUBS = 2
@@ -145,6 +148,11 @@ class MuxingTableWidget(QTableWidget):
         """Показать контекстное меню."""
         menu = RoundMenu(parent=self)
 
+        add_action = Action(
+            FluentIcon.ADD,
+            "Добавить файлы",
+            triggered=self._on_add_files_clicked,
+        )
         remove_action = Action(
             FluentIcon.DELETE,
             "Удалить выбранные",
@@ -156,15 +164,41 @@ class MuxingTableWidget(QTableWidget):
             triggered=self.clear_all,
         )
 
-        # Если ничего не выбрано, удаление недоступно
-        if not self.selectedItems():
-            remove_action.setEnabled(False)
-
-        menu.addAction(remove_action)
+        menu.addAction(add_action)
         menu.addSeparator()
+        menu.addAction(remove_action)
         menu.addAction(clear_action)
 
         menu.exec(self.mapToGlobal(position))
+
+    def _on_add_files_clicked(self) -> None:
+        """Обработчик нажатия «Добавить файлы» в меню."""
+        # Формируем фильтры для всех поддерживаемых типов
+        video_filters = "*.mkv *.mp4 *.avi *.mov *.webm"
+        audio_filters = "*.mp3 *.aac *.ac3 *.dts *.eac3 *.flac *.wav *.m4a *.ogg *.mka"
+        subs_filters = "*.srt *.ass *.ssa *.sub"
+        
+        all_exts = f"{video_filters} {audio_filters} {subs_filters}"
+        
+        filter_str = (
+            f"Мультимедиа ({all_exts});;"
+            f"Видео ({video_filters});;"
+            f"Аудио ({audio_filters});;"
+            f"Субтитры ({subs_filters});;"
+            "Все файлы (*)"
+        )
+
+        files, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Выберите файлы для муксинга",
+            "",
+            filter_str
+        )
+        
+        if files:
+            # Преобразуем строки в Path
+            paths = [Path(f) for f in files]
+            self.add_files(paths)
 
     def _remove_selected(self) -> None:
         """Удалить выбранные строки."""
@@ -173,6 +207,9 @@ class MuxingTableWidget(QTableWidget):
         
         for row in rows:
             self.removeRow(row)
+        
+        if rows:
+            self.filesChanged.emit()
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         """Обработка входа перетаскивания."""
@@ -255,6 +292,8 @@ class MuxingTableWidget(QTableWidget):
                 self.horizontalHeader().sortIndicatorSection(),
                 self.horizontalHeader().sortIndicatorOrder()
             )
+        
+        self.filesChanged.emit()
 
     def _find_row_by_stem(self, stem: str) -> int | None:
         """Найти индекс строки, содержащей файл с указанным stem.
@@ -311,6 +350,7 @@ class MuxingTableWidget(QTableWidget):
     def clear_all(self):
         """Очистить таблицу."""
         self.setRowCount(0)
+        self.filesChanged.emit()
         # self._stems.clear() # Удалено
 
     def get_file_paths(self) -> list[Path]:

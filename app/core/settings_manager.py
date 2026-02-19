@@ -46,6 +46,44 @@ class SettingsManager:
         self._settings.sync()
         logger.info("Настройка 'overwrite_existing' изменена на: %s", value)
 
+    @property
+    def default_output_subfolder(self) -> str:
+        """Имя подпапки для результатов по умолчанию."""
+        return self._settings.value(
+            "general/default_output_subfolder", 
+            "KTools_Result", 
+            type=str
+        )
+
+    @default_output_subfolder.setter
+    def default_output_subfolder(self, value: str) -> None:
+        """Установить имя подпапки для результатов."""
+        self._settings.setValue("general/default_output_subfolder", value)
+        self._settings.sync()
+        logger.info(
+            "Настройка 'default_output_subfolder' изменена на: %s", 
+            value
+        )
+
+    @property
+    def use_auto_subfolder(self) -> bool:
+        """Нужно ли создавать автоматическую подпапку."""
+        return self._settings.value(
+            "general/use_auto_subfolder", 
+            True, 
+            type=bool
+        )
+
+    @use_auto_subfolder.setter
+    def use_auto_subfolder(self, value: bool) -> None:
+        """Установить использование автоматической подпапки."""
+        self._settings.setValue("general/use_auto_subfolder", value)
+        self._settings.sync()
+        logger.info(
+            "Настройка 'use_auto_subfolder' изменена на: %s", 
+            value
+        )
+
     def sync(self) -> None:
         """Принудительная синхронизация с диском."""
         self._settings.sync()

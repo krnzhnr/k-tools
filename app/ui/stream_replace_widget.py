@@ -318,6 +318,8 @@ class StreamReplaceWidget(QWidget):
     # Роль для хранения пути файла.
     ROLE_FILE_PATH = Qt.ItemDataRole.UserRole + 1
 
+    filesChanged = pyqtSignal()
+
     def __init__(
         self, parent: QWidget | None = None
     ) -> None:
@@ -429,6 +431,9 @@ class StreamReplaceWidget(QWidget):
         # При изменении контейнера сбрасываем
         self._container_list.filesChanged.connect(
             self._on_container_changed
+        )
+        self._container_list.filesChanged.connect(
+            self.filesChanged.emit
         )
 
     def _on_load_tracks(self) -> None:

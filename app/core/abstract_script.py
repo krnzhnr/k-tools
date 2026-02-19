@@ -127,6 +127,7 @@ class AbstractScript(ABC):
         self,
         files: list[Path],
         settings: dict[str, Any],
+        output_path: str | None = None,
         progress_callback: ProgressCallback | None = None,
     ) -> list[str]:
         """Выполнить обработку списка файлов.
@@ -134,6 +135,7 @@ class AbstractScript(ABC):
         Args:
             files: Список путей к входным файлам.
             settings: Словарь текущих настроек скрипта.
+            output_path: Опциональный путь сохранения (ручной выбор).
             progress_callback: Callback (текущий, всего, сообщение).
 
         Returns:

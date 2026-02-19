@@ -13,6 +13,7 @@ from app.core.abstract_script import (
     SettingType,
 )
 from app.core.settings_manager import SettingsManager
+from app.core.output_resolver import OutputResolver
 from app.infrastructure.mkvmerge_runner import MKVMergeRunner
 
 logger = logging.getLogger(__name__)
@@ -24,6 +25,7 @@ class MuxerScript(AbstractScript):
     def __init__(self) -> None:
         """Инициализация муксера."""
         self._runner = MKVMergeRunner()
+        self._resolver = OutputResolver()
         logger.info("Скрипт муксинга создан")
 
     @property
@@ -84,6 +86,7 @@ class MuxerScript(AbstractScript):
         self,
         files: list[Path],
         settings: dict[str, Any],
+        output_path: str | None = None,
         progress_callback: ProgressCallback | None = None,
     ) -> list[str]:
         """Выполнить муксинг.
@@ -144,16 +147,14 @@ class MuxerScript(AbstractScript):
                          audio_path.name if audio_path else "нет", 
                          subs_path.name if subs_path else "нет")
 
-            output_dir = video_path.parent / "Completed"
-            if not output_dir.exists():
-                output_dir.mkdir(exist_ok=True)
-                logger.info("Создана директория для вывода: '%s'", output_dir)
-            
-            output_path = output_dir / f"{stem}.mkv"
+            target_dir = self._resolver.resolve(
+                video_path, output_path
+            )
+            output_file_path = target_dir / f"{stem}.mkv"
 
-            if output_path.exists() and not SettingsManager().overwrite_existing:
-                msg = f"⏭ Пропущен (файл существует): {output_path.name}"
-                logger.info("Пропуск: выходной файл '%s' уже существует", output_path.name)
+            if output_file_path.exists() and not SettingsManager().overwrite_existing:
+                msg = f"⏭ Пропущен (файл существует): {output_file_path.name}"
+                logger.info("Пропуск: выходной файл '%s' уже существует", output_file_path.name)
                 results.append(msg)
                 completed += 1
                 if progress_callback:
@@ -205,17 +206,17 @@ class MuxerScript(AbstractScript):
             # Запуск
             logger.debug("Вызов раннера mkvmerge")
             success = self._runner.run(
-                output_path=output_path,
+                output_path=output_file_path,
                 inputs=inputs,
                 title=stem # Заголовок файла = имя файла
             )
 
             if success:
-                msg = f"✅ Собрано: {output_path.name}"
-                logger.info("Успешно собран файл: '%s'", output_path.name)
+                msg = f"✅ Собрано: {output_file_path.name}"
+                logger.info("Успешно собран файл: '%s'", output_file_path.name)
             else:
-                msg = f"❌ Ошибка сборки: {output_path.name}"
-                logger.error("Ошибка mkvmerge при сборке файла: '%s'", output_path.name)
+                msg = f"❌ Ошибка сборки: {output_file_path.name}"
+                logger.error("Ошибка mkvmerge при сборке файла: '%s'", output_file_path.name)
             
             results.append(msg)
             completed += 1

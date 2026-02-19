@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtWidgets import QAbstractItemView, QListWidgetItem
+from PyQt6.QtWidgets import QAbstractItemView, QListWidgetItem, QFileDialog
 from qfluentwidgets import ListWidget, RoundMenu, Action, FluentIcon
 
 logger = logging.getLogger(__name__)
@@ -226,6 +226,11 @@ class FileListWidget(ListWidget):
         """
         menu = RoundMenu(parent=self)
 
+        add_action = Action(
+            FluentIcon.ADD,
+            "Добавить файлы",
+            triggered=self._on_add_files_clicked,
+        )
         remove_action = Action(
             FluentIcon.DELETE,
             "Удалить из списка",
@@ -237,11 +242,31 @@ class FileListWidget(ListWidget):
             triggered=self.clear_files,
         )
 
-        menu.addAction(remove_action)
+        menu.addAction(add_action)
         menu.addSeparator()
+        menu.addAction(remove_action)
         menu.addAction(clear_action)
 
         menu.exec(self.mapToGlobal(position))
+
+    def _on_add_files_clicked(self) -> None:
+        """Обработчик нажатия «Добавить файлы» в меню."""
+        # Формируем фильтры для диалога
+        if self._allowed_extensions:
+            ext_filter = " ".join([f"*{ext}" for ext in self._allowed_extensions])
+            filter_str = f"Допустимые файлы ({ext_filter});;Все файлы (*)"
+        else:
+            filter_str = "Все файлы (*)"
+
+        files, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Выберите файлы для добавления",
+            "",
+            filter_str
+        )
+        
+        if files:
+            self.add_files(files)
 
     def _remove_selected(self) -> None:
         """Удалить выбранные файлы из списка."""

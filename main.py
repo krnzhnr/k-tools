@@ -63,7 +63,7 @@ def _setup_logging() -> None:
 
     # Настройка корневого логгера
     logging.basicConfig(
-        level=logging.INFO,
+        level=logging.DEBUG,
         format=log_format,
         datefmt="%H:%M:%S",
         handlers=[

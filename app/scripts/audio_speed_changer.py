@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.abstract_script import AbstractScript, SettingField, SettingType
+from app.core.output_resolver import OutputResolver
 from app.infrastructure.eac3to_runner import Eac3toRunner
 
 logger = logging.getLogger(__name__)
@@ -17,6 +18,7 @@ class AudioSpeedChangerScript(AbstractScript):
     def __init__(self):
         """Инициализация скрипта."""
         self._runner = Eac3toRunner()
+        self._resolver = OutputResolver()
 
     @property
     def name(self) -> str:
@@ -74,6 +76,7 @@ class AudioSpeedChangerScript(AbstractScript):
         self,
         files: list[Path],
         settings: dict[str, Any],
+        output_path: str | None = None,
         progress_callback=None,
     ) -> list[str]:
         """Выполнить изменение скорости."""
@@ -129,36 +132,34 @@ class AudioSpeedChangerScript(AbstractScript):
                 if progress_callback:
                     progress_callback(i, total, f"Обработка: {file_path.name}")
 
-                # Формируем выходной путь
-                output_dir = file_path.parent / "Slowed"
-                if not output_dir.exists():
-                    output_dir.mkdir(exist_ok=True)
-                    logger.info("Создана директория для результатов: '%s'", output_dir)
+                # Формируем выходной путь через резолвер
+                target_dir = self._resolver.resolve(
+                    file_path, output_path
+                )
                 
-                # Используем выбранный формат
-                output_path = output_dir / f"{file_path.stem}{suffix}{output_ext}"
-                logger.debug("Назначен путь вывода: '%s'", output_path.name)
+                # Используем выбранный формат и суффикс
+                output_file_path = target_dir / f"{file_path.stem}{suffix}{output_ext}"
+                logger.debug("Назначен путь вывода: '%s'", output_file_path.name)
 
-                # Проверка на существование файла (хотя eac3to имеет свою логику, мы придерживаемся общих правил)
+                # Проверка на существование файла
                 from app.core.settings_manager import SettingsManager
-                if output_path.exists() and not SettingsManager().overwrite_existing:
-                    msg = f"⏭ Пропущен (файл существует): {output_path.name}"
-                    logger.info("Пропуск: файл '%s' уже существует", output_path.name)
+                if output_file_path.exists() and not SettingsManager().overwrite_existing:
+                    msg = f"⏭ Пропущен (файл существует): {output_file_path.name}"
+                    logger.info("Пропуск: файл '%s' уже существует", output_file_path.name)
                     results.append(msg)
                     completed += 1
                     continue
 
                 # Формируем аргументы для конкретного файла
-                # eac3to "input" "output" options
-                current_args = [str(file_path), str(output_path)] + eac3to_args
+                current_args = [str(file_path), str(output_file_path)] + eac3to_args
 
                 logger.debug("Вызов раннера eac3to")
                 success = self._runner.run(current_args, cwd=file_path.parent)
 
                 if success:
                     completed += 1
-                    msg = f"✅ Успешно: {file_path.name} -> {output_path.name}"
-                    logger.info("Успешно завершено преобразование для: '%s'", output_path.name)
+                    msg = f"✅ Успешно: {file_path.name} -> {output_file_path.name}"
+                    logger.info("Успешно завершено преобразование для: '%s'", output_file_path.name)
                     results.append(msg)
                     
                     if delete_source:
