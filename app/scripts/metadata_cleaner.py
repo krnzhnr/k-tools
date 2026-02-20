@@ -106,6 +106,10 @@ class MetadataCleanerScript(AbstractScript):
         )
 
         for idx, file_path in enumerate(files):
+            if progress_callback:
+                progress_callback(
+                    idx, total, f"Очистка: {file_path.name}"
+                )
             output_name = (
                 f"{file_path.stem}{suffix}{file_path.suffix}"
             )

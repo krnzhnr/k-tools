@@ -34,7 +34,7 @@ class MainWindow(FluentWindow):
     """
 
     WINDOW_WIDTH = 781
-    WINDOW_HEIGHT = 929
+    WINDOW_HEIGHT = 960
 
     def __init__(
         self,

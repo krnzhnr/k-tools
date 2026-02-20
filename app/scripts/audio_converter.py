@@ -192,6 +192,10 @@ class AudioConverterScript(AbstractScript):
         )
 
         for idx, file_path in enumerate(files):
+            if progress_callback:
+                progress_callback(
+                    idx, total, f"Обработка: {file_path.name}"
+                )
             logger.info("Обработка аудио-файла [%d/%d]: '%s' (вход)", idx + 1, total, file_path.name)
             
             # Пропускаем, если файл уже в целевом формате и это не lossy формат
@@ -202,7 +206,18 @@ class AudioConverterScript(AbstractScript):
                 continue
 
             target_dir = self._resolver.resolve(file_path, output_path)
-            output_file_path = target_dir / file_path.with_suffix(target_ext).name
+            out_name = file_path.with_suffix(target_ext).name
+            output_file_path = target_dir / out_name
+            
+            # Защита от перезаписи входного файла
+            if output_file_path.absolute() == file_path.absolute():
+                out_name = f"{file_path.stem}_processed{target_ext}"
+                output_file_path = target_dir / out_name
+                logger.debug(
+                    "Путь выхода совпадает с входом. Изменено на: '%s'",
+                    out_name,
+                )
+
             logger.debug("Целевой путь: '%s'", output_file_path.name)
             
             if output_file_path.exists() and not SettingsManager().overwrite_existing:

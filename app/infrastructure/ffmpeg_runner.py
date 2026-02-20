@@ -89,10 +89,10 @@ class FFmpegRunner:
 
             if result.returncode != 0:
                 logger.error(
-                    "FFmpeg завершился с ошибкой "
-                    "(код %d): %s",
+                    "FFmpeg завершился с ошибкой (код %d)\nSTDOUT: %s\nSTDERR: %s",
                     result.returncode,
-                    result.stderr.strip(),
+                    result.stdout.strip() or "пусто",
+                    result.stderr.strip() or "пусто",
                 )
                 return False
 

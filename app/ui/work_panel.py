@@ -25,6 +25,7 @@ from qfluentwidgets import (
     LineEdit,
     PrimaryPushButton,
     ProgressBar,
+    IndeterminateProgressBar,
     SmoothScrollArea,
     StrongBodyLabel,
     SubtitleLabel,
@@ -495,12 +496,23 @@ class ScriptPage(QWidget):
         Args:
             layout: Родительский layout.
         """
+        # Используем IndeterminateProgressBar для "бегающей" полоски, если это нужно.
+        # Но так как нам нужно переключаться между режимами, оставим ProgressBar 
+        # и попробуем заставить его работать, либо добавим второй виджет.
         self._progress = ProgressBar(self)
-        self._progress.setVisible(False)
+        self._progress.setVisible(True)
         layout.addWidget(self._progress)
 
-        self._status_label = CaptionLabel("", self)
-        self._status_label.setVisible(False)
+        # Добавим бегающую полоску отдельно для режима выполнения
+        try:
+            self._indeterminate_progress = IndeterminateProgressBar(self)
+            self._indeterminate_progress.setVisible(False)
+            layout.addWidget(self._indeterminate_progress)
+        except (NameError, ImportError):
+            self._indeterminate_progress = None
+
+        self._status_label = CaptionLabel("Готов к работе", self)
+        self._status_label.setVisible(True)
         layout.addWidget(self._status_label)
 
         self._execute_btn = PrimaryPushButton(
@@ -627,9 +639,17 @@ class ScriptPage(QWidget):
 
         self._log_area.clear()
         self._execute_btn.setEnabled(False)
-        self._progress.setVisible(True)
+        
+        if self._indeterminate_progress:
+            self._progress.setVisible(False)
+            self._indeterminate_progress.setVisible(True)
+            self._indeterminate_progress.start()
+        else:
+            self._progress.setVisible(True)
+            self._progress.setRange(0, 0)
+            
+        self._status_label.setText("Запуск...")
         self._status_label.setVisible(True)
-        self._progress.setValue(0)
 
         settings = self._get_current_settings()
 
@@ -722,7 +742,15 @@ class ScriptPage(QWidget):
             total,
             message
         )
-        self._progress.setValue(percent)
+        # Если активен IndeterminateProgressBar, обычный прогресс-бар скрыт.
+        # Значение устанавливаем только если обычный бар отображается и имеет диапазон.
+        if (
+            not self._indeterminate_progress 
+            or not self._indeterminate_progress.isVisible()
+        ):
+            if self._progress.maximum() > 0:
+                self._progress.setValue(percent)
+            
         self._status_label.setText(
             f"{current}/{total}: {message}"
         )
@@ -734,6 +762,12 @@ class ScriptPage(QWidget):
             results: Список строк-результатов.
         """
         self._execute_btn.setEnabled(True)
+        if self._indeterminate_progress:
+            self._indeterminate_progress.setVisible(False)
+            self._indeterminate_progress.stop()
+        
+        self._progress.setRange(0, 100)
+        self._progress.setVisible(True)
         self._progress.setValue(100)
         self._log_area.setPlainText("\n".join(results))
 
@@ -790,8 +824,13 @@ class ScriptPage(QWidget):
             error_text: Текст ошибки.
         """
         self._execute_btn.setEnabled(True)
-        self._progress.setVisible(False)
-        self._status_label.setVisible(False)
+        if self._indeterminate_progress:
+            self._indeterminate_progress.setVisible(False)
+            self._indeterminate_progress.stop()
+            
+        self._progress.setRange(0, 100)
+        self._progress.setVisible(True)
+        self._status_label.setVisible(True)
 
         InfoBar.error(
             title="Ошибка",

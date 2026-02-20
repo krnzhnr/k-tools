@@ -47,7 +47,6 @@ class QaacRunner:
         # Пример из bat: qaac64 --ignorelength --tvbr 127 "input" -o "output"
         cmd = [
             self._qaac_path,
-            "--ignorelength",
             "--tvbr", tvbr,
         ]
 
@@ -99,13 +98,24 @@ class QaacRunner:
 
             if result.returncode != 0:
                 err_msg = result.stderr.strip() or result.stdout.strip()
-                if "CoreAudioToolbox.dll" in err_msg:
+                # Код 3221225477 (0xC0000005) - Access Violation
+                if result.returncode == 3221225477 or result.returncode == -1073741819:
+                    logger.error(
+                        "QAAC критически завершился (Access Violation). "
+                        "Это может быть вызвано конфликтом библиотек Apple или поврежденным входом."
+                    )
+                elif "CoreAudioToolbox.dll" in err_msg:
                     logger.error(
                         "QAAC не может работать: отсутствуют библиотеки Apple (CoreAudio).\n"
                         "Пожалуйста, установите iTunes или скопируйте библиотеки в папку bin/ffmpeg/QTFiles64."
                     )
                 else:
-                    logger.error("QAAC завершился с ошибкой (код %d): %s", result.returncode, err_msg)
+                    logger.error(
+                        "QAAC завершился с ошибкой (код %d)\nSTDOUT: %s\nSTDERR: %s",
+                        result.returncode,
+                        result.stdout.strip() or "пусто",
+                        result.stderr.strip() or "пусто",
+                    )
                 return False
 
             if result.stdout.strip():
@@ -116,3 +126,4 @@ class QaacRunner:
         except Exception:
             logger.exception("Ошибка при запуске QAAC для файла '%s'", input_path.name)
             return False
+

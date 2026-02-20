@@ -117,6 +117,10 @@ class ContainerConverterScript(AbstractScript):
         )
 
         for idx, file_path in enumerate(files):
+            if progress_callback:
+                progress_callback(
+                    idx, total, f"Конвертация: {file_path.name}"
+                )
             logger.info("Обработка файла [%d/%d]: '%s' (вход)", idx + 1, total, file_path.name)
             if file_path.suffix.lower() == target_ext:
                 msg = (

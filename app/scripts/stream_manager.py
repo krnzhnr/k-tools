@@ -155,6 +155,12 @@ class StreamManagerScript(AbstractScript):
 
         for file_path in files:
             completed += 1
+            if progress_callback:
+                progress_callback(
+                    completed - 1,
+                    total,
+                    f"Анализ и фильтрация: {file_path.name}",
+                )
             file_key = str(file_path)
             selected_ids = per_file.get(file_key, [])
 
