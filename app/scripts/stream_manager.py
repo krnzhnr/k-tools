@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Скрипт управления потоками MKV.
+"""Скрипт управления потоками MKV и MP4.
 
 Позволяет удалять выбранные дорожки или сохранять
-только выбранные из MKV-контейнера.
+только выбранные из контейнеров MKV и MP4.
 """
 
 import logging
@@ -58,13 +58,13 @@ class StreamManagerScript(AbstractScript):
         self._probe = MKVProbeRunner()
         self._resolver = OutputResolver()
         logger.info(
-            "Скрипт управления потоками MKV создан"
+            "Скрипт управления потоками MKV/MP4 создан"
         )
 
     @property
     def name(self) -> str:
         """Отображаемое имя скрипта."""
-        return "Управление потоками MKV"
+        return "Управление потоками (MKV/MP4)"
 
     @property
     def description(self) -> str:
@@ -72,7 +72,7 @@ class StreamManagerScript(AbstractScript):
         return (
             "Удаление или сохранение выбранных "
             "дорожек (видео, аудио, субтитры) "
-            "в MKV-файлах."
+            "в MKV и MP4 файлах."
         )
 
     @property
@@ -83,7 +83,7 @@ class StreamManagerScript(AbstractScript):
     @property
     def file_extensions(self) -> list[str]:
         """Допустимые расширения файлов."""
-        return [".mkv"]
+        return [".mkv", ".mp4"]
 
     @property
     def settings_schema(self) -> list[SettingField]:
@@ -230,12 +230,29 @@ class StreamManagerScript(AbstractScript):
             kept_types = {t.track_type for t in kept_tracks}
             
             use_m4a = settings.get("use_m4a_container_audio_only", False)
+            is_mp4 = file_path.suffix.lower() == ".mp4"
             ext = file_path.suffix
-            use_ffmpeg = False
+            use_ffmpeg = is_mp4 # Всегда используем FFmpeg для MP4
             ffmpeg_args = []
 
-            # Логика для одной аудиодорожки
-            if len(kept_tracks) == 1 and kept_tracks[0].track_type == "audio":
+            if is_mp4:
+                # Генерируем аргументы маппинга для FFmpeg
+                # FFmpeg использует 0-based индексы потоков.
+                # mkvmerge -J возвращает ID, которые обычно совпадают с индексами для MP4.
+                for tid in keep_ids:
+                    ffmpeg_args.extend(["-map", f"0:{tid}"])
+                ffmpeg_args.extend(["-c", "copy"])
+                # Если сохраняем только аудио и одну дорожку, можем сменить расширение
+                if kept_types == {"audio"} and len(kept_tracks) == 1:
+                    if use_m4a:
+                        ext = ".m4a"
+                    else:
+                        ext = RAW_EXTENSIONS.get(kept_tracks[0].codec, ".mka")
+                elif kept_types == {"audio"}:
+                    ext = ".m4a" if use_m4a else ".mka"
+            
+            # Логика для одной аудиодорожки в MKV
+            elif len(kept_tracks) == 1 and kept_tracks[0].track_type == "audio":
                 track = kept_tracks[0]
                 use_ffmpeg = True
                 
@@ -282,6 +299,17 @@ class StreamManagerScript(AbstractScript):
             )
             
             output_file_path = target_dir / out_name
+
+            # Проверка на совпадение путей (FFmpeg не умеет писать в тот же файл)
+            if output_file_path.absolute() == file_path.absolute():
+                out_name = f"{file_path.stem}_processed{ext}"
+                output_file_path = target_dir / out_name
+                logger.debug(
+                    "Выходной путь совпадает с входным. "
+                    "Изменено имя на: '%s'",
+                    out_name,
+                )
+
             logger.info(
                 "Выходной файл: '%s' "
                 "(типы: %s, расширение: '%s')",
