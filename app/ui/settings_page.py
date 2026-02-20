@@ -55,7 +55,7 @@ class SettingsPage(ScrollArea):
 
         # Карточка настройки перезаписи на базе CardWidget (нативный hover)
         self._overwrite_card = CardWidget(self._general_group)
-        self._overwrite_card.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._overwrite_card.setCursor(Qt.CursorShape.ArrowCursor)
         self._overwrite_card.setMinimumHeight(70)
         
         card_layout = QHBoxLayout(self._overwrite_card)
@@ -98,7 +98,7 @@ class SettingsPage(ScrollArea):
 
         # Карточка настройки использования подпапок
         self._auto_subfolder_card = CardWidget(self._general_group)
-        self._auto_subfolder_card.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._auto_subfolder_card.setCursor(Qt.CursorShape.ArrowCursor)
         self._auto_subfolder_card.setMinimumHeight(70)
         
         auto_subfolder_layout = QHBoxLayout(self._auto_subfolder_card)
@@ -116,7 +116,7 @@ class SettingsPage(ScrollArea):
         
         subfolder_title_label = BodyLabel(self.tr("Автоматическая подпапка"), self._auto_subfolder_card)
         subfolder_desc_label = CaptionLabel(
-            self.tr("Сохранять результаты в отдельную подпапку рядом с исходным файлом"),
+            self.tr("Сохранять результаты в подпапку. Если отключено — файлы сохраняются рядом с исходником"),
             self._auto_subfolder_card
         )
         subfolder_desc_label.setStyleSheet("color: rgba(255, 255, 255, 0.6)")
@@ -130,6 +130,8 @@ class SettingsPage(ScrollArea):
 
         # Переключатель
         self._auto_subfolder_switch = SwitchButton(self._auto_subfolder_card)
+        self._auto_subfolder_switch.setOnText("")
+        self._auto_subfolder_switch.setOffText("")
         self._auto_subfolder_switch.setChecked(self._settings_manager.use_auto_subfolder)
         self._auto_subfolder_switch.checkedChanged.connect(self._on_auto_subfolder_changed)
         auto_subfolder_layout.addWidget(self._auto_subfolder_switch)

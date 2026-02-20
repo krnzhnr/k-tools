@@ -17,6 +17,7 @@ from app.core.abstract_script import (
 )
 from app.core.settings_manager import SettingsManager
 from app.core.output_resolver import OutputResolver
+from app.infrastructure.ffmpeg_runner import FFmpegRunner
 from app.infrastructure.mkvmerge_runner import (
     MKVMergeRunner,
 )
@@ -31,6 +32,21 @@ logger = logging.getLogger(__name__)
 MODE_REMOVE = "Удалить выбранные"
 MODE_KEEP = "Сохранить только выбранные"
 
+# Маппинг кодеков на расширения для сырого извлечения
+RAW_EXTENSIONS = {
+    "AC-3": ".ac3",
+    "E-AC-3": ".eac3",
+    "DTS": ".dts",
+    "AAC": ".aac",
+    "Opus": ".opus",
+    "FLAC": ".flac",
+    "Vorbis": ".ogg",
+    "MP3": ".mp3",
+    "TrueHD": ".thd",
+    "PCM": ".wav",
+    "MPEG Audio": ".mp3",
+}
+
 
 class StreamManagerScript(AbstractScript):
     """Скрипт для управления потоками в MKV."""
@@ -38,6 +54,7 @@ class StreamManagerScript(AbstractScript):
     def __init__(self) -> None:
         """Инициализация скрипта."""
         self._runner = MKVMergeRunner()
+        self._ffmpeg = FFmpegRunner()
         self._probe = MKVProbeRunner()
         self._resolver = OutputResolver()
         logger.info(
@@ -78,6 +95,12 @@ class StreamManagerScript(AbstractScript):
                 setting_type=SettingType.COMBO,
                 default=MODE_REMOVE,
                 options=[MODE_REMOVE, MODE_KEEP],
+            ),
+            SettingField(
+                key="use_m4a_container_audio_only",
+                label="Упаковать аудио в M4A (только при сохранении одной дорожки)",
+                setting_type=SettingType.CHECKBOX,
+                default=False,
             ),
         ]
 
@@ -198,12 +221,55 @@ class StreamManagerScript(AbstractScript):
                 )
 
             # Определяем расширение по типам
-            kept_types = self._get_kept_types(
-                all_tracks=all_tracks,
-                selected_ids=selected_ids,
-                mode=mode,
+            keep_ids = self._compute_keep_ids(
+                all_tracks, selected_ids, mode
             )
-            if kept_types == {"audio"}:
+            kept_tracks = [
+                t for t in all_tracks if t.track_id in keep_ids
+            ]
+            kept_types = {t.track_type for t in kept_tracks}
+            
+            use_m4a = settings.get("use_m4a_container_audio_only", False)
+            ext = file_path.suffix
+            use_ffmpeg = False
+            ffmpeg_args = []
+
+            # Логика для одной аудиодорожки
+            if len(kept_tracks) == 1 and kept_tracks[0].track_type == "audio":
+                track = kept_tracks[0]
+                use_ffmpeg = True
+                
+                if use_m4a:
+                    ext = ".m4a"
+                else:
+                    # Пытаемся определить raw расширение по кодеку
+                    codec = track.codec
+                    ext = RAW_EXTENSIONS.get(codec, ".mka")
+                    logger.debug("Определено расширение для кодека '%s': %s", codec, ext)
+                
+                # Аргументы для копирования дорожки
+                if mode == MODE_KEEP:
+                    # FFmpeg использует 0-based индекс для аудио -map 0:a:N 
+                    # Но mkvmerge ID не всегда совпадает. Надежнее через mkvmerge если сложная фильтрация,
+                    # но тут у нас одна дорожка.
+                    # Найдем индекс аудиодорожки среди всех аудиодорожек
+                    audio_tracks = [t for t in all_tracks if t.track_type == "audio"]
+                    try:
+                        audio_idx = audio_tracks.index(track)
+                        ffmpeg_args = ["-map", f"0:a:{audio_idx}", "-c", "copy"]
+                    except ValueError:
+                        use_ffmpeg = False # Fallback
+                else:
+                    # Если режим REMOVE, но осталась одна дорожка (значит все остальные удалены)
+                    # Нам все равно нужен индекс именно этой дорожки
+                    audio_tracks = [t for t in all_tracks if t.track_type == "audio"]
+                    try:
+                        audio_idx = audio_tracks.index(track)
+                        ffmpeg_args = ["-map", f"0:a:{audio_idx}", "-c", "copy"]
+                    except ValueError:
+                        use_ffmpeg = False
+
+            elif kept_types == {"audio"}:
                 ext = ".mka"
             else:
                 ext = file_path.suffix
@@ -250,18 +316,27 @@ class StreamManagerScript(AbstractScript):
                 mkvmerge_args,
             )
 
-            # Запуск mkvmerge
-            inputs = [
-                {
-                    "path": file_path,
-                    "args": mkvmerge_args,
-                }
-            ]
+            # Запуск обработки
+            if use_ffmpeg:
+                logger.debug("Использование FFmpeg для извлечения аудио дорожки")
+                success = self._ffmpeg.run(
+                    input_path=file_path,
+                    output_path=output_file_path,
+                    extra_args=ffmpeg_args
+                )
+            else:
+                # Запуск mkvmerge
+                inputs = [
+                    {
+                        "path": file_path,
+                        "args": mkvmerge_args,
+                    }
+                ]
 
-            success = self._runner.run(
-                output_path=output_file_path,
-                inputs=inputs,
-            )
+                success = self._runner.run(
+                    output_path=output_file_path,
+                    inputs=inputs,
+                )
 
             if success:
                 msg = (

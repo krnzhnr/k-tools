@@ -20,20 +20,20 @@ logger = logging.getLogger(__name__)
 
 # Поддерживаемые форматы и их настройки кодеков
 AUDIO_FORMATS = {
-    "MP3": {"ext": ".mp3", "codec": "libmp3lame"},
-    "AAC": {"ext": ".aac", "codec": "aac"},
     "QAAC": {"ext": ".m4a", "codec": "qaac"},
-    "OGG": {"ext": ".ogg", "codec": "libvorbis"},
+    "AAC": {"ext": ".aac", "codec": "aac"},
     "FLAC": {"ext": ".flac", "codec": "flac"},
     "WAV": {"ext": ".wav", "codec": "pcm_s16le"},
     "AC3": {"ext": ".ac3", "codec": "ac3"},
     "EAC3": {"ext": ".eac3", "codec": "eac3"},
+    "MP3": {"ext": ".mp3", "codec": "libmp3lame"},
+    "OPUS": {"ext": ".opus", "codec": "libopus"},
+    "OGG": {"ext": ".ogg", "codec": "libvorbis"},
     "DTS": {"ext": ".dts", "codec": "dca"},
     "WavPack": {"ext": ".wv", "codec": "wavpack"},
-    "AIFF": {"ext": ".aiff", "codec": "pcm_s16be"},
     "ALAC": {"ext": ".m4a", "codec": "alac"},
     "WMA": {"ext": ".wma", "codec": "wmav2"},
-    "OPUS": {"ext": ".opus", "codec": "libopus"},
+    "AIFF": {"ext": ".aiff", "codec": "pcm_s16be"},
     "ADPCM": {"ext": ".wav", "codec": "adpcm_ima_wav"},
 }
 
@@ -94,7 +94,7 @@ class AudioConverterScript(AbstractScript):
                 key="target_format",
                 label="Целевой формат",
                 setting_type=SettingType.COMBO,
-                default="MP3",
+                default="QAAC",
                 options=list(AUDIO_FORMATS.keys()),
             ),
             # Настройка битрейта (для lossy форматов)
