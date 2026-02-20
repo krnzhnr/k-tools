@@ -125,15 +125,14 @@ class AudioConverterScript(AbstractScript):
                 setting_type=SettingType.COMBO,
                 default="127",
                 options=[str(i) for i in range(0, 128, 16)] + ["127"],
-                visible_if={"target_format": "QAAC"},
+                visible_if={"target_format": ["QAAC"]},
             ),
-            # Без контейнера для QAAC
+            # Опция контейнера M4A
             SettingField(
-                key="qaac_adts",
-                label="Без контейнера (ADTS)",
+                key="use_m4a_container",
+                label="Упаковать в контейнер (m4a)",
                 setting_type=SettingType.CHECKBOX,
                 default=False,
-                visible_if={"target_format": "QAAC"},
             ),
             SettingField(
                 key="delete_original",
@@ -167,9 +166,10 @@ class AudioConverterScript(AbstractScript):
         target_ext = fmt_info["ext"]
         codec = fmt_info["codec"]
 
-        # Специальная обработка для QAAC ADTS
-        if target_fmt_key == "QAAC" and settings.get("qaac_adts", False):
-            target_ext = ".aac"
+        # Обработка контейнера M4A для форматов на базе AAC
+        use_m4a = settings.get("use_m4a_container", False)
+        if target_fmt_key in ["AAC", "QAAC"]:
+            target_ext = ".m4a" if use_m4a else ".aac"
 
         bitrate = settings.get("bitrate", "320k")
         compression = settings.get("compression", "5")
@@ -178,8 +178,8 @@ class AudioConverterScript(AbstractScript):
         )
 
         logger.info(
-            "Настройки аудио-конвертации: формат=%s, кодек=%s, битрейт=%s, сжатие=%s, удалять исходник=%s",
-            target_fmt_key, codec, bitrate, compression, "ДА" if delete_original else "НЕТ"
+            "Настройки аудио-конвертации: формат=%s, кодек=%s, битрейт=%s, сжатие=%s, контейнер=%s, удалять исходник=%s",
+            target_fmt_key, codec, bitrate, compression, "M4A" if use_m4a else "RAW", "ДА" if delete_original else "НЕТ"
         )
 
         results: list[str] = []
@@ -193,24 +193,16 @@ class AudioConverterScript(AbstractScript):
 
         for idx, file_path in enumerate(files):
             logger.info("Обработка аудио-файла [%d/%d]: '%s' (вход)", idx + 1, total, file_path.name)
-            # Пропускаем, если файл уже в целевом формате
-            if file_path.suffix.lower() == target_ext and \
-               target_fmt_key not in LOSSY_FORMATS:
-                 if file_path.suffix.lower() == target_ext:
-                    msg = (
-                        f"⏭ Пропущен (уже {target_fmt_key}): "
-                        f"{file_path.name}"
-                    )
-                    results.append(msg)
-                    logger.info("Файл '%s' уже имеет формат %s, пропуск", file_path.name, target_fmt_key)
-                    continue
+            
+            # Пропускаем, если файл уже в целевом формате и это не lossy формат
+            if file_path.suffix.lower() == target_ext and target_fmt_key not in LOSSY_FORMATS:
+                msg = f"⏭ Пропущен (уже {target_fmt_key}): {file_path.name}"
+                results.append(msg)
+                logger.info("Файл '%s' уже имеет формат %s, пропуск", file_path.name, target_fmt_key)
+                continue
 
-            target_dir = self._resolver.resolve(
-                file_path, output_path
-            )
-            output_file_path = (
-                target_dir / file_path.with_suffix(target_ext).name
-            )
+            target_dir = self._resolver.resolve(file_path, output_path)
+            output_file_path = target_dir / file_path.with_suffix(target_ext).name
             logger.debug("Целевой путь: '%s'", output_file_path.name)
             
             if output_file_path.exists() and not SettingsManager().overwrite_existing:
@@ -220,64 +212,51 @@ class AudioConverterScript(AbstractScript):
                 if progress_callback:
                     progress_callback(idx + 1, total, msg)
                 continue
+            
+            # Формируем аргументы в зависимости от формата
+            extra_args = ["-c:a", codec, "-map_metadata", "-1"]
+
+            if target_fmt_key in LOSSLESS_COMPRESSED:
+                extra_args.extend(["-compression_level", str(compression)])
+            elif target_fmt_key in LOSSY_FORMATS:
+                extra_args.extend(["-b:a", bitrate])
+            
+            if target_fmt_key == "DTS":
+                extra_args.extend(["-strict", "-2"])
+
+            # Выбор раннера
+            if target_fmt_key == "QAAC":
+                qaac_quality = settings.get("qaac_quality", "127")
+                qaac_adts = not use_m4a
+                logger.debug("Вызов QaacRunner для QAAC")
+                success = self._qaac.run(
+                    input_path=file_path,
+                    output_path=output_file_path,
+                    tvbr=qaac_quality,
+                    adts=qaac_adts,
+                )
             else:
-                # Формируем аргументы в зависимости от формата
-                extra_args = ["-c:a", codec, "-map_metadata", "-1"]
+                logger.debug("Вызов FFmpeg для конвертации аудио")
+                success = self._ffmpeg.run(
+                    input_path=file_path,
+                    output_path=output_file_path,
+                    extra_args=extra_args,
+                )
 
-                if target_fmt_key in LOSSLESS_COMPRESSED:
-                    extra_args.extend([
-                        "-compression_level", str(compression)
-                    ])
-                elif target_fmt_key in LOSSY_FORMATS:
-                    extra_args.extend([
-                        "-b:a", bitrate
-                    ])
-                
-                if target_fmt_key == "DTS":
-                    extra_args.extend(["-strict", "-2"])
+            if success:
+                msg = f"✅ Конвертировано: {output_file_path.name}"
+                logger.info("Успешная конвертация: '%s'", output_file_path.name)
+                if delete_original:
+                    logger.info("Удаление исходника: '%s'", file_path.name)
+                    self._delete_source(file_path, results)
+            else:
+                msg = f"❌ Ошибка: {file_path.name}"
+                logger.error("Ошибка при конвертации аудио для файла: '%s'", file_path.name)
 
-                if target_fmt_key == "QAAC":
-                    qaac_quality = settings.get("qaac_quality", "127")
-                    qaac_adts = settings.get("qaac_adts", False)
-                    logger.debug("Вызов QaacRunner для конвертации аудио")
-                    success = self._qaac.run(
-                        input_path=file_path,
-                        output_path=output_file_path,
-                        tvbr=qaac_quality,
-                        adts=qaac_adts,
-                    )
-                else:
-                    logger.debug("Вызов FFmpeg для конвертации аудио")
-                    success = self._ffmpeg.run(
-                        input_path=file_path,
-                        output_path=output_file_path,
-                        extra_args=extra_args,
-                    )
-
-                if success:
-                    msg = f"✅ Конвертировано: {output_file_path.name}"
-                    logger.info("Успешная конвертация: '%s'", output_file_path.name)
-                    if delete_original:
-                        logger.info("Удаление исходника: '%s'", file_path.name)
-                        self._delete_source(
-                            file_path,
-                            results,
-                        )
-                else:
-                    msg = (
-                        f"❌ Ошибка: "
-                        f"{file_path.name}"
-                    )
-                    logger.error("Ошибка при конвертации аудио для файла: '%s'", file_path.name)
-
-                results.append(msg)
+            results.append(msg)
 
             if progress_callback:
-                progress_callback(
-                    idx + 1,
-                    total,
-                    results[-1],
-                )
+                progress_callback(idx + 1, total, results[-1])
 
         success_count = len([r for r in results if r.startswith("✅")])
         logger.info(

@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, call
 
 import pytest
+from app.core.settings_manager import SettingsManager
 
 from app.infrastructure.mkvprobe_runner import (
     TrackInfo,
@@ -212,20 +213,21 @@ class TestExecuteEarlyReturns:
         out_file = out_dir / "video.mkv"
         out_file.touch()
 
-        mocker.patch(
-            "app.core.settings_manager"
-            ".SettingsManager.overwrite_existing",
-            new_callable=mocker.PropertyMock,
-            return_value=False,
-        )
+        # Настраиваем резолвер, чтобы он возвращал нашу временную папку
+        mocker.patch.object(script._resolver, "resolve", return_value=out_dir)
+        
+        # Полностью подменяем SettingsManager в модуле скрипта
+        mock_sm = mocker.patch("app.scripts.stream_replacer.SettingsManager")
+        mock_sm.return_value.overwrite_existing = False
 
         cb = MagicMock()
         settings = {
             "container_path": str(container),
             "replacements": {"0": "a.aac"},
         }
+        # Передаем только files и settings, progress_callback как именованный аргумент
         results = script.execute(
-            [], settings, cb
+            [], settings, progress_callback=cb
         )
         assert len(results) == 1
         assert "Пропущен" in results[0]
@@ -274,7 +276,7 @@ class TestExecuteMKV:
         }
         cb = MagicMock()
         results = script.execute(
-            [], settings, cb
+            [], settings, progress_callback=cb
         )
 
         assert len(results) == 1
@@ -412,7 +414,7 @@ class TestExecuteMP4:
         }
         cb = MagicMock()
         results = script.execute(
-            [], settings, cb
+            [], settings, progress_callback=cb
         )
 
         assert len(results) == 1
@@ -592,7 +594,7 @@ class TestExecuteMP4:
             },
         }
         results = script.execute(
-            [], settings, None
+            [], settings, progress_callback=None
         )
         assert "Собрано" in results[0]
 
@@ -988,6 +990,10 @@ class TestOutputDirectory:
             return_value=True,
         )
 
+        # Настраиваем резолвер
+        mocker.patch.object(SettingsManager, "use_auto_subfolder", new_callable=mocker.PropertyMock, return_value=True)
+        mocker.patch.object(SettingsManager, "default_output_subfolder", new_callable=mocker.PropertyMock, return_value="Completed")
+
         settings = {
             "container_path": str(container),
             "replacements": {
@@ -1021,6 +1027,10 @@ class TestOutputDirectory:
             "run",
             return_value=True,
         )
+
+        # Настраиваем резолвер
+        mocker.patch.object(SettingsManager, "use_auto_subfolder", new_callable=mocker.PropertyMock, return_value=True)
+        mocker.patch.object(SettingsManager, "default_output_subfolder", new_callable=mocker.PropertyMock, return_value="Completed")
 
         settings = {
             "container_path": str(container),

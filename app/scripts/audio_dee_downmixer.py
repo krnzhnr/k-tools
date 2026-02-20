@@ -32,7 +32,7 @@ class AudioDeeDownmixerScript(AbstractScript):
 
     @property
     def icon_name(self) -> str:
-        return "MUSIC"
+        return "MIX_VOLUMES"
 
     @property
     def file_extensions(self) -> list[str]:

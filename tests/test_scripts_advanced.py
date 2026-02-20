@@ -53,8 +53,10 @@ def test_muxer_skip_existing(tmp_path):
     
     script._runner = MagicMock()
     
-    # Принудительно выключаем перезапись для теста пропуска
-    with patch.object(SettingsManager, "overwrite_existing", new_callable=PropertyMock, return_value=False):
+    # Принудительно выключаем перезапись и настраиваем подпапку для теста пропуска
+    with patch.object(SettingsManager, "overwrite_existing", new_callable=PropertyMock, return_value=False), \
+         patch.object(SettingsManager, "use_auto_subfolder", new_callable=PropertyMock, return_value=True), \
+         patch.object(SettingsManager, "default_output_subfolder", new_callable=PropertyMock, return_value="Completed"):
         results = script.execute([video], {"clean_tracks": False})
     
     assert any("Пропущен" in r for r in results)
@@ -71,16 +73,24 @@ def test_audio_converter_all_codecs():
     for fmt, config in AUDIO_FORMATS.items():
         script._ffmpeg = MagicMock()
         script._ffmpeg.run.return_value = True
+        script._qaac = MagicMock()
+        script._qaac.run.return_value = True
         
         settings = {"target_format": fmt, "bitrate": "192k", "delete_original": False}
         script.execute([Path("test.raw")], settings)
         
-        # Проверяем вызов ffmpeg
-        args = script._ffmpeg.run.call_args[1].get("extra_args", [])
-        assert "-c:a" in args
-        assert config["codec"] in args
-        if fmt in ["MP3", "AAC", "OGG"]:
-             assert "192k" in args
+        if fmt == "QAAC":
+            # Проверяем вызов qaac
+            script._qaac.run.assert_called_once()
+            call_kwargs = script._qaac.run.call_args.kwargs
+            assert str(call_kwargs['output_path']).endswith(".aac")
+        else:
+            # Проверяем вызов ffmpeg
+            args = script._ffmpeg.run.call_args[1].get("extra_args", [])
+            assert "-c:a" in args
+            assert config["codec"] in args
+            if fmt in ["MP3", "AAC", "OGG"]:
+                 assert "192k" in args
 
 def test_audio_converter_delete_and_error():
     script = AudioConverterScript()
