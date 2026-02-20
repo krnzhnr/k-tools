@@ -29,6 +29,7 @@ from app.core.script_registry import ScriptRegistry
 from app.scripts.container_converter import ContainerConverterScript
 from app.scripts.metadata_cleaner import MetadataCleanerScript
 from app.scripts.audio_converter import AudioConverterScript
+from app.scripts.audio_dee_downmixer import AudioDeeDownmixerScript
 from app.scripts.audio_speed_changer import AudioSpeedChangerScript
 from app.scripts.muxer import MuxerScript
 from app.scripts.stream_manager import StreamManagerScript
@@ -83,6 +84,7 @@ def _create_registry() -> ScriptRegistry:
     registry.register(MetadataCleanerScript())
     registry.register(ContainerConverterScript())
     registry.register(AudioConverterScript())
+    registry.register(AudioDeeDownmixerScript())
     registry.register(AudioSpeedChangerScript())
     registry.register(MuxerScript())
     registry.register(StreamManagerScript())

@@ -40,6 +40,9 @@ def get_binary_path(binary_name: str) -> str:
     subfolder_map: dict[str, str] = {
         "mkvmerge": "mkvtoolnix",
         "ffprobe": "ffmpeg",
+        "deew": "DEE",
+        "dee": "DEE",
+        "qaac64": "ffmpeg",
     }
     subfolder_name = subfolder_map.get(
         base_name, base_name
@@ -48,6 +51,8 @@ def get_binary_path(binary_name: str) -> str:
     search_locations = [
         base_dir / "bin" / subfolder_name / binary_name,  # bin/ffmpeg/ffmpeg.exe
         base_dir / "bin" / binary_name,                    # bin/ffmpeg.exe (legacy)
+        base_dir / "venv" / "Scripts" / binary_name,       # venv/Scripts (pip installed)
+        base_dir / ".venv" / "Scripts" / binary_name,      # .venv/Scripts
     ]
 
     for loc in search_locations:

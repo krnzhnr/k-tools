@@ -14,6 +14,7 @@ from app.core.abstract_script import (
 from app.core.settings_manager import SettingsManager
 from app.core.output_resolver import OutputResolver
 from app.infrastructure.ffmpeg_runner import FFmpegRunner
+from app.infrastructure.qaac_runner import QaacRunner
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +22,7 @@ logger = logging.getLogger(__name__)
 AUDIO_FORMATS = {
     "MP3": {"ext": ".mp3", "codec": "libmp3lame"},
     "AAC": {"ext": ".aac", "codec": "aac"},
+    "QAAC": {"ext": ".m4a", "codec": "qaac"},
     "OGG": {"ext": ".ogg", "codec": "libvorbis"},
     "FLAC": {"ext": ".flac", "codec": "flac"},
     "WAV": {"ext": ".wav", "codec": "pcm_s16le"},
@@ -53,6 +55,7 @@ class AudioConverterScript(AbstractScript):
     def __init__(self) -> None:
         """Инициализация аудио конвертера."""
         self._ffmpeg = FFmpegRunner()
+        self._qaac = QaacRunner()
         self._resolver = OutputResolver()
         logger.info("Скрипт аудио конвертации создан")
 
@@ -115,6 +118,23 @@ class AudioConverterScript(AbstractScript):
                 options=[str(i) for i in range(13)],
                 visible_if={"target_format": LOSSLESS_COMPRESSED},
             ),
+            # Настройка качества QAAC (TVBR)
+            SettingField(
+                key="qaac_quality",
+                label="Качество QAAC (0-127)",
+                setting_type=SettingType.COMBO,
+                default="127",
+                options=[str(i) for i in range(0, 128, 16)] + ["127"],
+                visible_if={"target_format": "QAAC"},
+            ),
+            # Без контейнера для QAAC
+            SettingField(
+                key="qaac_adts",
+                label="Без контейнера (ADTS)",
+                setting_type=SettingType.CHECKBOX,
+                default=False,
+                visible_if={"target_format": "QAAC"},
+            ),
             SettingField(
                 key="delete_original",
                 label="Удалить исходный файл",
@@ -146,6 +166,10 @@ class AudioConverterScript(AbstractScript):
         )
         target_ext = fmt_info["ext"]
         codec = fmt_info["codec"]
+
+        # Специальная обработка для QAAC ADTS
+        if target_fmt_key == "QAAC" and settings.get("qaac_adts", False):
+            target_ext = ".aac"
 
         bitrate = settings.get("bitrate", "320k")
         compression = settings.get("compression", "5")
@@ -212,12 +236,23 @@ class AudioConverterScript(AbstractScript):
                 if target_fmt_key == "DTS":
                     extra_args.extend(["-strict", "-2"])
 
-                logger.debug("Вызов FFmpeg для конвертации аудио")
-                success = self._ffmpeg.run(
-                    input_path=file_path,
-                    output_path=output_file_path,
-                    extra_args=extra_args,
-                )
+                if target_fmt_key == "QAAC":
+                    qaac_quality = settings.get("qaac_quality", "127")
+                    qaac_adts = settings.get("qaac_adts", False)
+                    logger.debug("Вызов QaacRunner для конвертации аудио")
+                    success = self._qaac.run(
+                        input_path=file_path,
+                        output_path=output_file_path,
+                        tvbr=qaac_quality,
+                        adts=qaac_adts,
+                    )
+                else:
+                    logger.debug("Вызов FFmpeg для конвертации аудио")
+                    success = self._ffmpeg.run(
+                        input_path=file_path,
+                        output_path=output_file_path,
+                        extra_args=extra_args,
+                    )
 
                 if success:
                     msg = f"✅ Конвертировано: {output_file_path.name}"
