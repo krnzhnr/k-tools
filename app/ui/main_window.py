@@ -178,20 +178,67 @@ class MainWindow(FluentWindow):
 
     def _setup_navigation(self) -> None:
         """Настройка навигационной панели со скриптами."""
+        # Группировка скриптов по категориям
+        categories = {}
         for script in self._registry.scripts:
-            page = ScriptPage(script=script, parent=self)
-            page.setObjectName(
-                f"page_{script.name}"
+            cat = script.category
+            if cat not in categories:
+                categories[cat] = []
+            categories[cat].append(script)
+
+        # Порядок категорий для отображения
+        ordered_cats = ["Аудио", "Видео", "Муксинг"]
+        for cat in categories:
+            if cat not in ordered_cats:
+                ordered_cats.append(cat)
+
+        # Соответствие иконок и ASCII-ключей
+        cat_info = {
+            "Аудио": (FluentIcon.MUSIC, "audio"),
+            "Видео": (FluentIcon.VIDEO, "video"),
+            "Муксинг": (FluentIcon.SHARE, "muxing"),
+        }
+
+        for cat_name in ordered_cats:
+            if cat_name not in categories:
+                continue
+
+            scripts = categories[cat_name]
+            icon, cat_key = cat_info.get(
+                cat_name, 
+                (FluentIcon.FOLDER, f"cat{ordered_cats.index(cat_name)}")
             )
-            self._script_pages[script.name] = page
-
-            icon = self._resolve_icon(script.icon_name)
-
-            self.addSubInterface(
-                interface=page,
+            
+            # Для категорий используем addItem напрямую в navigationInterface.
+            # Это создает элемент, который может быть родителем, но не привязан к странице.
+            parent_item = self.navigationInterface.addItem(
+                routeKey=cat_key,
                 icon=icon,
-                text=script.name,
+                text=cat_name,
+                selectable=False
             )
+            parent_item.setObjectName(cat_key)
+
+            for script in scripts:
+                page = ScriptPage(script=script, parent=self)
+                
+                # Имя объекта (маршрут) ОБЯЗАТЕЛЬНО должно быть ASCII
+                # Для стабильности используем простое имя класса
+                safe_id = "".join(c for c in script.__class__.__name__ if c.isalnum())
+                page.setObjectName(safe_id)
+                
+                self._script_pages[script.name] = page
+
+                script_icon = self._resolve_icon(script.icon_name)
+
+                # Добавляем скрипт вложенным в категорию. 
+                # addSubInterface сам добавит его в stackedWidget и создаст NavigationItem.
+                self.addSubInterface(
+                    interface=page,
+                    icon=script_icon,
+                    text=script.name,
+                    parent=parent_item
+                )
 
         # Добавление страницы настроек вниз
         self._settings_page = SettingsPage(self)
@@ -208,20 +255,19 @@ class MainWindow(FluentWindow):
 
         # Настройка ширины навигационной панели
         fm = self.fontMetrics()
-        max_text_width = 0
+        max_text_width = 160
         for script in self._registry.scripts:
-            width = fm.horizontalAdvance(
-                script.name
-            )
+            width = fm.horizontalAdvance(script.name)
             if width > max_text_width:
                 max_text_width = width
 
         self.navigationInterface.setExpandWidth(
-            max_text_width + 100
+            max_text_width + 120
         )
 
         logger.info(
-            "Навигационная панель успешно настроена. Всего элементов: %d (скрипты) + 1 (настройки)",
+            "Навигационная панель успешно настроена (иерархический вид). "
+            "Всего скриптов: %d",
             len(self._script_pages),
         )
 

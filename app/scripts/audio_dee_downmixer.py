@@ -23,6 +23,11 @@ class AudioDeeDownmixerScript(AbstractScript):
         self._resolver = OutputResolver()
 
     @property
+    def category(self) -> str:
+        """Категория скрипта."""
+        return "Аудио"
+
+    @property
     def name(self) -> str:
         return "Даунмикс в Stereo (DEE)"
 

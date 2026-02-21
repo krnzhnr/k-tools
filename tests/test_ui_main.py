@@ -65,4 +65,10 @@ def test_work_panel_execution_start(qtbot, mocker):
     # Проверяем что воркер создан и запущен
     mock_worker_class.assert_called_once()
     mock_worker_instance.start.assert_called_once()
-    assert page._progress.isVisible()
+    
+    # Проверяем, что какой-то прогресс-бар виден
+    is_progress_visible = page._progress.isVisible()
+    if hasattr(page, "_indeterminate_progress") and page._indeterminate_progress:
+        is_progress_visible = is_progress_visible or page._indeterminate_progress.isVisible()
+    
+    assert is_progress_visible

@@ -35,6 +35,11 @@ class AudioSplitterScript(AbstractScript):
         logger.info("Скрипт AudioSplitterScript инициализирован")
 
     @property
+    def category(self) -> str:
+        """Категория скрипта."""
+        return "Аудио"
+
+    @property
     def name(self) -> str:
         """Отображаемое имя скрипта."""
         return "Разделение аудио (eac3to)"

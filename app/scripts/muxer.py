@@ -29,6 +29,11 @@ class MuxerScript(AbstractScript):
         logger.info("Скрипт муксинга создан")
 
     @property
+    def category(self) -> str:
+        """Категория скрипта."""
+        return "Муксинг"
+
+    @property
     def name(self) -> str:
         """Отображаемое имя скрипта."""
         return "Муксер (Video + Audio + Subs)"

@@ -7,6 +7,8 @@ from app.core.abstract_script import AbstractScript, SettingField, SettingType
 
 class MockScript(AbstractScript):
     @property
+    def category(self): return "Категория"
+    @property
     def name(self): return "Mock Script"
     @property
     def description(self): return "Description"

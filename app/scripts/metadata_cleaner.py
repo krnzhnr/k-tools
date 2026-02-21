@@ -32,6 +32,11 @@ class MetadataCleanerScript(AbstractScript):
         logger.info("Скрипт очистки метаданных создан")
 
     @property
+    def category(self) -> str:
+        """Категория скрипта."""
+        return "Видео"
+
+    @property
     def name(self) -> str:
         """Отображаемое имя скрипта."""
         return "Очистка метаданных"

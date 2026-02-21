@@ -40,6 +40,11 @@ class ContainerConverterScript(AbstractScript):
         )
 
     @property
+    def category(self) -> str:
+        """Категория скрипта."""
+        return "Видео"
+
+    @property
     def name(self) -> str:
         """Отображаемое имя скрипта."""
         return "Конвертация контейнера"

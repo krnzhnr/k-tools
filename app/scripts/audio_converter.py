@@ -60,6 +60,11 @@ class AudioConverterScript(AbstractScript):
         logger.info("Скрипт аудио конвертации создан")
 
     @property
+    def category(self) -> str:
+        """Категория скрипта."""
+        return "Аудио"
+
+    @property
     def name(self) -> str:
         """Отображаемое имя скрипта."""
         return "Аудио Конвертер"

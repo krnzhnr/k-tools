@@ -61,6 +61,11 @@ class AbstractScript(ABC):
 
     @property
     @abstractmethod
+    def category(self) -> str:
+        """Категория скрипта (например, 'Аудио', 'Видео')."""
+
+    @property
+    @abstractmethod
     def description(self) -> str:
         """Краткое описание скрипта для UI."""
 
