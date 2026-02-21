@@ -18,7 +18,12 @@ class QaacRunner:
     def __init__(self) -> None:
         """Инициализация runner'а."""
         self._qaac_path = path_utils.get_binary_path("qaac64")
-        logger.info("QaacRunner инициализирован. Путь: %s", self._qaac_path)
+        self._ffmpeg_path = path_utils.get_binary_path("ffmpeg")
+        logger.info(
+            "QaacRunner инициализирован. "
+            "qaac: %s, ffmpeg for pipe: %s",
+            self._qaac_path, self._ffmpeg_path
+        )
 
     def run(
         self,
@@ -28,7 +33,9 @@ class QaacRunner:
         adts: bool = False,
         extra_args: list[str] | None = None,
     ) -> bool:
-        """Запустить qaac64 для кодирования.
+        """Запустить qaac64 через конвейер с FFmpeg.
+
+        Это позволяет поддерживать любые входные форматы, которые знает FFmpeg.
 
         Args:
             input_path: Путь к входному файлу.
@@ -41,54 +48,69 @@ class QaacRunner:
             True при успешном завершении, False при ошибке.
         """
         if not Path(self._qaac_path).exists():
-            logger.error("Бинарник qaac64.exe не найден по пути: %s", self._qaac_path)
+            logger.error("Бинарник qaac64.exe не найден: %s", self._qaac_path)
             return False
 
-        # Пример из bat: qaac64 --ignorelength --tvbr 127 "input" -o "output"
-        cmd = [
+        # 1. Команда FFmpeg для декодирования в WAV через stdout
+        ffmpeg_cmd = [
+            self._ffmpeg_path,
+            "-v", "error",
+            "-i", str(input_path),
+            "-f", "wav",
+            "-",
+        ]
+
+        # 2. Команда QAAC для кодирования из stdin
+        # ВАЖНО: --ignorelength необходим при чтении из пайпа
+        qaac_cmd = [
             self._qaac_path,
             "--tvbr", tvbr,
+            "--ignorelength",
+            "-",
+            "-o", str(output_path),
         ]
 
         if adts:
-            cmd.append("--adts")
-
-        cmd.extend([
-            str(input_path),
-            "-o", str(output_path),
-        ])
+            qaac_cmd.insert(1, "--adts")
 
         if extra_args:
-            cmd.extend(extra_args)
+            qaac_cmd.extend(extra_args)
 
-        logger.info("Выполнение команды QAAC: %s", " ".join(cmd))
+        logger.info(
+            "Запуск конвейера: %s | %s",
+            " ".join(ffmpeg_cmd), " ".join(qaac_cmd)
+        )
 
         try:
-            # 1. Формируем список потенциальных путей к библиотекам Apple
+            # Настройка окружения для библиотек Apple
             apple_paths = [
-                # Локальная портативная папка в проекте (рекомендуется)
                 str(Path(self._qaac_path).parent / "QTFiles64"),
                 str(Path(self._qaac_path).parent / "QTFiles"),
-                # Стандартные пути установки Apple
                 os.path.expandvars(r"%ProgramFiles%\Common Files\Apple\Apple Application Support"),
                 os.path.expandvars(r"%ProgramFiles(x86)%\Common Files\Apple\Apple Application Support"),
-                os.path.expandvars(r"%ProgramFiles%\iTunes"),
             ]
-
             bin_dir = str(Path(self._qaac_path).parent)
             env = os.environ.copy()
-            
-            # Собираем существующие и найденные пути
             valid_paths = [bin_dir]
             for p in apple_paths:
                 if os.path.isdir(p):
                     valid_paths.append(p)
-            
             env["PATH"] = os.pathsep.join(valid_paths) + os.pathsep + env.get("PATH", "")
 
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
+            # Запуск FFmpeg
+            ffmpeg_proc = subprocess.Popen(
+                ffmpeg_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+
+            # Запуск QAAC с stdout от FFmpeg на входе
+            qaac_proc = subprocess.Popen(
+                qaac_cmd,
+                stdin=ffmpeg_proc.stdout,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
@@ -96,32 +118,35 @@ class QaacRunner:
                 creationflags=subprocess.CREATE_NO_WINDOW,
             )
 
-            if result.returncode != 0:
-                err_msg = result.stderr.strip() or result.stdout.strip()
-                # Код 3221225477 (0xC0000005) - Access Violation
-                if result.returncode == 3221225477 or result.returncode == -1073741819:
-                    logger.error(
-                        "QAAC критически завершился (Access Violation). "
-                        "Это может быть вызвано конфликтом библиотек Apple или поврежденным входом."
-                    )
-                elif "CoreAudioToolbox.dll" in err_msg:
-                    logger.error(
-                        "QAAC не может работать: отсутствуют библиотеки Apple (CoreAudio).\n"
-                        "Пожалуйста, установите iTunes или скопируйте библиотеки в папку bin/ffmpeg/QTFiles64."
-                    )
-                else:
-                    logger.error(
-                        "QAAC завершился с ошибкой (код %d)\nSTDOUT: %s\nSTDERR: %s",
-                        result.returncode,
-                        result.stdout.strip() or "пусто",
-                        result.stderr.strip() or "пусто",
-                    )
+            # Разрешаем FFmpeg получить SIGPIPE, если QAAC закроется раньше
+            if ffmpeg_proc.stdout:
+                ffmpeg_proc.stdout.close()
+
+            # Ждем завершения и собираем вывод
+            qaac_stdout, qaac_stderr = qaac_proc.communicate()
+            ffmpeg_stderr = ffmpeg_proc.stderr.read().decode("utf-8", "replace") if ffmpeg_proc.stderr else ""
+            
+            ffmpeg_proc.wait()
+
+            if qaac_proc.returncode != 0:
+                logger.error(
+                    "QAAC завершился с ошибкой (%d).\nSTDERR: %s\nFFmpeg STDERR: %s",
+                    qaac_proc.returncode, qaac_stderr.strip(), ffmpeg_stderr.strip()
+                )
                 return False
 
-            if result.stdout.strip():
-                logger.debug("Вывод QAAC:\n%s", result.stdout.strip())
+            if ffmpeg_proc.returncode != 0:
+                logger.error(
+                    "FFmpeg (декодер) завершился с ошибкой (%d).\nSTDERR: %s",
+                    ffmpeg_proc.returncode, ffmpeg_stderr.strip()
+                )
+                return False
 
             return True
+
+        except Exception:
+            logger.exception("Критическая ошибка конвейера QAAC для '%s'", input_path.name)
+            return False
 
         except Exception:
             logger.exception("Ошибка при запуске QAAC для файла '%s'", input_path.name)

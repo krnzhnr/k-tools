@@ -11,14 +11,65 @@ import os
 import ctypes
 from datetime import datetime
 
+# Принудительная установка UTF-8 для подпроцессов и консоли
+os.environ["PYTHONIOENCODING"] = "utf-8"
+
+# Попытка реконфигурации стандартных потоков для поддержки UTF-8 (Python 3.7+)
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+
 # Регистрация AppUserModelID для корректного отображения иконки в таскбаре Windows
-# Это должно быть сделано ПЕРЕД созданием QApplication
 if sys.platform == 'win32':
     try:
         myappid = 'krnzhnr.ktools.app.v1'
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
     except Exception:
         pass
+
+# Перехват запуска модулей через -m (для deew и других)
+if len(sys.argv) >= 3 and sys.argv[1] == "-m":
+    module_name = sys.argv[2]
+    if module_name == "deew":
+        # Очищаем argv ДО импорта, так как deew парсит их на уровне модуля
+        sys.argv = [sys.argv[0]] + sys.argv[3:]
+        
+        # Патчим subprocess.Popen, чтобы deew не открывал окна терминала 
+        # при вызове ffmpeg, ffprobe и dee.exe
+        import subprocess
+        _original_popen = subprocess.Popen
+        def _patched_popen(*args, **kwargs):
+            if sys.platform == 'win32':
+                if 'creationflags' not in kwargs:
+                    kwargs['creationflags'] = 0
+                kwargs['creationflags'] |= 0x08000000 # CREATE_NO_WINDOW
+            return _original_popen(*args, **kwargs)
+        subprocess.Popen = _patched_popen
+
+        # Импортируем deew и подавляем логотипы
+        import deew.__main__
+        try:
+            import deew.logos
+            deew.logos.logos = [""] * len(deew.logos.logos)
+        except (ImportError, AttributeError):
+            pass
+            
+        # Временно сбрасываем sys.frozen, чтобы deew использовал системный %TEMP%
+        # иначе в скомпилированном виде он лезет в папку приложения
+        _frozen = getattr(sys, 'frozen', False)
+        if _frozen:
+            delattr(sys, 'frozen')
+            
+        try:
+            deew.__main__.main()
+        finally:
+            # Восстанавливаем состояние frozen
+            if _frozen:
+                setattr(sys, 'frozen', True)
+        sys.exit(0)
 
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QIcon

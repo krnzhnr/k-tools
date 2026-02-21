@@ -21,24 +21,87 @@ SCRIPT = "main.py"
 EXE_BASE_NAME = "KTools"
 ICON = "assets/app_icon.ico"
 
-# === Управление номером сборки ===
-BUILD_NUMBER_FILE = "build_number.txt"
+# === Управление версионированием ===
+VERSION_FILE = "version.txt"
 
 
-def get_build_number() -> int:
-    """Получить текущий номер сборки из файла."""
-    if os.path.exists(BUILD_NUMBER_FILE):
-        with open(BUILD_NUMBER_FILE, "r") as f:
-            return int(f.read().strip())
-    return 0
+def get_current_version() -> str:
+    """Получить текущую версию из файла."""
+    if os.path.exists(VERSION_FILE):
+        with open(VERSION_FILE, "r") as f:
+            return f.read().strip()
+    return "1.0.000"
 
 
-def increment_build_number() -> int:
-    """Увеличить и сохранить номер сборки."""
-    build_num = get_build_number() + 1
-    with open(BUILD_NUMBER_FILE, "w") as f:
-        f.write(str(build_num))
-    return build_num
+def save_version(version: str) -> None:
+    """Сохранить новую версию в файл."""
+    with open(VERSION_FILE, "w") as f:
+        f.write(version)
+
+
+def prompt_version_update() -> str:
+    """Интерактивный опрос для обновления версии.
+    
+    Returns:
+        Новая строка версии.
+    """
+    current_version = get_current_version()
+    print(f"\n[*] Текущая версия: {current_version}")
+    print("[?] Выберите тип обновления:")
+    print("  1. Major (Мажорное: X.0.0)")
+    print("  2. Minor (Минорное: 1.X.0)")
+    print("  3. Patch (Патч: 1.0.X)")
+    print("  4. Без изменений")
+    
+    choice = input("Ваш выбор [1-4]: ").strip()
+    
+    if choice == "4":
+        return current_version
+        
+    try:
+        major, minor, patch = map(int, current_version.split('.'))
+    except ValueError:
+        major, minor, patch = 1, 0, 0
+        
+    if choice == "1":
+        major += 1
+        minor = 0
+        patch = 0
+    elif choice == "2":
+        minor += 1
+        patch = 0
+    else:
+        patch += 1
+        
+    new_version = f"{major}.{minor}.{patch:03d}"
+    save_version(new_version)
+    print(f"[✓] Версия обновлена до: {new_version}")
+    return new_version
+
+
+def update_app_version_py(version: str) -> None:
+    """Обновить версию в коде приложения (app/core/version.py)."""
+    version_py = Path("app/core/version.py")
+    if not version_py.exists():
+        print(f"[!] Файл {version_py} не найден для авто-обновления")
+        return
+        
+    with open(version_py, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+        
+    with open(version_py, "w", encoding="utf-8") as f:
+        for line in lines:
+            if line.startswith("VERSION =") or "return \"" in line and "Dev Mode" not in line:
+                if "return \"" in line:
+                    # Обработка жестко прописанной строки (как сейчас)
+                    import re
+                    new_line = re.sub(r'return "[^"]+"', f'return "{version}"', line)
+                    f.write(new_line)
+                else:
+                    f.write(f'VERSION = "{version}"\n')
+            else:
+                f.write(line)
+    print(f"[✓] Версия в {version_py} синхронизирована.")
 
 
 def ensure_venv() -> str:
@@ -80,18 +143,24 @@ def clean() -> None:
             os.remove(file)
 
 
-def create_version_file(build_num_formatted: str) -> None:
+def create_version_file(version_str: str) -> None:
     """Создать файл версии для Windows.
 
     Args:
-        build_num_formatted: Форматированный номер сборки.
+        version_str: Строка версии (например, '1.0.026').
     """
-    build_num = int(build_num_formatted)
+    parts = version_str.split('.')
+    v_parts = [int(p) for p in parts]
+    while len(v_parts) < 4:
+        v_parts.append(0)
+    
+    v_tuple = tuple(v_parts)
+    
     version_info = f"""# UTF-8
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=({build_num}, 0, 0, 0),
-    prodvers=({build_num}, 0, 0, 0),
+    filevers={v_tuple},
+    prodvers={v_tuple},
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -112,7 +181,7 @@ VSVersionInfo(
            ),
            StringStruct(
                u'FileVersion',
-               u'build {build_num_formatted}'
+               u'{version_str}'
            ),
            StringStruct(
                u'InternalName', u'{EXE_BASE_NAME}'
@@ -127,7 +196,7 @@ VSVersionInfo(
            ),
            StringStruct(
                u'ProductVersion',
-               u'1.0.{build_num}'
+               u'{version_str}'
            )])
       ]),
     VarFileInfo(
@@ -168,6 +237,8 @@ def copy_bin_directory(exe_name: str) -> None:
     shutil.copytree(src_bin, dst_bin)
 
     copied_files = list(dst_bin.iterdir())
+
+    copied_files = list(dst_bin.iterdir())
     print(
         f"[✓] Скопировано файлов из bin/: "
         f"{len(copied_files)}"
@@ -178,7 +249,7 @@ def copy_bin_directory(exe_name: str) -> None:
 
 def create_inno_setup_script(
     exe_name: str,
-    build_num: str,
+    version_str: str,
 ) -> None:
     """Генерация скрипта для Inno Setup.
 
@@ -191,14 +262,15 @@ def create_inno_setup_script(
 [Setup]
 AppId=krnzhnr.ktools.v1
 AppName={EXE_BASE_NAME}
-AppVersion=1.0.{build_num}
+AppVersion={version_str}
 DefaultDirName={{autopf}}\\{EXE_BASE_NAME}
 DefaultGroupName={EXE_BASE_NAME}
 OutputDir={cwd}\\setup_output
-OutputBaseFilename={EXE_BASE_NAME}_v1.0.{build_num}_setup
+OutputBaseFilename={EXE_BASE_NAME}_v{version_str}_setup
 SetupIconFile={cwd}\\{ICON.replace("/", "\\")}
-Compression=lzma
+Compression=lzma2/ultra64
 SolidCompression=yes
+LZMADictionarySize=65536
 ArchitecturesInstallIn64BitMode=x64
 
 [Tasks]
@@ -234,12 +306,13 @@ Flags: nowait postinstall skipifsilent
 
 def build() -> None:
     """Основная процедура сборки приложения."""
-    print("[*] Сборка .exe (Dir Mode)...")
-    build_num = increment_build_number()
-    build_num_formatted = f"{build_num:03d}"
-    print(f"[*] Номер сборки: {build_num_formatted}")
+    print("[*] Запуск интерактивного обновления версии...")
+    version_str = prompt_version_update()
+    
+    # Синхронизируем версию в коде перед сборкой
+    update_app_version_py(version_str)
 
-    create_version_file(build_num_formatted)
+    create_version_file(version_str)
 
     python_bin = ensure_venv()
 
@@ -298,6 +371,7 @@ def build() -> None:
         "--hidden-import=app.ui.work_panel",
         "--hidden-import=app.ui.file_list_widget",
         "--hidden-import=app.ui.muxing_table_widget",
+        "--hidden-import=deew",
 
         # Collect data
         "--collect-all=qfluentwidgets",
@@ -327,7 +401,7 @@ def build() -> None:
 
     # Генерация ISS скрипта
     create_inno_setup_script(
-        exe_name, build_num_formatted
+        exe_name, version_str
     )
 
     print(f"[✓] Готово! Сборка находится в dist/{exe_name}")

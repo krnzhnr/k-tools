@@ -284,9 +284,20 @@ class ScriptPage(QWidget):
         """
         if field.setting_type == SettingType.TEXT:
             widget = LineEdit(parent)
-            widget.setText(str(field.default))
+            
+            # Загрузка сохраненного значения
+            saved_val = SettingsManager().get_script_setting(
+                self._script.name, field.key, str(field.default)
+            )
+            widget.setText(str(saved_val))
             widget.setPlaceholderText(field.label)
             
+            # Сохранение при изменении
+            widget.textChanged.connect(
+                lambda text: SettingsManager().set_script_setting(
+                    self._script.name, field.key, text
+                )
+            )
             # Логирование изменения текстового поля
             widget.textChanged.connect(
                 lambda text: logger.info(
@@ -299,9 +310,22 @@ class ScriptPage(QWidget):
         if field.setting_type == SettingType.COMBO:
             widget = ComboBox(parent)
             widget.addItems(field.options)
-            if field.default in field.options:
+            
+            # Загрузка сохраненного значения
+            saved_val = SettingsManager().get_script_setting(
+                self._script.name, field.key, str(field.default)
+            )
+            if saved_val in field.options:
+                widget.setCurrentText(str(saved_val))
+            else:
                 widget.setCurrentText(str(field.default))
             
+            # Сохранение при изменении
+            widget.currentTextChanged.connect(
+                lambda text: SettingsManager().set_script_setting(
+                    self._script.name, field.key, text
+                )
+            )
             # Логирование изменения комбобокса
             widget.currentTextChanged.connect(
                 lambda text: logger.info(
@@ -313,8 +337,22 @@ class ScriptPage(QWidget):
 
         if field.setting_type == SettingType.CHECKBOX:
             widget = CheckBox(field.label, parent)
-            widget.setChecked(bool(field.default))
             
+            # Загрузка сохраненного значения
+            saved_val = SettingsManager().get_script_setting(
+                self._script.name, field.key, bool(field.default)
+            )
+            # QSettings может вернуть строку "true"/"false" вместо bool в некоторых случаях, 
+            # но SettingsManager.get_settings(..., type=bool) обычно это обрабатывает.
+            # Здесь мы полагаемся на SettingsManager.
+            widget.setChecked(bool(saved_val))
+            
+            # Сохранение при изменении
+            widget.stateChanged.connect(
+                lambda state: SettingsManager().set_script_setting(
+                    self._script.name, field.key, bool(state)
+                )
+            )
             # Логирование изменения чекбокса
             widget.stateChanged.connect(
                 lambda state: logger.info(

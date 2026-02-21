@@ -3,7 +3,9 @@
 
 import logging
 from pathlib import Path
+from typing import Any
 from PyQt6.QtCore import QSettings
+
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +87,53 @@ class SettingsManager:
         self._settings.sync()
         logger.info("Настройка 'use_auto_subfolder' изменена на: %s", value)
 
+    def _get_safe_script_name(self, script_name: str) -> str:
+        """Нормализовать имя скрипта для использования в качестве имени секции (группы).
+        
+        Заменяет слэши и другие спецсимволы, которые QSettings 
+        может интерпретировать как разделители подгрупп в INI.
+        """
+        # Заменяем / и \ на нижнее подчеркивание
+        safe_name = script_name.replace("/", "_").replace("\\", "_")
+        return f"Script_{safe_name}"
+
+    def get_script_setting(self, script_name: str, key: str, default: Any) -> Any:
+        """Получить настройку для конкретного скрипта.
+        
+        Args:
+            script_name: Имя скрипта (секция).
+            key: Ключ настройки.
+            default: Значение по умолчанию.
+        """
+        group = self._get_safe_script_name(script_name)
+        self._settings.beginGroup(group)
+        val = self._settings.value(key, default)
+        self._settings.endGroup()
+        return val
+
+    def set_script_setting(self, script_name: str, key: str, value: Any) -> None:
+        """Сохранить настройку для конкретного скрипта.
+        
+        Args:
+            script_name: Имя скрипта (секция).
+            key: Ключ настройки.
+            value: Значение для сохранения.
+        """
+        group = self._get_safe_script_name(script_name)
+        self._settings.beginGroup(group)
+        self._settings.setValue(key, value)
+        self._settings.endGroup()
+        self._settings.sync()
+
     def sync(self) -> None:
         """Принудительная синхронизация с диском."""
         self._settings.sync()
+
+    def reset_all_settings(self) -> None:
+        """Сбросить все настройки приложения к значениям по умолчанию.
+        
+        Удаляет все записи из файла настроек.
+        """
+        self._settings.clear()
+        self._settings.sync()
+        logger.warning("Все настройки приложения были сброшены к значениям по умолчанию")
