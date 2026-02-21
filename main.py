@@ -82,6 +82,7 @@ from app.scripts.metadata_cleaner import MetadataCleanerScript
 from app.scripts.audio_converter import AudioConverterScript
 from app.scripts.audio_dee_downmixer import AudioDeeDownmixerScript
 from app.scripts.audio_speed_changer import AudioSpeedChangerScript
+from app.scripts.audio_splitter import AudioSplitterScript
 from app.scripts.muxer import MuxerScript
 from app.scripts.stream_manager import StreamManagerScript
 from app.scripts.stream_replacer import StreamReplacerScript
@@ -137,6 +138,7 @@ def _create_registry() -> ScriptRegistry:
     registry.register(AudioConverterScript())
     registry.register(AudioDeeDownmixerScript())
     registry.register(AudioSpeedChangerScript())
+    registry.register(AudioSplitterScript())
     registry.register(MuxerScript())
     registry.register(StreamManagerScript())
     registry.register(StreamReplacerScript())

@@ -107,9 +107,9 @@ class SettingsPage(ScrollArea):
 
         subfolder_text_layout = QVBoxLayout()
         subfolder_text_layout.setSpacing(2)
-        subfolder_title_label = BodyLabel(self.tr("Автоматическая подпапка"), self._auto_subfolder_card)
+        subfolder_title_label = BodyLabel(self.tr("Автоматическое создание подпапки рядом с исходником"), self._auto_subfolder_card)
         subfolder_desc_label = CaptionLabel(
-            self.tr("Сохранять результаты в подпапку. Если отключено — файлы сохраняются рядом с исходником"),
+            self.tr("Вкл - сохранять результаты в подпапку. Выкл - сохранять рядом с исходником"),
             self._auto_subfolder_card
         )
         subfolder_desc_label.setStyleSheet("color: rgba(255, 255, 255, 0.6)")
@@ -143,7 +143,7 @@ class SettingsPage(ScrollArea):
         name_text_layout.setSpacing(2)
         name_title_label = BodyLabel(self.tr("Имя подпапки"), self._subfolder_name_card)
         name_desc_label = CaptionLabel(
-            self.tr("Название папки, которая будет создана при автоматическом сохранении"),
+            self.tr("Название подпапки для сохранения"),
             self._subfolder_name_card
         )
         name_desc_label.setStyleSheet("color: rgba(255, 255, 255, 0.6)")
@@ -188,7 +188,7 @@ class SettingsPage(ScrollArea):
         reset_layout.addLayout(reset_text_layout)
         reset_layout.addStretch(1)
 
-        self._reset_btn = PushButton(self.tr("Сбросить всё"), self._reset_card)
+        self._reset_btn = PushButton(self.tr("Сбросить"), self._reset_card)
         self._reset_btn.clicked.connect(self._show_reset_dialog)
         reset_layout.addWidget(self._reset_btn)
 
