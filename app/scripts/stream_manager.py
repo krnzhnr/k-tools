@@ -309,22 +309,14 @@ class StreamManagerScript(AbstractScript):
                 file_path, output_path
             )
             
-            output_file_path = target_dir / out_name
-
-            # Проверка на совпадение путей (FFmpeg не умеет писать в тот же файл)
-            if output_file_path.absolute() == file_path.absolute():
-                out_name = f"{file_path.stem}_processed{ext}"
-                output_file_path = target_dir / out_name
-                logger.debug(
-                    "Выходной путь совпадает с входным. "
-                    "Изменено имя на: '%s'",
-                    out_name,
-                )
+            output_file_path = self._get_safe_output_path(
+                file_path, target_dir / out_name
+            )
 
             logger.info(
                 "Выходной файл: '%s' "
                 "(типы: %s, расширение: '%s')",
-                out_name,
+                output_file_path.name,
                 kept_types,
                 ext,
             )

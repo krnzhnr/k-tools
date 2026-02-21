@@ -104,6 +104,25 @@ class SettingsManager:
         self._settings.sync()
         logger.info("Настройка 'theme' изменена на: %s", value)
 
+    @property
+    def max_parallel_tasks(self) -> int:
+        """Максимальное количество параллельных задач."""
+        import os
+        default = max(1, (os.cpu_count() or 2) // 2)
+        self._settings.beginGroup("General")
+        val = self._settings.value("max_parallel_tasks", default, type=int)
+        self._settings.endGroup()
+        return val
+
+    @max_parallel_tasks.setter
+    def max_parallel_tasks(self, value: int) -> None:
+        """Установить максимальное количество параллельных задач."""
+        self._settings.beginGroup("General")
+        self._settings.setValue("max_parallel_tasks", value)
+        self._settings.endGroup()
+        self._settings.sync()
+        logger.info("Настройка 'max_parallel_tasks' изменена на: %d", value)
+
     def _get_safe_script_name(self, script_name: str) -> str:
         """Нормализовать имя скрипта для использования в качестве имени секции (группы).
         

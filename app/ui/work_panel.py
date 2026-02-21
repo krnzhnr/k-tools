@@ -9,6 +9,10 @@ from PyQt6.QtCore import (
     Qt,
     QThread,
     pyqtSignal,
+    QRunnable,
+    QThreadPool,
+    QObject,
+    QMutex,
 )
 from PyQt6.QtWidgets import (
     QWidget,
@@ -49,6 +53,47 @@ from app.ui.stream_replace_widget import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class TaskSignals(QObject):
+    """Сигналы для отдельной задачи в пуле воркеров."""
+
+    finished = pyqtSignal(list, Path)
+
+
+class TaskRunnable(QRunnable):
+    """Задача для одного файла в пуле воркеров."""
+
+    def __init__(
+        self,
+        script: AbstractScript,
+        file_path: Path,
+        settings: dict[str, Any],
+        output_path: str | None = None,
+    ) -> None:
+        super().__init__()
+        self.script = script
+        self.file_path = file_path
+        self.settings = settings
+        self.output_path = output_path
+        self.signals = TaskSignals()
+
+    def run(self) -> None:
+        """Выполнение задачи."""
+        try:
+            results = self.script.execute_single(
+                self.file_path,
+                self.settings,
+                self.output_path,
+            )
+            self.signals.finished.emit(results, self.file_path)
+        except Exception as exc:
+            logger.exception(
+                "Ошибка в TaskRunnable для файла '%s'",
+                self.file_path.name,
+            )
+            msg = f"❌ Критическая ошибка: {self.file_path.name} ({exc})"
+            self.signals.finished.emit([msg], self.file_path)
 
 
 class ScriptWorker(QThread):
@@ -93,19 +138,86 @@ class ScriptWorker(QThread):
     def run(self) -> None:
         """Выполнение скрипта в рабочем потоке."""
         try:
-            results = self._script.execute(
-                files=self._files,
-                settings=self._settings,
-                output_path=self._output_path,
-                progress_callback=self._on_progress,
-            )
-            self.finished.emit(results)
+            # Проверка настроек параллелизма
+            from app.core.settings_manager import SettingsManager
+            mgr = SettingsManager()
+            max_parallel = mgr.max_parallel_tasks
+            
+            # Если скрипт поддерживает параллелизм и файлов больше одного
+            if (
+                self._script.supports_parallel 
+                and max_parallel > 1 
+                and len(self._files) > 1
+            ):
+                self._run_parallel(max_parallel)
+            else:
+                self._run_sequential()
         except Exception as exc:
             logger.exception(
                 "Ошибка выполнения скрипта '%s'",
                 self._script.name,
             )
             self.error.emit(str(exc))
+
+    def _run_sequential(self) -> None:
+        """Классическое последовательное выполнение."""
+        results = self._script.execute(
+            files=self._files,
+            settings=self._settings,
+            output_path=self._output_path,
+            progress_callback=self._on_progress,
+        )
+        self.finished.emit(results)
+
+    def _run_parallel(self, max_workers: int) -> None:
+        """Параллельное выполнение через пул потоков."""
+        total = len(self._files)
+        completed = 0
+        all_results: list[str] = []
+        
+        # Используем локальный пул для изоляции и чистого завершения
+        pool = QThreadPool()
+        pool.setMaxThreadCount(max_workers)
+        
+        logger.info(
+            "Запуск параллельной обработки: воркеров=%d, файлов=%d",
+            max_workers, total
+        )
+
+        mutex = QMutex()
+
+        def on_task_finished(res: list[str], fpath: Path) -> None:
+            nonlocal completed
+            mutex.lock()
+            try:
+                completed += 1
+                all_results.extend(res)
+                
+                # Сообщаем о прогрессе в UI
+                last_msg = res[-1] if res else ""
+                self.progress.emit(completed, total, last_msg)
+            finally:
+                mutex.unlock()
+
+        for file_path in self._files:
+            runnable = TaskRunnable(
+                self._script,
+                file_path,
+                self._settings,
+                self._output_path
+            )
+            # ВАЖНО: Используем DirectConnection, так как поток воркера 
+            # блокируется waitForDone и не имеет цикла событий.
+            runnable.signals.finished.connect(
+                on_task_finished, 
+                Qt.ConnectionType.DirectConnection
+            )
+            pool.start(runnable)
+
+        # Ждем завершения всех задач в пуле
+        pool.waitForDone()
+        
+        self.finished.emit(all_results)
 
     def _on_progress(
         self,
@@ -721,7 +833,7 @@ class ScriptPage(QWidget):
                     str(container)
                 )
             settings["replacements"] = {
-                str(k): str(v)
+                str(k): {"path": str(v["path"]), "src_id": v["src_id"]}
                 for k, v in replacements.items()
             }
             logger.info(
@@ -764,30 +876,22 @@ class ScriptPage(QWidget):
         total: int,
         message: str,
     ) -> None:
-        """Обработка прогресса выполнения.
+        """Обработка прогресса выполнения."""
+        if total <= 0:
+            return
 
-        Args:
-            current: Текущий файл.
-            total: Всего файлов.
-            message: Сообщение о статусе.
-        """
         percent = int((current / total) * 100)
-        logger.info(
-            "Прогресс выполнения скрипта '%s': %d%% (%d/%d). Статус: %s",
-            self._script.name,
-            percent,
-            current,
-            total,
-            message
-        )
-        # Если активен IndeterminateProgressBar, обычный прогресс-бар скрыт.
-        # Значение устанавливаем только если обычный бар отображается и имеет диапазон.
-        if (
-            not self._indeterminate_progress 
-            or not self._indeterminate_progress.isVisible()
-        ):
-            if self._progress.maximum() > 0:
-                self._progress.setValue(percent)
+        
+        # Переключение из режима ожидания (indeterminate) в режим прогресса
+        if self._indeterminate_progress and self._indeterminate_progress.isVisible():
+            self._indeterminate_progress.stop()
+            self._indeterminate_progress.setVisible(False)
+            self._progress.setVisible(True)
+        
+        if self._progress.maximum() == 0:
+            self._progress.setRange(0, 100)
+            
+        self._progress.setValue(percent)
             
         self._status_label.setText(
             f"{current}/{total}: {message}"

@@ -101,6 +101,15 @@ class AbstractScript(ABC):
         """
         return False
 
+    @property
+    def supports_parallel(self) -> bool:
+        """Поддерживает ли скрипт параллельную обработку файлов.
+        
+        Если True, ScriptWorker может запускать обработку
+        нескольких файлов одновременно в разных потоках.
+        """
+        return False
+
     def _delete_source(
         self,
         file_path: Path,
@@ -127,6 +136,42 @@ class AbstractScript(ABC):
                 f"{file_path.name}"
             )
 
+    def _get_safe_output_path(
+        self,
+        input_path: Path,
+        output_path: Path,
+    ) -> Path:
+        """Получить безопасный путь для выходного файла.
+
+        Защищает исходный файл от перезаписи и предотвращает пропуски
+        обработки, если целевой файл уже существует (добавляет '_processed').
+        """
+        import os
+        from app.core.settings_manager import SettingsManager
+        mgr = SettingsManager()
+
+        try:
+            in_norm = os.path.normcase(str(input_path.resolve()))
+            out_norm = os.path.normcase(str(output_path.resolve()))
+
+            # 1. Если выход совпадает с исходником — ОБЯЗАТЕЛЬНО меняем имя
+            if in_norm == out_norm:
+                output_path = output_path.parent / f"{output_path.stem}_processed{output_path.suffix}"
+                logger.debug("Защита исходника: добавлено '_processed' к имени")
+
+            # 2. Если такой файл уже существует и перезапись ВЫКЛЮЧЕНА
+            # — тоже добавляем суффикс, чтобы не пропускать файл
+            if output_path.exists() and not mgr.overwrite_existing:
+                # Вторичная проверка: если вход и выход все еще совпадают после добавления (маловероятно)
+                # или если мы просто хотим избежать пропуска
+                output_path = output_path.parent / f"{output_path.stem}_processed{output_path.suffix}"
+                logger.debug("Файл существует, перезапись выкл: добавлено '_processed'")
+                
+        except Exception as exc:
+            logger.warning("Ошибка при проверке путей в _get_safe_output_path: %s", exc)
+
+        return output_path
+
     @abstractmethod
     def execute(
         self,
@@ -146,3 +191,29 @@ class AbstractScript(ABC):
         Returns:
             Список строк-результатов выполнения для лога.
         """
+
+    def execute_single(
+        self,
+        file: Path,
+        settings: dict[str, Any],
+        output_path: str | None = None,
+    ) -> list[str]:
+        """Обработать один файл (для параллельного режима).
+
+        По умолчанию просто вызывает execute для одного файла.
+        Переопредели для оптимизации.
+
+        Args:
+            file: Путь к файлу.
+            settings: Настройки.
+            output_path: Опциональный путь сохранения.
+
+        Returns:
+            Список строк-результатов.
+        """
+        return self.execute(
+            files=[file],
+            settings=settings,
+            output_path=output_path,
+            progress_callback=None,
+        )

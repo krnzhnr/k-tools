@@ -6,8 +6,10 @@
 через ComboBox.
 """
 
+import json
 import logging
 from pathlib import Path
+from typing import Any
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
@@ -36,16 +38,19 @@ logger = logging.getLogger(__name__)
 # Расширения файлов по типу дорожки.
 _VIDEO_EXTS = {
     ".mkv", ".mp4", ".avi", ".mov",
-    ".webm", ".hevc", ".h264",
+    ".webm", ".hevc", ".h264", ".h265",
+    ".264", ".265", ".vc1", ".m2v",
 }
 _AUDIO_EXTS = {
     ".aac", ".ac3", ".eac3", ".dts",
     ".flac", ".wav", ".mp3", ".m4a",
     ".ogg", ".mka", ".opus", ".wv",
-    ".thd",
+    ".thd", ".truehd", ".mlp", ".dtshd",
+    ".pcm", ".mp2", ".m2a",
 }
 _SUBTITLE_EXTS = {
     ".srt", ".ass", ".ssa", ".sub",
+    ".vtt", ".idx", ".sup",
 }
 
 # Все допустимые расширения для файлов-замен.
@@ -154,48 +159,91 @@ class ReplacementCard(CardWidget):
         )
 
     def update_replacement_files(
-        self, files: list[Path]
+        self, files: list[Path], probe: MKVProbeRunner
     ) -> None:
         """Обновить варианты файлов-замен.
 
-        Фильтрует файлы по типу каждой дорожки.
+        Фильтрует файлы по типу каждой дорожки. Если файл является
+        контейнером (mkv, mp4, mka), анализирует его потоки.
 
         Args:
             files: Список файлов-замен.
+            probe: Утилита для анализа контейнеров.
         """
-        for track_id, combo in (
-            self._combos.items()
-        ):
-            track = self._tracks.get(track_id)
-            if track is None:
+        # Кэш для результатов анализа (чтобы не запускать mkvmerge постоянно)
+        if not hasattr(self, "_probe_cache"):
+            self._probe_cache: dict[Path, list[TrackInfo]] = {}
+
+        # Очищаем кэш от удаленных файлов
+        current_paths = set(files)
+        self._probe_cache = {
+            p: t for p, t in self._probe_cache.items()
+            if p in current_paths
+        }
+
+        for track_id, combo in self._combos.items():
+            target_track = self._tracks.get(track_id)
+            if target_track is None:
                 continue
 
-            # Текущее значение
-            current = combo.currentText()
+            # Текущее значение для восстановления
+            current_data = combo.currentData()
 
             # Фильтрация по типу
-            exts = self._get_exts_for_type(
-                track.track_type
-            )
-            filtered = [
-                f for f in files
-                if f.suffix.lower() in exts
-            ]
-
+            exts = self._get_exts_for_type(target_track.track_type)
+            
             combo.blockSignals(True)
             combo.clear()
             combo.addItem(_NO_REPLACE)
-            for f in filtered:
-                combo.addItem(
-                    f.name, userData=str(f)
-                )
 
-            # Восстановить выбор если файл ещё есть
-            idx = combo.findText(current)
-            if idx >= 0:
-                combo.setCurrentIndex(idx)
+            for f in files:
+                if f.suffix.lower() not in exts:
+                    continue
+
+                # Если это контейнер, пробуем достать дорожки подходящего типа
+                if f.suffix.lower() in {".mkv", ".mp4", ".mka", ".m4a", ".mov"}:
+                    if f not in self._probe_cache:
+                        try:
+                            self._probe_cache[f] = probe.get_tracks(f)
+                        except Exception:
+                            logger.error("Ошибка анализа замены '%s'", f.name)
+                            self._probe_cache[f] = []
+
+                    src_tracks = self._probe_cache[f]
+                    # Ищем дорожки того же типа внутри файла-замены
+                    relevant_tracks = [
+                        t for t in src_tracks 
+                        if t.track_type == target_track.track_type
+                    ]
+
+                    if relevant_tracks:
+                        for st in relevant_tracks:
+                            label = f"{f.name} (ID {st.track_id}: {st.codec}"
+                            if st.language and st.language != "und":
+                                label += f", {st.language}"
+                            if st.name:
+                                label += f", {st.name}"
+                            label += ")"
+                            
+                            data = json.dumps({"path": str(f), "src_id": st.track_id})
+                            combo.addItem(label, userData=data)
+                    else:
+                        # Если в контейнере нет таких дорожек, просто добавляем файл как есть (на авось)
+                        combo.addItem(f.name, userData=json.dumps({"path": str(f), "src_id": 0}))
+                else:
+                    # Обычный файл (аудио-стрим, субтитры)
+                    combo.addItem(f.name, userData=json.dumps({"path": str(f), "src_id": 0}))
+
+            # Восстановить выбор
+            if current_data:
+                idx = combo.findData(current_data)
+                if idx >= 0:
+                    combo.setCurrentIndex(idx)
+                else:
+                    combo.setCurrentIndex(0)
             else:
                 combo.setCurrentIndex(0)
+            
             combo.blockSignals(False)
 
         self.replacementsChanged.emit()
@@ -206,21 +254,28 @@ class ReplacementCard(CardWidget):
 
     def get_replacements(
         self,
-    ) -> dict[int, Path]:
+    ) -> dict[int, dict[str, Any]]:
         """Получить назначенные замены.
 
         Returns:
-            Словарь {track_id: путь_файла}.
+            Словарь {track_id: {"path": Path, "src_id": int}}.
         """
-        result: dict[int, Path] = {}
+        result: dict[int, dict[str, Any]] = {}
         for track_id, combo in (
             self._combos.items()
         ):
             if combo.currentText() == _NO_REPLACE:
                 continue
-            data = combo.currentData()
-            if data:
-                result[track_id] = Path(data)
+            data_str = combo.currentData()
+            if data_str:
+                try:
+                    data = json.loads(data_str)
+                    result[track_id] = {
+                        "path": Path(data["path"]),
+                        "src_id": int(data.get("src_id", 0))
+                    }
+                except (json.JSONDecodeError, KeyError, TypeError):
+                    logger.error("Ошибка парсинга данных замены для дорожки %d", track_id)
         return result
 
     def clear(self) -> None:
@@ -290,19 +345,22 @@ class ReplacementCard(CardWidget):
     ) -> set[str]:
         """Расширения файлов для типа дорожки.
 
+        Включает специфичные расширения и общие контейнеры.
+
         Args:
             track_type: Тип дорожки.
 
         Returns:
             Множество расширений.
         """
+        containers = {".mkv", ".mp4", ".mka"}
         if track_type == "video":
-            return _VIDEO_EXTS
+            return _VIDEO_EXTS | containers
         if track_type == "audio":
-            return _AUDIO_EXTS
+            return _AUDIO_EXTS | containers
         if track_type == "subtitles":
-            return _SUBTITLE_EXTS
-        return set()
+            return _SUBTITLE_EXTS | containers
+        return containers
 
 
 class StreamReplaceWidget(QWidget):
@@ -543,7 +601,7 @@ class StreamReplaceWidget(QWidget):
         """Обновить ComboBox при изменении."""
         files = self._replacement_list.files
         self._replacement_card.update_replacement_files(
-            files
+            files, self._probe
         )
 
     # --- Публичный API для WorkPanel ---
@@ -567,11 +625,11 @@ class StreamReplaceWidget(QWidget):
 
     def get_replacements(
         self,
-    ) -> dict[int, Path]:
+    ) -> dict[int, dict[str, Any]]:
         """Получить назначенные замены.
 
         Returns:
-            Словарь {track_id: путь_файла}.
+            Словарь {track_id: {"path": Path, "src_id": int}}.
         """
         return (
             self._replacement_card

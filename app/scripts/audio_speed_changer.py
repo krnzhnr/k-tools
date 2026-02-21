@@ -21,6 +21,11 @@ class AudioSpeedChangerScript(AbstractScript):
         self._resolver = OutputResolver()
 
     @property
+    def supports_parallel(self) -> bool:
+        """eac3to поддерживает параллелизм."""
+        return True
+
+    @property
     def category(self) -> str:
         """Категория скрипта."""
         return "Аудио"
@@ -84,30 +89,37 @@ class AudioSpeedChangerScript(AbstractScript):
         output_path: str | None = None,
         progress_callback=None,
     ) -> list[str]:
-        """Выполнить изменение скорости."""
-        total = len(files)
-        completed = 0
+        """Выполнить изменение скорости (последовательно)."""
         results = []
+        total = len(files)
+        
+        for i, file_path in enumerate(files):
+            if progress_callback:
+                progress_callback(i, total, f"Обработка: {file_path.name}")
+            
+            res = self.execute_single(file_path, settings, output_path)
+            results.extend(res)
+            
+            if progress_callback:
+                progress_callback(i + 1, total, res[-1] if res else "")
 
+        return results
+
+    def execute_single(
+        self,
+        file_path: Path,
+        settings: dict[str, Any],
+        output_path: str | None = None,
+    ) -> list[str]:
+        """Выполнить изменение скорости для одного файла."""
         mode = settings.get("mode")
         output_format = settings.get("output_format", "FLAC")
-        # Приводим к нижнему регистру и добавляем точку (.flac, .wav)
         output_ext = f".{output_format.lower()}"
-        
         delete_source = settings.get("delete_source", False)
-
-        logger.info(
-            "Настройки изменения скорости: режим='%s', формат вывода=%s, удалять исходник=%s",
-            mode, output_format, "ДА" if delete_source else "НЕТ"
-        )
-
-        completed = 0
-        results = []
 
         # Определение аргументов eac3to на основе режима
         eac3to_args = []
         suffix = ""
-
         if mode == "Slowdown (25.000 → 23.976)":
             eac3to_args.append("-slowdown")
             suffix = "_slowdown"
@@ -123,68 +135,38 @@ class AudioSpeedChangerScript(AbstractScript):
             eac3to_args.append("-changeTo24.000")
             suffix = "_25_to_24"
 
-        logger.info("Запуск процесса изменения скорости для %d файлов в режиме %s", total, mode)
+        try:
+            if not file_path.exists():
+                return [f"❌ Файл не найден: {file_path.name}"]
 
-        for i, file_path in enumerate(files):
-            try:
-                logger.info("Обработка файла [%d/%d]: '%s' (вход)", i + 1, total, file_path.name)
-                if not file_path.exists():
-                    msg = f"❌ Файл не найден: {file_path.name}"
-                    results.append(msg)
-                    logger.error("Ошибка: файл не найден по пути '%s'", file_path)
-                    continue
+            target_dir = self._resolver.resolve(file_path, output_path)
+            output_file_path = self._get_safe_output_path(
+                file_path, target_dir / f"{file_path.stem}{suffix}{output_ext}"
+            )
 
-                if progress_callback:
-                    progress_callback(i, total, f"Обработка: {file_path.name}")
+            from app.core.settings_manager import SettingsManager
+            if (
+                output_file_path.exists() 
+                and not SettingsManager().overwrite_existing
+            ):
+                return [f"⏭ Пропущен (существует): {output_file_path.name}"]
 
-                # Формируем выходной путь через резолвер
-                target_dir = self._resolver.resolve(
-                    file_path, output_path
-                )
-                
-                # Используем выбранный формат и суффикс
-                output_file_path = target_dir / f"{file_path.stem}{suffix}{output_ext}"
-                logger.debug("Назначен путь вывода: '%s'", output_file_path.name)
+            current_args = [str(file_path), str(output_file_path)] + eac3to_args
+            success = self._runner.run(current_args, cwd=file_path.parent)
 
-                # Проверка на существование файла
-                from app.core.settings_manager import SettingsManager
-                if output_file_path.exists() and not SettingsManager().overwrite_existing:
-                    msg = f"⏭ Пропущен (файл существует): {output_file_path.name}"
-                    logger.info("Пропуск: файл '%s' уже существует", output_file_path.name)
-                    results.append(msg)
-                    completed += 1
-                    continue
+            results = []
+            if success:
+                results.append(f"✅ Успешно: {file_path.name} -> {output_file_path.name}")
+                if delete_source:
+                    try:
+                        file_path.unlink()
+                        results.append(f"🗑️ Исходник удален: {file_path.name}")
+                    except Exception as e:
+                        logger.error("Ошибка удаления: %s", e)
+            else:
+                results.append(f"❌ Ошибка eac3to: {file_path.name}")
+            return results
 
-                # Формируем аргументы для конкретного файла
-                current_args = [str(file_path), str(output_file_path)] + eac3to_args
-
-                logger.debug("Вызов раннера eac3to")
-                success = self._runner.run(current_args, cwd=file_path.parent)
-
-                if success:
-                    completed += 1
-                    msg = f"✅ Успешно: {file_path.name} -> {output_file_path.name}"
-                    logger.info("Успешно завершено преобразование для: '%s'", output_file_path.name)
-                    results.append(msg)
-                    
-                    if delete_source:
-                        try:
-                            logger.info("Удаление исходного файла по запросу: '%s'", file_path.name)
-                            file_path.unlink()
-                            results.append(f"🗑️ Исходник удален: {file_path.name}")
-                        except Exception as e:
-                            logger.error("Не удалось удалить исходник '%s': %s", file_path.name, e)
-                            results.append(f"⚠️ Ошибка удаления: {file_path.name}")
-
-                else:
-                    msg = f"❌ Ошибка eac3to: {file_path.name}"
-                    logger.error("Ошибка eac3to при обработке файла: '%s'", file_path.name)
-                    results.append(msg)
-
-            except Exception as e:
-                logger.exception("Критическая ошибка при обработке файла '%s': %s", file_path.name, e)
-                results.append(f"❌ Ошибка: {file_path.name} ({e})")
-
-        logger.info("Изменение скорости завершено. Итог: %d успешно из %d", completed, total)
-
-        return results
+        except Exception as e:
+            logger.exception("Ошибка при обработке '%s'", file_path.name)
+            return [f"❌ Ошибка: {file_path.name} ({e})"]

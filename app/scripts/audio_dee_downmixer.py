@@ -23,6 +23,11 @@ class AudioDeeDownmixerScript(AbstractScript):
         self._resolver = OutputResolver()
 
     @property
+    def supports_parallel(self) -> bool:
+        """DEE поддерживает параллелизм."""
+        return True
+
+    @property
     def category(self) -> str:
         """Категория скрипта."""
         return "Аудио"
@@ -76,13 +81,30 @@ class AudioDeeDownmixerScript(AbstractScript):
         output_path: str | None = None,
         progress_callback=None,
     ) -> list[str]:
-        """Выполнить даунмикс."""
-        total = len(files)
-        completed = 0
+        """Выполнить даунмикс (последовательно)."""
         results = []
+        total = len(files)
+        
+        for i, file_path in enumerate(files):
+            if progress_callback:
+                progress_callback(i, total, f"Даунмикс: {file_path.name}")
+            
+            res = self.execute_single(file_path, settings, output_path)
+            results.extend(res)
+            
+            if progress_callback:
+                progress_callback(i + 1, total, res[-1] if res else "")
+                
+        return results
 
+    def execute_single(
+        self,
+        file_path: Path,
+        settings: dict[str, Any],
+        output_path: str | None = None,
+    ) -> list[str]:
+        """Выполнить даунмикс для одного файла."""
         raw_format = settings.get("format", "Dolby Digital Plus (E-AC3)")
-        # Ищем ключевые слова для определения формата
         if "Plus" in raw_format or "E-AC3" in raw_format or "ddp" in raw_format.lower():
             output_format = "ddp"
             output_ext = ".eac3"
@@ -93,59 +115,41 @@ class AudioDeeDownmixerScript(AbstractScript):
         bitrate = settings.get("bitrate", "192")
         delete_source = settings.get("delete_source", False)
 
-        logger.info(
-            "Настройки даунмикса DEE: формат=%s, битрейт=%s, удалять исходник=%s",
-            output_format, bitrate, "ДА" if delete_source else "НЕТ"
-        )
+        try:
+            target_dir = self._resolver.resolve(file_path, output_path)
+            actual_output_name = f"{file_path.stem}{output_ext}"
+            target_file_path = self._get_safe_output_path(
+                file_path, target_dir / actual_output_name
+            )
 
-        for i, file_path in enumerate(files):
-            try:
-                logger.info("Обработка файла [%d/%d]: '%s'", i + 1, total, file_path.name)
-                
-                if progress_callback:
-                    progress_callback(i, total, f"Даунмикс: {file_path.name}")
+            from app.core.settings_manager import SettingsManager
+            if (
+                target_file_path.exists() 
+                and not SettingsManager().overwrite_existing
+            ):
+                return [f"⏭ Пропущен (существует): {target_file_path.name}"]
 
-                # Путь через резолвер
-                target_dir = self._resolver.resolve(file_path, output_path)
-                
-                # Т.к. deew сам добавляет расширение или меняет его в зависимости от формата,
-                # мы просто передаем папку в раннер, но для результата нам нужно знать имя.
-                # Но deew -o принимает директорию. Имя он берет из инпута.
-                output_file_name = f"{file_path.stem}.{output_format}{output_ext}" # deew делает так
-                # На самом деле deew делает input.eac3 если format ddp
-                actual_output_name = f"{file_path.stem}{output_ext}"
-                target_file_path = target_dir / actual_output_name
+            success = self._runner.run(
+                input_path=file_path,
+                output_path=target_file_path,
+                bitrate=bitrate,
+                output_format=output_format,
+                channels=2
+            )
 
-                # Если файл существует и перезапись выключена
-                from app.core.settings_manager import SettingsManager
-                if target_file_path.exists() and not SettingsManager().overwrite_existing:
-                    results.append(f"⏭ Пропущен: {actual_output_name}")
-                    completed += 1
-                    continue
+            results = []
+            if success:
+                results.append(f"✅ Успешно: {file_path.name} -> {actual_output_name}")
+                if delete_source:
+                    try:
+                        file_path.unlink()
+                        results.append(f"🗑️ Исходник удален: {file_path.name}")
+                    except Exception as e:
+                        logger.error("Ошибка удаления: %s", e)
+            else:
+                results.append(f"❌ Ошибка DEE: {file_path.name}")
+            return results
 
-                success = self._runner.run(
-                    input_path=file_path,
-                    output_path=target_file_path,
-                    bitrate=bitrate,
-                    output_format=output_format,
-                    channels=2
-                )
-
-                if success:
-                    completed += 1
-                    results.append(f"✅ Успешно: {file_path.name} -> {actual_output_name}")
-                    
-                    if delete_source:
-                        try:
-                            file_path.unlink()
-                            results.append(f"🗑️ Исходник удален: {file_path.name}")
-                        except Exception as e:
-                            logger.error("Ошибка удаления: %s", e)
-                else:
-                    results.append(f"❌ Ошибка DEE: {file_path.name}")
-
-            except Exception as e:
-                logger.exception("Ошибка при обработке '%s'", file_path.name)
-                results.append(f"❌ Ошибка: {file_path.name} ({e})")
-
-        return results
+        except Exception as e:
+            logger.exception("Ошибка при обработке '%s'", file_path.name)
+            return [f"❌ Ошибка: {file_path.name} ({e})"]

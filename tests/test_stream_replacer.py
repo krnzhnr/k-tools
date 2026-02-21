@@ -917,6 +917,8 @@ class TestBuildReplacementArgs:
                 audio_track
             )
         )
+        assert "--tracks" in args
+        assert "0" in args
         assert "--language" in args
         assert "0:rus" in args
         assert "--track-name" in args
@@ -933,6 +935,7 @@ class TestBuildReplacementArgs:
             )
         )
         assert "--language" not in args
+        assert args == ["--tracks", "0"]
 
     def test_no_name(self) -> None:
         """Без названия — нет --track-name."""
@@ -943,14 +946,12 @@ class TestBuildReplacementArgs:
             StreamReplacerScript
             ._build_replacement_args(track)
         )
-        assert "--language" in args
-        assert "0:jpn" in args
-        assert "--track-name" not in args
+        assert args == ["--tracks", "0", "--language", "0:jpn"]
 
     def test_empty_language_and_name(
         self,
     ) -> None:
-        """Пустые язык и имя → пустые аргументы."""
+        """Пустые язык и имя → только --tracks."""
         track = TrackInfo(
             0, "video", "HEVC", "", ""
         )
@@ -958,7 +959,14 @@ class TestBuildReplacementArgs:
             StreamReplacerScript
             ._build_replacement_args(track)
         )
-        assert args == []
+        assert args == ["--tracks", "0"]
+
+    def test_custom_src_id(self, audio_track) -> None:
+        """Проверка передачи src_id."""
+        args = StreamReplacerScript._build_replacement_args(audio_track, src_id=5)
+        assert "--tracks" in args
+        assert "5" in args
+        assert "5:rus" in args
 
 
 # -----------------------------------------------

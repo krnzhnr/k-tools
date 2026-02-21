@@ -35,16 +35,19 @@ logger = logging.getLogger(__name__)
 # Расширения по типам дорожек.
 VIDEO_EXTENSIONS = {
     ".mkv", ".mp4", ".avi", ".mov",
-    ".webm", ".hevc", ".h264",
+    ".webm", ".hevc", ".h264", ".h265",
+    ".264", ".265", ".vc1", ".m2v", ".avc",
 }
 AUDIO_EXTENSIONS = {
     ".aac", ".ac3", ".eac3", ".dts",
     ".flac", ".wav", ".mp3", ".m4a",
     ".ogg", ".mka", ".opus", ".wv",
-    ".thd",
+    ".thd", ".truehd", ".mlp", ".dtshd",
+    ".pcm", ".mp2", ".m2a",
 }
 SUBTITLE_EXTENSIONS = {
     ".srt", ".ass", ".ssa", ".sub",
+    ".vtt", ".idx", ".sup",
 }
 
 
@@ -138,23 +141,27 @@ class StreamReplacerScript(AbstractScript):
             logger.error(msg)
             return results
 
-        # Словарь замен: {track_id: путь_файла}
-        raw_replacements: dict[str, str] = (
-            settings.get("replacements", {})
-        )
+        # Словарь замен: {track_id_цели: {"path": str, "src_id": int}}
+        raw_replacements: dict[str, Any] = settings.get("replacements", {})
         if not raw_replacements:
             msg = "❌ Не назначено ни одной замены"
             results.append(msg)
             logger.error(msg)
             return results
 
-        replacements: dict[int, Path] = {}
-        for tid_str, fpath_str in (
-            raw_replacements.items()
-        ):
-            replacements[int(tid_str)] = Path(
-                fpath_str
-            )
+        replacements: dict[int, dict[str, Any]] = {}
+        for tid_str, data in raw_replacements.items():
+            if isinstance(data, dict):
+                replacements[int(tid_str)] = {
+                    "path": Path(data["path"]),
+                    "src_id": int(data.get("src_id", 0))
+                }
+            else:
+                # Обратная совместимость (если в настройках просто путь)
+                replacements[int(tid_str)] = {
+                    "path": Path(data),
+                    "src_id": 0
+                }
 
         logger.info(
             "Подмена потоков: контейнер='%s', "
@@ -169,10 +176,9 @@ class StreamReplacerScript(AbstractScript):
         )
         
         # Выходной путь с расширением оригинала
-        output_file_path = (
-            target_dir
-            / f"{container.stem}"
-            f"{container.suffix}"
+        output_file_path = self._get_safe_output_path(
+            container,
+            target_dir / f"{container.stem}{container.suffix}"
         )
 
         if (
@@ -270,9 +276,9 @@ class StreamReplacerScript(AbstractScript):
             }
         ]
 
-        for track_id, repl_path in (
-            replacements.items()
-        ):
+        for track_id, repl_data in replacements.items():
+            repl_path = repl_data["path"]
+            src_id = repl_data["src_id"]
             track = self._find_track(
                 all_tracks, track_id
             )
@@ -286,7 +292,7 @@ class StreamReplacerScript(AbstractScript):
 
             repl_args = (
                 self._build_replacement_args(
-                    track
+                    track, src_id
                 )
             )
             inputs.append(
@@ -297,10 +303,11 @@ class StreamReplacerScript(AbstractScript):
             )
             logger.info(
                 "Замена дорожки ID=%d (%s) "
-                "на файл '%s'",
+                "на файл '%s' (внутренний ID: %d)",
                 track_id,
                 track.type_label,
                 repl_path.name,
+                src_id,
             )
 
         if progress_callback:
@@ -404,18 +411,22 @@ class StreamReplacerScript(AbstractScript):
         for stream in streams:
             sid = stream.stream_index
             if sid in replaced_indices:
-                repl_path = replacements[sid]
+                repl_data = replacements[sid]
+                repl_path = repl_data["path"]
+                src_id = repl_data["src_id"]
+                
                 extra_inputs.append(repl_path)
                 extra_args.extend([
-                    "-map", f"{input_idx}:0",
+                    "-map", f"{input_idx}:{src_id}",
                 ])
                 logger.info(
                     "Замена потока #%d (%s) "
-                    "→ '%s' (вход %d)",
+                    "→ '%s' (вход %d, стрим %d)",
                     sid,
                     stream.type_label,
                     repl_path.name,
                     input_idx,
+                    src_id,
                 )
                 self._add_ffmpeg_metadata(
                     extra_args,
@@ -596,17 +607,22 @@ class StreamReplacerScript(AbstractScript):
     @staticmethod
     def _build_replacement_args(
         track: TrackInfo,
+        src_id: int = 0
     ) -> list[str]:
         """Аргументы mkvmerge для файла-замены.
 
         Args:
-            track: Информация о заменяемой
-                дорожке.
+            track: Информация о заменяемой дорожке.
+            src_id: ID дорожки в исходном файле-замене.
 
         Returns:
             Список аргументов mkvmerge.
         """
         args: list[str] = []
+
+        # Ограничиваем только выбранной дорожкой из входного файла-замены.
+        # mkvmerge нумерует дорожки каждого входа отдельно.
+        args.extend(["--tracks", str(src_id)])
 
         if (
             track.language
@@ -614,13 +630,13 @@ class StreamReplacerScript(AbstractScript):
         ):
             args.extend([
                 "--language",
-                f"0:{track.language}",
+                f"{src_id}:{track.language}",
             ])
 
         if track.name:
             args.extend([
                 "--track-name",
-                f"0:{track.name}",
+                f"{src_id}:{track.name}",
             ])
 
         return args

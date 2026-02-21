@@ -39,8 +39,10 @@ AUDIO_FORMATS = {
 
 # Группы форматов для видимости настроек
 LOSSY_FORMATS = [
-    "MP3", "AAC", "OGG", "AC3", "EAC3", "DTS", "WMA", "OPUS"
+    "MP3", "AAC", "QAAC", "OGG", "AC3", "EAC3", "DTS", "WMA", "OPUS", "ADPCM"
 ]
+# Форматы, для которых нужно отображать выбор битрейта (QAAC использует TVBR)
+BITRATE_FORMATS = [f for f in LOSSY_FORMATS if f != "QAAC"]
 LOSSLESS_COMPRESSED = ["FLAC", "WavPack"]
 
 
@@ -92,6 +94,11 @@ class AudioConverterScript(AbstractScript):
         ]
 
     @property
+    def supports_parallel(self) -> bool:
+        """Аудио-конвертация поддерживает параллелизм."""
+        return True
+
+    @property
     def settings_schema(self) -> list[SettingField]:
         """Схема настроек скрипта."""
         return [
@@ -112,7 +119,7 @@ class AudioConverterScript(AbstractScript):
                     "64k", "96k", "128k", "160k", "192k",
                     "224k", "256k", "320k", "448k", "640k"
                 ],
-                visible_if={"target_format": LOSSY_FORMATS},
+                visible_if={"target_format": BITRATE_FORMATS},
             ),
             # Настройка сжатия (для lossless форматов)
             SettingField(
@@ -154,16 +161,29 @@ class AudioConverterScript(AbstractScript):
         output_path: str | None = None,
         progress_callback: ProgressCallback | None = None,
     ) -> list[str]:
-        """Конвертировать аудиофайлы.
+        """Конвертировать аудиофайлы (последовательно)."""
+        results: list[str] = []
+        total = len(files)
+        
+        for idx, file_path in enumerate(files):
+            if progress_callback:
+                progress_callback(idx, total, f"Обработка: {file_path.name}")
+            
+            res = self.execute_single(file_path, settings, output_path)
+            results.extend(res)
+            
+            if progress_callback:
+                progress_callback(idx + 1, total, res[-1] if res else "")
+        
+        return results
 
-        Args:
-            files: Список файлов для обработки.
-            settings: Настройки конвертации.
-            progress_callback: Callback прогресса.
-
-        Returns:
-            Список строк-результатов.
-        """
+    def execute_single(
+        self,
+        file_path: Path,
+        settings: dict[str, Any],
+        output_path: str | None = None,
+    ) -> list[str]:
+        """Конвертировать один аудиофайл."""
         target_fmt_key = settings.get("target_format", "MP3")
         fmt_info = AUDIO_FORMATS.get(
             target_fmt_key, AUDIO_FORMATS["MP3"]
@@ -182,107 +202,66 @@ class AudioConverterScript(AbstractScript):
             "delete_original", False
         )
 
-        logger.info(
-            "Настройки аудио-конвертации: формат=%s, кодек=%s, битрейт=%s, сжатие=%s, контейнер=%s, удалять исходник=%s",
-            target_fmt_key, codec, bitrate, compression, "M4A" if use_m4a else "RAW", "ДА" if delete_original else "НЕТ"
-        )
-
         results: list[str] = []
-        total = len(files)
-
-        logger.info(
-            "Запуск аудио-конвертации для %d файл(ов) в формат %s",
-            total,
-            target_fmt_key,
-        )
-
-        for idx, file_path in enumerate(files):
-            if progress_callback:
-                progress_callback(
-                    idx, total, f"Обработка: {file_path.name}"
-                )
-            logger.info("Обработка аудио-файла [%d/%d]: '%s' (вход)", idx + 1, total, file_path.name)
-            
-            # Пропускаем, если файл уже в целевом формате и это не lossy формат
-            if file_path.suffix.lower() == target_ext and target_fmt_key not in LOSSY_FORMATS:
-                msg = f"⏭ Пропущен (уже {target_fmt_key}): {file_path.name}"
-                results.append(msg)
-                logger.info("Файл '%s' уже имеет формат %s, пропуск", file_path.name, target_fmt_key)
-                continue
-
-            target_dir = self._resolver.resolve(file_path, output_path)
-            out_name = file_path.with_suffix(target_ext).name
-            output_file_path = target_dir / out_name
-            
-            # Защита от перезаписи входного файла
-            if output_file_path.absolute() == file_path.absolute():
-                out_name = f"{file_path.stem}_processed{target_ext}"
-                output_file_path = target_dir / out_name
-                logger.debug(
-                    "Путь выхода совпадает с входом. Изменено на: '%s'",
-                    out_name,
-                )
-
-            logger.debug("Целевой путь: '%s'", output_file_path.name)
-            
-            if output_file_path.exists() and not SettingsManager().overwrite_existing:
-                msg = f"⏭ Пропущен (файл существует): {output_file_path.name}"
-                logger.info("Пропуск: выходной файл '%s' уже существует", output_file_path.name)
-                results.append(msg)
-                if progress_callback:
-                    progress_callback(idx + 1, total, msg)
-                continue
-            
-            # Формируем аргументы в зависимости от формата
-            extra_args = ["-c:a", codec, "-map_metadata", "-1"]
-
-            if target_fmt_key in LOSSLESS_COMPRESSED:
-                extra_args.extend(["-compression_level", str(compression)])
-            elif target_fmt_key in LOSSY_FORMATS:
-                extra_args.extend(["-b:a", bitrate])
-            
-            if target_fmt_key == "DTS":
-                extra_args.extend(["-strict", "-2"])
-
-            # Выбор раннера
-            if target_fmt_key == "QAAC":
-                qaac_quality = settings.get("qaac_quality", "127")
-                qaac_adts = not use_m4a
-                logger.debug("Вызов QaacRunner для QAAC")
-                success = self._qaac.run(
-                    input_path=file_path,
-                    output_path=output_file_path,
-                    tvbr=qaac_quality,
-                    adts=qaac_adts,
-                )
-            else:
-                logger.debug("Вызов FFmpeg для конвертации аудио")
-                success = self._ffmpeg.run(
-                    input_path=file_path,
-                    output_path=output_file_path,
-                    extra_args=extra_args,
-                )
-
-            if success:
-                msg = f"✅ Конвертировано: {output_file_path.name}"
-                logger.info("Успешная конвертация: '%s'", output_file_path.name)
-                if delete_original:
-                    logger.info("Удаление исходника: '%s'", file_path.name)
-                    self._delete_source(file_path, results)
-            else:
-                msg = f"❌ Ошибка: {file_path.name}"
-                logger.error("Ошибка при конвертации аудио для файла: '%s'", file_path.name)
-
+        
+        # Пропускаем, если файл уже в целевом формате и это не lossy формат
+        if (
+            file_path.suffix.lower() == target_ext 
+            and target_fmt_key not in LOSSY_FORMATS
+        ):
+            msg = f"⏭ Пропущен (уже {target_fmt_key}): {file_path.name}"
+            logger.info("[%s] %s", self.name, msg)
             results.append(msg)
+            return results
 
-            if progress_callback:
-                progress_callback(idx + 1, total, results[-1])
-
-        success_count = len([r for r in results if r.startswith("✅")])
-        logger.info(
-            "Процесс аудио-конвертации завершен. Итог: %d успешно, %d всего",
-            success_count,
-            total,
+        target_dir = self._resolver.resolve(file_path, output_path)
+        out_name = file_path.with_suffix(target_ext).name
+        output_file_path = self._get_safe_output_path(
+            file_path, target_dir / out_name
         )
+
+        if (
+            output_file_path.exists() 
+            and not SettingsManager().overwrite_existing
+        ):
+            # После обновления _get_safe_output_path мы сюда попасть почти не должны, 
+            # так как он добавит _processed, если файл существует.
+            msg = f"⏭ Пропущен (существует и нет '_processed'): {output_file_path.name}"
+            logger.info("[%s] %s", self.name, msg)
+            return [msg]
+        
+        # Формируем аргументы
+        extra_args = ["-c:a", codec, "-map_metadata", "-1"]
+        if target_fmt_key in LOSSLESS_COMPRESSED:
+            extra_args.extend(["-compression_level", str(compression)])
+        elif target_fmt_key in LOSSY_FORMATS:
+            extra_args.extend(["-b:a", bitrate])
+        
+        if target_fmt_key == "DTS":
+            extra_args.extend(["-strict", "-2"])
+
+        # Выбор раннера
+        if target_fmt_key == "QAAC":
+            qaac_quality = settings.get("qaac_quality", "127")
+            qaac_adts = not use_m4a
+            success = self._qaac.run(
+                input_path=file_path,
+                output_path=output_file_path,
+                tvbr=qaac_quality,
+                adts=qaac_adts,
+            )
+        else:
+            success = self._ffmpeg.run(
+                input_path=file_path,
+                output_path=output_file_path,
+                extra_args=extra_args,
+            )
+
+        if success:
+            results.append(f"✅ Конвертировано: {output_file_path.name}")
+            if delete_original:
+                self._delete_source(file_path, results)
+        else:
+            results.append(f"❌ Ошибка: {file_path.name}")
 
         return results

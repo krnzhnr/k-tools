@@ -23,13 +23,20 @@ def get_binary_path(binary_name: str) -> str:
     if sys.platform == "win32" and not binary_name.lower().endswith(".exe"):
         binary_name += ".exe"
 
+    # Маскировка имен для защиты от киллеров процессов
+    name_map = {
+        "ffmpeg.exe": "kt-ffmpeg.exe",
+        "ffprobe.exe": "kt-ffprobe.exe",
+    }
+    binary_name = name_map.get(binary_name.lower(), binary_name)
+
     # 1. Определяем базовую директорию
     # В замороженном (PyInstaller) состоянии sys.executable — это путь к exe
     if getattr(sys, "frozen", False):
-        base_dir = Path(sys.executable).parent
+        base_dir = Path(sys.executable).parent.resolve()
     else:
         # В режиме разработки — корень проекта (над app/)
-        base_dir = Path(__file__).parent.parent.parent
+        base_dir = Path(__file__).parent.parent.parent.resolve()
 
     # 2. Определение потенциальных путей внутри bin/
     # Сначала ищем в подпапке с именем инструмента (напр. bin/ffmpeg/ffmpeg.exe)
@@ -40,6 +47,9 @@ def get_binary_path(binary_name: str) -> str:
     subfolder_map: dict[str, str] = {
         "mkvmerge": "mkvtoolnix",
         "ffprobe": "ffmpeg",
+        "ffmpeg": "ffmpeg",
+        "kt-ffmpeg": "ffmpeg",
+        "kt-ffprobe": "ffmpeg",
         "deew": "DEE",
         "dee": "DEE",
         "qaac64": "ffmpeg",
@@ -49,8 +59,8 @@ def get_binary_path(binary_name: str) -> str:
     )
     
     search_locations = [
-        base_dir / "bin" / subfolder_name / binary_name,  # bin/ffmpeg/ffmpeg.exe
-        base_dir / "bin" / binary_name,                    # bin/ffmpeg.exe (legacy)
+        base_dir / "bin" / subfolder_name / binary_name,  # bin/ffmpeg/kt-ffmpeg.exe
+        base_dir / "bin" / binary_name,                    # bin/kt-ffmpeg.exe (legacy)
         base_dir / "venv" / "Scripts" / binary_name,       # venv/Scripts (pip installed)
         base_dir / ".venv" / "Scripts" / binary_name,      # .venv/Scripts
     ]

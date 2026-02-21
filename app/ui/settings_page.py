@@ -18,6 +18,7 @@ from qfluentwidgets import (
     MessageBox,
     LineEdit,
     ComboBox,
+    SpinBox,
 )
 
 from app.core.settings_manager import SettingsManager
@@ -200,6 +201,40 @@ class SettingsPage(ScrollArea):
 
         self._general_group.addSettingCard(self._theme_card)
 
+        # 5. Карточка параллельных задач
+        self._parallel_card = CardWidget(self._general_group)
+        self._parallel_card.setMinimumHeight(70)
+        
+        parallel_layout = QHBoxLayout(self._parallel_card)
+        parallel_layout.setContentsMargins(16, 16, 16, 16)
+        parallel_layout.setSpacing(16)
+
+        parallel_icon = IconWidget(FluentIcon.TILES, self._parallel_card)
+        parallel_icon.setFixedSize(16, 16)
+        parallel_layout.addWidget(parallel_icon)
+
+        parallel_text_layout = QVBoxLayout()
+        parallel_text_layout.setSpacing(2)
+        parallel_title = BodyLabel(self.tr("Максимум параллельных задач"), self._parallel_card)
+        parallel_desc = CaptionLabel(
+            self.tr("Количество одновременно обрабатываемых файлов (0 - авто)"),
+            self._parallel_card
+        )
+        parallel_desc.setStyleSheet("color: rgba(255, 255, 255, 0.6)")
+        parallel_text_layout.addWidget(parallel_title)
+        parallel_text_layout.addWidget(parallel_desc)
+        parallel_layout.addLayout(parallel_text_layout)
+        parallel_layout.addStretch(1)
+
+        self._parallel_spin = SpinBox(self._parallel_card)
+        self._parallel_spin.setRange(1, 16)
+        self._parallel_spin.setValue(self._settings_manager.max_parallel_tasks)
+        self._parallel_spin.valueChanged.connect(self._on_parallel_tasks_changed)
+        self._parallel_spin.setFixedWidth(200)
+        parallel_layout.addWidget(self._parallel_spin)
+
+        self._general_group.addSettingCard(self._parallel_card)
+
         # Группа "Обслуживание"
         self._maintenance_group = SettingCardGroup(
             self.tr("Обслуживание"), self._scroll_widget
@@ -299,6 +334,11 @@ class SettingsPage(ScrollArea):
             self.tr("Для применения новой темы необходимо перезапустить приложение. Перезагрузить сейчас?")
         )
 
+    def _on_parallel_tasks_changed(self, value: int) -> None:
+        """Обработка изменения количества параллельных задач."""
+        self._settings_manager.max_parallel_tasks = value
+        logger.info("Настройка 'Максимум параллельных задач' изменена на: %d", value)
+
     def _show_reset_dialog(self) -> None:
         """Показать диалог подтверждения сброса."""
         title = self.tr("Сброс настроек")
@@ -313,6 +353,7 @@ class SettingsPage(ScrollArea):
             self._switch_btn.setChecked(self._settings_manager.overwrite_existing)
             self._auto_subfolder_switch.setChecked(self._settings_manager.use_auto_subfolder)
             self._subfolder_name_edit.setText(self._settings_manager.default_output_subfolder)
+            self._parallel_spin.setValue(self._settings_manager.max_parallel_tasks)
             
             # Сброс комбобокса темы
             self._theme_combo.setCurrentIndex(0)

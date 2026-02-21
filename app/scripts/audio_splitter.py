@@ -35,6 +35,11 @@ class AudioSplitterScript(AbstractScript):
         logger.info("Скрипт AudioSplitterScript инициализирован")
 
     @property
+    def supports_parallel(self) -> bool:
+        """Сплиттер поддерживает параллелизм."""
+        return True
+
+    @property
     def category(self) -> str:
         """Категория скрипта."""
         return "Аудио"
@@ -88,74 +93,61 @@ class AudioSplitterScript(AbstractScript):
         output_path: str | None = None,
         progress_callback: ProgressCallback | None = None,
     ) -> list[str]:
-        """Выполнить разделение и склейку аудиофайлов.
-
-        Args:
-            files: Список файлов для обработки.
-            settings: Настройки.
-            output_path: Опциональный путь сохранения.
-            progress_callback: Callback прогресса.
-
-        Returns:
-            Список строк-результатов.
-        """
-        delete_original = settings.get("delete_original", False)
-        merge_stereo = settings.get("merge_stereo", True)
+        """Выполнить разделение (последовательно)."""
         results: list[str] = []
         total = len(files)
 
-        logger.info(
-            "Запущено разделение аудио для %d файл(ов), склейка стерео: %s",
-            total, "ВКЛ" if merge_stereo else "ВЫКЛ"
-        )
-
         for idx, file_path in enumerate(files):
             if progress_callback:
-                progress_callback(
-                    idx, total, f"Обработка: {file_path.name}"
-                )
+                progress_callback(idx, total, f"Обработка: {file_path.name}")
             
-            logger.info(
-                "Обработка файла [%d/%d]: '%s'",
-                idx + 1, total, file_path.name
+            res = self.execute_single(file_path, settings, output_path)
+            results.extend(res)
+            
+            if progress_callback:
+                progress_callback(idx + 1, total, res[-1] if res else "")
+
+        return results
+
+    def execute_single(
+        self,
+        file_path: Path,
+        settings: dict[str, Any],
+        output_path: str | None = None,
+    ) -> list[str]:
+        """Разделить один аудиофайл."""
+        delete_original = settings.get("delete_original", False)
+        merge_stereo = settings.get("merge_stereo", True)
+        results: list[str] = []
+
+        try:
+            target_dir = self._resolver.resolve(file_path, output_path)
+            output_pattern = self._get_safe_output_path(
+                file_path, target_dir / (file_path.stem + ".wavs")
             )
 
-            target_dir = self._resolver.resolve(file_path, output_path)
-            # eac3to требует ".wavs" для автоматического именования моно-каналов
-            # он создаст файлы вида "{stem}.L.wav", "{stem}.R.wav" и т.д.
-            output_pattern = target_dir / (file_path.stem + ".wavs")
-
-            logger.debug("Целевой шаблон eac3to: '%s'", output_pattern)
-
             # Команда eac3to "input" "output.wavs"
+            # Если eac3to видит расширение .wavs, он создает папку с моно-файлами
             args = [str(file_path), str(output_pattern)]
             
-            # eac3to может жаловаться на существующие файлы, поэтому лучше 
-            # дать ему -overwrite если такая опция есть, но runner просто 
-            # передает список аргументов.
-            
+            # runner просто передает список аргументов.
             success = self._runner.run(args)
 
             if success:
-                msg = f"✅ Разделено: {file_path.name}"
-                logger.info("Успешное разделение: '%s'", file_path.name)
-                
+                results.append(f"✅ Разделено: {file_path.name}")
                 if merge_stereo:
-                    self._perform_stereo_merge(file_path.stem, target_dir, results)
+                    # При склейке используем имя из output_pattern
+                    self._perform_stereo_merge(output_pattern.stem, target_dir, results)
 
                 if delete_original:
-                    logger.info("Задание удаления исходника: '%s'", file_path.name)
                     self._delete_source(file_path, results)
             else:
-                msg = f"❌ Ошибка eac3to: {file_path.name}"
-                logger.error("Ошибка eac3to для файла: '%s'", file_path.name)
+                results.append(f"❌ Ошибка eac3to: {file_path.name}")
 
-            results.append(msg)
-
-            if progress_callback:
-                progress_callback(idx + 1, total, results[-1])
-
-        return results
+            return results
+        except Exception as e:
+            logger.exception("Ошибка при обработке '%s'", file_path.name)
+            return [f"❌ Ошибка: {file_path.name} ({e})"]
 
     def _perform_stereo_merge(self, stem: str, target_dir: Path, results: list[str]) -> None:
         """Поиск моно-файлов и их склейка в стереопары.
