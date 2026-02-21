@@ -9,6 +9,7 @@ import logging
 import sys
 import os
 import ctypes
+import darkdetect
 from datetime import datetime
 
 # Принудительная установка UTF-8 для подпроцессов и консоли
@@ -71,21 +72,18 @@ if len(sys.argv) >= 3 and sys.argv[1] == "-m":
                 setattr(sys, 'frozen', True)
         sys.exit(0)
 
+from PyQt6.QtCore import QObject, pyqtSignal, QThread
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QIcon
-from qfluentwidgets import setTheme, Theme
+from qfluentwidgets import setTheme, Theme, qconfig, MessageBox
 
 from app.core.resource_utils import get_resource_path
 from app.core.script_registry import ScriptRegistry
-from app.scripts.container_converter import ContainerConverterScript
-from app.scripts.metadata_cleaner import MetadataCleanerScript
-from app.scripts.audio_converter import AudioConverterScript
-from app.scripts.audio_dee_downmixer import AudioDeeDownmixerScript
-from app.scripts.audio_speed_changer import AudioSpeedChangerScript
-from app.scripts.audio_splitter import AudioSplitterScript
-from app.scripts.muxer import MuxerScript
-from app.scripts.stream_manager import StreamManagerScript
-from app.scripts.stream_replacer import StreamReplacerScript
+from app.core.abstract_script import AbstractScript
+import importlib
+import pkgutil
+import app.scripts
+from app.core.settings_manager import SettingsManager
 from app.ui.main_window import MainWindow
 
 logger = logging.getLogger(__name__)
@@ -127,27 +125,62 @@ def _setup_logging() -> None:
 
 
 def _create_registry() -> ScriptRegistry:
-    """Создать и заполнить реестр скриптов.
+    """Создать и заполнить реестр скриптов динамически.
 
-    Returns:
-        Заполненный реестр скриптов.
+    Сканирует пакет app.scripts и регистрирует все найденные
+    подклассы AbstractScript.
     """
     registry = ScriptRegistry()
-    registry.register(MetadataCleanerScript())
-    registry.register(ContainerConverterScript())
-    registry.register(AudioConverterScript())
-    registry.register(AudioDeeDownmixerScript())
-    registry.register(AudioSpeedChangerScript())
-    registry.register(AudioSplitterScript())
-    registry.register(MuxerScript())
-    registry.register(StreamManagerScript())
-    registry.register(StreamReplacerScript())
+    
+    # Динамический импорт всех модулей в пакете app.scripts
+    for _, name, is_pkg in pkgutil.iter_modules(app.scripts.__path__):
+        if is_pkg:
+            continue
+            
+        full_module_name = f"app.scripts.{name}"
+        try:
+            module = importlib.import_module(full_module_name)
+            # Поиск классов внутри модуля
+            for attribute_name in dir(module):
+                attribute = getattr(module, attribute_name)
+                
+                # Проверяем, что это класс, наследник AbstractScript и не сам AbstractScript
+                if (isinstance(attribute, type) and 
+                    issubclass(attribute, AbstractScript) and 
+                    attribute is not AbstractScript and
+                    attribute.__module__ == full_module_name):
+                    
+                    # Регистрация должна быть "жесткой" — ValueError пробрасывается наверх
+                    registry.register(attribute())
+        except Exception:
+            logger.exception("Ошибка при загрузке модуля: %s", full_module_name)
 
     logger.info(
-        "Зарегистрировано скриптов: %d",
+        "Всего автоматически зарегистрировано скриптов: %d",
         len(registry),
     )
     return registry
+
+
+class ThemeSignal(QObject):
+    """Класс-сигнал для обработки изменений темы из сторонних потоков."""
+    themeChanged = pyqtSignal(str)
+
+
+class ThemeWorker(QThread):
+    """Поток для прослушивания системной темы."""
+    
+    def __init__(self, signal: ThemeSignal) -> None:
+        super().__init__()
+        self.signal = signal
+
+    def run(self) -> None:
+        """Запуск слушателя."""
+        try:
+            darkdetect.listener(lambda t: self.signal.themeChanged.emit(t))
+        except Exception:
+            # На случай ошибок в сторонней библиотеке
+            pass
 
 
 def main() -> None:
@@ -157,7 +190,48 @@ def main() -> None:
 
     app = QApplication(sys.argv)
     app.setWindowIcon(QIcon(get_resource_path("app_icon.ico")))
-    setTheme(Theme.DARK)
+    
+    # Загрузка настроек темы
+    settings = SettingsManager()
+    theme_val = settings.theme
+    
+    if theme_val == "Dark":
+        qconfig.theme = Theme.DARK
+        setTheme(Theme.DARK)
+    elif theme_val == "Light":
+        qconfig.theme = Theme.LIGHT
+        setTheme(Theme.LIGHT)
+    else:
+        # Системная тема
+        qconfig.theme = Theme.AUTO
+        setTheme(Theme.AUTO)
+
+    # Создаем объект-сигнал для связи между потоками
+    theme_signal = ThemeSignal()
+
+    def on_theme_changed(theme):
+        """Обработка сигнала смены темы."""
+        try:
+            if window and window.isVisible():
+                msg = MessageBox(
+                    "Смена системной темы",
+                    "Обнаружено изменение системной темы. Для корректного обновления всех иконок и стилей рекомендуется перезапустить приложение. Перезагрузить сейчас?",
+                    window
+                )
+                msg.yesButton.setText("Перезагрузить")
+                msg.cancelButton.setText("Позже")
+                if msg.exec():
+                    from app.core.lifecycle import restart_current_app
+                    restart_current_app()
+        except (NameError, AttributeError):
+            pass
+
+    # Соединяем сигнал с обработчиком
+    theme_signal.themeChanged.connect(on_theme_changed)
+
+    # Запускаем системный слушатель в отдельном потоке (асинхронно)
+    theme_worker = ThemeWorker(theme_signal)
+    theme_worker.start()
 
     registry = _create_registry()
     window = MainWindow(registry=registry)

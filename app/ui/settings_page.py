@@ -17,6 +17,7 @@ from qfluentwidgets import (
     PushButton,
     MessageBox,
     LineEdit,
+    ComboBox,
 )
 
 from app.core.settings_manager import SettingsManager
@@ -160,6 +161,45 @@ class SettingsPage(ScrollArea):
 
         self._general_group.addSettingCard(self._subfolder_name_card)
 
+        # 4. Карточка выбора темы
+        self._theme_card = CardWidget(self._general_group)
+        self._theme_card.setMinimumHeight(70)
+        
+        theme_layout = QHBoxLayout(self._theme_card)
+        theme_layout.setContentsMargins(16, 16, 16, 16)
+        theme_layout.setSpacing(16)
+
+        theme_icon = IconWidget(FluentIcon.PALETTE, self._theme_card)
+        theme_icon.setFixedSize(16, 16)
+        theme_layout.addWidget(theme_icon)
+
+        theme_text_layout = QVBoxLayout()
+        theme_text_layout.setSpacing(2)
+        theme_title_label = BodyLabel(self.tr("Тема приложения"), self._theme_card)
+        theme_desc_label = CaptionLabel(
+            self.tr("Выберите цветовую схему оформления (требуется перезапуск)"),
+            self._theme_card
+        )
+        theme_desc_label.setStyleSheet("color: rgba(255, 255, 255, 0.6)")
+        theme_text_layout.addWidget(theme_title_label)
+        theme_text_layout.addWidget(theme_desc_label)
+        theme_layout.addLayout(theme_text_layout)
+        theme_layout.addStretch(1)
+
+        self._theme_combo = ComboBox(self._theme_card)
+        self._theme_combo.addItems([self.tr("Темная"), self.tr("Светлая"), self.tr("Системная")])
+        
+        # Установка текущего значения
+        current_theme = self._settings_manager.theme
+        theme_map = {"Dark": 0, "Light": 1, "System": 2}
+        self._theme_combo.setCurrentIndex(theme_map.get(current_theme, 0))
+        
+        self._theme_combo.currentIndexChanged.connect(self._on_theme_changed)
+        self._theme_combo.setFixedWidth(200)
+        theme_layout.addWidget(self._theme_combo)
+
+        self._general_group.addSettingCard(self._theme_card)
+
         # Группа "Обслуживание"
         self._maintenance_group = SettingCardGroup(
             self.tr("Обслуживание"), self._scroll_widget
@@ -242,6 +282,23 @@ class SettingsPage(ScrollArea):
             self._settings_manager.default_output_subfolder = text.strip()
             logger.info("Имя автоматической подпапки изменено на: '%s'", text.strip())
 
+    def _on_theme_changed(self, index: int) -> None:
+        """Обработка изменения темы."""
+        theme_map = {0: "Dark", 1: "Light", 2: "System"}
+        new_theme = theme_map.get(index, "Dark")
+        
+        if self._settings_manager.theme == new_theme:
+            return
+            
+        self._settings_manager.theme = new_theme
+        logger.info("Тема приложения в настройках изменена на: %s", new_theme)
+        
+        # Показ диалога перезапуска
+        self._show_restart_dialog(
+            self.tr("Смена темы"),
+            self.tr("Для применения новой темы необходимо перезапустить приложение. Перезагрузить сейчас?")
+        )
+
     def _show_reset_dialog(self) -> None:
         """Показать диалог подтверждения сброса."""
         title = self.tr("Сброс настроек")
@@ -257,15 +314,23 @@ class SettingsPage(ScrollArea):
             self._auto_subfolder_switch.setChecked(self._settings_manager.use_auto_subfolder)
             self._subfolder_name_edit.setText(self._settings_manager.default_output_subfolder)
             
+            # Сброс комбобокса темы
+            self._theme_combo.setCurrentIndex(0)
+            
             logger.info("Пользователь подтвердил сброс всех настроек")
             
             # Предлагаем перезапуск
-            restart_title = self.tr("Перезапуск")
-            restart_content = self.tr("Настройки сброшены. Рекомендуется перезапустить приложение для полного применения изменений. Перезагрузить сейчас?")
-            rw = MessageBox(restart_title, restart_content, self.window())
-            rw.yesButton.setText(self.tr("Перезагрузить"))
-            rw.cancelButton.setText(self.tr("Позже"))
-            
-            if rw.exec():
-                from app.core.lifecycle import restart_current_app
-                restart_current_app()
+            self._show_restart_dialog(
+                self.tr("Перезапуск"),
+                self.tr("Настройки сброшены. Рекомендуется перезапустить приложение для полного применения изменений. Перезагрузить сейчас?")
+            )
+
+    def _show_restart_dialog(self, title: str, content: str) -> None:
+        """Показать диалог предложения перезапуска."""
+        rw = MessageBox(title, content, self.window())
+        rw.yesButton.setText(self.tr("Перезагрузить"))
+        rw.cancelButton.setText(self.tr("Позже"))
+        
+        if rw.exec():
+            from app.core.lifecycle import restart_current_app
+            restart_current_app()

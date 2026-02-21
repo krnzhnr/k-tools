@@ -22,6 +22,7 @@ from app.core.script_registry import ScriptRegistry
 from app.core.resource_utils import get_resource_path
 from app.ui.work_panel import ScriptPage
 from app.ui.settings_page import SettingsPage
+from app.ui.home_page import HomePage
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +34,7 @@ class MainWindow(FluentWindow):
     навигация слева, рабочая панель справа.
     """
 
-    WINDOW_WIDTH = 781
+    WINDOW_WIDTH = 792
     WINDOW_HEIGHT = 960
 
     def __init__(
@@ -54,6 +55,11 @@ class MainWindow(FluentWindow):
         self._replace_stacked_view()
 
         self._setup_window()
+        
+        # Инициализация главной страницы
+        self._home_page = HomePage(self._registry.scripts, self._resolve_icon, self)
+        self._home_page.scriptRequested.connect(self._on_script_requested)
+        
         self._setup_navigation()
 
         logger.info(
@@ -178,6 +184,13 @@ class MainWindow(FluentWindow):
 
     def _setup_navigation(self) -> None:
         """Настройка навигационной панели со скриптами."""
+        # Добавление главной страницы в начало
+        self.addSubInterface(
+            interface=self._home_page,
+            icon=FluentIcon.HOME,
+            text="Главная"
+        )
+
         # Группировка скриптов по категориям
         categories = {}
         for script in self._registry.scripts:
@@ -209,8 +222,14 @@ class MainWindow(FluentWindow):
                 (FluentIcon.FOLDER, f"cat{ordered_cats.index(cat_name)}")
             )
             
+            # Покраска иконок категорий отключена по запросу пользователя.
+            # Чтобы вернуть, используйте:
+            # theme_colors = {"Видео": "#1B9DE3", "Аудио": "#28CAC6", "Муксинг": "#EB6E4D"}
+            # if cat_name in theme_colors:
+            #     from PyQt6.QtGui import QColor
+            #     icon = icon.icon(color=QColor(theme_colors[cat_name]))
+
             # Для категорий используем addItem напрямую в navigationInterface.
-            # Это создает элемент, который может быть родителем, но не привязан к странице.
             parent_item = self.navigationInterface.addItem(
                 routeKey=cat_key,
                 icon=icon,
@@ -287,6 +306,18 @@ class MainWindow(FluentWindow):
             page_name,
             index,
         )
+
+    def _on_script_requested(self, script_name: str) -> None:
+        """Переключиться на страницу скрипта по названию.
+
+        Этот метод вызывается при клике по карточке на главной странице.
+        """
+        if page := self._script_pages.get(script_name):
+            logger.info(
+                "Переход на страницу скрипта '%s' из Home",
+                script_name
+            )
+            self.switchTo(page)
 
     @staticmethod
     def _resolve_icon(icon_name: str) -> FluentIcon:

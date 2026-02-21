@@ -87,6 +87,23 @@ class SettingsManager:
         self._settings.sync()
         logger.info("Настройка 'use_auto_subfolder' изменена на: %s", value)
 
+    @property
+    def theme(self) -> str:
+        """Тема приложения (Dark/Light)."""
+        self._settings.beginGroup("General")
+        val = self._settings.value("theme", "Dark", type=str)
+        self._settings.endGroup()
+        return val
+
+    @theme.setter
+    def theme(self, value: str) -> None:
+        """Установить тему приложения (Dark/Light)."""
+        self._settings.beginGroup("General")
+        self._settings.setValue("theme", value)
+        self._settings.endGroup()
+        self._settings.sync()
+        logger.info("Настройка 'theme' изменена на: %s", value)
+
     def _get_safe_script_name(self, script_name: str) -> str:
         """Нормализовать имя скрипта для использования в качестве имени секции (группы).
         

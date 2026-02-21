@@ -47,10 +47,7 @@ class AudioSplitterScript(AbstractScript):
     @property
     def description(self) -> str:
         """Описание скрипта."""
-        return (
-            "Разбивает многоканальный аудиофайл на отдельные "
-            "моно-потоки (WAV) с опциональной склейкой в стереопары"
-        )
+        return "Разбивает многоканальное аудио на моно-WAV с опциональной склейкой в стереопары"
 
     @property
     def icon_name(self) -> str:

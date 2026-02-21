@@ -21,12 +21,24 @@ class ScriptRegistry:
         self._scripts: list[AbstractScript] = []
         logger.info("Реестр скриптов инициализирован")
 
+    MAX_DESCRIPTION_LENGTH = 100
+
     def register(self, script: AbstractScript) -> None:
         """Зарегистрировать скрипт в реестре.
 
         Args:
             script: Экземпляр скрипта для регистрации.
+        
+        Raises:
+            ValueError: Если описание скрипта слишком длинное.
         """
+        if len(script.description) > self.MAX_DESCRIPTION_LENGTH:
+            raise ValueError(
+                f"Описание скрипта '{script.name}' слишком длинное "
+                f"({len(script.description)} > {self.MAX_DESCRIPTION_LENGTH}). "
+                f"Пожалуйста, сократите его до {self.MAX_DESCRIPTION_LENGTH} символов."
+            )
+            
         self._scripts.append(script)
         logger.info(
             "Скрипт '%s' зарегистрирован в реестре",

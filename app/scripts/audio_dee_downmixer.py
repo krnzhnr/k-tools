@@ -33,7 +33,7 @@ class AudioDeeDownmixerScript(AbstractScript):
 
     @property
     def description(self) -> str:
-        return "Превращает 5.1/7.1 аудио в Стерео 2.0 (Dolby Digital Plus / Dolby Digital) используя Dolby Encoding Engine."
+        return "Даунмикс 5.1/7.1 в Stereo 2.0 (DDP/DD) через Dolby Encoding Engine"
 
     @property
     def icon_name(self) -> str:
