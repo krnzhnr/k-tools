@@ -73,7 +73,7 @@ def prompt_version_update() -> str:
     else:
         patch += 1
         
-    new_version = f"{major}.{minor}.{patch:03d}"
+    new_version = f"{major}.{minor}.{patch}"
     save_version(new_version)
     print(f"[✓] Версия обновлена до: {new_version}")
     return new_version
@@ -147,7 +147,7 @@ def create_version_file(version_str: str) -> None:
     """Создать файл версии для Windows.
 
     Args:
-        version_str: Строка версии (например, '1.0.026').
+        version_str: Строка версии (например, '1.2.3').
     """
     parts = version_str.split('.')
     v_parts = [int(p) for p in parts]

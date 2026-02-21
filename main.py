@@ -125,38 +125,56 @@ def _setup_logging() -> None:
 
 
 def _create_registry() -> ScriptRegistry:
-    """Создать и заполнить реестр скриптов динамически.
+    """Создать и заполнить реестр скриптов.
 
-    Сканирует пакет app.scripts и регистрирует все найденные
-    подклассы AbstractScript.
+    Использует как явный список из app.scripts, так и 
+    динамическое сканирование для максимальной надежности.
     """
     registry = ScriptRegistry()
     
-    # Динамический импорт всех модулей в пакете app.scripts
-    for _, name, is_pkg in pkgutil.iter_modules(app.scripts.__path__):
-        if is_pkg:
-            continue
-            
-        full_module_name = f"app.scripts.{name}"
+    # Сначала пытаемся загрузить из явного списка (надежнее для EXE)
+    modules_to_process = []
+    if hasattr(app.scripts, "SCRIPT_MODULES"):
+        modules_to_process.extend(app.scripts.SCRIPT_MODULES)
+        logger.debug("Используется явный список из app.scripts.SCRIPT_MODULES")
+    
+    # Затем дополняем динамически, если что-то пропустили
+    try:
+        for _, name, is_pkg in pkgutil.iter_modules(app.scripts.__path__):
+            if is_pkg:
+                continue
+            full_module_name = f"app.scripts.{name}"
+            try:
+                module = importlib.import_module(full_module_name)
+                if module not in modules_to_process:
+                    modules_to_process.append(module)
+            except Exception:
+                logger.exception("Ошибка при импорте модуля: %s", full_module_name)
+    except Exception:
+        logger.warning("pkgutil не смог просканировать app.scripts.__path__")
+
+    # Регистрация классов из собранного списка модулей
+    for module in modules_to_process:
+        module_name = getattr(module, "__name__", "unknown")
         try:
-            module = importlib.import_module(full_module_name)
-            # Поиск классов внутри модуля
             for attribute_name in dir(module):
                 attribute = getattr(module, attribute_name)
                 
                 # Проверяем, что это класс, наследник AbstractScript и не сам AbstractScript
                 if (isinstance(attribute, type) and 
                     issubclass(attribute, AbstractScript) and 
-                    attribute is not AbstractScript and
-                    attribute.__module__ == full_module_name):
+                    attribute is not AbstractScript):
                     
-                    # Регистрация должна быть "жесткой" — ValueError пробрасывается наверх
+                    # Проверка: если скрипт уже зарегистрирован (по имени), пропускаем
+                    if registry.find_by_name(attribute().name):
+                        continue
+                        
                     registry.register(attribute())
         except Exception:
-            logger.exception("Ошибка при загрузке модуля: %s", full_module_name)
+            logger.exception("Ошибка при регистрации скриптов из модуля: %s", module_name)
 
     logger.info(
-        "Всего автоматически зарегистрировано скриптов: %d",
+        "Всего зарегистрировано скриптов: %d",
         len(registry),
     )
     return registry
