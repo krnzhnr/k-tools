@@ -511,7 +511,7 @@ class ScriptPage(QWidget):
         if (
             self._script.use_custom_widget
             and isinstance(self._script.name, str)
-            and "Подмена" in self._script.name
+            and ("Подмена" in self._script.name or "Замена" in self._script.name)
         ):
             # Скрипт подмены потоков MKV
             self._stream_replace_widget = (
@@ -531,12 +531,14 @@ class ScriptPage(QWidget):
         elif (
             self._script.use_custom_widget
             and isinstance(self._script.name, str)
-            and "Муксер" in self._script.name
+            and ("Муксер" in self._script.name or "Муксинг" in self._script.name)
         ):
             self._file_list = MuxingTableWidget(self)
             self._file_list.filesChanged.connect(
                 self._update_path_placeholder
             )
+            layout.addWidget(self._file_list, stretch=1)
+            return
         elif (
             self._script.use_custom_widget
             and isinstance(self._script.name, str)
