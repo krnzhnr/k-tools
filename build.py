@@ -45,6 +45,14 @@ def prompt_version_update() -> str:
     Returns:
         Новая строка версии.
     """
+    ci_version = os.environ.get("CI_VERSION")
+    if ci_version:
+        # Убираем букву 'v' из тега (например 'v1.0.3' -> '1.0.3')
+        version = ci_version.lstrip('v')
+        save_version(version)
+        print(f"[✓] CI/CD: Версия автоматически установлена: {version}")
+        return version
+
     current_version = get_current_version()
     print(f"\n[*] Текущая версия: {current_version}")
     print("[?] Выберите тип обновления:")
@@ -379,11 +387,16 @@ def build() -> None:
 
 
 if __name__ == "__main__":
+    is_ci = os.environ.get("CI_VERSION") is not None
     try:
         clean()
         build()
-        print("\n[*] Окно закроется через 10 секунд...")
-        time.sleep(10)
+        if not is_ci:
+            print("\n[*] Окно закроется через 10 секунд...")
+            time.sleep(10)
     except Exception as e:
         print(f"\n[!] ОШИБКА: {e}")
-        input("Нажмите Enter чтобы выйти...")
+        if not is_ci:
+            input("Нажмите Enter чтобы выйти...")
+        else:
+            sys.exit(1) # Жестко завершаем с ошибкой для пайплайна

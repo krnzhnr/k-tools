@@ -1,0 +1,52 @@
+name: Build K-Tools Installer
+
+on:
+  push:
+    tags:
+      - 'v*' # Сработает на v1.0.0, v1.1.0 и т.д.
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+      with:
+        lfs: true # Тянем bin/ со всеми ffmpeg и dee
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        # Устанавливаем только сам сборщик, если его вдруг нет в списке
+        pip install pyinstaller 
+
+    - name: Run Build Script
+      env:
+        CI_VERSION: ${{ github.ref_name }}
+      run: |
+        python build.py
+
+    - name: Install Inno Setup
+      run: |
+        choco install innosetup
+
+    - name: Compile Installer
+      run: |
+        iscc KTools.iss
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: setup_output/KTools_*.exe
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
