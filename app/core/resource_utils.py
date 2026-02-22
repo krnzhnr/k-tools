@@ -17,20 +17,21 @@ def get_resource_path(relative_path: str) -> str:
         relative_path: Относительный путь к файлу (например, 'app_icon.ico').
 
     Returns:
-        Абсолютный путь к файлу.
+        Абсолютный путь к файлу (в виде строки для совместимости с API).
     """
     # 1. Проверяем режим PyInstaller
-    base_path = getattr(sys, '_MEIPASS', os.path.abspath("."))
+    base_path = Path(getattr(sys, '_MEIPASS', os.path.abspath(".")))
+    rel_p = Path(relative_path)
     
     # 2. Формируем прямой путь (для сборки, где всё в куче)
-    path = os.path.join(base_path, relative_path)
-    if os.path.exists(path):
-        return path
+    path = base_path / rel_p
+    if path.exists():
+        return str(path.resolve())
         
     # 3. Формируем путь через assets (для режима разработки)
-    path_with_assets = os.path.join(base_path, "assets", relative_path)
-    if os.path.exists(path_with_assets):
-        return path_with_assets
+    path_with_assets = base_path / "assets" / rel_p
+    if path_with_assets.exists():
+        return str(path_with_assets.resolve())
         
-    # Fallback: возвращаем как есть
-    return path
+    # Fallback: возвращаем разрешенный путь (даже если файла нет)
+    return str(path.resolve())

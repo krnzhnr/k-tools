@@ -48,6 +48,8 @@ RAW_EXTENSIONS = {
 }
 
 
+from app.core.constants import VIDEO_EXTENSIONS
+
 class StreamManagerScript(AbstractScript):
     """Скрипт для управления потоками в MKV."""
 
@@ -88,7 +90,7 @@ class StreamManagerScript(AbstractScript):
     @property
     def file_extensions(self) -> list[str]:
         """Допустимые расширения файлов."""
-        return [".mkv", ".mp4"]
+        return list(VIDEO_EXTENSIONS)
 
     @property
     def settings_schema(self) -> list[SettingField]:
@@ -114,297 +116,98 @@ class StreamManagerScript(AbstractScript):
         """Скрипт использует кастомный виджет."""
         return True
 
-    def execute(
+    def execute_single(
         self,
-        files: list[Path],
+        file_path: Path,
         settings: dict[str, Any],
         output_path: str | None = None,
-        progress_callback: (
-            ProgressCallback | None
-        ) = None,
     ) -> list[str]:
-        """Выполнить обработку файлов.
-
-        Args:
-            files: Список путей к MKV-файлам.
-            settings: Настройки скрипта.
-            progress_callback: Callback прогресса.
-
-        Returns:
-            Список строк-результатов.
-        """
-        results: list[str] = []
+        """Обработать один файл (фильтрация дорожек)."""
         mode = settings.get("mode", MODE_REMOVE)
-        per_file: dict[str, list[int]] = settings.get(
-            "selected_tracks_per_file", {}
+        per_file = settings.get("selected_tracks_per_file", {})
+        file_key = str(file_path)
+        selected_ids = per_file.get(file_key, [])
+        overwrite = SettingsManager().overwrite_existing
+
+        if not selected_ids:
+            msg = f"⏭ Пропущен (нет выбранных дорожек): {file_path.name}"
+            logger.info("[%s] %s", self.name, msg)
+            return [msg]
+
+        try:
+            all_tracks = self._probe.get_tracks(file_path)
+        except Exception:
+            logger.exception("Ошибка анализа дорожек файла '%s'", file_path.name)
+            return [f"❌ Ошибка анализа: {file_path.name}"]
+
+        # Формируем аргументы фильтрации
+        mkvmerge_args = self._build_track_args(
+            all_tracks=all_tracks,
+            selected_ids=selected_ids,
+            mode=mode,
         )
-        total = len(files)
-        completed = 0
 
-        logger.info(
-            "Запуск скрипта управления потоками. "
-            "Режим: '%s'. Файлов: %d",
-            mode,
-            total,
-        )
+        keep_ids = self._compute_keep_ids(all_tracks, selected_ids, mode)
+        kept_tracks = [t for t in all_tracks if t.track_id in keep_ids]
+        kept_types = {t.track_type for t in kept_tracks}
+        
+        use_m4a = settings.get("use_m4a_container_audio_only", False)
+        is_mp4 = file_path.suffix.lower() == ".mp4"
+        ext = file_path.suffix
+        use_ffmpeg = is_mp4
+        ffmpeg_args = []
 
-        # Проверяем, есть ли хоть один выбранный трек
-        has_any = any(
-            bool(ids) for ids in per_file.values()
-        )
-        if not has_any:
-            msg = "⚠ Не выбраны дорожки для обработки"
-            logger.warning(msg)
-            results.append(msg)
-            return results
-
-        for file_path in files:
-            completed += 1
-            if progress_callback:
-                progress_callback(
-                    completed - 1,
-                    total,
-                    f"Анализ и фильтрация: {file_path.name}",
-                )
-            file_key = str(file_path)
-            selected_ids = per_file.get(file_key, [])
-
-            if not selected_ids:
-                msg = (
-                    f"⏭ Пропущен (нет выбранных "
-                    f"дорожек): {file_path.name}"
-                )
-                logger.info(
-                    "Пропуск файла '%s': "
-                    "дорожки не выбраны",
-                    file_path.name,
-                )
-                results.append(msg)
-                if progress_callback:
-                    progress_callback(
-                        completed, total, msg
-                    )
-                continue
-
-            logger.info(
-                "Обработка файла [%d/%d]: '%s'. "
-                "Выбрано дорожек: %d",
-                completed,
-                total,
-                file_path.name,
-                len(selected_ids),
-            )
-
-            try:
-                all_tracks = self._probe.get_tracks(
-                    file_path
-                )
-            except Exception:
-                msg = (
-                    f"❌ Ошибка анализа: "
-                    f"{file_path.name}"
-                )
-                logger.exception(
-                    "Ошибка анализа дорожек "
-                    "файла '%s'",
-                    file_path.name,
-                )
-                results.append(msg)
-                if progress_callback:
-                    progress_callback(
-                        completed, total, msg
-                    )
-                continue
-
-            # Формируем аргументы mkvmerge
-            mkvmerge_args = self._build_track_args(
-                all_tracks=all_tracks,
-                selected_ids=selected_ids,
-                mode=mode,
-            )
-
-            if not mkvmerge_args:
-                logger.info(
-                    "Файл '%s': все дорожки "
-                    "сохраняются, ремуксинг "
-                    "без фильтрации",
-                    file_path.name,
-                )
-
-            # Определяем расширение по типам
-            keep_ids = self._compute_keep_ids(
-                all_tracks, selected_ids, mode
-            )
-            kept_tracks = [
-                t for t in all_tracks if t.track_id in keep_ids
-            ]
-            kept_types = {t.track_type for t in kept_tracks}
-            
-            use_m4a = settings.get("use_m4a_container_audio_only", False)
-            is_mp4 = file_path.suffix.lower() == ".mp4"
-            ext = file_path.suffix
-            use_ffmpeg = is_mp4 # Всегда используем FFmpeg для MP4
-            ffmpeg_args = []
-
-            if is_mp4:
-                # Генерируем аргументы маппинга для FFmpeg
-                # FFmpeg использует 0-based индексы потоков.
-                # mkvmerge -J возвращает ID, которые обычно совпадают с индексами для MP4.
-                for tid in keep_ids:
-                    ffmpeg_args.extend(["-map", f"0:{tid}"])
-                ffmpeg_args.extend(["-c", "copy"])
-                # Если сохраняем только аудио и одну дорожку, можем сменить расширение
-                if kept_types == {"audio"} and len(kept_tracks) == 1:
-                    if use_m4a:
-                        ext = ".m4a"
-                    else:
-                        ext = RAW_EXTENSIONS.get(kept_tracks[0].codec, ".mka")
-                elif kept_types == {"audio"}:
-                    ext = ".m4a" if use_m4a else ".mka"
-            
-            # Логика для одной аудиодорожки в MKV
-            elif len(kept_tracks) == 1 and kept_tracks[0].track_type == "audio":
-                track = kept_tracks[0]
-                use_ffmpeg = True
-                
-                if use_m4a:
-                    ext = ".m4a"
-                else:
-                    # Пытаемся определить raw расширение по кодеку
-                    codec = track.codec
-                    ext = RAW_EXTENSIONS.get(codec, ".mka")
-                    logger.debug("Определено расширение для кодека '%s': %s", codec, ext)
-                
-                # Аргументы для копирования дорожки
-                if mode == MODE_KEEP:
-                    # FFmpeg использует 0-based индекс для аудио -map 0:a:N 
-                    # Но mkvmerge ID не всегда совпадает. Надежнее через mkvmerge если сложная фильтрация,
-                    # но тут у нас одна дорожка.
-                    # Найдем индекс аудиодорожки среди всех аудиодорожек
-                    audio_tracks = [t for t in all_tracks if t.track_type == "audio"]
-                    try:
-                        audio_idx = audio_tracks.index(track)
-                        ffmpeg_args = ["-map", f"0:a:{audio_idx}", "-c", "copy"]
-                    except ValueError:
-                        use_ffmpeg = False # Fallback
-                else:
-                    # Если режим REMOVE, но осталась одна дорожка (значит все остальные удалены)
-                    # Нам все равно нужен индекс именно этой дорожки
-                    audio_tracks = [t for t in all_tracks if t.track_type == "audio"]
-                    try:
-                        audio_idx = audio_tracks.index(track)
-                        ffmpeg_args = ["-map", f"0:a:{audio_idx}", "-c", "copy"]
-                    except ValueError:
-                        use_ffmpeg = False
-
+        if is_mp4:
+            for tid in sorted(keep_ids):
+                ffmpeg_args.extend(["-map", f"0:{tid}"])
+            ffmpeg_args.extend(["-c", "copy"])
+            if kept_types == {"audio"} and len(kept_tracks) == 1:
+                ext = ".m4a" if use_m4a else RAW_EXTENSIONS.get(kept_tracks[0].codec, ".mka")
             elif kept_types == {"audio"}:
-                ext = ".mka"
-            else:
-                ext = file_path.suffix
+                ext = ".m4a" if use_m4a else ".mka"
+        elif len(kept_tracks) == 1 and kept_tracks[0].track_type == "audio":
+            track = kept_tracks[0]
+            use_ffmpeg = True
+            ext = ".m4a" if use_m4a else RAW_EXTENSIONS.get(track.codec, ".mka")
+            audio_tracks = [t for t in all_tracks if t.track_type == "audio"]
+            try:
+                audio_idx = audio_tracks.index(track)
+                ffmpeg_args = ["-map", f"0:a:{audio_idx}", "-c", "copy"]
+            except ValueError:
+                use_ffmpeg = False
+        elif kept_types == {"audio"}:
+            ext = ".mka"
+        else:
+            ext = file_path.suffix
 
-            out_name = file_path.stem + ext
-
-            # Выходной путь через резолвер
-            target_dir = self._resolver.resolve(
-                file_path, output_path
-            )
-            
-            output_file_path = self._get_safe_output_path(
-                file_path, target_dir / out_name
-            )
-
-            logger.info(
-                "Выходной файл: '%s' "
-                "(типы: %s, расширение: '%s')",
-                output_file_path.name,
-                kept_types,
-                ext,
-            )
-
-            if (
-                output_file_path.exists()
-                and not SettingsManager()
-                .overwrite_existing
-            ):
-                msg = (
-                    f"⏭ Пропущен (файл существует): "
-                    f"{output_file_path.name}"
-                )
-                logger.info(
-                    "Пропуск: выходной файл '%s' "
-                    "уже существует",
-                    output_file_path.name,
-                )
-                results.append(msg)
-                if progress_callback:
-                    progress_callback(
-                        completed, total, msg
-                    )
-                continue
-
-            logger.debug(
-                "Аргументы фильтрации: %s",
-                mkvmerge_args,
-            )
-
-            # Запуск обработки
-            if use_ffmpeg:
-                logger.debug("Использование FFmpeg для извлечения аудио дорожки")
-                success = self._ffmpeg.run(
-                    input_path=file_path,
-                    output_path=output_file_path,
-                    extra_args=ffmpeg_args
-                )
-            else:
-                # Запуск mkvmerge
-                inputs = [
-                    {
-                        "path": file_path,
-                        "args": mkvmerge_args,
-                    }
-                ]
-
-                success = self._runner.run(
-                    output_path=output_file_path,
-                    inputs=inputs,
-                )
-
-            if success:
-                msg = (
-                    f"✅ Обработано: "
-                    f"{output_file_path.name}"
-                )
-                logger.info(
-                    "Файл успешно обработан: '%s'",
-                    output_file_path.name,
-                )
-            else:
-                msg = (
-                    f"❌ Ошибка обработки: "
-                    f"{file_path.name}"
-                )
-                logger.error(
-                    "Ошибка mkvmerge при обработке "
-                    "файла '%s'",
-                    file_path.name,
-                )
-
-            results.append(msg)
-            if progress_callback:
-                progress_callback(
-                    completed, total, msg
-                )
-
-        success_count = len(
-            [r for r in results if r.startswith("✅")]
+        target_dir = self._resolver.resolve(file_path, output_path)
+        output_file_path = self._get_safe_output_path(
+            file_path, target_dir / (file_path.stem + ext)
         )
-        logger.info(
-            "Управление потоками завершено. "
-            "Итог: %d успешно из %d",
-            success_count,
-            total,
-        )
-        return results
+
+        if output_file_path.exists() and not overwrite:
+            msg = f"⏭ Пропущен (файл существует): {output_file_path.name}"
+            logger.info("[%s] %s", self.name, msg)
+            return [msg]
+
+        if use_ffmpeg:
+            success = self._ffmpeg.run(
+                input_path=file_path,
+                output_path=output_file_path,
+                extra_args=ffmpeg_args,
+                overwrite=overwrite
+            )
+        else:
+            inputs = [{"path": file_path, "args": mkvmerge_args}]
+            success = self._runner.run(
+                output_path=output_file_path,
+                inputs=inputs,
+                overwrite=overwrite
+            )
+
+        if success:
+            return [f"✅ Обработано: {output_file_path.name}"]
+        return [f"❌ Ошибка обработки: {file_path.name}"]
 
     @staticmethod
     def _compute_keep_ids(

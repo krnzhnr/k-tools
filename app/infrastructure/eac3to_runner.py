@@ -19,7 +19,7 @@ class Eac3toRunner:
         self._executable = path_utils.get_binary_path("eac3to")
         logger.info("Eac3toRunner инициализирован. Путь к бинарнику: %s", self._executable)
 
-    def run(self, args: list[str], cwd: Path | None = None) -> bool:
+    def run(self, args: list[str], cwd: Path | None = None, overwrite: bool = False) -> bool:
         """Запустить eac3to с аргументами.
 
         Args:

@@ -41,7 +41,7 @@ def test_muxer_grouping_and_execution(mocker, temp_dir):
     inputs = call_args["inputs"]
     title = call_args["title"]
     
-    assert output_path.name == "movie.mkv"
+    assert output_path.name == "movie_processed.mkv"
     assert title == "movie"
     assert len(inputs) == 3 # Video + Audio + Subs
     

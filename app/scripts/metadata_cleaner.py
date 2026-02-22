@@ -18,6 +18,8 @@ from app.infrastructure.ffmpeg_runner import FFmpegRunner
 logger = logging.getLogger(__name__)
 
 
+from app.core.constants import VIDEO_EXTENSIONS
+
 class MetadataCleanerScript(AbstractScript):
     """Очистка метаданных видеофайлов через FFmpeg.
 
@@ -57,7 +59,7 @@ class MetadataCleanerScript(AbstractScript):
     @property
     def file_extensions(self) -> list[str]:
         """Допустимые расширения файлов."""
-        return [".mp4", ".mkv", ".mov", ".avi"]
+        return list(VIDEO_EXTENSIONS)
 
     @property
     def settings_schema(self) -> list[SettingField]:
@@ -77,98 +79,51 @@ class MetadataCleanerScript(AbstractScript):
             ),
         ]
 
-    def execute(
+    def execute_single(
         self,
-        files: list[Path],
+        file_path: Path,
         settings: dict[str, Any],
         output_path: str | None = None,
-        progress_callback: ProgressCallback | None = None,
     ) -> list[str]:
-        """Очистить метаданные из списка файлов.
-
-        Args:
-            files: Список файлов для обработки.
-            settings: Настройки скрипта (suffix).
-            progress_callback: Callback прогресса.
-
-        Returns:
-            Список строк-результатов.
-        """
+        """Очистить метаданные одного файла."""
         suffix = settings.get("suffix", "_cl")
-        delete_original = settings.get(
-            "delete_original", False
-        )
-        logger.info(
-            "Получены настройки скрипта: суффикс='%s', удалять исходник=%s",
-            suffix, "ДА" if delete_original else "НЕТ"
-        )
+        delete_original = settings.get("delete_original", False)
+        overwrite = SettingsManager().overwrite_existing
+        
         results: list[str] = []
-        total = len(files)
+        
+        output_name = f"{file_path.stem}{suffix}{file_path.suffix}"
+        target_dir = self._resolver.resolve(file_path, output_path)
+        output_file_path = target_dir / output_name
+        
+        # Защита путей и учет настроек перезаписи
+        output_file_path = self._get_safe_output_path(file_path, output_file_path)
 
-        logger.info(
-            "Запуск процесса очистки метаданных для %d файл(ов)",
-            total,
+        if output_file_path.exists() and not overwrite:
+            msg = f"⏭ Пропущен (файл существует): {output_file_path.name}"
+            logger.info("Пропуск '%s': файл существует", file_path.name)
+            return [msg]
+
+        logger.debug("Вызов FFmpeg для удаления метаданных")
+        success = self._ffmpeg.run(
+            input_path=file_path,
+            output_path=output_file_path,
+            extra_args=[
+                "-map_metadata", "-1",
+                "-c:v", "copy",
+                "-c:a", "copy",
+            ],
+            overwrite=overwrite,
         )
 
-        for idx, file_path in enumerate(files):
-            if progress_callback:
-                progress_callback(
-                    idx, total, f"Очистка: {file_path.name}"
-                )
-            output_name = (
-                f"{file_path.stem}{suffix}{file_path.suffix}"
-            )
-            target_dir = self._resolver.resolve(
-                file_path, output_path
-            )
-            output_file_path = target_dir / output_name
-            logger.info("Обработка файла [%d/%d]: '%s' -> '%s'", idx + 1, total, file_path.name, output_name)
+        if success:
+            msg = f"✅ Очищены метаданные: {output_file_path.name}"
+            logger.info("Успешно очищены метаданные для файла: '%s'", output_file_path.name)
+            if delete_original:
+                self._delete_source(file_path, results)
+        else:
+            msg = f"❌ Ошибка обработки: {file_path.name}"
+            logger.error("Не удалось очистить метаданные для файла: '%s'", file_path.name)
 
-            if output_file_path.exists() and not SettingsManager().overwrite_existing:
-                msg = f"⏭ Пропущен (файл существует): {output_name}"
-                logger.info("Пропуск файла '%s': выходной файл уже существует и перезапись отключена", file_path.name)
-                results.append(msg)
-                if progress_callback:
-                    progress_callback(idx + 1, total, msg)
-                continue
-            else:
-                logger.debug("Вызов FFmpeg для удаления метаданных")
-                success = self._ffmpeg.run(
-                    input_path=file_path,
-                    output_path=output_file_path,
-                    extra_args=[
-                        "-map_metadata", "-1",
-                        "-c:v", "copy",
-                        "-c:a", "copy",
-                    ],
-                )
-
-                if success:
-                    msg = f"✅ Очищены метаданные: {output_name}"
-                    logger.info("Успешно очищены метаданные для файла: '%s'", output_name)
-                    if delete_original:
-                        logger.info("Запрошено удаление исходного файла: '%s'", file_path.name)
-                        self._delete_source(
-                            file_path, results
-                        )
-                else:
-                    msg = f"❌ Ошибка обработки: {file_path.name}"
-                    logger.error("Не удалось очистить метаданные для файла: '%s'", file_path.name)
-
-                results.append(msg)
-
-            if progress_callback:
-                progress_callback(
-                    idx + 1,
-                    total,
-                    results[-1],
-                )
-
-        success_count = len([r for r in results if r.startswith("✅")])
-        logger.info(
-            "Весь процесс очистки метаданных завершен. Итог: %d успешно, %d всего",
-            success_count,
-            total,
-        )
-
+        results.insert(0, msg)
         return results

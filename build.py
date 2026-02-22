@@ -3,7 +3,7 @@
 
 Выполняет сборку приложения через PyInstaller (onedir),
 копирует внешние зависимости из bin/ и генерирует
-скрипт Inno Setup (.iss) для создания инсталлятора.
+крипт Inno Setup (.iss) для создания инсталлятора.
 """
 
 import os
@@ -11,32 +11,32 @@ import shutil
 import subprocess
 import sys
 import time
+import re
 from pathlib import Path
 
 # === Настройки ===
-VENV_DIR = "venv"
-PYTHON_EXE = os.path.join(VENV_DIR, "Scripts", "python.exe")
-REQUIREMENTS = "requirements.txt"
-SCRIPT = "main.py"
+BASE_DIR = Path(__name__).parent.resolve()
+VENV_DIR = BASE_DIR / "venv"
+PYTHON_EXE = VENV_DIR / "Scripts" / "python.exe"
+REQUIREMENTS = BASE_DIR / "requirements.txt"
+SCRIPT = BASE_DIR / "main.py"
 EXE_BASE_NAME = "KTools"
-ICON = "assets/app_icon.ico"
+ICON = BASE_DIR / "assets" / "app_icon.ico"
 
 # === Управление версионированием ===
-VERSION_FILE = "version.txt"
+VERSION_FILE = BASE_DIR / "version.txt"
 
 
 def get_current_version() -> str:
     """Получить текущую версию из файла."""
-    if os.path.exists(VERSION_FILE):
-        with open(VERSION_FILE, "r") as f:
-            return f.read().strip()
+    if VERSION_FILE.exists():
+        return VERSION_FILE.read_text().strip()
     return "1.0.000"
 
 
 def save_version(version: str) -> None:
     """Сохранить новую версию в файл."""
-    with open(VERSION_FILE, "w") as f:
-        f.write(version)
+    VERSION_FILE.write_text(version)
 
 
 def prompt_version_update() -> str:
@@ -81,50 +81,36 @@ def prompt_version_update() -> str:
 
 def update_app_version_py(version: str) -> None:
     """Обновить версию в коде приложения (app/core/version.py)."""
-    version_py = Path("app/core/version.py")
+    version_py = BASE_DIR / "app" / "core" / "version.py"
     if not version_py.exists():
         print(f"[!] Файл {version_py} не найден для авто-обновления")
         return
         
-    with open(version_py, "r", encoding="utf-8") as f:
-        lines = f.readlines()
-        
-    with open(version_py, "w", encoding="utf-8") as f:
-        for line in lines:
-            if line.startswith("VERSION =") or "return \"" in line and "Dev Mode" not in line:
-                if "return \"" in line:
-                    # Обработка жестко прописанной строки (как сейчас)
-                    import re
-                    new_line = re.sub(r'return "[^"]+"', f'return "{version}"', line)
-                    f.write(new_line)
-                else:
-                    f.write(f'VERSION = "{version}"\n')
-            else:
-                f.write(line)
+    content = version_py.read_text(encoding="utf-8")
+    
+    # Регулярные выражения для замены версии
+    content = re.sub(r'VERSION = "[^"]+"', f'VERSION = "{version}"', content)
+    content = re.sub(r'return "[^"]+"', f'return "{version}"', content)
+    
+    version_py.write_text(content, encoding="utf-8")
     print(f"[✓] Версия в {version_py} синхронизирована.")
 
 
-def ensure_venv() -> str:
+def ensure_venv() -> Path:
     """Проверить наличие виртуального окружения.
 
     Returns:
         Путь к интерпретатору Python.
     """
-    if not os.path.exists(PYTHON_EXE):
-        print(
-            f"[!] Виртуальное окружение {VENV_DIR} "
-            f"не найдено!"
-        )
-        print(
-            f"[!] Ожидаемый путь: {PYTHON_EXE}"
-        )
+    if not PYTHON_EXE.exists():
+        print(f"[!] Виртуальное окружение {VENV_DIR} не найдено!")
+        print(f"[!] Ожидаемый путь: {PYTHON_EXE}")
+        
+        current_exe = Path(sys.executable)
         if sys.prefix != sys.base_prefix:
-            print(
-                f"[*] Использую текущий интерпретатор: "
-                f"{sys.executable}"
-            )
-            return sys.executable
-        return sys.executable
+            print(f"[*] Использую текущий интерпретатор: {current_exe}")
+            return current_exe
+        return current_exe
     else:
         print("[✓] venv найден")
         return PYTHON_EXE
@@ -132,15 +118,15 @@ def ensure_venv() -> str:
 
 def clean() -> None:
     """Очистка сборочных папок и артефактов."""
-    for folder in ["build", "dist"]:
-        if os.path.exists(folder):
+    for folder_name in ["build", "dist"]:
+        folder = BASE_DIR / folder_name
+        if folder.exists():
             print(f"[*] Удаляю {folder}...")
             shutil.rmtree(folder)
 
-    for file in os.listdir():
-        if file.endswith(".spec"):
-            print(f"[*] Удаляю {file}...")
-            os.remove(file)
+    for file in BASE_DIR.glob("*.spec"):
+        print(f"[*] Удаляю {file.name}...")
+        file.unlink()
 
 
 def create_version_file(version_str: str) -> None:
@@ -204,10 +190,7 @@ VSVersionInfo(
     )
   ]
 )"""
-    with open(
-        "file_version_info.txt", "w", encoding="utf-8"
-    ) as f:
-        f.write(version_info)
+    (BASE_DIR / "file_version_info.txt").write_text(version_info, encoding="utf-8")
 
 
 def copy_bin_directory(exe_name: str) -> None:
@@ -220,8 +203,8 @@ def copy_bin_directory(exe_name: str) -> None:
     Args:
         exe_name: Имя папки сборки в dist/.
     """
-    src_bin = Path("bin")
-    dst_bin = Path("dist") / exe_name / "bin"
+    src_bin = BASE_DIR / "bin"
+    dst_bin = BASE_DIR / "dist" / exe_name / "bin"
 
     if not src_bin.exists():
         print(
@@ -237,12 +220,7 @@ def copy_bin_directory(exe_name: str) -> None:
     shutil.copytree(src_bin, dst_bin)
 
     copied_files = list(dst_bin.iterdir())
-
-    copied_files = list(dst_bin.iterdir())
-    print(
-        f"[✓] Скопировано файлов из bin/: "
-        f"{len(copied_files)}"
-    )
+    print(f"[✓] Скопировано файлов из bin/: {len(copied_files)}")
     for f in sorted(copied_files):
         print(f"    • {f.name}")
 
@@ -255,9 +233,11 @@ def create_inno_setup_script(
 
     Args:
         exe_name: Имя исполняемого файла (без .exe).
-        build_num: Форматированный номер сборки.
+        version_str: Строка версии.
     """
-    cwd = os.getcwd()
+    cwd = str(BASE_DIR).replace("\\", "\\\\")
+    icon_p = str(ICON).replace("\\", "\\\\")
+    
     iss_content = f"""
 [Setup]
 AppId=krnzhnr.ktools.v1
@@ -267,41 +247,38 @@ DefaultDirName={{autopf}}\\{EXE_BASE_NAME}
 DefaultGroupName={EXE_BASE_NAME}
 OutputDir={cwd}\\setup_output
 OutputBaseFilename={EXE_BASE_NAME}_v{version_str}_setup
-SetupIconFile={cwd}\\{ICON.replace("/", "\\")}
+SetupIconFile={icon_p}
 Compression=lzma2/ultra64
 SolidCompression=yes
 LZMADictionarySize=65536
 ArchitecturesInstallIn64BitMode=x64
 
 [Tasks]
-Name: "desktopicon"; Description: "{{cm:CreateDesktopIcon}}"; \
+Name: "desktopicon"; Description: "{{cm:CreateDesktopIcon}}"; \\
 GroupDescription: "{{cm:AdditionalIcons}}"; Flags: unchecked
 
 [Files]
 ; Основная папка сборки (onedir) + bin/
-Source: "{cwd}\\dist\\{exe_name}\\*"; DestDir: "{{app}}"; \
+Source: "{cwd}\\dist\\{exe_name}\\*"; DestDir: "{{app}}"; \\
 Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{{group}}\\{EXE_BASE_NAME}"; \
-Filename: "{{app}}\\{EXE_BASE_NAME}.exe"; \
+Name: "{{group}}\\{EXE_BASE_NAME}"; \\
+Filename: "{{app}}\\{EXE_BASE_NAME}.exe"; \\
 IconFilename: "{{app}}\\app_icon.ico"
-Name: "{{commondesktop}}\\{EXE_BASE_NAME}"; \
-Filename: "{{app}}\\{EXE_BASE_NAME}.exe"; \
-IconFilename: "{{app}}\\app_icon.ico"; \
+Name: "{{commondesktop}}\\{EXE_BASE_NAME}"; \\
+Filename: "{{app}}\\{EXE_BASE_NAME}.exe"; \\
+IconFilename: "{{app}}\\app_icon.ico"; \\
 Tasks: desktopicon
 
 [Run]
-Filename: "{{app}}\\{EXE_BASE_NAME}.exe"; \
-Description: "{{cm:LaunchProgram,{EXE_BASE_NAME}}}"; \
+Filename: "{{app}}\\{EXE_BASE_NAME}.exe"; \\
+Description: "{{cm:LaunchProgram,{EXE_BASE_NAME}}}"; \\
 Flags: nowait postinstall skipifsilent
 """
-    iss_path = f"{EXE_BASE_NAME}.iss"
-    with open(iss_path, "w", encoding="utf-8") as f:
-        f.write(iss_content)
-    print(
-        f"[✓] Создан скрипт инсталлятора: {iss_path}"
-    )
+    iss_path = BASE_DIR / f"{EXE_BASE_NAME}.iss"
+    iss_path.write_text(iss_content, encoding="utf-8")
+    print(f"[✓] Создан скрипт инсталлятора: {iss_path}")
 
 
 def build() -> None:
@@ -317,28 +294,19 @@ def build() -> None:
     python_bin = ensure_venv()
 
     # === Проверка импортов ===
-    print(
-        "[*] Проверка импорта "
-        "app.core.script_registry..."
-    )
+    print("[*] Проверка импорта app.core.script_registry...")
     try:
-        sys.path.insert(0, os.getcwd())
+        sys.path.insert(0, str(BASE_DIR))
         import app.core.script_registry
         print("[✓] Модуль найден успешно.")
     except ImportError as e:
-        print(
-            f"[!] ОШИБКА: Не удалось "
-            f"импортировать модуль: {e}"
-        )
-        print(
-            "[!] Проверьте структуру папок "
-            "и __init__.py"
-        )
+        print(f"[!] ОШИБКА: Не удалось импортировать модуль: {e}")
+        print("[!] Проверьте структуру папок и __init__.py")
 
     exe_name = EXE_BASE_NAME
 
     cmd = [
-        python_bin,
+        str(python_bin),
         "-m", "PyInstaller",
         "--noconfirm",
         "--clean",
@@ -377,11 +345,11 @@ def build() -> None:
         "--collect-all=qfluentwidgets",
 
         # Главный скрипт
-        SCRIPT,
+        str(SCRIPT),
     ]
 
-    if ICON and os.path.exists(ICON):
-        abs_icon = os.path.abspath(ICON)
+    if ICON.exists():
+        abs_icon = ICON.resolve()
         # Вставляем иконку ПЕРЕД главным скриптом
         cmd.insert(-1, f"--icon={abs_icon}")
         cmd.insert(-1, f"--add-data={abs_icon};.")
@@ -391,8 +359,8 @@ def build() -> None:
     subprocess.check_call(cmd)
 
     # Копирование иконки для ярлыков Inno Setup
-    dst_icon = Path("dist") / exe_name / "app_icon.ico"
-    if os.path.exists(ICON):
+    dst_icon = BASE_DIR / "dist" / exe_name / "app_icon.ico"
+    if ICON.exists():
         shutil.copy2(ICON, dst_icon)
         print(f"[✓] Иконка скопирована для ярлыков: {dst_icon}")
 
@@ -400,9 +368,7 @@ def build() -> None:
     copy_bin_directory(exe_name)
 
     # Генерация ISS скрипта
-    create_inno_setup_script(
-        exe_name, version_str
-    )
+    create_inno_setup_script(exe_name, version_str)
 
     print(f"[✓] Готово! Сборка находится в dist/{exe_name}")
     print(

@@ -32,6 +32,7 @@ class QaacRunner:
         tvbr: str = "127",
         adts: bool = False,
         extra_args: list[str] | None = None,
+        overwrite: bool = False,
     ) -> bool:
         """Запустить qaac64 через конвейер с FFmpeg.
 

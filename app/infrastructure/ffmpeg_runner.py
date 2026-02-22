@@ -27,6 +27,7 @@ class FFmpegRunner:
         input_path: Path,
         output_path: Path,
         extra_args: list[str] | None = None,
+        overwrite: bool = False,
     ) -> bool:
         """Запустить FFmpeg с указанными параметрами.
 
@@ -34,13 +35,11 @@ class FFmpegRunner:
             input_path: Путь к входному файлу.
             output_path: Путь к выходному файлу.
             extra_args: Дополнительные аргументы FFmpeg.
+            overwrite: Нужно ли перезаписывать выходной файл.
 
         Returns:
             True при успешном завершении, False при ошибке.
         """
-        from app.core.settings_manager import SettingsManager
-        
-        overwrite = SettingsManager().overwrite_existing
         overwrite_flag = "-y" if overwrite else "-n"
         logger.info(
             "Подготовка команды FFmpeg. Файл на входе: '%s', файл на выходе: '%s'. "

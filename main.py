@@ -89,23 +89,51 @@ from app.ui.main_window import MainWindow
 logger = logging.getLogger(__name__)
 
 
+from pathlib import Path
+
+def _cleanup_old_logs(log_dir: Path, days: int = 10) -> None:
+    """Удалить лог-файлы старше указанного количества дней.
+    
+    Args:
+        log_dir: Путь к папке с логами.
+        days: Срок хранения в днях.
+    """
+    try:
+        if not log_dir.exists():
+            return
+            
+        now = datetime.now().timestamp()
+        max_age_seconds = days * 24 * 60 * 60
+        
+        for file in log_dir.glob("ktools_*.log"):
+            try:
+                if (now - file.stat().st_mtime) > max_age_seconds:
+                    file.unlink()
+                    print(f"[LogCleanup] Удален старый лог: {file.name}")
+            except OSError as e:
+                print(f"[LogCleanup] Ошибка при удалении {file.name}: {e}")
+    except Exception as e:
+        print(f"[LogCleanup] Критическая ошибка при очистке: {e}")
+
+
 def _setup_logging() -> None:
     """Настройка логирования приложения.
 
     Создает папку logs/ и настраивает вывод в консоль
     и в файл с временной меткой.
     """
-    log_dir = "logs"
-    try:
-        if not os.path.exists(log_dir):
-            os.makedirs(log_dir)
-    except Exception as e:
-        print(f"Критическая ошибка: не удалось создать папку логов: {e}")
-        return
+    log_dir = Path("logs")
+    _cleanup_old_logs(log_dir)
 
-    # Формируем имя файла: ktools_20260216_001025.log
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = os.path.join(log_dir, f"ktools_{timestamp}.log")
+    try:
+        if not log_dir.exists():
+            log_dir.mkdir(parents=True, exist_ok=True)
+            
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_file = log_dir / f"ktools_{timestamp}.log"
+    except Exception as e:
+        print(f"[Logging] Ошибка при подготовке папки логов: {e}")
+        log_file = Path(f"ktools_fallback.log")
 
     log_format = (
         "%(asctime)s | %(levelname)-8s | "

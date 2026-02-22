@@ -19,6 +19,9 @@ from app.infrastructure.mkvmerge_runner import MKVMergeRunner
 logger = logging.getLogger(__name__)
 
 
+from app.core.constants import VIDEO_EXTENSIONS, AUDIO_EXTENSIONS, SUBTITLE_EXTENSIONS
+from app.core.settings_manager import SettingsManager
+
 class MuxerScript(AbstractScript):
     """Скрипт для сборки MKV из компонентов."""
 
@@ -54,14 +57,8 @@ class MuxerScript(AbstractScript):
     @property
     def file_extensions(self) -> list[str]:
         """Допустимые расширения файлов."""
-        return [
-            # Видео
-            ".mkv", ".mp4", ".avi", ".mov", ".webm", ".hevc", ".h264",
-            # Аудио
-            ".mp3", ".aac", ".ac3", ".dts", ".eac3", ".flac", ".wav", ".m4a", ".ogg", ".mka",
-            # Субтитры
-            ".srt", ".ass", ".ssa", ".sub"
-        ]
+        # Объединяем все поддерживаемые расширения
+        return list(VIDEO_EXTENSIONS | AUDIO_EXTENSIONS | SUBTITLE_EXTENSIONS)
 
     @property
     def use_custom_widget(self) -> bool:
@@ -84,8 +81,16 @@ class MuxerScript(AbstractScript):
                 setting_type=SettingType.CHECKBOX,
                 default=True,
             ),
-            # TODO: Можно добавить выбор языка, задержки и т.д.
         ]
+
+    def execute_single(
+        self,
+        file: Path,
+        settings: dict[str, Any],
+        output_path: str | None = None,
+    ) -> list[str]:
+        """Не используется в Муксере (переопределен execute)."""
+        raise NotImplementedError("MuxerScript использует групповую обработку в execute()")
 
     def execute(
         self,
@@ -94,34 +99,24 @@ class MuxerScript(AbstractScript):
         output_path: str | None = None,
         progress_callback: ProgressCallback | None = None,
     ) -> list[str]:
-        """Выполнить муксинг.
-
-        Args:
-            files: Список всех файлов (видео, аудио, сабы).
-            settings: Настройки.
-            progress_callback: Callback прогресса.
-
-        Returns:
-            Результаты выполнения.
-        """
+        """Выполнить муксинг (групповая обработка)."""
         # 1. Группировка файлов по имени (stem)
         groups = defaultdict(lambda: {"video": None, "audio": None, "subs": None})
+        overwrite = SettingsManager().overwrite_existing
         
         for file_path in files:
             stem = file_path.stem
             ext = file_path.suffix.lower()
             
-            if ext in [".mkv", ".mp4", ".avi", ".mov", ".webm", ".hevc", ".h264"]:
+            if ext in VIDEO_EXTENSIONS:
                 if groups[stem]["video"] is None: 
                     groups[stem]["video"] = file_path
-                # Если уже есть видео, возможно дубликат или конфликт, пока игнорируем
             
-            elif ext in [".mp3", ".aac", ".ac3", ".dts", ".eac3", ".flac", ".wav", ".m4a", ".ogg", ".mka"]:
-                 # Берем первый попавшийся аудиофайл с таким именем
+            elif ext in AUDIO_EXTENSIONS:
                  if groups[stem]["audio"] is None:
                     groups[stem]["audio"] = file_path
             
-            elif ext in [".srt", ".ass", ".ssa", ".sub"]:
+            elif ext in SUBTITLE_EXTENSIONS:
                  if groups[stem]["subs"] is None:
                     groups[stem]["subs"] = file_path
 
@@ -136,30 +131,21 @@ class MuxerScript(AbstractScript):
         clean_tracks = settings.get("clean_tracks", True)
 
         logger.info(
-            "Настройки муксинга: заголовок сабов='%s', очистка дорожек=%s",
-            subs_title, "ДА" if clean_tracks else "НЕТ"
+            "Настройки муксинга: заголовок сабов='%s', очистка дорожек=%s, файлов=%d",
+            subs_title, clean_tracks, total
         )
-        logger.info("Найдено групп для муксинга: %d", total)
 
         for stem, components in valid_groups.items():
             video_path = components["video"]
             audio_path = components["audio"]
             subs_path = components["subs"]
             
-            logger.info("Обработка группы [%d/%d]: '%s'", completed + 1, total, stem)
-            logger.debug("Компоненты группы: видео=%s, аудио=%s, сабы=%s", 
-                         video_path.name, 
-                         audio_path.name if audio_path else "нет", 
-                         subs_path.name if subs_path else "нет")
+            target_dir = self._resolver.resolve(video_path, output_path)
+            output_file_path = self._get_safe_output_path(video_path, target_dir / f"{stem}.mkv")
 
-            target_dir = self._resolver.resolve(
-                video_path, output_path
-            )
-            output_file_path = target_dir / f"{stem}.mkv"
-
-            if output_file_path.exists() and not SettingsManager().overwrite_existing:
+            if output_file_path.exists() and not overwrite:
                 msg = f"⏭ Пропущен (файл существует): {output_file_path.name}"
-                logger.info("Пропуск: выходной файл '%s' уже существует", output_file_path.name)
+                logger.info("[%s] %s", self.name, msg)
                 results.append(msg)
                 completed += 1
                 if progress_callback:
@@ -172,7 +158,6 @@ class MuxerScript(AbstractScript):
             # 1. Видео (основа)
             video_args = []
             if clean_tracks:
-                logger.debug("Применение фильтрации дорожек для видео-источника")
                 if audio_path:
                     video_args.append("--no-audio")
                 if subs_path:
@@ -190,7 +175,6 @@ class MuxerScript(AbstractScript):
 
             # 2. Аудио (доп)
             if audio_path:
-                logger.debug("Добавление внешней аудиодорожки")
                 inputs.append({
                     "path": audio_path,
                     "args": ["--language", "0:und"]
@@ -198,7 +182,6 @@ class MuxerScript(AbstractScript):
 
             # 3. Субтитры (доп)
             if subs_path:
-                logger.debug("Добавление внешних субтитров с заголовком '%s'", subs_title)
                 inputs.append({
                     "path": subs_path,
                     "args": [
@@ -209,19 +192,17 @@ class MuxerScript(AbstractScript):
                 })
 
             # Запуск
-            logger.debug("Вызов раннера mkvmerge")
             success = self._runner.run(
                 output_path=output_file_path,
                 inputs=inputs,
-                title=stem # Заголовок файла = имя файла
+                title=stem,
+                overwrite=overwrite
             )
 
             if success:
                 msg = f"✅ Собрано: {output_file_path.name}"
-                logger.info("Успешно собран файл: '%s'", output_file_path.name)
             else:
                 msg = f"❌ Ошибка сборки: {output_file_path.name}"
-                logger.error("Ошибка mkvmerge при сборке файла: '%s'", output_file_path.name)
             
             results.append(msg)
             completed += 1
@@ -229,10 +210,4 @@ class MuxerScript(AbstractScript):
             if progress_callback:
                 progress_callback(completed, total, msg)
 
-        success_count = len([r for r in results if r.startswith("✅")])
-        logger.info(
-            "Процесс муксинга завершён. Итог: %d успешно из %d", 
-            success_count, 
-            total
-        )
         return results

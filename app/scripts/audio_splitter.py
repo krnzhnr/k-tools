@@ -20,6 +20,8 @@ from app.infrastructure.ffmpeg_runner import FFmpegRunner
 logger = logging.getLogger(__name__)
 
 
+from app.core.constants import AUDIO_EXTENSIONS, VIDEO_EXTENSIONS
+
 class AudioSplitterScript(AbstractScript):
     """Разделение аудио на отдельные потоки через eac3to.
 
@@ -62,11 +64,7 @@ class AudioSplitterScript(AbstractScript):
     @property
     def file_extensions(self) -> list[str]:
         """Допустимые расширения файлов."""
-        return [
-            ".wav", ".w64", ".rf64", ".pcm", ".mkv", ".mp4", 
-            ".m4a", ".ac3", ".dts", ".eac3", ".dtshd", ".thd", 
-            ".truehd", ".flac", ".aac"
-        ]
+        return list(AUDIO_EXTENSIONS) + list(VIDEO_EXTENSIONS)
 
     @property
     def settings_schema(self) -> list[SettingField]:
@@ -86,29 +84,6 @@ class AudioSplitterScript(AbstractScript):
             ),
         ]
 
-    def execute(
-        self,
-        files: list[Path],
-        settings: dict[str, Any],
-        output_path: str | None = None,
-        progress_callback: ProgressCallback | None = None,
-    ) -> list[str]:
-        """Выполнить разделение (последовательно)."""
-        results: list[str] = []
-        total = len(files)
-
-        for idx, file_path in enumerate(files):
-            if progress_callback:
-                progress_callback(idx, total, f"Обработка: {file_path.name}")
-            
-            res = self.execute_single(file_path, settings, output_path)
-            results.extend(res)
-            
-            if progress_callback:
-                progress_callback(idx + 1, total, res[-1] if res else "")
-
-        return results
-
     def execute_single(
         self,
         file_path: Path,
@@ -118,6 +93,7 @@ class AudioSplitterScript(AbstractScript):
         """Разделить один аудиофайл."""
         delete_original = settings.get("delete_original", False)
         merge_stereo = settings.get("merge_stereo", True)
+        overwrite = SettingsManager().overwrite_existing
         results: list[str] = []
 
         try:
@@ -137,7 +113,7 @@ class AudioSplitterScript(AbstractScript):
                 results.append(f"✅ Разделено: {file_path.name}")
                 if merge_stereo:
                     # При склейке используем имя из output_pattern
-                    self._perform_stereo_merge(output_pattern.stem, target_dir, results)
+                    self._perform_stereo_merge(output_pattern.stem, target_dir, results, overwrite)
 
                 if delete_original:
                     self._delete_source(file_path, results)
@@ -149,8 +125,9 @@ class AudioSplitterScript(AbstractScript):
             logger.exception("Ошибка при обработке '%s'", file_path.name)
             return [f"❌ Ошибка: {file_path.name} ({e})"]
 
-    def _perform_stereo_merge(self, stem: str, target_dir: Path, results: list[str]) -> None:
-        """Поиск моно-файлов и их склейка в стереопары.
+    def _perform_stereo_merge(self, stem: str, target_dir: Path, results: list[str], overwrite: bool) -> None:
+        """
+        Поиск моно-файлов и их склейка в стереопары.
 
         Args:
             stem: Базовое имя файла (без канала).
@@ -197,7 +174,8 @@ class AudioSplitterScript(AbstractScript):
                 merge_success = self._ffmpeg.run(
                     input_path=left_path,
                     output_path=output_path,
-                    extra_args=extra_args
+                    extra_args=extra_args,
+                    overwrite=overwrite
                 )
 
                 if merge_success:

@@ -14,6 +14,9 @@ from app.infrastructure.deew_runner import DeewRunner
 logger = logging.getLogger(__name__)
 
 
+from app.core.constants import AUDIO_EXTENSIONS, VIDEO_EXTENSIONS
+from app.core.settings_manager import SettingsManager
+
 class AudioDeeDownmixerScript(AbstractScript):
     """Скрипт для даунмикса многоканального аудио в Stereo (Dolby Digital Plus / DD)."""
 
@@ -46,8 +49,8 @@ class AudioDeeDownmixerScript(AbstractScript):
 
     @property
     def file_extensions(self) -> list[str]:
-        # deew поддерживает множество контейнеров, он сам вытащит аудио
-        return [".ac3", ".eac3", ".dts", ".wav", ".flac", ".aac", ".thd", ".mka", ".mkv", ".mp4"]
+        """Допустимые расширения файлов."""
+        return list(AUDIO_EXTENSIONS) + list(VIDEO_EXTENSIONS)
 
     @property
     def settings_schema(self) -> list[SettingField]:
@@ -74,29 +77,6 @@ class AudioDeeDownmixerScript(AbstractScript):
             ),
         ]
 
-    def execute(
-        self,
-        files: list[Path],
-        settings: dict[str, Any],
-        output_path: str | None = None,
-        progress_callback=None,
-    ) -> list[str]:
-        """Выполнить даунмикс (последовательно)."""
-        results = []
-        total = len(files)
-        
-        for i, file_path in enumerate(files):
-            if progress_callback:
-                progress_callback(i, total, f"Даунмикс: {file_path.name}")
-            
-            res = self.execute_single(file_path, settings, output_path)
-            results.extend(res)
-            
-            if progress_callback:
-                progress_callback(i + 1, total, res[-1] if res else "")
-                
-        return results
-
     def execute_single(
         self,
         file_path: Path,
@@ -114,6 +94,7 @@ class AudioDeeDownmixerScript(AbstractScript):
         
         bitrate = settings.get("bitrate", "192")
         delete_source = settings.get("delete_source", False)
+        overwrite = SettingsManager().overwrite_existing
 
         try:
             target_dir = self._resolver.resolve(file_path, output_path)
@@ -122,12 +103,10 @@ class AudioDeeDownmixerScript(AbstractScript):
                 file_path, target_dir / actual_output_name
             )
 
-            from app.core.settings_manager import SettingsManager
-            if (
-                target_file_path.exists() 
-                and not SettingsManager().overwrite_existing
-            ):
-                return [f"⏭ Пропущен (существует): {target_file_path.name}"]
+            if target_file_path.exists() and not overwrite:
+                msg = f"⏭ Пропущен (существует): {target_file_path.name}"
+                logger.info("[%s] %s", self.name, msg)
+                return [msg]
 
             success = self._runner.run(
                 input_path=file_path,
@@ -139,17 +118,13 @@ class AudioDeeDownmixerScript(AbstractScript):
 
             results = []
             if success:
-                results.append(f"✅ Успешно: {file_path.name} -> {actual_output_name}")
+                results.append(f"✅ Успешно: {file_path.name} -> {target_file_path.name}")
                 if delete_source:
-                    try:
-                        file_path.unlink()
-                        results.append(f"🗑️ Исходник удален: {file_path.name}")
-                    except Exception as e:
-                        logger.error("Ошибка удаления: %s", e)
+                    self._delete_source(file_path, results)
             else:
                 results.append(f"❌ Ошибка DEE: {file_path.name}")
             return results
 
         except Exception as e:
-            logger.exception("Ошибка при обработке '%s'", file_path.name)
+            logger.exception("Ошибка при даунмиксе '%s'", file_path.name)
             return [f"❌ Ошибка: {file_path.name} ({e})"]

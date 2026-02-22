@@ -46,6 +46,8 @@ BITRATE_FORMATS = [f for f in LOSSY_FORMATS if f != "QAAC"]
 LOSSLESS_COMPRESSED = ["FLAC", "WavPack"]
 
 
+from app.core.constants import AUDIO_EXTENSIONS
+
 class AudioConverterScript(AbstractScript):
     """Универсальная конвертация аудиофайлов.
 
@@ -87,11 +89,7 @@ class AudioConverterScript(AbstractScript):
     @property
     def file_extensions(self) -> list[str]:
         """Допустимые расширения файлов."""
-        return [
-            ".mp3", ".flac", ".wav", ".m4a", ".ogg",
-            ".wma", ".aiff", ".alac", ".ape", ".opus",
-            ".ac3", ".eac3", ".dts", ".wv", ".aac"
-        ]
+        return list(AUDIO_EXTENSIONS)
 
     @property
     def supports_parallel(self) -> bool:
@@ -154,29 +152,6 @@ class AudioConverterScript(AbstractScript):
             ),
         ]
 
-    def execute(
-        self,
-        files: list[Path],
-        settings: dict[str, Any],
-        output_path: str | None = None,
-        progress_callback: ProgressCallback | None = None,
-    ) -> list[str]:
-        """Конвертировать аудиофайлы (последовательно)."""
-        results: list[str] = []
-        total = len(files)
-        
-        for idx, file_path in enumerate(files):
-            if progress_callback:
-                progress_callback(idx, total, f"Обработка: {file_path.name}")
-            
-            res = self.execute_single(file_path, settings, output_path)
-            results.extend(res)
-            
-            if progress_callback:
-                progress_callback(idx + 1, total, res[-1] if res else "")
-        
-        return results
-
     def execute_single(
         self,
         file_path: Path,
@@ -201,6 +176,7 @@ class AudioConverterScript(AbstractScript):
         delete_original = settings.get(
             "delete_original", False
         )
+        overwrite = SettingsManager().overwrite_existing
 
         results: list[str] = []
         
@@ -220,13 +196,9 @@ class AudioConverterScript(AbstractScript):
             file_path, target_dir / out_name
         )
 
-        if (
-            output_file_path.exists() 
-            and not SettingsManager().overwrite_existing
-        ):
-            # После обновления _get_safe_output_path мы сюда попасть почти не должны, 
-            # так как он добавит _processed, если файл существует.
-            msg = f"⏭ Пропущен (существует и нет '_processed'): {output_file_path.name}"
+        if output_file_path.exists() and not overwrite:
+            # Превентивная защита (хотя _get_safe_output_path уже должен был решить это)
+            msg = f"⏭ Пропущен (файл существует): {output_file_path.name}"
             logger.info("[%s] %s", self.name, msg)
             return [msg]
         
@@ -255,6 +227,7 @@ class AudioConverterScript(AbstractScript):
                 input_path=file_path,
                 output_path=output_file_path,
                 extra_args=extra_args,
+                overwrite=overwrite,
             )
 
         if success:

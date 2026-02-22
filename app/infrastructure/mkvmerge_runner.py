@@ -26,6 +26,7 @@ class MKVMergeRunner:
         output_path: Path,
         inputs: list[dict[str, Any]],
         title: str | None = None,
+        overwrite: bool = False,
     ) -> bool:
         """Запустить mkvmerge.
 

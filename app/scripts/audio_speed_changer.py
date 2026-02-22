@@ -8,6 +8,8 @@ from typing import Any
 from app.core.abstract_script import AbstractScript, SettingField, SettingType
 from app.core.output_resolver import OutputResolver
 from app.infrastructure.eac3to_runner import Eac3toRunner
+from app.core.constants import AUDIO_EXTENSIONS
+from app.core.settings_manager import SettingsManager
 
 logger = logging.getLogger(__name__)
 
@@ -44,8 +46,8 @@ class AudioSpeedChangerScript(AbstractScript):
 
     @property
     def file_extensions(self) -> list[str]:
-        # eac3to поддерживает множество форматов, ограничимся основными
-        return [".ac3", ".eac3", ".dts", ".wav", ".flac", ".aac", ".thd", ".mpa", ".mp3"]
+        """Допустимые расширения файлов."""
+        return list(AUDIO_EXTENSIONS)
 
     @property
     def settings_schema(self) -> list[SettingField]:
@@ -59,14 +61,9 @@ class AudioSpeedChangerScript(AbstractScript):
                     "Speedup (23.976 → 25.000)",
                     "Custom (24.000 → 23.976)",
                     "Custom (25.000 → 24.000)",
-                    # "Ручной ввод (Custom FPS)" # TODO: реализовать позже если нужно
                 ],
-                default="Slowdown (25.000 -> 23.976)",
+                default="Slowdown (25.000 → 23.976)",
             ),
-            # Поля для ручного ввода пока скрыты/не реализованы в первой версии, 
-            # так как eac3to имеет готовые флаги для большинства задач.
-            # Если потребуется, добавим visible_if для режима "Ручной ввод".
-            
             SettingField(
                 key="output_format",
                 label="Формат вывода",
@@ -82,29 +79,6 @@ class AudioSpeedChangerScript(AbstractScript):
             ),
         ]
 
-    def execute(
-        self,
-        files: list[Path],
-        settings: dict[str, Any],
-        output_path: str | None = None,
-        progress_callback=None,
-    ) -> list[str]:
-        """Выполнить изменение скорости (последовательно)."""
-        results = []
-        total = len(files)
-        
-        for i, file_path in enumerate(files):
-            if progress_callback:
-                progress_callback(i, total, f"Обработка: {file_path.name}")
-            
-            res = self.execute_single(file_path, settings, output_path)
-            results.extend(res)
-            
-            if progress_callback:
-                progress_callback(i + 1, total, res[-1] if res else "")
-
-        return results
-
     def execute_single(
         self,
         file_path: Path,
@@ -116,6 +90,7 @@ class AudioSpeedChangerScript(AbstractScript):
         output_format = settings.get("output_format", "FLAC")
         output_ext = f".{output_format.lower()}"
         delete_source = settings.get("delete_source", False)
+        overwrite = SettingsManager().overwrite_existing
 
         # Определение аргументов eac3to на основе режима
         eac3to_args = []
@@ -127,7 +102,6 @@ class AudioSpeedChangerScript(AbstractScript):
             eac3to_args.append("-speedup")
             suffix = "_speedup"
         elif mode == "Custom (24.000 → 23.976)":
-            eac3to_args.append("-24.000")
             eac3to_args.append("-slowdown") 
             suffix = "_24_to_23"
         elif mode == "Custom (25.000 → 24.000)":
@@ -136,20 +110,15 @@ class AudioSpeedChangerScript(AbstractScript):
             suffix = "_25_to_24"
 
         try:
-            if not file_path.exists():
-                return [f"❌ Файл не найден: {file_path.name}"]
-
             target_dir = self._resolver.resolve(file_path, output_path)
             output_file_path = self._get_safe_output_path(
                 file_path, target_dir / f"{file_path.stem}{suffix}{output_ext}"
             )
 
-            from app.core.settings_manager import SettingsManager
-            if (
-                output_file_path.exists() 
-                and not SettingsManager().overwrite_existing
-            ):
-                return [f"⏭ Пропущен (существует): {output_file_path.name}"]
+            if output_file_path.exists() and not overwrite:
+                msg = f"⏭ Пропущен (существует): {output_file_path.name}"
+                logger.info("[%s] %s", self.name, msg)
+                return [msg]
 
             current_args = [str(file_path), str(output_file_path)] + eac3to_args
             success = self._runner.run(current_args, cwd=file_path.parent)
@@ -158,15 +127,11 @@ class AudioSpeedChangerScript(AbstractScript):
             if success:
                 results.append(f"✅ Успешно: {file_path.name} -> {output_file_path.name}")
                 if delete_source:
-                    try:
-                        file_path.unlink()
-                        results.append(f"🗑️ Исходник удален: {file_path.name}")
-                    except Exception as e:
-                        logger.error("Ошибка удаления: %s", e)
+                    self._delete_source(file_path, results)
             else:
                 results.append(f"❌ Ошибка eac3to: {file_path.name}")
             return results
 
         except Exception as e:
-            logger.exception("Ошибка при обработке '%s'", file_path.name)
+            logger.exception("Ошибка при изменении скорости '%s'", file_path.name)
             return [f"❌ Ошибка: {file_path.name} ({e})"]

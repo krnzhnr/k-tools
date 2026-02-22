@@ -23,7 +23,7 @@ class MockScript(AbstractScript):
     def use_custom_widget(self):
         return False
     
-    def execute(self, files, settings, progress_callback=None):
+    def execute_single(self, file, settings, output_path=None):
         return ["Done"]
 
 # --- ScriptRegistry Tests ---

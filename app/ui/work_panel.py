@@ -883,7 +883,12 @@ class ScriptPage(QWidget):
         percent = int((current / total) * 100)
         
         # Переключение из режима ожидания (indeterminate) в режим прогресса
-        if self._indeterminate_progress and self._indeterminate_progress.isVisible():
+        # Делаем это только когда обработан хотя бы один файл (current > 0)
+        # Если файлов всего один, оставляем бегущую полоску до самого конца
+        if (self._indeterminate_progress and 
+            self._indeterminate_progress.isVisible() and 
+            current > 0 and 
+            total > 1):
             self._indeterminate_progress.stop()
             self._indeterminate_progress.setVisible(False)
             self._progress.setVisible(True)

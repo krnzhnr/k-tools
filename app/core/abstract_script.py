@@ -143,36 +143,23 @@ class AbstractScript(ABC):
     ) -> Path:
         """Получить безопасный путь для выходного файла.
 
-        Защищает исходный файл от перезаписи и предотвращает пропуски
-        обработки, если целевой файл уже существует (добавляет '_processed').
+        Защищает исходный файл от перезаписи (добавляет '_processed').
         """
-        import os
-        from app.core.settings_manager import SettingsManager
-        mgr = SettingsManager()
-
         try:
-            in_norm = os.path.normcase(str(input_path.resolve()))
-            out_norm = os.path.normcase(str(output_path.resolve()))
+            # Используем resolve() для получения абсолютных путей и сравнения
+            in_resolved = input_path.resolve()
+            out_resolved = output_path.resolve()
 
             # 1. Если выход совпадает с исходником — ОБЯЗАТЕЛЬНО меняем имя
-            if in_norm == out_norm:
+            if in_resolved == out_resolved:
                 output_path = output_path.parent / f"{output_path.stem}_processed{output_path.suffix}"
                 logger.debug("Защита исходника: добавлено '_processed' к имени")
 
-            # 2. Если такой файл уже существует и перезапись ВЫКЛЮЧЕНА
-            # — тоже добавляем суффикс, чтобы не пропускать файл
-            if output_path.exists() and not mgr.overwrite_existing:
-                # Вторичная проверка: если вход и выход все еще совпадают после добавления (маловероятно)
-                # или если мы просто хотим избежать пропуска
-                output_path = output_path.parent / f"{output_path.stem}_processed{output_path.suffix}"
-                logger.debug("Файл существует, перезапись выкл: добавлено '_processed'")
-                
         except Exception as exc:
-            logger.warning("Ошибка при проверке путей в _get_safe_output_path: %s", exc)
+            logger.exception("Ошибка в _get_safe_output_path: %s", exc)
 
         return output_path
 
-    @abstractmethod
     def execute(
         self,
         files: list[Path],
@@ -180,7 +167,11 @@ class AbstractScript(ABC):
         output_path: str | None = None,
         progress_callback: ProgressCallback | None = None,
     ) -> list[str]:
-        """Выполнить обработку списка файлов.
+        """Выполнить обработку списка файлов (Template Method).
+        
+        Обеспечивает базовую логику цикла обработки. Скрипты, требующие
+        группировки файлов (например, Муксер), переопределяют этот метод.
+        Все остальные реализуют execute_single.
 
         Args:
             files: Список путей к входным файлам.
@@ -191,29 +182,46 @@ class AbstractScript(ABC):
         Returns:
             Список строк-результатов выполнения для лога.
         """
+        results: list[str] = []
+        total = len(files)
+        
+        for i, file_path in enumerate(files):
+            if progress_callback:
+                progress_callback(i, total, f"Обработка: {file_path.name}")
+            
+            # Обработка одного файла
+            try:
+                res = self.execute_single(file_path, settings, output_path)
+                results.extend(res)
+            except Exception as e:
+                msg = f"❌ Критическая ошибка при обработке {file_path.name}: {e}"
+                logger.exception(msg)
+                results.append(msg)
+            
+            if progress_callback:
+                # Показываем результат последнего обработанного файла в статусе
+                status_msg = results[-1] if results else ""
+                progress_callback(i + 1, total, status_msg)
+                
+        return results
 
+    @abstractmethod
     def execute_single(
         self,
         file: Path,
         settings: dict[str, Any],
         output_path: str | None = None,
     ) -> list[str]:
-        """Обработать один файл (для параллельного режима).
-
-        По умолчанию просто вызывает execute для одного файла.
-        Переопредели для оптимизации.
+        """Обработать один файл. 
+        
+        Должен быть реализован во всех скриптах, поддерживающих 
+        пофайловую или параллельную обработку.
 
         Args:
-            file: Путь к файлу.
-            settings: Настройки.
+            file: Путь к входному файлу.
+            settings: Словарь настроек.
             output_path: Опциональный путь сохранения.
 
         Returns:
             Список строк-результатов.
         """
-        return self.execute(
-            files=[file],
-            settings=settings,
-            output_path=output_path,
-            progress_callback=None,
-        )
