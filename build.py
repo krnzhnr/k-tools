@@ -298,7 +298,7 @@ def build() -> None:
         "--clean",
         "--onedir",
         "--noconsole",
-        f"--name={exe_name}",
+        f"--name={EXE_BASE_NAME}",
         "--version-file=file_version_info.txt",
         "--paths=.",
         "--hidden-import=PyQt6",
@@ -336,16 +336,16 @@ def build() -> None:
     subprocess.check_call(cmd)
 
     # Копирование иконки для ярлыков Inno Setup
-    dst_icon = BASE_DIR / "dist" / exe_name / "app_icon.ico"
+    dst_icon = BASE_DIR / "dist" / EXE_BASE_NAME / "app_icon.ico"
     if ICON.exists():
         shutil.copy2(ICON, dst_icon)
         print(f"[✓] Иконка скопирована для ярлыков: {dst_icon}")
 
     # Копирование папки bin/ со всеми зависимостями
-    copy_bin_directory(exe_name)
+    copy_bin_directory(EXE_BASE_NAME)
 
     # Генерация ISS скрипта
-    create_inno_setup_script(exe_name, version_str)
+    create_inno_setup_script(EXE_BASE_NAME, version_str)
 
     print(f"[✓] Сборка готова: dist/{EXE_BASE_NAME}")
 
