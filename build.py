@@ -22,8 +22,6 @@ REQUIREMENTS = BASE_DIR / "requirements.txt"
 SCRIPT = BASE_DIR / "main.py"
 EXE_BASE_NAME = "KTools"
 ICON = BASE_DIR / "assets" / "app_icon.ico"
-
-# === Управление версионированием ===
 VERSION_FILE = BASE_DIR / "version.txt"
 
 
@@ -105,11 +103,7 @@ def update_app_version_py(version: str) -> None:
 
 
 def ensure_venv() -> Path:
-    """Проверить наличие виртуального окружения.
-
-    Returns:
-        Путь к интерпретатору Python.
-    """
+    """Проверка наличия виртуального окружения."""
     if not PYTHON_EXE.exists():
         print(f"[!] Виртуальное окружение {VENV_DIR} не найдено!")
         print(f"[!] Ожидаемый путь: {PYTHON_EXE}")
@@ -120,8 +114,8 @@ def ensure_venv() -> Path:
             return current_exe
         return current_exe
     else:
-        print("[✓] venv найден")
-        return PYTHON_EXE
+    print("[✓] venv найден")
+    return PYTHON_EXE
 
 
 def clean() -> None:
@@ -138,11 +132,7 @@ def clean() -> None:
 
 
 def create_version_file(version_str: str) -> None:
-    """Создать файл версии для Windows.
-
-    Args:
-        version_str: Строка версии (например, '1.2.3').
-    """
+    """Создать файл версии Windows."""
     parts = version_str.split('.')
     v_parts = [int(p) for p in parts]
     while len(v_parts) < 4:
@@ -202,15 +192,7 @@ VSVersionInfo(
 
 
 def copy_bin_directory(exe_name: str) -> None:
-    """Копирование всей папки bin/ в сборку.
-
-    Копирует все внешние зависимости (eac3to, ffmpeg,
-    ffprobe, mkvmerge и их DLL) из исходной папки bin/
-    в dist/<exe_name>/bin/.
-
-    Args:
-        exe_name: Имя папки сборки в dist/.
-    """
+    """Перенос внешних утилит (eac3to, ffmpeg и др.) в каталог сборки."""
     src_bin = BASE_DIR / "bin"
     dst_bin = BASE_DIR / "dist" / exe_name / "bin"
 
@@ -301,17 +283,13 @@ def build() -> None:
 
     python_bin = ensure_venv()
 
-    # === Проверка импортов ===
-    print("[*] Проверка импорта app.core.script_registry...")
+    print("[*] Проверка импорта ядра...")
     try:
         sys.path.insert(0, str(BASE_DIR))
         import app.core.script_registry
-        print("[✓] Модуль найден успешно.")
+        print("[✓] Импорт прошел успешно.")
     except ImportError as e:
-        print(f"[!] ОШИБКА: Не удалось импортировать модуль: {e}")
-        print("[!] Проверьте структуру папок и __init__.py")
-
-    exe_name = EXE_BASE_NAME
+        print(f"[!] Ошибка импорта: {e}")
 
     cmd = [
         str(python_bin),
@@ -322,15 +300,10 @@ def build() -> None:
         "--noconsole",
         f"--name={exe_name}",
         "--version-file=file_version_info.txt",
-
-        # Путь для поиска модулей
         "--paths=.",
-
-        # Hidden imports — PyQt6 / qfluentwidgets
         "--hidden-import=PyQt6",
         "--hidden-import=qfluentwidgets",
 
-        # Hidden imports — модули приложения
         "--hidden-import=app.core.abstract_script",
         "--hidden-import=app.core.path_utils",
         "--hidden-import=app.core.resource_utils",
@@ -349,16 +322,12 @@ def build() -> None:
         "--hidden-import=app.ui.muxing_table_widget",
         "--hidden-import=deew",
 
-        # Collect data
         "--collect-all=qfluentwidgets",
-
-        # Главный скрипт
         str(SCRIPT),
     ]
 
     if ICON.exists():
         abs_icon = ICON.resolve()
-        # Вставляем иконку ПЕРЕД главным скриптом
         cmd.insert(-1, f"--icon={abs_icon}")
         cmd.insert(-1, f"--add-data={abs_icon};.")
 
@@ -378,12 +347,7 @@ def build() -> None:
     # Генерация ISS скрипта
     create_inno_setup_script(exe_name, version_str)
 
-    print(f"[✓] Готово! Сборка находится в dist/{exe_name}")
-    print(
-        f"[✓] Для создания инсталлятора откройте "
-        f"{EXE_BASE_NAME}.iss в Inno Setup "
-        f"и нажмите Compile"
-    )
+    print(f"[✓] Сборка готова: dist/{EXE_BASE_NAME}")
 
 
 if __name__ == "__main__":

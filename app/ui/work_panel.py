@@ -540,7 +540,7 @@ class ScriptPage(QWidget):
         elif (
             self._script.use_custom_widget
             and isinstance(self._script.name, str)
-            and "Массовое извлечение" in self._script.name
+            and ("Массовое извлечение" in self._script.name or "Демуксинг" in self._script.name)
         ):
             self._track_extract_widget = TrackExtractWidget(self)
             self._file_list = self._track_extract_widget
@@ -840,7 +840,7 @@ class ScriptPage(QWidget):
             )
             settings["selected_tracks_per_file"] = per_file
             logger.info(
-                "[Массовое извлечение] "
+                "[Демуксинг] "
                 "Выбранные дорожки по файлам: %s",
                 per_file,
             )

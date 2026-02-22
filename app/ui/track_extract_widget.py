@@ -81,7 +81,7 @@ class TrackExtractWidget(QWidget):
         # 1. Список файлов
         self._file_list = FileListWidget(
             allowed_extensions=[".mkv", ".mp4"],
-            context_name="Массовое извлечение",
+            context_name="Демуксинг",
             parent=self
         )
         self._file_list.filesChanged.connect(self._on_files_changed)
@@ -89,7 +89,7 @@ class TrackExtractWidget(QWidget):
 
         # 2. Кнопка загрузки дорожек
         self._load_tracks_btn = PrimaryPushButton(
-            FluentIcon.SYNC, "Обработать файлы", self
+            FluentIcon.SYNC, "Загрузить дорожки", self
         )
         self._load_tracks_btn.clicked.connect(self._on_load_tracks_clicked)
         layout.addWidget(self._load_tracks_btn)
