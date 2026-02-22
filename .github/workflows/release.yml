@@ -33,6 +33,7 @@ jobs:
     - name: Run Build Script
       env:
         CI_VERSION: ${{ github.ref_name }}
+        PYTHONUTF8: "1"
       run: |
         python build.py
 
