@@ -114,8 +114,8 @@ def ensure_venv() -> Path:
             return current_exe
         return current_exe
     else:
-    print("[✓] venv найден")
-    return PYTHON_EXE
+        print("[✓] venv найден")
+        return PYTHON_EXE
 
 
 def clean() -> None:
