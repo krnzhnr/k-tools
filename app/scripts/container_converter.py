@@ -49,7 +49,7 @@ class ContainerConverterScript(AbstractScript):
     @property
     def name(self) -> str:
         """Отображаемое имя скрипта."""
-        return "Конвертация контейнера"
+        return "Ремуксинг"
 
     @property
     def description(self) -> str:

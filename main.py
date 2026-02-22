@@ -133,22 +133,39 @@ def _setup_logging() -> None:
         log_file = log_dir / f"ktools_{timestamp}.log"
     except Exception as e:
         print(f"[Logging] Ошибка при подготовке папки логов: {e}")
-        log_file = Path(f"ktools_fallback.log")
+        import os
+        fallback_dir = Path(os.getenv('LOCALAPPDATA', Path.home() / "AppData" / "Local")) / "KTools" / "logs"
+        try:
+            fallback_dir.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            log_file = fallback_dir / f"ktools_fallback_{timestamp}.log"
+        except Exception as fallback_e:
+            print(f"[Logging] Ошибка резервной директории: {fallback_e}")
+            log_file = Path.home() / "ktools_fallback.log"
 
     log_format = (
         "%(asctime)s | %(levelname)-8s | "
         "%(name)s | %(message)s"
     )
 
+    handlers = [logging.StreamHandler(sys.stdout)]
+    
+    if log_file:
+        try:
+            # Пытаемся сразу открыть файл, чтобы отловить PermissionError
+            with open(log_file, "a", encoding="utf-8"):
+                pass
+            handlers.append(logging.FileHandler(log_file, encoding="utf-8"))
+        except Exception as e:
+            print(f"[Logging] Критическая ошибка доступа к файлу лога ({log_file}): {e}")
+            print("[Logging] Приложение продолжит работу только с консольным логом.")
+
     # Настройка корневого логгера
     logging.basicConfig(
         level=logging.DEBUG,
         format=log_format,
         datefmt="%H:%M:%S",
-        handlers=[
-            logging.StreamHandler(sys.stdout),
-            logging.FileHandler(log_file, encoding="utf-8"),
-        ],
+        handlers=handlers,
     )
 
 

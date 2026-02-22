@@ -55,7 +55,7 @@ class StreamReplacerScript(AbstractScript):
     @property
     def name(self) -> str:
         """Отображаемое имя скрипта."""
-        return "Подмена потоков (MKV/MP4)"
+        return "Замена потоков"
 
     @property
     def description(self) -> str:

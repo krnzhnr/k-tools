@@ -12,6 +12,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.core.constants import normalize_language
 from app.core import path_utils
 
 logger = logging.getLogger(__name__)
@@ -41,6 +42,8 @@ class TrackInfo:
     codec: str
     language: str
     name: str
+    resolution: str  # Формат: "1920x1080"
+    channels: int    # Количество каналов, 0 если не применимо
 
     @property
     def type_label(self) -> str:
@@ -166,12 +169,18 @@ class MKVProbeRunner:
 
         for raw_track in data.get("tracks", []):
             props = raw_track.get("properties", {})
+            # Если есть тег IETF (н-р es-419), берем его, иначе fallback на IANA/ISO
+            lang_raw = props.get("language_ietf", props.get("language", "und"))
+            lang_norm = normalize_language(lang_raw)
+            
             track = TrackInfo(
                 track_id=raw_track.get("id", 0),
                 track_type=raw_track.get("type", ""),
                 codec=raw_track.get("codec", ""),
-                language=props.get("language", "und"),
+                language=lang_norm,
                 name=props.get("track_name", ""),
+                resolution=props.get("display_dimensions", props.get("pixel_dimensions", "")),
+                channels=props.get("audio_channels", 0),
             )
             tracks.append(track)
             logger.debug(

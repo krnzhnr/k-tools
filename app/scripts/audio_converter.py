@@ -71,14 +71,14 @@ class AudioConverterScript(AbstractScript):
     @property
     def name(self) -> str:
         """Отображаемое имя скрипта."""
-        return "Аудио Конвертер"
+        return "Транскодирование аудио"
 
     @property
     def description(self) -> str:
         """Описание скрипта."""
         return (
-            "Конвертирует аудиофайлы в MP3, FLAC, WAV, "
-            "AAC, OGG, AC3 и др. с настройкой качества"
+            "Перекодирует аудиофайлы в QAAC, AAC, FLAC, WAV, "
+            "E-AC3, AC3 и др. с настройкой качества"
         )
 
     @property

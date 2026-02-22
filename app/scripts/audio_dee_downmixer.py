@@ -37,7 +37,7 @@ class AudioDeeDownmixerScript(AbstractScript):
 
     @property
     def name(self) -> str:
-        return "Даунмикс в Stereo (DEE)"
+        return "Даунмикс в Stereo"
 
     @property
     def description(self) -> str:

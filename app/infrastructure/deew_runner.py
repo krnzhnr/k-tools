@@ -79,12 +79,14 @@ class DeewRunner:
         if not is_safe:
             logger.info("Обнаружены не-ASCII символы в пути. Используется режим безопасных имен.")
             with tempfile.TemporaryDirectory() as temp_work_dir:
+                import uuid
+                safe_name = f"input_{uuid.uuid4().hex[:8]}"
                 temp_dir_path = Path(temp_work_dir)
-                temp_input = temp_dir_path / f"input{input_path.suffix}"
+                temp_input = temp_dir_path / f"{safe_name}{input_path.suffix}"
                 shutil.copy2(input_path, temp_input)
                 
                 cmd = base_cmd + [
-                    "-i", "input" + input_path.suffix,
+                    "-i", f"{safe_name}{input_path.suffix}",
                     "-o", ".",
                 ]
 
@@ -109,10 +111,10 @@ class DeewRunner:
                     return False
 
                 ext = ".ec3" if output_format == "ddp" else ".ac3"
-                temp_output = temp_dir_path / f"input{ext}"
+                temp_output = temp_dir_path / f"{safe_name}{ext}"
                 if not temp_output.exists():
                     alt_ext = ".eac3" if output_format == "ddp" else ".ac3"
-                    temp_output = temp_dir_path / f"input{alt_ext}"
+                    temp_output = temp_dir_path / f"{safe_name}{alt_ext}"
                 
                 if temp_output.exists():
                     shutil.move(temp_output, output_path)

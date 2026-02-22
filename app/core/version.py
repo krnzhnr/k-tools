@@ -4,7 +4,7 @@
 import sys
 
 # Эта строка обновляется автоматически скриптом build.py
-VERSION = "1.3.0"
+VERSION = "1.4.2"
 
 def get_app_version() -> str:
     """Получить строку версии приложения.
@@ -15,7 +15,7 @@ def get_app_version() -> str:
     if getattr(sys, "frozen", False):
         return VERSION
     
-    return "1.3.0"
+    return "1.4.2"
 
 def get_version_badge_text() -> str:
     """Получить текст для бейджа версии с префиксом.

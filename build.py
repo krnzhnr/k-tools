@@ -163,7 +163,7 @@ VSVersionInfo(
            StringStruct(
                u'FileDescription',
                u'K-Tools — Набор инструментов для'
-               u' обработки видео/аудио'
+               u' обработки медиа'
            ),
            StringStruct(
                u'FileVersion',
@@ -241,7 +241,7 @@ def create_inno_setup_script(
     iss_content = f"""
 [Setup]
 AppId=krnzhnr.ktools.v1
-AppName={EXE_BASE_NAME}
+AppName={EXE_BASE_NAME} — Набор инструментов для работы с медиа
 AppVersion={version_str}
 DefaultDirName={{autopf}}\\{EXE_BASE_NAME}
 DefaultGroupName={EXE_BASE_NAME}

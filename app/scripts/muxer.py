@@ -39,7 +39,7 @@ class MuxerScript(AbstractScript):
     @property
     def name(self) -> str:
         """Отображаемое имя скрипта."""
-        return "Муксер (Video + Audio + Subs)"
+        return "Муксинг"
 
     @property
     def description(self) -> str:

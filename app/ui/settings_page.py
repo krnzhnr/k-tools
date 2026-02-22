@@ -217,7 +217,7 @@ class SettingsPage(ScrollArea):
         parallel_text_layout.setSpacing(2)
         parallel_title = BodyLabel(self.tr("Максимум параллельных задач"), self._parallel_card)
         parallel_desc = CaptionLabel(
-            self.tr("Количество одновременно обрабатываемых файлов (0 - авто)"),
+            self.tr("Количество одновременно обрабатываемых файлов (1-16)"),
             self._parallel_card
         )
         parallel_desc.setStyleSheet("color: rgba(255, 255, 255, 0.6)")

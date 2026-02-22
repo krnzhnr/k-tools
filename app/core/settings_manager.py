@@ -29,11 +29,35 @@ class SettingsManager:
         if self._initialized:
             return
 
-        # Путь к файлу настроек в корневом каталоге
-        settings_path = Path("settings.ini").absolute()
-        self._settings = QSettings(str(settings_path), QSettings.Format.IniFormat)
+        import os
+        import tempfile
         
-        logger.info("Загружены настройки из: %s", settings_path)
+        # По умолчанию пытаемся использовать настройки в корневом каталоге (portable)
+        settings_path = Path("settings.ini").absolute()
+        
+        try:
+            # Проверяем, есть ли права на запись в эту директорию
+            test_path = settings_path if settings_path.exists() else settings_path.parent
+            if not os.access(test_path, os.W_OK):
+                # Если нет прав (например, установлено в Program Files), используем AppData
+                fallback_dir = Path(os.getenv('LOCALAPPDATA', Path.home() / "AppData" / "Local")) / "KTools"
+                fallback_dir.mkdir(parents=True, exist_ok=True)
+                settings_path = fallback_dir / "settings.ini"
+        except Exception as e:
+            # Если вообще все сломалось (нет доступа к AppData, ошибки путей и т.д.)
+            try:
+                settings_path = Path(tempfile.gettempdir()) / "ktools_settings_fallback.ini"
+            except Exception:
+                settings_path = Path("memory_settings_fallback.ini")
+
+        try:
+            self._settings = QSettings(str(settings_path), QSettings.Format.IniFormat)
+            logger.info("Загружены настройки из: %s", settings_path)
+        except Exception as init_err:
+            logger.error("Критическая ошибка инициализации QSettings (%s): %s", settings_path, init_err)
+            # В самом крайнем случае используем реестр Windows / дефолтный скоуп ОС, чтобы не было краша
+            self._settings = QSettings("KTools", "KTools")
+            
         self._initialized = True
 
     @property

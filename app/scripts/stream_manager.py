@@ -71,7 +71,7 @@ class StreamManagerScript(AbstractScript):
     @property
     def name(self) -> str:
         """Отображаемое имя скрипта."""
-        return "Управление потоками (MKV/MP4)"
+        return "Управление потоками"
 
     @property
     def description(self) -> str:

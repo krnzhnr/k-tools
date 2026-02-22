@@ -10,6 +10,7 @@ from . import metadata_cleaner
 from . import muxer
 from . import stream_manager
 from . import stream_replacer
+from . import track_extractor
 
 # Список всех модулей для удобства регистрации
 SCRIPT_MODULES = [
@@ -22,4 +23,5 @@ SCRIPT_MODULES = [
     muxer,
     stream_manager,
     stream_replacer,
+    track_extractor,
 ]

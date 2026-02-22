@@ -34,7 +34,7 @@ class AudioSpeedChangerScript(AbstractScript):
 
     @property
     def name(self) -> str:
-        return "Изменение скорости аудио (eac3to)"
+        return "Изменение скорости аудио"
 
     @property
     def description(self) -> str:

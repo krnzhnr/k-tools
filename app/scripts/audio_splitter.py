@@ -49,7 +49,7 @@ class AudioSplitterScript(AbstractScript):
     @property
     def name(self) -> str:
         """Отображаемое имя скрипта."""
-        return "Разделение аудио (eac3to)"
+        return "Декомпозиция каналов"
 
     @property
     def description(self) -> str:

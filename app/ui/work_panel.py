@@ -51,6 +51,7 @@ from app.ui.track_list_widget import TrackListWidget
 from app.ui.stream_replace_widget import (
     StreamReplaceWidget,
 )
+from app.ui.track_extract_widget import TrackExtractWidget
 
 logger = logging.getLogger(__name__)
 
@@ -262,6 +263,7 @@ class ScriptPage(QWidget):
         self._stream_replace_widget: (
             StreamReplaceWidget | None
         ) = None
+        self._track_extract_widget: TrackExtractWidget | None = None
         self._settings_manager = SettingsManager()
 
         self._init_ui()
@@ -535,6 +537,18 @@ class ScriptPage(QWidget):
             self._file_list.filesChanged.connect(
                 self._update_path_placeholder
             )
+        elif (
+            self._script.use_custom_widget
+            and isinstance(self._script.name, str)
+            and "Массовое извлечение" in self._script.name
+        ):
+            self._track_extract_widget = TrackExtractWidget(self)
+            self._file_list = self._track_extract_widget
+            layout.addWidget(self._track_extract_widget, stretch=1)
+            self._track_extract_widget.filesChanged.connect(
+                self._update_path_placeholder
+            )
+            return
         elif (
             self._script.use_custom_widget
             and isinstance(self._script.name, str)
@@ -814,6 +828,19 @@ class ScriptPage(QWidget):
             )
             logger.info(
                 "[Управление потоками] "
+                "Выбранные дорожки по файлам: %s",
+                per_file,
+            )
+            
+        # Инъекция выбранных дорожек для скрипта массового извлечения
+        if getattr(self, "_track_extract_widget", None) is not None:
+            per_file = (
+                self._track_extract_widget
+                .get_selected_tracks_per_file()
+            )
+            settings["selected_tracks_per_file"] = per_file
+            logger.info(
+                "[Массовое извлечение] "
                 "Выбранные дорожки по файлам: %s",
                 per_file,
             )
