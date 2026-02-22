@@ -179,8 +179,8 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
-/bin
 /setup_output
 /icons
 *.iss
 settings.ini
+bin/eac3to/log*.txt
