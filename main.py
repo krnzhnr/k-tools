@@ -7,10 +7,12 @@
 
 import logging
 import sys
+from typing import Any
 import os
 import ctypes
 import darkdetect
 from datetime import datetime
+import atexit
 
 # Принудительная установка UTF-8 для подпроцессов и консоли
 os.environ["PYTHONIOENCODING"] = "utf-8"
@@ -18,15 +20,16 @@ os.environ["PYTHONIOENCODING"] = "utf-8"
 # Попытка реконфигурации стандартных потоков для поддержки UTF-8 (Python 3.7+)
 if hasattr(sys.stdout, "reconfigure"):
     try:
-        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
-        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+        getattr(sys.stdout, "reconfigure")(encoding="utf-8", errors="replace")
+        getattr(sys.stderr, "reconfigure")(encoding="utf-8", errors="replace")
     except Exception:
         pass
 
-# Регистрация AppUserModelID для корректного отображения иконки в таскбаре Windows
-if sys.platform == 'win32':
+# Регистрация AppUserModelID для корректного отображения
+# иконки в таскбаре Windows
+if sys.platform == "win32":
     try:
-        myappid = 'krnzhnr.ktools.app.v1'
+        myappid = "krnzhnr.ktools.app.v1"
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
     except Exception:
         pass
@@ -37,63 +40,71 @@ if len(sys.argv) >= 3 and sys.argv[1] == "-m":
     if module_name == "deew":
         # Очищаем argv ДО импорта, так как deew парсит их на уровне модуля
         sys.argv = [sys.argv[0]] + sys.argv[3:]
-        
-        # Патчим subprocess.Popen, чтобы deew не открывал окна терминала 
+
+        # Патчим subprocess.Popen, чтобы deew не открывал окна терминала
         # при вызове ffmpeg, ffprobe и dee.exe
         import subprocess
+
         _original_popen = subprocess.Popen
-        def _patched_popen(*args, **kwargs):
-            if sys.platform == 'win32':
-                if 'creationflags' not in kwargs:
-                    kwargs['creationflags'] = 0
-                kwargs['creationflags'] |= 0x08000000 # CREATE_NO_WINDOW
+
+        def _patched_popen(*args: Any, **kwargs: Any) -> Any:
+            if sys.platform == "win32":
+                if "creationflags" not in kwargs:
+                    kwargs["creationflags"] = 0
+                kwargs["creationflags"] |= 0x08000000  # CREATE_NO_WINDOW
             return _original_popen(*args, **kwargs)
-        subprocess.Popen = _patched_popen
+
+        subprocess.Popen = _patched_popen  # type: ignore[misc, assignment]
 
         # Импортируем deew и подавляем логотипы
         import deew.__main__
+
         try:
             import deew.logos
+
             deew.logos.logos = [""] * len(deew.logos.logos)
         except (ImportError, AttributeError):
             pass
-            
-        # Временно сбрасываем sys.frozen, чтобы deew использовал системный %TEMP%
+
+        # Временно сбрасываем sys.frozen, чтобы deew использовал
+        # системный %TEMP%
         # иначе в скомпилированном виде он лезет в папку приложения
-        _frozen = getattr(sys, 'frozen', False)
+        _frozen = getattr(sys, "frozen", False)
         if _frozen:
-            delattr(sys, 'frozen')
-            
+            delattr(sys, "frozen")
+
         try:
             deew.__main__.main()
         finally:
             # Восстанавливаем состояние frozen
             if _frozen:
-                setattr(sys, 'frozen', True)
+                setattr(sys, "frozen", True)
         sys.exit(0)
 
-from PyQt6.QtCore import QObject, pyqtSignal, QThread
-from PyQt6.QtWidgets import QApplication
-from PyQt6.QtGui import QIcon
-from qfluentwidgets import setTheme, Theme, qconfig, MessageBox
+from PyQt6.QtCore import QObject, pyqtSignal, QThread  # noqa: E402
+from PyQt6.QtWidgets import QApplication  # noqa: E402
+from PyQt6.QtGui import QIcon  # noqa: E402
+from qfluentwidgets import setTheme, Theme, qconfig, MessageBox  # noqa: E402
 
-from app.core.resource_utils import get_resource_path
-from app.core.script_registry import ScriptRegistry
-from app.core.abstract_script import AbstractScript
-import importlib
-import pkgutil
-import app.scripts
-from app.core.settings_manager import SettingsManager
-from app.ui.main_window import MainWindow
+from app.core.resource_utils import get_resource_path  # noqa: E402
+from app.core.script_registry import ScriptRegistry  # noqa: E402
+from app.core.abstract_script import AbstractScript  # noqa: E402
+import importlib  # noqa: E402
+import pkgutil  # noqa: E402
+import app.scripts  # noqa: E402
+from app.core.settings_manager import SettingsManager  # noqa: E402
+from app.ui.main_window import MainWindow  # noqa: E402
+from app.core.temp_file_manager import TempFileManager  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
 
-from pathlib import Path
+from pathlib import Path  # noqa: E402
+
 
 def _cleanup_old_logs(log_dir: Path, days: int = 10) -> None:
     """Удалить лог-файлы старше указанного количества дней.
-    
+
     Args:
         log_dir: Путь к папке с логами.
         days: Срок хранения в днях.
@@ -101,10 +112,10 @@ def _cleanup_old_logs(log_dir: Path, days: int = 10) -> None:
     try:
         if not log_dir.exists():
             return
-            
+
         now = datetime.now().timestamp()
         max_age_seconds = days * 24 * 60 * 60
-        
+
         for file in log_dir.glob("ktools_*.log"):
             try:
                 if (now - file.stat().st_mtime) > max_age_seconds:
@@ -128,13 +139,18 @@ def _setup_logging() -> None:
     try:
         if not log_dir.exists():
             log_dir.mkdir(parents=True, exist_ok=True)
-            
+
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         log_file = log_dir / f"ktools_{timestamp}.log"
     except Exception as e:
         print(f"[Logging] Ошибка при подготовке папки логов: {e}")
         import os
-        fallback_dir = Path(os.getenv('LOCALAPPDATA', Path.home() / "AppData" / "Local")) / "KTools" / "logs"
+
+        fallback_dir = (
+            Path(os.getenv("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+            / "KTools"
+            / "logs"
+        )
         try:
             fallback_dir.mkdir(parents=True, exist_ok=True)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -143,13 +159,10 @@ def _setup_logging() -> None:
             print(f"[Logging] Ошибка резервной директории: {fallback_e}")
             log_file = Path.home() / "ktools_fallback.log"
 
-    log_format = (
-        "%(asctime)s | %(levelname)-8s | "
-        "%(name)s | %(message)s"
-    )
+    log_format = "%(asctime)s | %(levelname)-8s | " "%(name)s | %(message)s"
 
-    handlers = [logging.StreamHandler(sys.stdout)]
-    
+    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+
     if log_file:
         try:
             # Пытаемся сразу открыть файл, чтобы отловить PermissionError
@@ -157,8 +170,14 @@ def _setup_logging() -> None:
                 pass
             handlers.append(logging.FileHandler(log_file, encoding="utf-8"))
         except Exception as e:
-            print(f"[Logging] Критическая ошибка доступа к файлу лога ({log_file}): {e}")
-            print("[Logging] Приложение продолжит работу только с консольным логом.")
+            print(
+                f"[Logging] Критическая ошибка доступа к файлу лога "
+                f"({log_file}): {e}"
+            )
+            print(
+                "[Logging] Приложение продолжит работу только с "
+                "консольным логом."
+            )
 
     # Настройка корневого логгера
     logging.basicConfig(
@@ -172,17 +191,17 @@ def _setup_logging() -> None:
 def _create_registry() -> ScriptRegistry:
     """Создать и заполнить реестр скриптов.
 
-    Использует как явный список из app.scripts, так и 
+    Использует как явный список из app.scripts, так и
     динамическое сканирование для максимальной надежности.
     """
     registry = ScriptRegistry()
-    
+
     # Сначала пытаемся загрузить из явного списка (надежнее для EXE)
     modules_to_process = []
     if hasattr(app.scripts, "SCRIPT_MODULES"):
         modules_to_process.extend(app.scripts.SCRIPT_MODULES)
         logger.debug("Используется явный список из app.scripts.SCRIPT_MODULES")
-    
+
     # Затем дополняем динамически, если что-то пропустили
     try:
         for _, name, is_pkg in pkgutil.iter_modules(app.scripts.__path__):
@@ -194,7 +213,9 @@ def _create_registry() -> ScriptRegistry:
                 if module not in modules_to_process:
                     modules_to_process.append(module)
             except Exception:
-                logger.exception("Ошибка при импорте модуля: %s", full_module_name)
+                logger.exception(
+                    "Ошибка при импорте модуля: %s", full_module_name
+                )  # noqa: E501
     except Exception:
         logger.warning("pkgutil не смог просканировать app.scripts.__path__")
 
@@ -204,19 +225,29 @@ def _create_registry() -> ScriptRegistry:
         try:
             for attribute_name in dir(module):
                 attribute = getattr(module, attribute_name)
-                
-                # Проверяем, что это класс, наследник AbstractScript и не сам AbstractScript
-                if (isinstance(attribute, type) and 
-                    issubclass(attribute, AbstractScript) and 
-                    attribute is not AbstractScript):
-                    
-                    # Проверка: если скрипт уже зарегистрирован (по имени), пропускаем
-                    if registry.find_by_name(attribute().name):
+
+                # Проверяем, что это класс, наследник AbstractScript
+                # и не сам AbstractScript
+                if (
+                    isinstance(attribute, type)
+                    and issubclass(attribute, AbstractScript)
+                    and attribute is not AbstractScript
+                ):
+
+                    # Инстанцируем один раз для предотвращения дублей
+                    script_instance = attribute()
+
+                    # Проверка: если скрипт уже зарегистрирован
+                    # (по имени), пропускаем
+                    if registry.find_by_name(script_instance.name):
                         continue
-                        
-                    registry.register(attribute())
+
+                    registry.register(script_instance)
         except Exception:
-            logger.exception("Ошибка при регистрации скриптов из модуля: %s", module_name)
+            logger.exception(
+                "Ошибка при регистрации скриптов из модуля: %s",
+                module_name,
+            )
 
     logger.info(
         "Всего зарегистрировано скриптов: %d",
@@ -227,12 +258,13 @@ def _create_registry() -> ScriptRegistry:
 
 class ThemeSignal(QObject):
     """Класс-сигнал для обработки изменений темы из сторонних потоков."""
+
     themeChanged = pyqtSignal(str)
 
 
 class ThemeWorker(QThread):
     """Поток для прослушивания системной темы."""
-    
+
     def __init__(self, signal: ThemeSignal) -> None:
         super().__init__()
         self.signal = signal
@@ -251,13 +283,19 @@ def main() -> None:
     _setup_logging()
     logger.info("Запуск K-Tools")
 
+    # Очистка временных файлов от предыдущих сессий
+    TempFileManager().cleanup_on_startup()
+
+    # Регистрация очистки при выходе
+    atexit.register(TempFileManager().cleanup)
+
     app = QApplication(sys.argv)
     app.setWindowIcon(QIcon(get_resource_path("app_icon.ico")))
-    
+
     # Загрузка настроек темы
     settings = SettingsManager()
     theme_val = settings.theme
-    
+
     if theme_val == "Dark":
         qconfig.theme = Theme.DARK
         setTheme(Theme.DARK)
@@ -272,19 +310,23 @@ def main() -> None:
     # Создаем объект-сигнал для связи между потоками
     theme_signal = ThemeSignal()
 
-    def on_theme_changed(theme):
+    def on_theme_changed(theme: str) -> None:
         """Обработка сигнала смены темы."""
         try:
             if window and window.isVisible():
                 msg = MessageBox(
                     "Смена системной темы",
-                    "Обнаружено изменение системной темы. Для корректного обновления всех иконок и стилей рекомендуется перезапустить приложение. Перезагрузить сейчас?",
-                    window
+                    "Обнаружено изменение системной темы. Для "
+                    "корректного обновления всех иконок и стилей "
+                    "рекомендуется перезапустить приложение. "
+                    "Перезагрузить сейчас?",
+                    window,
                 )
                 msg.yesButton.setText("Перезагрузить")
                 msg.cancelButton.setText("Позже")
                 if msg.exec():
                     from app.core.lifecycle import restart_current_app
+
                     restart_current_app()
         except (NameError, AttributeError):
             pass

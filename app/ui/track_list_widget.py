@@ -44,9 +44,7 @@ class TrackListWidget(CardWidget):
     ROLE_TRACK_ID = Qt.ItemDataRole.UserRole
     ROLE_FILE_PATH = Qt.ItemDataRole.UserRole + 1
 
-    def __init__(
-        self, parent: QWidget | None = None
-    ) -> None:
+    def __init__(self, parent: QWidget | None = None) -> None:
         """Инициализация виджета-дерева дорожек.
 
         Args:
@@ -54,13 +52,9 @@ class TrackListWidget(CardWidget):
         """
         super().__init__(parent)
         self._probe = MKVProbeRunner()
-        self._file_tracks: dict[
-            Path, list[TrackInfo]
-        ] = {}
+        self._file_tracks: dict[Path, list[TrackInfo]] = {}
         self._init_ui()
-        logger.info(
-            "Виджет-дерево дорожек инициализирован"
-        )
+        logger.info("Виджет-дерево дорожек инициализирован")
 
     def _init_ui(self) -> None:
         """Настройка пользовательского интерфейса."""
@@ -74,16 +68,11 @@ class TrackListWidget(CardWidget):
 
         # Подсказка
         self._hint_label = CaptionLabel(
-            "Добавьте файлы и нажмите "
-            "«Загрузить дорожки»",
+            "Добавьте файлы и нажмите " "«Загрузить дорожки»",
             self,
         )
-        self._hint_label.setStyleSheet(
-            "color: rgba(255, 255, 255, 0.5);"
-        )
-        self._hint_label.setAlignment(
-            Qt.AlignmentFlag.AlignCenter
-        )
+        self._hint_label.setStyleSheet("color: rgba(255, 255, 255, 0.5);")
+        self._hint_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self._hint_label)
 
         # Нативное дерево qfluentwidgets
@@ -100,16 +89,12 @@ class TrackListWidget(CardWidget):
         self._select_all_btn = PushButton(
             "Выбрать все", self, FluentIcon.CHECKBOX
         )
-        self._select_all_btn.clicked.connect(
-            self._select_all
-        )
+        self._select_all_btn.clicked.connect(self._select_all)
 
         self._deselect_all_btn = PushButton(
             "Снять все", self, FluentIcon.CANCEL
         )
-        self._deselect_all_btn.clicked.connect(
-            self._deselect_all
-        )
+        self._deselect_all_btn.clicked.connect(self._deselect_all)
 
         btn_layout.addWidget(self._select_all_btn)
         btn_layout.addWidget(self._deselect_all_btn)
@@ -119,9 +104,7 @@ class TrackListWidget(CardWidget):
         self._btn_widget.setVisible(False)
         layout.addWidget(self._btn_widget)
 
-    def load_files(
-        self, file_paths: list[Path]
-    ) -> None:
+    def load_files(self, file_paths: list[Path]) -> None:
         """Загрузить дорожки для списка файлов.
 
         Анализирует каждый файл через mkvmerge -J
@@ -137,8 +120,7 @@ class TrackListWidget(CardWidget):
             self._tree.setVisible(False)
             self._btn_widget.setVisible(False)
             self._hint_label.setText(
-                "Добавьте файлы и нажмите "
-                "«Загрузить дорожки»"
+                "Добавьте файлы и нажмите " "«Загрузить дорожки»"
             )
             self._hint_label.setVisible(True)
             return
@@ -149,9 +131,7 @@ class TrackListWidget(CardWidget):
 
         for file_path in file_paths:
             try:
-                tracks = self._probe.get_tracks(
-                    file_path
-                )
+                tracks = self._probe.get_tracks(file_path)
             except Exception:
                 logger.exception(
                     "Ошибка анализа файла '%s'",
@@ -164,83 +144,48 @@ class TrackListWidget(CardWidget):
 
         self._tree.expandAll()
         logger.info(
-            "Загружено файлов: %d, "
-            "общее количество дорожек: %d",
+            "Загружено файлов: %d, " "общее количество дорожек: %d",
             len(file_paths),
-            sum(
-                len(t)
-                for t in self._file_tracks.values()
-            ),
+            sum(len(t) for t in self._file_tracks.values()),
         )
 
-    def _add_file_node(
-        self,
-        file_path: Path,
-        tracks: list[TrackInfo],
-    ) -> None:
-        """Добавить узел файла с дочерними дорожками.
-
-        Args:
-            file_path: Путь к файлу.
-            tracks: Список дорожек файла.
-        """
+    def _add_file_node(self, file_path: Path, tracks: list[TrackInfo]) -> None:
+        """Добавить узел файла с дочерними дорожками."""
         file_item = QTreeWidgetItem(self._tree)
         file_item.setText(0, file_path.name)
-        file_item.setIcon(
-            0, FluentIcon.MOVIE.icon()
-        )
-        file_item.setData(
-            0, self.ROLE_FILE_PATH, str(file_path)
-        )
+        file_item.setIcon(0, FluentIcon.MOVIE.icon())
+        file_item.setData(0, self.ROLE_FILE_PATH, str(file_path))
 
         if not tracks:
             no_track = QTreeWidgetItem(file_item)
-            no_track.setText(
-                0, "⚠ Дорожки не обнаружены"
-            )
-            no_track.setFlags(
-                no_track.flags()
-                & ~Qt.ItemFlag.ItemIsSelectable
-            )
+            no_track.setText(0, "⚠ Дорожки не обнаружены")
+            no_track.setFlags(no_track.flags() & ~Qt.ItemFlag.ItemIsSelectable)
             return
 
         for track in tracks:
-            track_item = QTreeWidgetItem(file_item)
+            self._add_track_node(file_item, track, file_path)
 
-            # Компактная строка дорожки
-            parts = [track.type_label, track.codec]
-            if (
-                track.language
-                and track.language != "und"
-            ):
-                parts.append(track.language)
-            if track.name:
-                parts.append(f'"{track.name}"')
-            parts.append(f"ID: {track.track_id}")
+    def _add_track_node(
+        self, parent_item: QTreeWidgetItem, track: TrackInfo, file_path: Path
+    ) -> None:
+        """Добавить дочерний узел для дорожки."""
+        track_item = QTreeWidgetItem(parent_item)
 
-            label = "  ·  ".join(parts)
-            track_item.setText(0, label)
+        parts = [track.type_label, track.codec]
+        if track.language and track.language != "und":
+            parts.append(track.language)
+        if track.name:
+            parts.append(f'"{track.name}"')
+        parts.append(f"ID: {track.track_id}")
 
-            # Чекбокс
-            track_item.setFlags(
-                track_item.flags()
-                | Qt.ItemFlag.ItemIsUserCheckable
-            )
-            track_item.setCheckState(
-                0, Qt.CheckState.Unchecked
-            )
+        track_item.setText(0, "  ·  ".join(parts))
+        track_item.setFlags(
+            track_item.flags() | Qt.ItemFlag.ItemIsUserCheckable
+        )
+        track_item.setCheckState(0, Qt.CheckState.Unchecked)
 
-            # Метаданные
-            track_item.setData(
-                0,
-                self.ROLE_TRACK_ID,
-                track.track_id,
-            )
-            track_item.setData(
-                0,
-                self.ROLE_FILE_PATH,
-                str(file_path),
-            )
+        track_item.setData(0, self.ROLE_TRACK_ID, track.track_id)
+        track_item.setData(0, self.ROLE_FILE_PATH, str(file_path))
 
     def get_selected_tracks_per_file(
         self,
@@ -255,20 +200,15 @@ class TrackListWidget(CardWidget):
         root = self._tree.invisibleRootItem()
         for i in range(root.childCount()):
             file_node = root.child(i)
-            file_path = file_node.data(
-                0, self.ROLE_FILE_PATH
-            )
+            file_path = file_node.data(0, self.ROLE_FILE_PATH)
             selected_ids: list[int] = []
 
             for j in range(file_node.childCount()):
                 track_node = file_node.child(j)
-                track_id = track_node.data(
-                    0, self.ROLE_TRACK_ID
-                )
+                track_id = track_node.data(0, self.ROLE_TRACK_ID)
                 if (
                     track_id is not None
-                    and track_node.checkState(0)
-                    == Qt.CheckState.Checked
+                    and track_node.checkState(0) == Qt.CheckState.Checked
                 ):
                     selected_ids.append(track_id)
 
@@ -288,10 +228,7 @@ class TrackListWidget(CardWidget):
             Список ID выбранных дорожек.
         """
         all_ids: list[int] = []
-        for ids in (
-            self.get_selected_tracks_per_file()
-            .values()
-        ):
+        for ids in self.get_selected_tracks_per_file().values():
             all_ids.extend(ids)
         return all_ids
 
@@ -302,15 +239,12 @@ class TrackListWidget(CardWidget):
         self._tree.setVisible(False)
         self._btn_widget.setVisible(False)
         self._hint_label.setText(
-            "Добавьте файлы и нажмите "
-            "«Загрузить дорожки»"
+            "Добавьте файлы и нажмите " "«Загрузить дорожки»"
         )
         self._hint_label.setVisible(True)
         logger.info("Дерево дорожек очищено")
 
-    def sync_with_files(
-        self, file_paths: list[Path]
-    ) -> None:
+    def sync_with_files(self, file_paths: list[Path]) -> None:
         """Синхронизировать дерево с текущим списком.
 
         Удаляет узлы файлов, которых нет в списке.
@@ -323,9 +257,7 @@ class TrackListWidget(CardWidget):
         removed_any = False
 
         # 1. Удаляем из внутреннего словаря
-        existing_paths = list(
-            self._file_tracks.keys()
-        )
+        existing_paths = list(self._file_tracks.keys())
         for path in existing_paths:
             if path not in paths_to_keep:
                 del self._file_tracks[path]
@@ -338,9 +270,7 @@ class TrackListWidget(CardWidget):
         root = self._tree.invisibleRootItem()
         for i in range(root.childCount() - 1, -1, -1):
             item = root.child(i)
-            item_path_str = item.data(
-                0, self.ROLE_FILE_PATH
-            )
+            item_path_str = item.data(0, self.ROLE_FILE_PATH)
             if item_path_str:
                 p = Path(item_path_str)
                 if p not in paths_to_keep:
@@ -362,15 +292,9 @@ class TrackListWidget(CardWidget):
             file_node = root.child(i)
             for j in range(file_node.childCount()):
                 track_node = file_node.child(j)
-                if track_node.data(
-                    0, self.ROLE_TRACK_ID
-                ) is not None:
-                    track_node.setCheckState(
-                        0, Qt.CheckState.Checked
-                    )
-        logger.info(
-            "Пользователь выбрал все дорожки"
-        )
+                if track_node.data(0, self.ROLE_TRACK_ID) is not None:
+                    track_node.setCheckState(0, Qt.CheckState.Checked)
+        logger.info("Пользователь выбрал все дорожки")
 
     def _deselect_all(self) -> None:
         """Снять выбор со всех дорожек."""
@@ -379,13 +303,6 @@ class TrackListWidget(CardWidget):
             file_node = root.child(i)
             for j in range(file_node.childCount()):
                 track_node = file_node.child(j)
-                if track_node.data(
-                    0, self.ROLE_TRACK_ID
-                ) is not None:
-                    track_node.setCheckState(
-                        0, Qt.CheckState.Unchecked
-                    )
-        logger.info(
-            "Пользователь снял выбор "
-            "со всех дорожек"
-        )
+                if track_node.data(0, self.ROLE_TRACK_ID) is not None:
+                    track_node.setCheckState(0, Qt.CheckState.Unchecked)
+        logger.info("Пользователь снял выбор " "со всех дорожек")

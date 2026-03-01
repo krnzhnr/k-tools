@@ -3,6 +3,7 @@
 
 import logging
 from pathlib import Path
+from typing import Sequence
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import QAbstractItemView, QListWidgetItem, QFileDialog
@@ -22,8 +23,7 @@ class FileListWidget(ListWidget):
     filesChanged = pyqtSignal()
 
     PLACEHOLDER_TEXT = (
-        "Перетащите файлы сюда\n"
-        "или используйте контекстное меню"
+        "Перетащите файлы сюда\n" "или используйте контекстное меню"
     )
 
     def __init__(
@@ -40,9 +40,7 @@ class FileListWidget(ListWidget):
             parent: Родительский виджет.
         """
         super().__init__(parent)
-        self._allowed_extensions: list[str] = (
-            allowed_extensions or []
-        )
+        self._allowed_extensions: list[str] = allowed_extensions or []
         self._context_name = context_name
         self._file_paths: list[Path] = []
 
@@ -53,41 +51,39 @@ class FileListWidget(ListWidget):
             "[%s] Виджет списка файлов успешно инициализирован. "
             "Список допустимых расширений: %s",
             self._context_name,
-            self._allowed_extensions if self._allowed_extensions else "все файлы",
+            (
+                self._allowed_extensions
+                if self._allowed_extensions
+                else "все файлы"
+            ),
         )
 
     def _setup_drag_drop(self) -> None:
         """Настройка поддержки drag-n-drop."""
         self.setAcceptDrops(True)
-        self.setDragDropMode(
-            QAbstractItemView.DragDropMode.DropOnly
-        )
+        self.setDragDropMode(QAbstractItemView.DragDropMode.DropOnly)
         self.setDefaultDropAction(Qt.DropAction.CopyAction)
 
     def _setup_context_menu(self) -> None:
         """Настройка контекстного меню."""
-        self.setContextMenuPolicy(
-            Qt.ContextMenuPolicy.CustomContextMenu
-        )
-        self.customContextMenuRequested.connect(
-            self._show_context_menu
-        )
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_context_menu)
 
-    def set_allowed_extensions(
-        self, extensions: list[str]
-    ) -> None:
+    def set_allowed_extensions(self, extensions: list[str]) -> None:
         """Обновить список допустимых расширений.
 
         Args:
             extensions: Новый список расширений.
         """
-        self._allowed_extensions = [
-            ext.lower() for ext in extensions
-        ]
+        self._allowed_extensions = [ext.lower() for ext in extensions]
         logger.info(
             "[%s] Фильтр расширений обновлен пользователем: %s",
             self._context_name,
-            self._allowed_extensions if self._allowed_extensions else "все файлы",
+            (
+                self._allowed_extensions
+                if self._allowed_extensions
+                else "все файлы"
+            ),
         )
 
     def get_file_paths(self) -> list[Path]:
@@ -107,7 +103,7 @@ class FileListWidget(ListWidget):
         """
         return list(self._file_paths)
 
-    def add_files(self, paths: list[str | Path]) -> None:
+    def add_files(self, paths: Sequence[str | Path]) -> None:
         """Программно добавить файлы в список.
 
         Args:
@@ -119,19 +115,29 @@ class FileListWidget(ListWidget):
             if self._is_valid_file(file_path):
                 self._add_file(file_path)
                 added_count += 1
-        
+
         if added_count > 0:
             self.filesChanged.emit()
-            logger.info("[%s] В список успешно добавлено файлов (программно): %d", self._context_name, added_count)
+            logger.info(
+                "[%s] В список успешно добавлено файлов (программно): %d",
+                self._context_name,
+                added_count,
+            )
         else:
-            logger.warning("[%s] При попытке программного добавления ни один файл не прошел валидацию", self._context_name)
+            logger.warning(
+                "[%s] При попытке программного добавления ни один файл не прошел валидацию",  # noqa: E501
+                self._context_name,
+            )
 
     def clear_files(self) -> None:
         """Очистить список файлов."""
         self._file_paths.clear()
         self.clear()
         self.filesChanged.emit()
-        logger.info("[%s] Список файлов полностью очищен пользователем", self._context_name)
+        logger.info(
+            "[%s] Список файлов полностью очищен пользователем",
+            self._context_name,
+        )
 
     def dragEnterEvent(self, event) -> None:
         """Обработка входа перетаскивания.
@@ -180,7 +186,10 @@ class FileListWidget(ListWidget):
             )
             self.filesChanged.emit()
         else:
-            logger.warning("[%s] Сброшенные файлы не прошли валидацию по расширению или не являются файлами", self._context_name)
+            logger.warning(
+                "[%s] Сброшенные файлы не прошли валидацию по расширению или не являются файлами",  # noqa: E501
+                self._context_name,
+            )
         event.acceptProposedAction()
 
     def _is_valid_file(self, path: Path) -> bool:
@@ -208,7 +217,9 @@ class FileListWidget(ListWidget):
         """
         if path in self._file_paths:
             logger.info(
-                "[%s] Файл пропущен (уже есть в списке): %s", self._context_name, path.name
+                "[%s] Файл пропущен (уже есть в списке): %s",
+                self._context_name,
+                path.name,
             )
             return
 
@@ -216,7 +227,12 @@ class FileListWidget(ListWidget):
         item = QListWidgetItem(path.name)
         item.setToolTip(str(path))
         self.addItem(item)
-        logger.info("[%s] Новый файл успешно добавлен в список: %s (путь: %s)", self._context_name, path.name, path)
+        logger.info(
+            "[%s] Новый файл успешно добавлен в список: %s (путь: %s)",
+            self._context_name,
+            path.name,
+            path,
+        )
 
     def _show_context_menu(self, position) -> None:
         """Показать контекстное меню.
@@ -253,18 +269,17 @@ class FileListWidget(ListWidget):
         """Обработчик нажатия «Добавить файлы» в меню."""
         # Формируем фильтры для диалога
         if self._allowed_extensions:
-            ext_filter = " ".join([f"*{ext}" for ext in self._allowed_extensions])
+            ext_filter = " ".join(
+                [f"*{ext}" for ext in self._allowed_extensions]
+            )
             filter_str = f"Допустимые файлы ({ext_filter});;Все файлы (*)"
         else:
             filter_str = "Все файлы (*)"
 
         files, _ = QFileDialog.getOpenFileNames(
-            self,
-            "Выберите файлы для добавления",
-            "",
-            filter_str
+            self, "Выберите файлы для добавления", "", filter_str
         )
-        
+
         if files:
             self.add_files(files)
 
@@ -282,9 +297,10 @@ class FileListWidget(ListWidget):
                 logger.info(
                     "[%s] Пользователь удалил файл из списка: %s (индекс: %d)",
                     self._context_name,
-                    removed.name, row
+                    removed.name,
+                    row,
                 )
-        
+
         if selected_rows:
             self.filesChanged.emit()
 
@@ -298,6 +314,7 @@ class FileListWidget(ListWidget):
 
         if self.count() == 0:
             from PyQt6.QtGui import QPainter, QColor
+
             painter = QPainter(self.viewport())
             painter.setPen(QColor(128, 128, 128))
             painter.drawText(

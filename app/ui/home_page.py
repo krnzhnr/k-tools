@@ -15,10 +15,11 @@ from qfluentwidgets import (
     CardWidget,
     SmoothScrollArea,
     FluentIcon,
-    SubtitleLabel
+    SubtitleLabel,
 )
 
 from app.core.abstract_script import AbstractScript
+from app.core.constants import CATEGORY_CONFIG
 
 logger = logging.getLogger(__name__)
 
@@ -35,15 +36,9 @@ class ScriptCard(CardWidget):
         self,
         script: AbstractScript,
         resolve_icon: Callable[[str], FluentIcon],
-        parent: QWidget = None
+        parent: QWidget | None = None,
     ) -> None:
-        """Инициализация карточки.
-
-        Args:
-            script: Объект скрипта.
-            resolve_icon: Функция для получения объекта FluentIcon по имени.
-            parent: Родительский виджет.
-        """
+        """Инициализация карточки."""
         super().__init__(parent)
         self._script = script
         self.setFixedSize(330, 100)
@@ -53,16 +48,20 @@ class ScriptCard(CardWidget):
         layout.setContentsMargins(16, 12, 16, 12)
         layout.setSpacing(12)
 
-        # Цветовая схема для категорий (мягкие приглушенные цвета)
-        cat_colors = {
-            "Видео": ("rgba(27, 157, 227, 0.2)", "#1B9DE3"),    # Голубой
-            "Аудио": ("rgba(40, 202, 198, 0.2)", "#28CAC6"),    # Бирюзовый
-            "Муксинг": ("rgba(235, 110, 77, 0.2)", "#EB6E4D"),  # Терракотовый
-        }
-        category = script.category.strip()
-        bg_color, icon_color = cat_colors.get(category, ("rgba(255, 255, 255, 0.1)", "#FFFFFF"))
+        self._init_icon_section(layout, resolve_icon)
+        self._init_text_section(layout)
+        layout.addStretch(1)
 
-        # Контейнер для иконки
+    def _init_icon_section(
+        self, layout: QHBoxLayout, resolve_icon: Callable[[str], FluentIcon]
+    ) -> None:
+        """Инициализация секции иконки."""
+        cat = self._script.category.strip()
+        config = CATEGORY_CONFIG.get(cat, {})
+        bg_color, icon_color = config.get(
+            "color", ("rgba(255, 255, 255, 0.1)", "#FFFFFF")
+        )
+
         icon_wrapper = QFrame(self)
         icon_wrapper.setFixedSize(40, 40)
         icon_wrapper.setStyleSheet(
@@ -71,10 +70,10 @@ class ScriptCard(CardWidget):
         icon_layout = QVBoxLayout(icon_wrapper)
         icon_layout.setContentsMargins(8, 8, 8, 8)
 
-        icon = resolve_icon(script.icon_name)
-        # Если это FluentIcon, устанавливаем цвет через штатный метод .icon()
+        icon = resolve_icon(self._script.icon_name)
         if hasattr(icon, "icon"):
             from PyQt6.QtGui import QColor
+
             icon = icon.icon(color=QColor(icon_color))
 
         self.icon_widget = IconWidget(icon, icon_wrapper)
@@ -82,20 +81,20 @@ class ScriptCard(CardWidget):
         icon_layout.addWidget(self.icon_widget)
         layout.addWidget(icon_wrapper)
 
-        # Текстовая часть
+    def _init_text_section(self, layout: QHBoxLayout) -> None:
+        """Инициализация текстовой секции."""
         text_layout = QVBoxLayout()
         text_layout.setContentsMargins(0, 4, 0, 0)
         text_layout.setSpacing(2)
         text_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
-        self.title_label = StrongBodyLabel(script.name, self)
-        self.desc_label = CaptionLabel(script.description, self)
+        self.title_label = StrongBodyLabel(self._script.name, self)
+        self.desc_label = CaptionLabel(self._script.description, self)
         self.desc_label.setWordWrap(True)
 
         text_layout.addWidget(self.title_label)
         text_layout.addWidget(self.desc_label)
         layout.addLayout(text_layout)
-        layout.addStretch(1)
 
     def mouseReleaseEvent(self, event) -> None:
         """Событие клика по карточке."""
@@ -117,7 +116,7 @@ class HomePage(QWidget):
         self,
         scripts: List[AbstractScript],
         resolve_icon: Callable[[str], FluentIcon],
-        parent: QWidget = None
+        parent: QWidget | None = None,
     ) -> None:
         """Инициализация домашней страницы.
 
@@ -138,10 +137,11 @@ class HomePage(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        # Область прокрутки
         self.scroll_area = SmoothScrollArea(self)
         self.scroll_area.setWidgetResizable(True)
-        self.scroll_area.setStyleSheet("background: transparent; border: none;")
+        self.scroll_area.setStyleSheet(
+            "background: transparent; border: none;"
+        )
 
         self.container = QWidget()
         self.container.setStyleSheet("background: transparent;")
@@ -149,42 +149,51 @@ class HomePage(QWidget):
         self.container_layout.setContentsMargins(36, 40, 36, 40)
         self.container_layout.setSpacing(32)
 
-        # Заголовок страницы
+        self._setup_header()
+        self._populate_categories()
+
+        self.container_layout.addStretch(1)
+        self.scroll_area.setWidget(self.container)
+        layout.addWidget(self.scroll_area)
+
+    def _setup_header(self) -> None:
+        """Настройка заголовка страницы."""
         header_layout = QVBoxLayout()
         header_layout.setSpacing(4)
-        
         from PyQt6.QtGui import QFont
+
         title = SubtitleLabel("K-Tools", self)
-        title_font = QFont("Segoe UI", 24, QFont.Weight.Bold)
-        title.setFont(title_font)
-        
-        desc = BodyLabel("Ваш персональный набор инструментов для обработки медиа", self)
+        title.setFont(QFont("Segoe UI", 24, QFont.Weight.Bold))
+        desc = BodyLabel(
+            "Ваш персональный набор инструментов для обработки медиа", self
+        )
+
         header_layout.addWidget(title)
         header_layout.addWidget(desc)
         self.container_layout.addLayout(header_layout)
 
-        # Группировка скриптов по категориям
-        categories = {}
+    def _populate_categories(self) -> None:
+        """Заполнение категорий карточками скриптов."""
+        categories: dict[str, List[AbstractScript]] = {}
         for script in self._scripts:
             cat = script.category
             if cat not in categories:
                 categories[cat] = []
             categories[cat].append(script)
 
-        # Порядок категорий как в MainWindow
-        ordered_cats = ["Видео", "Аудио", "Муксинг"]
-        
-        for cat_name in ordered_cats:
-            if cat_name not in categories:
-                continue
-            
-            self._add_category_section(cat_name, categories[cat_name])
+        # 1. Добавляем известные категории в заданном порядке
+        for cat_name in CATEGORY_CONFIG:
+            if cat_name in categories:
+                self._add_category_section(cat_name, categories[cat_name])
 
-        self.container_layout.addStretch(1)
-        self.scroll_area.setWidget(self.container)
-        layout.addWidget(self.scroll_area)
+        # 2. Добавляем все остальные категории
+        for cat_name, scripts in categories.items():
+            if cat_name not in CATEGORY_CONFIG:
+                self._add_category_section(cat_name, scripts)
 
-    def _add_category_section(self, name: str, scripts: List[AbstractScript]) -> None:
+    def _add_category_section(
+        self, name: str, scripts: List[AbstractScript]
+    ) -> None:
         """Добавить секцию категории с карточками.
 
         Args:
@@ -196,6 +205,7 @@ class HomePage(QWidget):
 
         # Заголовок категории
         from PyQt6.QtGui import QFont
+
         cat_label = StrongBodyLabel(name, self.container)
         cat_label.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
         section_layout.addWidget(cat_label)

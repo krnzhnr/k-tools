@@ -12,6 +12,7 @@ import subprocess
 import sys
 import time
 import re
+import importlib.util
 from pathlib import Path
 
 # === Настройки ===
@@ -23,6 +24,7 @@ SCRIPT = BASE_DIR / "main.py"
 EXE_BASE_NAME = "KTools"
 ICON = BASE_DIR / "assets" / "app_icon.ico"
 VERSION_FILE = BASE_DIR / "version.txt"
+CHANGELOG_FILE = BASE_DIR / "CHANGELOG.md"
 
 
 def get_current_version() -> str:
@@ -34,55 +36,59 @@ def get_current_version() -> str:
 
 def save_version(version: str) -> None:
     """Сохранить новую версию в файл."""
-    VERSION_FILE.write_text(version)
+    VERSION_FILE.write_text(version, encoding="utf-8")
+
+
+def extract_version_from_changelog() -> str:
+    """Извлечь последнюю версию из CHANGELOG.md.
+
+    Ищет первую строку, начинающуюся с '# '.
+
+    Returns:
+        Строка версии (например, '1.5.0').
+
+    Raises:
+        ValueError: Если файл не найден или версия не обнаружена.
+    """
+    if not CHANGELOG_FILE.exists():
+        raise ValueError(f"Файл {CHANGELOG_FILE} не найден")
+
+    content = CHANGELOG_FILE.read_text(encoding="utf-8")
+    match = re.search(r"^#\s*([\d\.]+)", content, re.MULTILINE)
+
+    if not match:
+        raise ValueError("Не удалось найти версию в CHANGELOG.md")
+
+    version = match.group(1).strip()
+    return version
 
 
 def prompt_version_update() -> str:
-    """Интерактивный опрос для обновления версии.
-    
+    """Определить версию для сборки.
+
+    Автоматически берет версию из окружения (CI) или из CHANGELOG.md (Локально).
+
     Returns:
-        Новая строка версии.
+        Строка версии.
     """
     ci_version = os.environ.get("CI_VERSION")
     if ci_version:
         # Убираем букву 'v' из тега (например 'v1.0.3' -> '1.0.3')
-        version = ci_version.lstrip('v')
+        version = ci_version.lstrip("v")
         save_version(version)
         print(f"[✓] CI/CD: Версия автоматически установлена: {version}")
         return version
 
-    current_version = get_current_version()
-    print(f"\n[*] Текущая версия: {current_version}")
-    print("[?] Выберите тип обновления:")
-    print("  1. Major (Мажорное: X.0.0)")
-    print("  2. Minor (Минорное: 1.X.0)")
-    print("  3. Patch (Патч: 1.0.X)")
-    print("  4. Без изменений")
-    
-    choice = input("Ваш выбор [1-4]: ").strip()
-    
-    if choice == "4":
-        return current_version
-        
     try:
-        major, minor, patch = map(int, current_version.split('.'))
-    except ValueError:
-        major, minor, patch = 1, 0, 0
-        
-    if choice == "1":
-        major += 1
-        minor = 0
-        patch = 0
-    elif choice == "2":
-        minor += 1
-        patch = 0
-    else:
-        patch += 1
-        
-    new_version = f"{major}.{minor}.{patch}"
-    save_version(new_version)
-    print(f"[✓] Версия обновлена до: {new_version}")
-    return new_version
+        version = extract_version_from_changelog()
+        save_version(version)
+        print(f"[✓] Локальная сборка: Версия взята из CHANGELOG.md: {version}")
+        return version
+    except Exception as e:
+        print(f"[!] Ошибка при получении версии из CHANGELOG.md: {e}")
+        current_version = get_current_version()
+        print(f"[*] Используется текущая версия из файла: {current_version}")
+        return current_version
 
 
 def update_app_version_py(version: str) -> None:
@@ -91,13 +97,13 @@ def update_app_version_py(version: str) -> None:
     if not version_py.exists():
         print(f"[!] Файл {version_py} не найден для авто-обновления")
         return
-        
+
     content = version_py.read_text(encoding="utf-8")
-    
+
     # Регулярные выражения для замены версии
     content = re.sub(r'VERSION = "[^"]+"', f'VERSION = "{version}"', content)
     content = re.sub(r'return "[^"]+"', f'return "{version}"', content)
-    
+
     version_py.write_text(content, encoding="utf-8")
     print(f"[✓] Версия в {version_py} синхронизирована.")
 
@@ -107,7 +113,7 @@ def ensure_venv() -> Path:
     if not PYTHON_EXE.exists():
         print(f"[!] Виртуальное окружение {VENV_DIR} не найдено!")
         print(f"[!] Ожидаемый путь: {PYTHON_EXE}")
-        
+
         current_exe = Path(sys.executable)
         if sys.prefix != sys.base_prefix:
             print(f"[*] Использую текущий интерпретатор: {current_exe}")
@@ -133,13 +139,13 @@ def clean() -> None:
 
 def create_version_file(version_str: str) -> None:
     """Создать файл версии Windows."""
-    parts = version_str.split('.')
+    parts = version_str.split(".")
     v_parts = [int(p) for p in parts]
     while len(v_parts) < 4:
         v_parts.append(0)
-    
+
     v_tuple = tuple(v_parts)
-    
+
     version_info = f"""# UTF-8
 VSVersionInfo(
   ffi=FixedFileInfo(
@@ -160,8 +166,7 @@ VSVersionInfo(
           [StringStruct(u'CompanyName', u''),
            StringStruct(
                u'FileDescription',
-               u'K-Tools — Набор инструментов для'
-               u' обработки медиа'
+               u'K-Tools'
            ),
            StringStruct(
                u'FileVersion',
@@ -188,7 +193,9 @@ VSVersionInfo(
     )
   ]
 )"""
-    (BASE_DIR / "file_version_info.txt").write_text(version_info, encoding="utf-8")
+    (BASE_DIR / "file_version_info.txt").write_text(
+        version_info, encoding="utf-8"
+    )
 
 
 def copy_bin_directory(exe_name: str) -> None:
@@ -227,11 +234,11 @@ def create_inno_setup_script(
     """
     cwd = str(BASE_DIR).replace("\\", "\\\\")
     icon_p = str(ICON).replace("\\", "\\\\")
-    
+
     iss_content = f"""
 [Setup]
 AppId=krnzhnr.ktools.v1
-AppName={EXE_BASE_NAME} — Набор инструментов для работы с медиа
+AppName={EXE_BASE_NAME}
 AppVersion={version_str}
 DefaultDirName={{autopf}}\\{EXE_BASE_NAME}
 DefaultGroupName={EXE_BASE_NAME}
@@ -273,9 +280,9 @@ Flags: nowait postinstall skipifsilent
 
 def build() -> None:
     """Основная процедура сборки приложения."""
-    print("[*] Запуск интерактивного обновления версии...")
+    print("[*] Определение версии сборки...")
     version_str = prompt_version_update()
-    
+
     # Синхронизируем версию в коде перед сборкой
     update_app_version_py(version_str)
 
@@ -286,14 +293,17 @@ def build() -> None:
     print("[*] Проверка импорта ядра...")
     try:
         sys.path.insert(0, str(BASE_DIR))
-        import app.core.script_registry
-        print("[✓] Импорт прошел успешно.")
+        if importlib.util.find_spec("app.core.script_registry") is None:
+            raise ImportError("Модуль app.core.script_registry не найден")
+
+        print("[✓] Импорт ядра доступен.")
     except ImportError as e:
         print(f"[!] Ошибка импорта: {e}")
 
     cmd = [
         str(python_bin),
-        "-m", "PyInstaller",
+        "-m",
+        "PyInstaller",
         "--noconfirm",
         "--clean",
         "--onedir",
@@ -303,7 +313,6 @@ def build() -> None:
         "--paths=.",
         "--hidden-import=PyQt6",
         "--hidden-import=qfluentwidgets",
-
         "--hidden-import=app.core.abstract_script",
         "--hidden-import=app.core.path_utils",
         "--hidden-import=app.core.resource_utils",
@@ -321,7 +330,6 @@ def build() -> None:
         "--hidden-import=app.ui.file_list_widget",
         "--hidden-import=app.ui.muxing_table_widget",
         "--hidden-import=deew",
-
         "--collect-all=qfluentwidgets",
         str(SCRIPT),
     ]
@@ -363,4 +371,4 @@ if __name__ == "__main__":
         if not is_ci:
             input("Нажмите Enter чтобы выйти...")
         else:
-            sys.exit(1) # Жестко завершаем с ошибкой для пайплайна
+            sys.exit(1)  # Жестко завершаем с ошибкой для пайплайна

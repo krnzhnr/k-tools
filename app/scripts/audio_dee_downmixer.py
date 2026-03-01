@@ -1,12 +1,20 @@
 # -*- coding: utf-8 -*-
 """Скрипт даунмикса аудио в стерео (Stereo 2.0) через DEE/deew."""
 
-    # Std
+from app.core.settings_manager import SettingsManager
+from app.core.constants import (
+    AUDIO_EXTENSIONS,
+    VIDEO_CONTAINERS,
+    ScriptCategory,
+    ScriptMetadata,
+)
+
+# Std
 import logging
 from pathlib import Path
 from typing import Any
 
-    # Local
+# Local
 from app.core.abstract_script import AbstractScript, SettingField, SettingType
 from app.core.output_resolver import OutputResolver
 from app.infrastructure.deew_runner import DeewRunner
@@ -14,11 +22,8 @@ from app.infrastructure.deew_runner import DeewRunner
 logger = logging.getLogger(__name__)
 
 
-from app.core.constants import AUDIO_EXTENSIONS, VIDEO_EXTENSIONS
-from app.core.settings_manager import SettingsManager
-
 class AudioDeeDownmixerScript(AbstractScript):
-    """Скрипт для даунмикса многоканального аудио в Stereo (Dolby Digital Plus / DD)."""
+    """Скрипт для даунмикса многоканального аудио в Stereo (Dolby Digital Plus / DD)."""  # noqa: E501
 
     def __init__(self):
         """Инициализация скрипта."""
@@ -33,15 +38,17 @@ class AudioDeeDownmixerScript(AbstractScript):
     @property
     def category(self) -> str:
         """Категория скрипта."""
-        return "Аудио"
+        return ScriptCategory.AUDIO
 
     @property
     def name(self) -> str:
-        return "Даунмикс в Stereo"
+        """Отображаемое имя скрипта."""
+        return ScriptMetadata.AUDIO_DOWNMIX_NAME
 
     @property
     def description(self) -> str:
-        return "Даунмикс 5.1/7.1 в Stereo 2.0 (DDP/DD) через Dolby Encoding Engine"
+        """Описание скрипта."""
+        return ScriptMetadata.AUDIO_DOWNMIX_DESC
 
     @property
     def icon_name(self) -> str:
@@ -50,7 +57,7 @@ class AudioDeeDownmixerScript(AbstractScript):
     @property
     def file_extensions(self) -> list[str]:
         """Допустимые расширения файлов."""
-        return list(AUDIO_EXTENSIONS) + list(VIDEO_EXTENSIONS)
+        return list(AUDIO_EXTENSIONS | VIDEO_CONTAINERS)
 
     @property
     def settings_schema(self) -> list[SettingField]:
@@ -66,7 +73,16 @@ class AudioDeeDownmixerScript(AbstractScript):
                 key="bitrate",
                 label="Битрейт (kbps)",
                 setting_type=SettingType.COMBO,
-                options=["128", "192", "224", "256", "320", "384", "448", "640"],
+                options=[
+                    "128",
+                    "192",
+                    "224",
+                    "256",
+                    "320",
+                    "384",
+                    "448",
+                    "640",
+                ],
                 default="256",
             ),
             SettingField(
@@ -84,47 +100,71 @@ class AudioDeeDownmixerScript(AbstractScript):
         output_path: str | None = None,
     ) -> list[str]:
         """Выполнить даунмикс для одного файла."""
-        raw_format = settings.get("format", "Dolby Digital Plus (E-AC3)")
-        if "Plus" in raw_format or "E-AC3" in raw_format or "ddp" in raw_format.lower():
-            output_format = "ddp"
-            output_ext = ".eac3"
-        else:
-            output_format = "dd"
-            output_ext = ".ac3"
-        
-        bitrate = settings.get("bitrate", "192")
-        delete_source = settings.get("delete_source", False)
-        overwrite = SettingsManager().overwrite_existing
-
         try:
-            target_dir = self._resolver.resolve(file_path, output_path)
-            actual_output_name = f"{file_path.stem}{output_ext}"
-            target_file_path = self._get_safe_output_path(
-                file_path, target_dir / actual_output_name
+            target_file_path, output_format = self._prepare_downmix_target(
+                file_path, settings, output_path
             )
-
-            if target_file_path.exists() and not overwrite:
-                msg = f"⏭ Пропущен (существует): {target_file_path.name}"
-                logger.info("[%s] %s", self.name, msg)
-                return [msg]
+            if target_file_path is None:
+                return ["⏭ ПРОПУСК (файл уже существует)"]
 
             success = self._runner.run(
                 input_path=file_path,
                 output_path=target_file_path,
-                bitrate=bitrate,
+                bitrate=settings.get("bitrate", "192"),
                 output_format=output_format,
-                channels=2
+                channels=2,
             )
 
             results = []
             if success:
-                results.append(f"✅ Успешно: {file_path.name} -> {target_file_path.name}")
-                if delete_source:
+                results.append(
+                    f"✅ УСПЕХ: {file_path.name} -> {target_file_path.name}"
+                )
+                if settings.get("delete_source", False):
                     self._delete_source(file_path, results)
             else:
-                results.append(f"❌ Ошибка DEE: {file_path.name}")
+                if self.is_cancelled:
+                    self._cleanup_if_cancelled(target_file_path)
+                    results.append(f"⚠ Отменено: {target_file_path.name}")
+                else:
+                    results.append(f"❌ ОШИБКА DEE: {file_path.name}")
             return results
 
         except Exception as e:
             logger.exception("Ошибка при даунмиксе '%s'", file_path.name)
-            return [f"❌ Ошибка: {file_path.name} ({e})"]
+            return [f"❌ ОШИБКА: {file_path.name} ({e})"]
+
+    def _prepare_downmix_target(
+        self,
+        file_path: Path,
+        settings: dict[str, Any],
+        output_path: str | None,
+    ) -> tuple[Path | None, str]:
+        """Определить пути и формат для даунмикса."""
+        raw_format = settings.get("format", "Dolby Digital Plus (E-AC3)")
+        is_eac3 = (
+            "Plus" in raw_format
+            or "E-AC3" in raw_format
+            or "ddp" in raw_format.lower()
+        )
+        output_format = "ddp" if is_eac3 else "dd"
+        output_ext = ".eac3" if is_eac3 else ".ac3"
+
+        target_dir = self._resolver.resolve(file_path, output_path)
+        actual_output_name = f"{file_path.stem}{output_ext}"
+        target_file_path = self._get_safe_output_path(
+            file_path, target_dir / actual_output_name
+        )
+
+        if (
+            target_file_path.exists()
+            and not SettingsManager().overwrite_existing
+        ):
+            logger.info(
+                "[%s] ПРОПУСК (существует): %s",
+                self.name,
+                target_file_path.name,
+            )
+            return None, ""
+
+        return target_file_path, output_format

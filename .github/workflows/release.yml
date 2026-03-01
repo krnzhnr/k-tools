@@ -11,6 +11,9 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
 
     steps:
     - name: Checkout Repository
@@ -29,6 +32,10 @@ jobs:
         pip install -r requirements.txt
         pip install pyinstaller 
 
+    - name: Run Tests
+      run: |
+        pytest
+
     - name: Run Build Script
       env:
         CI_VERSION: ${{ github.ref_name }}
@@ -46,7 +53,6 @@ jobs:
 
     - name: Extract Changelog Notes
       id: extract_changelog
-      shell: bash
       run: |
         VERSION=$(echo "${{ github.ref_name }}" | sed 's/^v//')
         awk -v ver="$VERSION" '

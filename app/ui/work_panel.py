@@ -18,11 +18,9 @@ from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
-    QLabel,
 )
 from qfluentwidgets import (
     BodyLabel,
-    CaptionLabel,
     CardWidget,
     CheckBox,
     ComboBox,
@@ -48,10 +46,9 @@ from app.core.settings_manager import SettingsManager
 from app.ui.file_list_widget import FileListWidget
 from app.ui.muxing_table_widget import MuxingTableWidget
 from app.ui.track_list_widget import TrackListWidget
-from app.ui.stream_replace_widget import (
-    StreamReplaceWidget,
-)
+from app.ui.stream_replace_widget import StreamReplaceWidget
 from app.ui.track_extract_widget import TrackExtractWidget
+from app.ui.elided_label import ElidedLabel
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +78,11 @@ class TaskRunnable(QRunnable):
 
     def run(self) -> None:
         """Выполнение задачи."""
+        if getattr(self.script, "is_cancelled", False):
+            msg = f"⚠ Отменено: {self.file_path.name}"
+            self.signals.finished.emit([msg], self.file_path)
+            return
+
         try:
             results = self.script.execute_single(
                 self.file_path,
@@ -136,18 +138,33 @@ class ScriptWorker(QThread):
         self._settings = settings
         self._output_path = output_path
 
+        # Очищаем и инициализируем зарезервированные пути перед новым пакетом
+        if hasattr(self._script, "prepare_batch"):
+            self._script.prepare_batch(self._files)
+
+    def cancel(self) -> None:
+        """Отмена выполнения воркера."""
+        from app.core.process_manager import ProcessManager
+
+        if hasattr(self._script, "cancel"):
+            self._script.cancel()
+
+        ProcessManager().cancel_all()
+        logger.info("Воркер получил команду на остановку работы.")
+
     def run(self) -> None:
         """Выполнение скрипта в рабочем потоке."""
         try:
             # Проверка настроек параллелизма
             from app.core.settings_manager import SettingsManager
+
             mgr = SettingsManager()
             max_parallel = mgr.max_parallel_tasks
-            
+
             # Если скрипт поддерживает параллелизм и файлов больше одного
             if (
-                self._script.supports_parallel 
-                and max_parallel > 1 
+                self._script.supports_parallel
+                and max_parallel > 1
                 and len(self._files) > 1
             ):
                 self._run_parallel(max_parallel)
@@ -175,14 +192,15 @@ class ScriptWorker(QThread):
         total = len(self._files)
         completed = 0
         all_results: list[str] = []
-        
+
         # Используем локальный пул для изоляции и чистого завершения
         pool = QThreadPool()
         pool.setMaxThreadCount(max_workers)
-        
+
         logger.info(
             "Запуск параллельной обработки: воркеров=%d, файлов=%d",
-            max_workers, total
+            max_workers,
+            total,
         )
 
         mutex = QMutex()
@@ -193,7 +211,7 @@ class ScriptWorker(QThread):
             try:
                 completed += 1
                 all_results.extend(res)
-                
+
                 # Сообщаем о прогрессе в UI
                 last_msg = res[-1] if res else ""
                 self.progress.emit(completed, total, last_msg)
@@ -202,22 +220,19 @@ class ScriptWorker(QThread):
 
         for file_path in self._files:
             runnable = TaskRunnable(
-                self._script,
-                file_path,
-                self._settings,
-                self._output_path
+                self._script, file_path, self._settings, self._output_path
             )
-            # ВАЖНО: Используем DirectConnection, так как поток воркера 
+            # ВАЖНО: Используем DirectConnection, так как поток воркера
             # блокируется waitForDone и не имеет цикла событий.
             runnable.signals.finished.connect(
-                on_task_finished, 
-                Qt.ConnectionType.DirectConnection
+                on_task_finished,
+                Qt.ConnectionType.DirectConnection,  # type: ignore[call-arg]
             )
             pool.start(runnable)
 
         # Ждем завершения всех задач в пуле
         pool.waitForDone()
-        
+
         self.finished.emit(all_results)
 
     def _on_progress(
@@ -260,10 +275,9 @@ class ScriptPage(QWidget):
         self._settings_rows: dict[str, QWidget] = {}
         self._worker: ScriptWorker | None = None
         self._track_widget: TrackListWidget | None = None
-        self._stream_replace_widget: (
-            StreamReplaceWidget | None
-        ) = None
+        self._stream_replace_widget: StreamReplaceWidget | None = None
         self._track_extract_widget: TrackExtractWidget | None = None
+        self._file_list: Any = None
         self._settings_manager = SettingsManager()
 
         self._init_ui()
@@ -272,7 +286,7 @@ class ScriptPage(QWidget):
             script.name,
         )
 
-    def showEvent(self, event) -> None:
+    def showEvent(self, event: Any) -> None:
         """Событие отображения страницы."""
         super().showEvent(event)
         self._update_path_placeholder()
@@ -286,14 +300,11 @@ class ScriptPage(QWidget):
         scroll = SmoothScrollArea(self)
         scroll.setWidgetResizable(True)
         scroll.setStyleSheet(
-            "QScrollArea { background: transparent; "
-            "border: none; }"
+            "QScrollArea { background: transparent; " "border: none; }"
         )
 
         container = QWidget()
-        container.setStyleSheet(
-            "background: transparent;"
-        )
+        container.setStyleSheet("background: transparent;")
         layout = QVBoxLayout(container)
         layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(16)
@@ -341,9 +352,7 @@ class ScriptPage(QWidget):
         card_layout.setContentsMargins(16, 12, 16, 12)
         card_layout.setSpacing(10)
 
-        settings_title = StrongBodyLabel(
-            "Настройки", settings_card
-        )
+        settings_title = StrongBodyLabel("Настройки", settings_card)
         card_layout.addWidget(settings_title)
 
         for field in self._script.settings_schema:
@@ -351,9 +360,7 @@ class ScriptPage(QWidget):
             row_layout = QHBoxLayout(row_widget)
             row_layout.setContentsMargins(0, 0, 0, 0)
 
-            widget = self._create_setting_widget(
-                field, settings_card
-            )
+            widget = self._create_setting_widget(field, settings_card)
             self._settings_widgets[field.key] = widget
 
             # Подключение сигналов для динамической видимости
@@ -369,9 +376,7 @@ class ScriptPage(QWidget):
             if field.setting_type == SettingType.CHECKBOX:
                 row_layout.addWidget(widget)
             else:
-                label = BodyLabel(
-                    field.label, settings_card
-                )
+                label = BodyLabel(field.label, settings_card)
                 label.setMinimumWidth(150)
                 row_layout.addWidget(label)
                 row_layout.addWidget(widget)
@@ -383,102 +388,95 @@ class ScriptPage(QWidget):
         layout.addWidget(settings_card)
 
     def _create_setting_widget(
-        self,
-        field: SettingField,
-        parent: QWidget,
+        self, field: SettingField, parent: QWidget
     ) -> QWidget:
-        """Создать виджет настройки по типу поля.
-
-        Args:
-            field: Описание поля настройки.
-            parent: Родительский виджет.
-
-        Returns:
-            Виджет настройки.
-        """
+        """Создать виджет настройки по типу поля."""
         if field.setting_type == SettingType.TEXT:
-            widget = LineEdit(parent)
-            
-            # Загрузка сохраненного значения
-            saved_val = SettingsManager().get_script_setting(
-                self._script.name, field.key, str(field.default)
-            )
-            widget.setText(str(saved_val))
-            widget.setPlaceholderText(field.label)
-            
-            # Сохранение при изменении
-            widget.textChanged.connect(
-                lambda text: SettingsManager().set_script_setting(
-                    self._script.name, field.key, text
-                )
-            )
-            # Логирование изменения текстового поля
-            widget.textChanged.connect(
-                lambda text: logger.info(
-                    "[%s] Настройка '%s' (%s) изменена пользователем: '%s'",
-                    self._script.name, field.label, field.key, text
-                )
-            )
-            return widget
-
+            return self._create_text_setting_widget(field, parent)
         if field.setting_type == SettingType.COMBO:
-            widget = ComboBox(parent)
-            widget.addItems(field.options)
-            
-            # Загрузка сохраненного значения
-            saved_val = SettingsManager().get_script_setting(
-                self._script.name, field.key, str(field.default)
-            )
-            if saved_val in field.options:
-                widget.setCurrentText(str(saved_val))
-            else:
-                widget.setCurrentText(str(field.default))
-            
-            # Сохранение при изменении
-            widget.currentTextChanged.connect(
-                lambda text: SettingsManager().set_script_setting(
-                    self._script.name, field.key, text
-                )
-            )
-            # Логирование изменения комбобокса
-            widget.currentTextChanged.connect(
-                lambda text: logger.info(
-                    "[%s] Настройка '%s' (%s) изменена пользователем на: '%s'",
-                    self._script.name, field.label, field.key, text
-                )
-            )
-            return widget
-
+            return self._create_combo_setting_widget(field, parent)
         if field.setting_type == SettingType.CHECKBOX:
-            widget = CheckBox(field.label, parent)
-            
-            # Загрузка сохраненного значения
-            saved_val = SettingsManager().get_script_setting(
-                self._script.name, field.key, bool(field.default)
-            )
-            # QSettings может вернуть строку "true"/"false" вместо bool в некоторых случаях, 
-            # но SettingsManager.get_settings(..., type=bool) обычно это обрабатывает.
-            # Здесь мы полагаемся на SettingsManager.
-            widget.setChecked(bool(saved_val))
-            
-            # Сохранение при изменении
-            widget.stateChanged.connect(
-                lambda state: SettingsManager().set_script_setting(
-                    self._script.name, field.key, bool(state)
-                )
-            )
-            # Логирование изменения чекбокса
-            widget.stateChanged.connect(
-                lambda state: logger.info(
-                    "[%s] Настройка '%s' (%s) изменена пользователем на: %s",
-                    self._script.name, field.label, field.key, "ВКЛ" if state else "ВЫКЛ"
-                )
-            )
-            return widget
+            return self._create_checkbox_setting_widget(field, parent)
 
-        # Fallback для неизвестных типов
         widget = LineEdit(parent)
         widget.setText(str(field.default))
+        return widget
+
+    def _create_text_setting_widget(
+        self, field: SettingField, parent: QWidget
+    ) -> LineEdit:
+        widget = LineEdit(parent)
+        saved_val = SettingsManager().get_script_setting(
+            self._script.name, field.key, str(field.default)
+        )
+        widget.setText(str(saved_val))
+        widget.setPlaceholderText(field.label)
+        widget.textChanged.connect(
+            lambda text: SettingsManager().set_script_setting(
+                self._script.name, field.key, text
+            )
+        )
+        widget.textChanged.connect(
+            lambda text: logger.info(
+                "[%s] Настройка '%s' (%s) изменена на: '%s'",
+                self._script.name,
+                field.label,
+                field.key,
+                text,
+            )
+        )
+        return widget
+
+    def _create_combo_setting_widget(
+        self, field: SettingField, parent: QWidget
+    ) -> ComboBox:
+        widget = ComboBox(parent)
+        widget.addItems(field.options)
+        saved_val = SettingsManager().get_script_setting(
+            self._script.name, field.key, str(field.default)
+        )
+        if saved_val in field.options:
+            widget.setCurrentText(str(saved_val))
+        else:
+            widget.setCurrentText(str(field.default))
+        widget.currentTextChanged.connect(
+            lambda text: SettingsManager().set_script_setting(
+                self._script.name, field.key, text
+            )
+        )
+        widget.currentTextChanged.connect(
+            lambda text: logger.info(
+                "[%s] Настройка '%s' (%s) изменена на: '%s'",
+                self._script.name,
+                field.label,
+                field.key,
+                text,
+            )
+        )
+        return widget
+
+    def _create_checkbox_setting_widget(
+        self, field: SettingField, parent: QWidget
+    ) -> CheckBox:
+        widget = CheckBox(field.label, parent)
+        saved_val = SettingsManager().get_script_setting(
+            self._script.name, field.key, bool(field.default)
+        )
+        widget.setChecked(bool(saved_val))
+        widget.stateChanged.connect(
+            lambda state: SettingsManager().set_script_setting(
+                self._script.name, field.key, bool(state)
+            )
+        )
+        widget.stateChanged.connect(
+            lambda state: logger.info(
+                "[%s] Настройка '%s' (%s) изменена на: %s",
+                self._script.name,
+                field.label,
+                field.key,
+                "ВКЛ" if state else "ВЫКЛ",
+            )
+        )
         return widget
 
     def _update_visibility(self) -> None:
@@ -500,120 +498,88 @@ class ScriptPage(QWidget):
                 row.setVisible(is_visible)
 
     def _add_file_list(self, layout: QVBoxLayout) -> None:
-        """Добавить секцию списка файлов.
-
-        Args:
-            layout: Родительский layout.
-        """
+        """Добавить секцию списка файлов."""
         files_label = StrongBodyLabel("Файлы", self)
         layout.addWidget(files_label)
 
-        if (
-            self._script.use_custom_widget
-            and isinstance(self._script.name, str)
-            and ("Подмена" in self._script.name or "Замена" in self._script.name)
+        script_name = str(self._script.name)
+        if self._script.use_custom_widget and (
+            "Подмена" in script_name or "Замена" in script_name
         ):
-            # Скрипт подмены потоков MKV
-            self._stream_replace_widget = (
-                StreamReplaceWidget(self)
-            )
-            self._file_list = (
-                self._stream_replace_widget
-            )
-            layout.addWidget(
-                self._stream_replace_widget,
-                stretch=1,
-            )
-            self._stream_replace_widget.filesChanged.connect(
-                self._update_path_placeholder
-            )
-            return
-        elif (
-            self._script.use_custom_widget
-            and isinstance(self._script.name, str)
-            and ("Муксер" in self._script.name or "Муксинг" in self._script.name)
+            self._create_stream_replace_widget(layout)
+        elif self._script.use_custom_widget and (
+            "Муксер" in script_name or "Муксинг" in script_name
         ):
-            self._file_list = MuxingTableWidget(self)
-            self._file_list.filesChanged.connect(
-                self._update_path_placeholder
-            )
-            layout.addWidget(self._file_list, stretch=1)
-            return
-        elif (
-            self._script.use_custom_widget
-            and isinstance(self._script.name, str)
-            and ("Массовое извлечение" in self._script.name or "Демуксинг" in self._script.name)
+            self._create_muxing_widget(layout)
+        elif self._script.use_custom_widget and (
+            "Массовое извлечение" in script_name or "Демуксинг" in script_name
         ):
-            self._track_extract_widget = TrackExtractWidget(self)
-            self._file_list = self._track_extract_widget
-            layout.addWidget(self._track_extract_widget, stretch=1)
-            self._track_extract_widget.filesChanged.connect(
-                self._update_path_placeholder
-            )
-            return
-        elif (
-            self._script.use_custom_widget
-            and isinstance(self._script.name, str)
-            and "поток" in self._script.name.lower()
-        ):
-            # Скрипт управления потоками MKV
-            self._file_list = FileListWidget(
-                allowed_extensions=(
-                    self._script.file_extensions
-                ),
-                context_name=self._script.name,
-                parent=self,
-            )
-            self._file_list.filesChanged.connect(
-                self._update_path_placeholder
-            )
-            layout.addWidget(self._file_list, stretch=1)
-
-            # Кнопка загрузки дорожек
-            self._load_tracks_btn = PrimaryPushButton(
-                FluentIcon.SYNC,
-                "Загрузить дорожки",
-                self,
-            )
-            self._load_tracks_btn.clicked.connect(
-                self._on_load_tracks_clicked
-            )
-            layout.addWidget(self._load_tracks_btn)
-
-            # Виджет-дерево дорожек
-            self._track_widget = TrackListWidget(self)
-            layout.addWidget(self._track_widget)
-
-            # При очистке списка файлов сбрасываем дерево дорожек
-            self._file_list.filesChanged.connect(
-                self._on_files_changed
-            )
-            return
+            self._create_track_extract_widget(layout)
+        elif self._script.use_custom_widget and "поток" in script_name.lower():
+            self._create_stream_manager_widget(layout)
         else:
-            self._file_list = FileListWidget(
-                allowed_extensions=(
-                    self._script.file_extensions
-                ),
-                context_name=self._script.name,
-                parent=self,
-            )
-            self._file_list.filesChanged.connect(
-                self._update_path_placeholder
-            )
+            self._create_generic_file_list(layout)
 
-        
+    def _create_stream_replace_widget(self, layout: QVBoxLayout) -> None:
+        self._stream_replace_widget = StreamReplaceWidget(self)
+        self._file_list = self._stream_replace_widget
+        layout.addWidget(self._stream_replace_widget, stretch=1)
+        self._stream_replace_widget.filesChanged.connect(
+            self._update_path_placeholder
+        )
+
+    def _create_muxing_widget(self, layout: QVBoxLayout) -> None:
+        self._file_list = MuxingTableWidget(self)
+        self._file_list.filesChanged.connect(self._update_path_placeholder)
+        layout.addWidget(self._file_list, stretch=1)
+
+    def _create_track_extract_widget(self, layout: QVBoxLayout) -> None:
+        self._track_extract_widget = TrackExtractWidget(self)
+        self._file_list = self._track_extract_widget
+        layout.addWidget(self._track_extract_widget, stretch=1)
+        self._track_extract_widget.filesChanged.connect(
+            self._update_path_placeholder
+        )
+
+    def _create_stream_manager_widget(self, layout: QVBoxLayout) -> None:
+        self._file_list = FileListWidget(
+            allowed_extensions=(self._script.file_extensions),
+            context_name=self._script.name,
+            parent=self,
+        )
+        self._file_list.filesChanged.connect(self._update_path_placeholder)
+        layout.addWidget(self._file_list, stretch=1)
+
+        self._load_tracks_btn = PrimaryPushButton(
+            FluentIcon.SYNC, "Загрузить дорожки", self
+        )
+        self._load_tracks_btn.clicked.connect(self._on_load_tracks_clicked)
+        layout.addWidget(self._load_tracks_btn)
+
+        self._track_widget = TrackListWidget(self)
+        layout.addWidget(self._track_widget)
+        self._file_list.filesChanged.connect(self._on_files_changed)
+
+    def _create_generic_file_list(self, layout: QVBoxLayout) -> None:
+        self._file_list = FileListWidget(
+            allowed_extensions=(self._script.file_extensions),
+            context_name=self._script.name,
+            parent=self,
+        )
+        self._file_list.filesChanged.connect(self._update_path_placeholder)
         layout.addWidget(self._file_list, stretch=1)
 
     def _on_files_changed(self) -> None:
         """Обработчик изменения списка файлов."""
-        if (
-            self._file_list is not None
-            and self._track_widget is not None
-        ):
+        if self._file_list is not None and self._track_widget is not None:
             # Синхронизируем дерево дорожек (удаляем ушедшие файлы)
-            self._track_widget.sync_with_files(
-                self._file_list.files
-            )
+            files = []
+            if hasattr(self._file_list, "files"):
+                files = self._file_list.files
+            elif hasattr(self._file_list, "get_file_paths"):
+                files = self._file_list.get_file_paths()
+
+            self._track_widget.sync_with_files(files)
 
     def _on_load_tracks_clicked(self) -> None:
         """Обработчик кнопки «Загрузить дорожки»."""
@@ -623,20 +589,18 @@ class ScriptPage(QWidget):
         if not paths:
             InfoBar.warning(
                 title="Нет файлов",
-                content=(
-                    "Сначала добавьте MKV-файлы"
-                ),
+                content=("Сначала добавьте MKV-файлы"),
                 parent=self,
                 position=InfoBarPosition.TOP,
                 duration=3000,
             )
             return
         logger.info(
-            "[Управление потоками] Загрузка "
-            "дорожек для %d файлов",
+            "[Управление потоками] Загрузка " "дорожек для %d файлов",
             len(paths),
         )
         self._track_widget.load_files(paths)
+
     def _add_log_area(self, layout: QVBoxLayout) -> None:
         """Добавить область лога выполнения.
 
@@ -654,22 +618,12 @@ class ScriptPage(QWidget):
         )
         layout.addWidget(self._log_area)
 
-    def _add_bottom_bar(
-        self, layout: QVBoxLayout
-    ) -> None:
-        """Добавить прогресс-бар и кнопку выполнения.
-
-        Args:
-            layout: Родительский layout.
-        """
-        # Используем IndeterminateProgressBar для "бегающей" полоски, если это нужно.
-        # Но так как нам нужно переключаться между режимами, оставим ProgressBar 
-        # и попробуем заставить его работать, либо добавим второй виджет.
+    def _add_bottom_bar(self, layout: QVBoxLayout) -> None:
+        """Добавить прогресс-бар и кнопку выполнения."""
         self._progress = ProgressBar(self)
         self._progress.setVisible(True)
         layout.addWidget(self._progress)
 
-        # Добавим бегающую полоску отдельно для режима выполнения
         try:
             self._indeterminate_progress = IndeterminateProgressBar(self)
             self._indeterminate_progress.setVisible(False)
@@ -677,21 +631,22 @@ class ScriptPage(QWidget):
         except (NameError, ImportError):
             self._indeterminate_progress = None
 
-        self._status_label = CaptionLabel("Готов к работе", self)
+        self._status_label = ElidedLabel("Готов к работе", self)
+        self._status_label.setElideMode(Qt.TextElideMode.ElideRight)
         self._status_label.setVisible(True)
         layout.addWidget(self._status_label)
 
         self._execute_btn = PrimaryPushButton(
-            FluentIcon.PLAY,
-            "Выполнить",
-            self,
+            FluentIcon.PLAY, "Выполнить", self
         )
         self._execute_btn.setMinimumHeight(38)
-        self._execute_btn.clicked.connect(
-            self._on_execute_clicked
-        )
+        self._execute_btn.clicked.connect(self._on_execute_clicked)
 
-        # Выбор пути сохранения
+        self._add_output_path_selector(layout)
+        layout.addWidget(self._execute_btn)
+
+    def _add_output_path_selector(self, layout: QVBoxLayout) -> None:
+        """Добавить селектор пути сохранения."""
         path_label = StrongBodyLabel("Путь сохранения", self)
         layout.addSpacing(10)
         layout.addWidget(path_label)
@@ -704,29 +659,25 @@ class ScriptPage(QWidget):
         self._output_path_edit.textChanged.connect(
             lambda t: logger.info(
                 "[%s] Ручной путь сохранения изменен на: '%s'",
-                self._script.name, t
+                self._script.name,
+                t,
             )
         )
         path_layout.addWidget(self._output_path_edit)
 
         self._browse_output_btn = PrimaryPushButton(
-            FluentIcon.FOLDER,
-            "Обзор",
-            self,
+            FluentIcon.FOLDER, "Обзор", self
         )
         self._browse_output_btn.setFixedWidth(100)
-        self._browse_output_btn.clicked.connect(
-            self._on_browse_output_clicked
-        )
+        self._browse_output_btn.clicked.connect(self._on_browse_output_clicked)
         path_layout.addWidget(self._browse_output_btn)
 
         layout.addLayout(path_layout)
-        layout.addWidget(self._execute_btn)
 
     def _on_browse_output_clicked(self) -> None:
         """Обработчик нажатия кнопки выбора папки."""
         from PyQt6.QtWidgets import QFileDialog
-        
+
         folder = QFileDialog.getExistingDirectory(
             self,
             "Выберите папку для сохранения",
@@ -735,14 +686,13 @@ class ScriptPage(QWidget):
         if folder:
             self._output_path_edit.setText(folder)
             logger.info(
-                "[%s] Пользователь выбрал папку: %s",
-                self._script.name, folder
+                "[%s] Пользователь выбрал папку: %s", self._script.name, folder
             )
 
     def _update_path_placeholder(self) -> None:
         """Обновить плейсхолдер пути сохранения на базе глобальных настроек."""
         files = self._file_list.get_file_paths() if self._file_list else []
-        
+
         # 1. Определяем базовую директорию
         if files:
             # Берем родительскую папку первого файла
@@ -756,7 +706,7 @@ class ScriptPage(QWidget):
             target_dir = base_dir / subfolder
         else:
             target_dir = base_dir
-        
+
         # 3. Формируем текст (абсолютный путь)
         placeholder = str(target_dir)
         self._output_path_edit.setPlaceholderText(placeholder)
@@ -790,7 +740,18 @@ class ScriptPage(QWidget):
         return settings
 
     def _on_execute_clicked(self) -> None:
-        """Обработчик нажатия кнопки «Выполнить»."""
+        """Обработчик нажатия кнопки «Выполнить/Остановить»."""
+        if self._worker is not None and self._worker.isRunning():
+            logger.info("Пользователь нажал 'Остановить'")
+            self._worker.cancel()
+            self._execute_btn.setEnabled(False)
+            self._status_label.setText("Остановка...")
+            return
+
+        # Сбросим флаг отмены у скрипта перед новым запуском
+        if hasattr(self._script, "_is_cancelled"):
+            self._script._is_cancelled = False
+
         files = self._file_list.get_file_paths()
 
         if not files:
@@ -803,82 +764,15 @@ class ScriptPage(QWidget):
             )
             return
 
-        self._log_area.clear()
-        self._execute_btn.setEnabled(False)
-        
-        if self._indeterminate_progress:
-            self._progress.setVisible(False)
-            self._indeterminate_progress.setVisible(True)
-            self._indeterminate_progress.start()
-        else:
-            self._progress.setVisible(True)
-            self._progress.setRange(0, 0)
-            
-        self._status_label.setText("Запуск...")
-        self._status_label.setVisible(True)
-
+        self._prepare_execution_ui()
         settings = self._get_current_settings()
-
-        # Инъекция выбранных дорожек для скрипта потоков
-        if self._track_widget is not None:
-            per_file = (
-                self._track_widget
-                .get_selected_tracks_per_file()
-            )
-            settings["selected_tracks_per_file"] = (
-                per_file
-            )
-            logger.info(
-                "[Управление потоками] "
-                "Выбранные дорожки по файлам: %s",
-                per_file,
-            )
-            
-        # Инъекция выбранных дорожек для скрипта массового извлечения
-        if getattr(self, "_track_extract_widget", None) is not None:
-            per_file = (
-                self._track_extract_widget
-                .get_selected_tracks_per_file()
-            )
-            settings["selected_tracks_per_file"] = per_file
-            logger.info(
-                "[Демуксинг] "
-                "Выбранные дорожки по файлам: %s",
-                per_file,
-            )
-
-        # Инъекция данных для скрипта подмены
-        if self._stream_replace_widget is not None:
-            container = (
-                self._stream_replace_widget
-                .get_container_path()
-            )
-            replacements = (
-                self._stream_replace_widget
-                .get_replacements()
-            )
-            if container:
-                settings["container_path"] = (
-                    str(container)
-                )
-            settings["replacements"] = {
-                str(k): {"path": str(v["path"]), "src_id": v["src_id"]}
-                for k, v in replacements.items()
-            }
-            logger.info(
-                "[Подмена потоков] "
-                "Контейнер: '%s', замен: %d",
-                container.name if container
-                else "не указан",
-                len(replacements),
-            )
+        self._inject_script_settings(settings)
 
         logger.info(
-            "Пользователь нажал кнопку 'Выполнить' для скрипта '%s'. "
-            "Количество файлов в очереди: %d. Текущие настройки: %s",
+            "Пользователь нажал 'Выполнить' для скрипта '%s'. Файлов: %d. Настройки: %s",  # noqa: E501
             self._script.name,
             len(files),
-            settings
+            settings,
         )
 
         self._worker = ScriptWorker(
@@ -888,16 +782,56 @@ class ScriptPage(QWidget):
             output_path=self._output_path_edit.text(),
             parent=self,
         )
-        self._worker.progress.connect(
-            self._on_progress
-        )
-        self._worker.finished.connect(
-            self._on_finished
-        )
-        self._worker.error.connect(
-            self._on_error
-        )
+        self._worker.progress.connect(self._on_progress)
+        self._worker.finished.connect(self._on_finished)
+        self._worker.error.connect(self._on_error)
         self._worker.start()
+
+    def _prepare_execution_ui(self) -> None:
+        self._log_area.clear()
+        self._execute_btn.setText("Остановить")
+        self._execute_btn.setIcon(FluentIcon.CLOSE)
+
+        if getattr(self, "_indeterminate_progress", None):
+            self._progress.setVisible(False)
+            self._indeterminate_progress.setVisible(True)
+            self._indeterminate_progress.start()
+        else:
+            self._progress.setVisible(True)
+            self._progress.setRange(0, 0)
+
+        self._status_label.setText("Запуск...")
+        self._status_label.setVisible(True)
+
+    def _inject_script_settings(self, settings: dict[str, Any]) -> None:
+        if self._track_widget is not None:
+            per_file = self._track_widget.get_selected_tracks_per_file()
+            settings["selected_tracks_per_file"] = per_file
+            logger.info(
+                "[Управление потоками] Выбранные дорожки: %s", per_file
+            )
+
+        if self._track_extract_widget is not None:
+            per_file = (
+                self._track_extract_widget.get_selected_tracks_per_file()
+            )
+            settings["selected_tracks_per_file"] = per_file
+            logger.info("[Демуксинг] Выбранные дорожки: %s", per_file)
+
+        if self._stream_replace_widget is not None:
+            container = self._stream_replace_widget.get_container_path()
+            replacements = self._stream_replace_widget.get_replacements()
+            if container:
+                settings["container_path"] = str(container)
+            settings["replacements"] = {
+                str(k): {"path": str(v["path"]), "src_id": v["src_id"]}
+                for k, v in replacements.items()
+            }
+            logger.info(
+                "[Подмена потоков] Контейнер: '%s', замен: %d",
+                container.name if container else "None",
+                len(replacements),
+            )
 
     def _on_progress(
         self,
@@ -910,72 +844,70 @@ class ScriptPage(QWidget):
             return
 
         percent = int((current / total) * 100)
-        
+
         # Переключение из режима ожидания (indeterminate) в режим прогресса
         # Делаем это только когда обработан хотя бы один файл (current > 0)
         # Если файлов всего один, оставляем бегущую полоску до самого конца
-        if (self._indeterminate_progress and 
-            self._indeterminate_progress.isVisible() and 
-            current > 0 and 
-            total > 1):
+        if (
+            self._indeterminate_progress
+            and self._indeterminate_progress.isVisible()
+            and current > 0
+            and total > 1
+        ):
             self._indeterminate_progress.stop()
             self._indeterminate_progress.setVisible(False)
             self._progress.setVisible(True)
-        
+
         if self._progress.maximum() == 0:
             self._progress.setRange(0, 100)
-            
+
         self._progress.setValue(percent)
-            
-        self._status_label.setText(
-            f"{current}/{total}: {message}"
-        )
+
+        self._status_label.setText(f"{current}/{total}: {message}")
 
     def _on_finished(self, results: list[str]) -> None:
-        """Обработка завершения выполнения.
-
-        Args:
-            results: Список строк-результатов.
-        """
+        """Обработка завершения выполнения."""
+        self._execute_btn.setText("Выполнить")
+        self._execute_btn.setIcon(FluentIcon.PLAY)
         self._execute_btn.setEnabled(True)
-        if self._indeterminate_progress:
+        if getattr(self, "_indeterminate_progress", None):
             self._indeterminate_progress.setVisible(False)
             self._indeterminate_progress.stop()
-        
+
         self._progress.setRange(0, 100)
         self._progress.setVisible(True)
         self._progress.setValue(100)
         self._log_area.setPlainText("\n".join(results))
 
-        success_count = len([r for r in results if r.startswith("✅")])
-        skipped_count = len([r for r in results if r.startswith("⏭")])
-        error_count = len([r for r in results if r.startswith("❌")])
-        total = len(results)
+        success = sum(1 for r in results if r.startswith("✅"))
+        skipped = sum(1 for r in results if r.startswith("⏭"))
+        errors = sum(1 for r in results if r.startswith("❌"))
 
-        # Подготовка сообщения
+        self._show_finished_notification(success, skipped, errors)
+
+    def _show_finished_notification(
+        self, success: int, skipped: int, errors: int
+    ) -> None:
         stats = []
-        if success_count:
-            stats.append(f"Успешно: {success_count}")
-        if skipped_count:
-            stats.append(f"Пропущено: {skipped_count}")
-        if error_count:
-            stats.append(f"Ошибок: {error_count}")
-        
+        if success:
+            stats.append(f"Успешно: {success}")
+        if skipped:
+            stats.append(f"Пропущено: {skipped}")
+        if errors:
+            stats.append(f"Ошибок: {errors}")
+
         content = ", ".join(stats) if stats else "Результатов нет"
 
-        # Выбор типа уведомления и заголовка
-        if error_count > 0:
-            show_info = InfoBar.error
-            title = "Завершено с ошибками"
-        elif success_count == 0 and skipped_count > 0:
-            show_info = InfoBar.warning
-            title = "Обработка пропущена"
-        elif skipped_count > 0:
-            show_info = InfoBar.warning
-            title = "Выполнено частично"
+        if self._script.is_cancelled:
+            show_info, title = InfoBar.warning, "Операция прервана"
+        elif errors > 0:
+            show_info, title = InfoBar.error, "Завершено с ошибками"
+        elif success == 0 and skipped > 0:
+            show_info, title = InfoBar.warning, "Обработка пропущена"
+        elif skipped > 0:
+            show_info, title = InfoBar.warning, "Выполнено частично"
         else:
-            show_info = InfoBar.success
-            title = "Выполнено"
+            show_info, title = InfoBar.success, "Выполнено"
 
         show_info(
             title=title,
@@ -984,13 +916,12 @@ class ScriptPage(QWidget):
             position=InfoBarPosition.TOP,
             duration=5000,
         )
-
         logger.info(
-            "Скрипт '%s' завершён: %d успешно, %d пропущено, %d ошибок",
+            "Скрипт '%s' завершён: %d успехов, %d пропусков, %d ошибок",
             self._script.name,
-            success_count,
-            skipped_count,
-            error_count,
+            success,
+            skipped,
+            errors,
         )
 
     def _on_error(self, error_text: str) -> None:
@@ -999,11 +930,13 @@ class ScriptPage(QWidget):
         Args:
             error_text: Текст ошибки.
         """
+        self._execute_btn.setText("Выполнить")
+        self._execute_btn.setIcon(FluentIcon.PLAY)
         self._execute_btn.setEnabled(True)
-        if self._indeterminate_progress:
+        if getattr(self, "_indeterminate_progress", None):
             self._indeterminate_progress.setVisible(False)
             self._indeterminate_progress.stop()
-            
+
         self._progress.setRange(0, 100)
         self._progress.setVisible(True)
         self._status_label.setVisible(True)

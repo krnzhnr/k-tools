@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """Скрипт конвертации контейнера видеофайлов."""
 
+from app.core.constants import VIDEO_CONTAINERS, ScriptCategory, ScriptMetadata
 import logging
 from pathlib import Path
 from typing import Any
 
 from app.core.abstract_script import (
     AbstractScript,
-    ProgressCallback,
     SettingField,
     SettingType,
 )
@@ -24,8 +24,6 @@ FORMAT_MAP: dict[str, str] = {
 }
 
 
-from app.core.constants import VIDEO_EXTENSIONS
-
 class ContainerConverterScript(AbstractScript):
     """Конвертация контейнера видео без перекодирования.
 
@@ -37,27 +35,22 @@ class ContainerConverterScript(AbstractScript):
         """Инициализация скрипта конвертации контейнера."""
         self._ffmpeg = FFmpegRunner()
         self._resolver = OutputResolver()
-        logger.info(
-            "Скрипт конвертации контейнера создан"
-        )
+        logger.info("Скрипт конвертации контейнера создан")
 
     @property
     def category(self) -> str:
         """Категория скрипта."""
-        return "Видео"
+        return ScriptCategory.VIDEO
 
     @property
     def name(self) -> str:
         """Отображаемое имя скрипта."""
-        return "Ремуксинг"
+        return ScriptMetadata.CONTAINER_CONV_NAME
 
     @property
     def description(self) -> str:
         """Описание скрипта."""
-        return (
-            "Перемещает видео/аудио потоки в другой "
-            "контейнер без перекодирования"
-        )
+        return ScriptMetadata.CONTAINER_CONV_DESC
 
     @property
     def icon_name(self) -> str:
@@ -67,7 +60,7 @@ class ContainerConverterScript(AbstractScript):
     @property
     def file_extensions(self) -> list[str]:
         """Допустимые расширения файлов."""
-        return list(VIDEO_EXTENSIONS)
+        return list(VIDEO_CONTAINERS)
 
     @property
     def settings_schema(self) -> list[SettingField]:
@@ -97,27 +90,43 @@ class ContainerConverterScript(AbstractScript):
         """Конвертировать контейнер одного файла."""
         target_key = settings.get("target_format", "MP4")
         target_ext = FORMAT_MAP.get(target_key, ".mp4")
-        delete_original = settings.get("delete_original", False)
-        overwrite = SettingsManager().overwrite_existing
-        
-        results: list[str] = []
 
         if file_path.suffix.lower() == target_ext:
-            msg = f"⏭ Пропущен (уже {target_key}): {file_path.name}"
-            logger.info("Файл '%s' уже имеет расширение %s, пропуск", file_path.name, target_ext)
-            return [msg]
+            logger.info(
+                "Файл '%s' уже имеет расширение %s, пропуск",
+                file_path.name,
+                target_ext,
+            )
+            return [f"⏭ ПРОПУСК (уже {target_key}): {file_path.name}"]
 
         target_dir = self._resolver.resolve(file_path, output_path)
-        output_file_path = target_dir / file_path.with_suffix(target_ext).name
-        
-        # Безопасное получение пути
-        output_file_path = self._get_safe_output_path(file_path, output_file_path)
+        output_file_path = self._get_safe_output_path(
+            file_path, target_dir / file_path.with_suffix(target_ext).name
+        )
+        overwrite = SettingsManager().overwrite_existing
 
         if output_file_path.exists() and not overwrite:
-            msg = f"⏭ Пропущен (файл существует): {output_file_path.name}"
-            logger.info("Пропуск: выходной файл '%s' уже существует", output_file_path.name)
-            return [msg]
+            logger.info(
+                "Пропуск: выходной файл '%s' уже существует",
+                output_file_path.name,
+            )
+            return [f"⏭ ПРОПУСК (файл существует): {output_file_path.name}"]
 
+        return self._run_conversion(
+            file_path,
+            output_file_path,
+            settings.get("delete_original", False),
+            overwrite,
+        )
+
+    def _run_conversion(
+        self,
+        file_path: Path,
+        output_file_path: Path,
+        delete_original: bool,
+        overwrite: bool,
+    ) -> list[str]:
+        """Вызов FFmpeg для смены контейнера."""
         logger.debug("Старт FFmpeg для смены контейнера (copy)")
         success = self._ffmpeg.run(
             input_path=file_path,
@@ -126,14 +135,27 @@ class ContainerConverterScript(AbstractScript):
             overwrite=overwrite,
         )
 
+        results: list[str] = []
         if success:
             msg = f"✅ Конвертировано: {output_file_path.name}"
-            logger.info("Успешная смена контейнера: '%s'", output_file_path.name)
+            logger.info(
+                "Успешная смена контейнера: '%s'", output_file_path.name
+            )
             if delete_original:
                 self._delete_source(file_path, results)
         else:
-            msg = f"❌ Ошибка: {file_path.name}"
-            logger.error("Ошибка при смене контейнера для файла: '%s'", file_path.name)
+            if self.is_cancelled:
+                self._cleanup_if_cancelled(output_file_path)
+                msg = f"⚠ Отменено: {output_file_path.name}"
+                logger.info(
+                    "Отмена смены контейнера: '%s'", output_file_path.name
+                )
+            else:
+                msg = f"❌ ОШИБКА: {file_path.name}"
+                logger.error(
+                    "Ошибка при смене контейнера для файла: '%s'",
+                    file_path.name,
+                )
 
         results.insert(0, msg)
         return results

@@ -5,12 +5,24 @@ from pathlib import Path
 # Добавляем корень проекта в sys.path для импорта модулей приложения
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from app.core.singleton import SingletonMeta
+
+
 @pytest.fixture
 def temp_dir(tmp_path):
     """Фикстура для создания временной директории."""
     return tmp_path
 
+
 @pytest.fixture
 def mock_path_exists(mocker):
     """Фикстура для мока Path.exists."""
     return mocker.patch("pathlib.Path.exists", return_value=True)
+
+
+@pytest.fixture(autouse=True)
+def reset_singletons():
+    """Сброс всех Singleton-экземпляров перед каждым тестом."""
+    SingletonMeta._clear_instances()
+    yield
+    SingletonMeta._clear_instances()

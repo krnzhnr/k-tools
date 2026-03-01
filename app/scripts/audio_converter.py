@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """Скрипт универсальной конвертации аудиофайлов."""
 
+from app.core.constants import AUDIO_EXTENSIONS, ScriptCategory, ScriptMetadata
 import logging
 from pathlib import Path
 from typing import Any
 
 from app.core.abstract_script import (
     AbstractScript,
-    ProgressCallback,
     SettingField,
     SettingType,
 )
@@ -39,14 +39,21 @@ AUDIO_FORMATS = {
 
 # Группы форматов для видимости настроек
 LOSSY_FORMATS = [
-    "MP3", "AAC", "QAAC", "OGG", "AC3", "EAC3", "DTS", "WMA", "OPUS", "ADPCM"
+    "MP3",
+    "AAC",
+    "QAAC",
+    "OGG",
+    "AC3",
+    "EAC3",
+    "DTS",
+    "WMA",
+    "OPUS",
+    "ADPCM",
 ]
 # Форматы, для которых нужно отображать выбор битрейта (QAAC использует TVBR)
 BITRATE_FORMATS = [f for f in LOSSY_FORMATS if f != "QAAC"]
 LOSSLESS_COMPRESSED = ["FLAC", "WavPack"]
 
-
-from app.core.constants import AUDIO_EXTENSIONS
 
 class AudioConverterScript(AbstractScript):
     """Универсальная конвертация аудиофайлов.
@@ -66,20 +73,17 @@ class AudioConverterScript(AbstractScript):
     @property
     def category(self) -> str:
         """Категория скрипта."""
-        return "Аудио"
+        return ScriptCategory.AUDIO
 
     @property
     def name(self) -> str:
         """Отображаемое имя скрипта."""
-        return "Транскодирование аудио"
+        return ScriptMetadata.AUDIO_CONVERTER_NAME
 
     @property
     def description(self) -> str:
         """Описание скрипта."""
-        return (
-            "Перекодирует аудиофайлы в QAAC, AAC, FLAC, WAV, "
-            "E-AC3, AC3 и др. с настройкой качества"
-        )
+        return ScriptMetadata.AUDIO_CONVERTER_DESC
 
     @property
     def icon_name(self) -> str:
@@ -99,7 +103,7 @@ class AudioConverterScript(AbstractScript):
     @property
     def settings_schema(self) -> list[SettingField]:
         """Схема настроек скрипта."""
-        return [
+        fields = [
             SettingField(
                 key="target_format",
                 label="Целевой формат",
@@ -107,42 +111,15 @@ class AudioConverterScript(AbstractScript):
                 default="QAAC",
                 options=list(AUDIO_FORMATS.keys()),
             ),
-            # Настройка битрейта (для lossy форматов)
-            SettingField(
-                key="bitrate",
-                label="Битрейт (кбит/с)",
-                setting_type=SettingType.COMBO,
-                default="320k",
-                options=[
-                    "64k", "96k", "128k", "160k", "192k",
-                    "224k", "256k", "320k", "448k", "640k"
-                ],
-                visible_if={"target_format": BITRATE_FORMATS},
-            ),
-            # Настройка сжатия (для lossless форматов)
-            SettingField(
-                key="compression",
-                label="Уровень сжатия (0-12)",
-                setting_type=SettingType.COMBO,
-                default="5",
-                options=[str(i) for i in range(13)],
-                visible_if={"target_format": LOSSLESS_COMPRESSED},
-            ),
-            # Настройка качества QAAC (TVBR)
-            SettingField(
-                key="qaac_quality",
-                label="Качество QAAC (0-127)",
-                setting_type=SettingType.COMBO,
-                default="127",
-                options=[str(i) for i in range(0, 128, 16)] + ["127"],
-                visible_if={"target_format": ["QAAC"]},
-            ),
-            # Опция контейнера M4A
+            self._get_bitrate_field(),
+            self._get_compression_field(),
+            self._get_qaac_quality_field(),
             SettingField(
                 key="use_m4a_container",
                 label="Упаковать в контейнер (m4a)",
                 setting_type=SettingType.CHECKBOX,
                 default=False,
+                visible_if={"target_format": ["QAAC", "AAC", "ALAC"]},
             ),
             SettingField(
                 key="delete_original",
@@ -151,6 +128,51 @@ class AudioConverterScript(AbstractScript):
                 default=False,
             ),
         ]
+        return fields
+
+    def _get_bitrate_field(self) -> SettingField:
+        """Поле настройки битрейта."""
+        return SettingField(
+            key="bitrate",
+            label="Битрейт (кбит/с)",
+            setting_type=SettingType.COMBO,
+            default="320k",
+            options=[
+                "64k",
+                "96k",
+                "128k",
+                "160k",
+                "192k",
+                "224k",
+                "256k",
+                "320k",
+                "448k",
+                "640k",
+            ],
+            visible_if={"target_format": BITRATE_FORMATS},
+        )
+
+    def _get_compression_field(self) -> SettingField:
+        """Поле настройки сжатия."""
+        return SettingField(
+            key="compression",
+            label="Уровень сжатия (0-12)",
+            setting_type=SettingType.COMBO,
+            default="5",
+            options=[str(i) for i in range(13)],
+            visible_if={"target_format": LOSSLESS_COMPRESSED},
+        )
+
+    def _get_qaac_quality_field(self) -> SettingField:
+        """Поле настройки качества QAAC."""
+        return SettingField(
+            key="qaac_quality",
+            label="Качество QAAC (0-127)",
+            setting_type=SettingType.COMBO,
+            default="127",
+            options=[str(i) for i in range(0, 128, 16)] + ["127"],
+            visible_if={"target_format": ["QAAC"]},
+        )
 
     def execute_single(
         self,
@@ -160,81 +182,103 @@ class AudioConverterScript(AbstractScript):
     ) -> list[str]:
         """Конвертировать один аудиофайл."""
         target_fmt_key = settings.get("target_format", "MP3")
-        fmt_info = AUDIO_FORMATS.get(
-            target_fmt_key, AUDIO_FORMATS["MP3"]
+        fmt_info = AUDIO_FORMATS.get(target_fmt_key, AUDIO_FORMATS["MP3"])
+        target_ext, codec = self._resolve_extension(
+            fmt_info, target_fmt_key, settings
         )
-        target_ext = fmt_info["ext"]
-        codec = fmt_info["codec"]
 
-        # Обработка контейнера M4A для форматов на базе AAC
-        use_m4a = settings.get("use_m4a_container", False)
-        if target_fmt_key in ["AAC", "QAAC"]:
-            target_ext = ".m4a" if use_m4a else ".aac"
+        results: list[str] = []
+        if (
+            file_path.suffix.lower() == target_ext
+            and target_fmt_key not in LOSSY_FORMATS
+        ):
+            msg = f"⏭ ПРОПУСК (файл уже в формате {target_fmt_key}): {file_path.name}"  # noqa: E501
+            logger.info("[%s] %s", self.name, msg)
+            return [msg]
 
-        bitrate = settings.get("bitrate", "320k")
-        compression = settings.get("compression", "5")
-        delete_original = settings.get(
-            "delete_original", False
+        target_dir = self._resolver.resolve(file_path, output_path)
+        output_file_path = self._get_safe_output_path(
+            file_path, target_dir / file_path.with_suffix(target_ext).name
         )
         overwrite = SettingsManager().overwrite_existing
 
-        results: list[str] = []
-        
-        # Пропускаем, если файл уже в целевом формате и это не lossy формат
-        if (
-            file_path.suffix.lower() == target_ext 
-            and target_fmt_key not in LOSSY_FORMATS
-        ):
-            msg = f"⏭ Пропущен (уже {target_fmt_key}): {file_path.name}"
-            logger.info("[%s] %s", self.name, msg)
-            results.append(msg)
-            return results
-
-        target_dir = self._resolver.resolve(file_path, output_path)
-        out_name = file_path.with_suffix(target_ext).name
-        output_file_path = self._get_safe_output_path(
-            file_path, target_dir / out_name
-        )
-
         if output_file_path.exists() and not overwrite:
-            # Превентивная защита (хотя _get_safe_output_path уже должен был решить это)
-            msg = f"⏭ Пропущен (файл существует): {output_file_path.name}"
+            msg = f"⏭ ПРОПУСК (файл уже существует): {output_file_path.name}"
             logger.info("[%s] %s", self.name, msg)
             return [msg]
-        
-        # Формируем аргументы
+
+        success = self._run_conversion(
+            file_path,
+            output_file_path,
+            codec,
+            target_fmt_key,
+            settings,
+            overwrite,
+        )
+
+        if success:
+            results.append(f"✅ УСПЕХ: {output_file_path.name}")
+            if settings.get("delete_original", False):
+                self._delete_source(file_path, results)
+        else:
+            if self.is_cancelled:
+                self._cleanup_if_cancelled(output_file_path)
+                msg = f"⚠ Отменено: {output_file_path.name}"
+                results.append(msg)
+            else:
+                results.append(f"❌ ОШИБКА: {file_path.name}")
+        return results
+
+    def _resolve_extension(
+        self, fmt_info: dict, target_fmt_key: str, settings: dict[str, Any]
+    ) -> tuple[str, str]:
+        """Определить расширение и кодек с учетом опции M4A."""
+        target_ext = fmt_info["ext"]
+        codec = fmt_info["codec"]
+        use_m4a = settings.get("use_m4a_container", False)
+
+        if target_fmt_key in ["AAC", "QAAC"]:
+            target_ext = ".m4a" if use_m4a else ".aac"
+        elif target_fmt_key == "ALAC":
+            target_ext = ".m4a" if use_m4a else ".alac"
+
+        return target_ext, codec
+
+    def _run_conversion(
+        self,
+        file_path: Path,
+        output_file_path: Path,
+        codec: str,
+        target_fmt_key: str,
+        settings: dict[str, Any],
+        overwrite: bool,
+    ) -> bool:
+        """Запуск раннера FFmpeg или QAAC."""
         extra_args = ["-c:a", codec, "-map_metadata", "-1"]
         if target_fmt_key in LOSSLESS_COMPRESSED:
-            extra_args.extend(["-compression_level", str(compression)])
+            extra_args.extend(
+                ["-compression_level", settings.get("compression", "5")]
+            )
         elif target_fmt_key in LOSSY_FORMATS:
-            extra_args.extend(["-b:a", bitrate])
-        
+            extra_args.extend(["-b:a", settings.get("bitrate", "320k")])
+
         if target_fmt_key == "DTS":
             extra_args.extend(["-strict", "-2"])
 
-        # Выбор раннера
         if target_fmt_key == "QAAC":
-            qaac_quality = settings.get("qaac_quality", "127")
-            qaac_adts = not use_m4a
-            success = self._qaac.run(
+            return self._qaac.run(
                 input_path=file_path,
                 output_path=output_file_path,
-                tvbr=qaac_quality,
-                adts=qaac_adts,
-            )
-        else:
-            success = self._ffmpeg.run(
-                input_path=file_path,
-                output_path=output_file_path,
-                extra_args=extra_args,
-                overwrite=overwrite,
+                tvbr=settings.get("qaac_quality", "127"),
+                adts=not settings.get("use_m4a_container", False),
             )
 
-        if success:
-            results.append(f"✅ Конвертировано: {output_file_path.name}")
-            if delete_original:
-                self._delete_source(file_path, results)
-        else:
-            results.append(f"❌ Ошибка: {file_path.name}")
+        if output_file_path.suffix.lower() == ".alac":
+            extra_args = ["-f", "caf"] + extra_args
 
-        return results
+        return self._ffmpeg.run(
+            input_path=file_path,
+            output_path=output_file_path,
+            extra_args=extra_args,
+            overwrite=overwrite,
+        )

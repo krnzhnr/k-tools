@@ -26,36 +26,26 @@ from qfluentwidgets import (
     StrongBodyLabel,
     TreeWidget,
 )
+from app.ui.elided_label import ElidedLabel
 
 from app.infrastructure.mkvprobe_runner import (
     MKVProbeRunner,
     TrackInfo,
 )
 from app.ui.file_list_widget import FileListWidget
+from app.core.constants import (
+    VIDEO_EXTENSIONS,
+    AUDIO_EXTENSIONS,
+    SUBTITLE_EXTENSIONS,
+    VIDEO_CONTAINERS,
+    MEDIA_CONTAINERS,
+)
 
 logger = logging.getLogger(__name__)
 
-# Расширения файлов по типу дорожки.
-_VIDEO_EXTS = {
-    ".mkv", ".mp4", ".avi", ".mov",
-    ".webm", ".hevc", ".h264", ".h265",
-    ".264", ".265", ".vc1", ".m2v",
-}
-_AUDIO_EXTS = {
-    ".aac", ".ac3", ".eac3", ".dts",
-    ".flac", ".wav", ".mp3", ".m4a",
-    ".ogg", ".mka", ".opus", ".wv",
-    ".thd", ".truehd", ".mlp", ".dtshd",
-    ".pcm", ".mp2", ".m2a",
-}
-_SUBTITLE_EXTS = {
-    ".srt", ".ass", ".ssa", ".sub",
-    ".vtt", ".idx", ".sup",
-}
-
 # Все допустимые расширения для файлов-замен.
 _ALL_REPLACEMENT_EXTS = sorted(
-    _VIDEO_EXTS | _AUDIO_EXTS | _SUBTITLE_EXTS
+    VIDEO_EXTENSIONS | AUDIO_EXTENSIONS | SUBTITLE_EXTENSIONS
 )
 
 # Плейсхолдер для ComboBox «не заменять».
@@ -71,9 +61,7 @@ class ReplacementCard(CardWidget):
 
     replacementsChanged = pyqtSignal()
 
-    def __init__(
-        self, parent: QWidget | None = None
-    ) -> None:
+    def __init__(self, parent: QWidget | None = None) -> None:
         """Инициализация карточки.
 
         Args:
@@ -81,37 +69,24 @@ class ReplacementCard(CardWidget):
         """
         super().__init__(parent)
         self._layout = QVBoxLayout(self)
-        self._layout.setContentsMargins(
-            16, 12, 16, 16
-        )
+        self._layout.setContentsMargins(16, 12, 16, 16)
         self._layout.setSpacing(8)
 
-        title = StrongBodyLabel(
-            "Назначение замен", self
-        )
+        title = StrongBodyLabel("Назначение замен", self)
         self._layout.addWidget(title)
 
         self._hint = CaptionLabel(
-            "Загрузите дорожки контейнера, "
-            "чтобы назначить замены",
+            "Загрузите дорожки контейнера, " "чтобы назначить замены",
             self,
         )
-        self._hint.setStyleSheet(
-            "color: rgba(255, 255, 255, 0.5);"
-        )
-        self._hint.setAlignment(
-            Qt.AlignmentFlag.AlignCenter
-        )
+        self._hint.setStyleSheet("color: rgba(255, 255, 255, 0.5);")
+        self._hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._layout.addWidget(self._hint)
 
         # Контейнер для строк назначений
         self._rows_widget = QWidget(self)
-        self._rows_layout = QVBoxLayout(
-            self._rows_widget
-        )
-        self._rows_layout.setContentsMargins(
-            0, 0, 0, 0
-        )
+        self._rows_layout = QVBoxLayout(self._rows_widget)
+        self._rows_layout.setContentsMargins(0, 0, 0, 0)
         self._rows_layout.setSpacing(6)
         self._rows_widget.setVisible(False)
         self._layout.addWidget(self._rows_widget)
@@ -121,14 +96,9 @@ class ReplacementCard(CardWidget):
         # Хранение: track_id → TrackInfo
         self._tracks: dict[int, TrackInfo] = {}
 
-        logger.info(
-            "Карточка назначений замен "
-            "инициализирована"
-        )
+        logger.info("Карточка назначений замен " "инициализирована")
 
-    def set_tracks(
-        self, tracks: list[TrackInfo]
-    ) -> None:
+    def set_tracks(self, tracks: list[TrackInfo]) -> None:
         """Установить дорожки контейнера.
 
         Создаёт строку с ComboBox для каждой.
@@ -161,37 +131,23 @@ class ReplacementCard(CardWidget):
     def update_replacement_files(
         self, files: list[Path], probe: MKVProbeRunner
     ) -> None:
-        """Обновить варианты файлов-замен.
-
-        Фильтрует файлы по типу каждой дорожки. Если файл является
-        контейнером (mkv, mp4, mka), анализирует его потоки.
-
-        Args:
-            files: Список файлов-замен.
-            probe: Утилита для анализа контейнеров.
-        """
-        # Кэш для результатов анализа (чтобы не запускать mkvmerge постоянно)
+        """Обновить варианты файлов-замен."""
         if not hasattr(self, "_probe_cache"):
             self._probe_cache: dict[Path, list[TrackInfo]] = {}
 
-        # Очищаем кэш от удаленных файлов
         current_paths = set(files)
         self._probe_cache = {
-            p: t for p, t in self._probe_cache.items()
-            if p in current_paths
+            p: t for p, t in self._probe_cache.items() if p in current_paths
         }
 
         for track_id, combo in self._combos.items():
             target_track = self._tracks.get(track_id)
-            if target_track is None:
+            if not target_track:
                 continue
 
-            # Текущее значение для восстановления
             current_data = combo.currentData()
-
-            # Фильтрация по типу
             exts = self._get_exts_for_type(target_track.track_type)
-            
+
             combo.blockSignals(True)
             combo.clear()
             combo.addItem(_NO_REPLACE)
@@ -199,58 +155,74 @@ class ReplacementCard(CardWidget):
             for f in files:
                 if f.suffix.lower() not in exts:
                     continue
+                self._add_replacement_option(combo, f, target_track, probe)
 
-                # Если это контейнер, пробуем достать дорожки подходящего типа
-                if f.suffix.lower() in {".mkv", ".mp4", ".mka", ".m4a", ".mov"}:
-                    if f not in self._probe_cache:
-                        try:
-                            self._probe_cache[f] = probe.get_tracks(f)
-                        except Exception:
-                            logger.error("Ошибка анализа замены '%s'", f.name)
-                            self._probe_cache[f] = []
-
-                    src_tracks = self._probe_cache[f]
-                    # Ищем дорожки того же типа внутри файла-замены
-                    relevant_tracks = [
-                        t for t in src_tracks 
-                        if t.track_type == target_track.track_type
-                    ]
-
-                    if relevant_tracks:
-                        for st in relevant_tracks:
-                            label = f"{f.name} (ID {st.track_id}: {st.codec}"
-                            if st.language and st.language != "und":
-                                label += f", {st.language}"
-                            if st.name:
-                                label += f", {st.name}"
-                            label += ")"
-                            
-                            data = json.dumps({"path": str(f), "src_id": st.track_id})
-                            combo.addItem(label, userData=data)
-                    else:
-                        # Если в контейнере нет таких дорожек, просто добавляем файл как есть (на авось)
-                        combo.addItem(f.name, userData=json.dumps({"path": str(f), "src_id": 0}))
-                else:
-                    # Обычный файл (аудио-стрим, субтитры)
-                    combo.addItem(f.name, userData=json.dumps({"path": str(f), "src_id": 0}))
-
-            # Восстановить выбор
             if current_data:
                 idx = combo.findData(current_data)
-                if idx >= 0:
-                    combo.setCurrentIndex(idx)
-                else:
-                    combo.setCurrentIndex(0)
+                combo.setCurrentIndex(idx if idx >= 0 else 0)
             else:
                 combo.setCurrentIndex(0)
-            
+
             combo.blockSignals(False)
 
         self.replacementsChanged.emit()
-        logger.debug(
-            "ComboBox обновлены, файлов-замен: %d",
-            len(files),
-        )
+        logger.debug("ComboBox обновлены, файлов-замен: %d", len(files))
+
+    def _add_replacement_option(
+        self,
+        combo: ComboBox,
+        f: Path,
+        target_track: TrackInfo,
+        probe: MKVProbeRunner,
+    ) -> None:
+        """Добавить опцию файла-замены в ComboBox."""
+        container_exts = {".mkv", ".mp4", ".mka", ".m4a", ".mov"}
+        if f.suffix.lower() in container_exts:
+            self._process_replacement_container(combo, f, target_track, probe)
+        else:
+            combo.addItem(
+                f.name, userData=json.dumps({"path": str(f), "src_id": 0})
+            )
+
+    def _process_replacement_container(
+        self,
+        combo: ComboBox,
+        f: Path,
+        target_track: TrackInfo,
+        probe: MKVProbeRunner,
+    ) -> None:
+        """Обработать файл-контейнер как источник замен."""
+        if f not in self._probe_cache:
+            try:
+                self._probe_cache[f] = probe.get_tracks(f)
+            except Exception:
+                logger.error("Ошибка анализа замены '%s'", f.name)
+                self._probe_cache[f] = []
+
+        src_tracks = self._probe_cache[f]
+        relevant_tracks = [
+            t for t in src_tracks if t.track_type == target_track.track_type
+        ]
+
+        if relevant_tracks:
+            for st in relevant_tracks:
+                label_parts = [f"{f.name} (ID {st.track_id}: {st.codec}"]
+                if st.language and st.language != "und":
+                    label_parts.append(f", {st.language}")
+                if st.name:
+                    label_parts.append(f", {st.name}")
+                label_parts.append(")")
+
+                combo.addItem(
+                    "".join(label_parts),
+                    userData=json.dumps(
+                        {"path": str(f), "src_id": st.track_id}
+                    ),
+                )
+        else:
+            combo.addItem(
+                f.name, userData=json.dumps({"path": str(f), "src_id": 0})
+            )
 
     def get_replacements(
         self,
@@ -261,9 +233,7 @@ class ReplacementCard(CardWidget):
             Словарь {track_id: {"path": Path, "src_id": int}}.
         """
         result: dict[int, dict[str, Any]] = {}
-        for track_id, combo in (
-            self._combos.items()
-        ):
+        for track_id, combo in self._combos.items():
             if combo.currentText() == _NO_REPLACE:
                 continue
             data_str = combo.currentData()
@@ -272,10 +242,13 @@ class ReplacementCard(CardWidget):
                     data = json.loads(data_str)
                     result[track_id] = {
                         "path": Path(data["path"]),
-                        "src_id": int(data.get("src_id", 0))
+                        "src_id": int(data.get("src_id", 0)),
                     }
                 except (json.JSONDecodeError, KeyError, TypeError):
-                    logger.error("Ошибка парсинга данных замены для дорожки %d", track_id)
+                    logger.error(
+                        "Ошибка парсинга данных замены для дорожки %d",
+                        track_id,
+                    )
         return result
 
     def clear(self) -> None:
@@ -286,9 +259,7 @@ class ReplacementCard(CardWidget):
         self._rows_widget.setVisible(False)
         self._hint.setVisible(True)
 
-    def _create_row(
-        self, track: TrackInfo
-    ) -> QWidget:
+    def _create_row(self, track: TrackInfo) -> QWidget:
         """Создать строку назначения.
 
         Args:
@@ -304,24 +275,27 @@ class ReplacementCard(CardWidget):
 
         # Лейбл дорожки
         parts = [track.type_label, track.codec]
-        if (
-            track.language
-            and track.language != "und"
-        ):
+        if track.language and track.language != "und":
             parts.append(track.language)
         if track.name:
             parts.append(f'"{track.name}"')
         parts.append(f"ID: {track.track_id}")
         label_text = "  ·  ".join(parts)
 
-        label = CaptionLabel(label_text, row)
-        label.setStyleSheet(
-            "color: rgba(255, 255, 255, 0.7);"
-        )
+        label = ElidedLabel(label_text, row)
+        label.setStyleSheet("color: rgba(255, 255, 255, 0.7);")
+        label.setElideMode(Qt.TextElideMode.ElideMiddle)
         layout.addWidget(label)
 
         # ComboBox
+        from PyQt6.QtWidgets import QSizePolicy
+
         combo = ComboBox(row)
+        # Игнорируем размер содержимого при расчете ширины
+        combo.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed
+        )
+        combo.setMinimumWidth(200)
         combo.addItem(_NO_REPLACE)
         combo.currentIndexChanged.connect(
             lambda: self.replacementsChanged.emit()
@@ -335,9 +309,10 @@ class ReplacementCard(CardWidget):
         """Удалить все строки назначений."""
         while self._rows_layout.count():
             item = self._rows_layout.takeAt(0)
-            widget = item.widget()
-            if widget:
-                widget.deleteLater()
+            if item is not None:
+                widget = item.widget()
+                if widget:
+                    widget.deleteLater()
 
     @staticmethod
     def _get_exts_for_type(
@@ -353,14 +328,13 @@ class ReplacementCard(CardWidget):
         Returns:
             Множество расширений.
         """
-        containers = {".mkv", ".mp4", ".mka"}
         if track_type == "video":
-            return _VIDEO_EXTS | containers
+            return set(VIDEO_EXTENSIONS | MEDIA_CONTAINERS)
         if track_type == "audio":
-            return _AUDIO_EXTS | containers
+            return set(AUDIO_EXTENSIONS | MEDIA_CONTAINERS)
         if track_type == "subtitles":
-            return _SUBTITLE_EXTS | containers
-        return containers
+            return set(SUBTITLE_EXTENSIONS | MEDIA_CONTAINERS)
+        return set(MEDIA_CONTAINERS)
 
 
 class StreamReplaceWidget(QWidget):
@@ -378,9 +352,7 @@ class StreamReplaceWidget(QWidget):
 
     filesChanged = pyqtSignal()
 
-    def __init__(
-        self, parent: QWidget | None = None
-    ) -> None:
+    def __init__(self, parent: QWidget | None = None) -> None:
         """Инициализация виджета.
 
         Args:
@@ -390,10 +362,7 @@ class StreamReplaceWidget(QWidget):
         self._probe = MKVProbeRunner()
         self._tracks: list[TrackInfo] = []
         self._init_ui()
-        logger.info(
-            "Виджет подмены потоков "
-            "инициализирован"
-        )
+        logger.info("Виджет подмены потоков " "инициализирован")
 
     def _init_ui(self) -> None:
         """Настройка пользовательского интерфейса."""
@@ -401,57 +370,47 @@ class StreamReplaceWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
 
-        # --- Секция исходного файла ---
-        container_label = StrongBodyLabel(
-            "Исходный файл (MKV / MP4)", self
-        )
-        layout.addWidget(container_label)
+        self._init_container_section(layout)
+        self._init_track_tree_section(layout)
+        self._init_replacements_section(layout)
 
+        self._container_list.filesChanged.connect(self._on_container_changed)
+        self._container_list.filesChanged.connect(self.filesChanged.emit)
+
+    def _init_container_section(self, layout: QVBoxLayout) -> None:
+        """Инициализировать секцию выбора исходного контейнера."""
+        layout.addWidget(
+            StrongBodyLabel("Исходный файл (MKV / MP4 / MOV)", self)
+        )
         self._container_list = FileListWidget(
-            allowed_extensions=[".mkv", ".mp4"],
+            allowed_extensions=list(VIDEO_CONTAINERS),
             context_name="Подмена потоков (исходник)",
             parent=self,
         )
-        layout.addWidget(
-            self._container_list, stretch=0
-        )
+        layout.addWidget(self._container_list, stretch=0)
 
-        # Кнопка загрузки дорожек
         self._load_btn = PrimaryPushButton(
-            FluentIcon.SYNC,
-            "Загрузить дорожки",
-            self,
+            FluentIcon.SYNC, "Загрузить дорожки", self
         )
-        self._load_btn.clicked.connect(
-            self._on_load_tracks
-        )
+        self._load_btn.clicked.connect(self._on_load_tracks)
         layout.addWidget(self._load_btn)
 
-        # --- Дерево дорожек ---
+    def _init_track_tree_section(self, layout: QVBoxLayout) -> None:
+        """Инициализировать секцию дерева дорожек исходника."""
         self._track_card = CardWidget(self)
         track_layout = QVBoxLayout(self._track_card)
-        track_layout.setContentsMargins(
-            16, 4, 16, 16
-        )
+        track_layout.setContentsMargins(16, 4, 16, 16)
         track_layout.setSpacing(8)
 
-        track_title = StrongBodyLabel(
-            "Текущие дорожки исходника",
-            self._track_card,
+        track_layout.addWidget(
+            StrongBodyLabel("Текущие дорожки исходника", self._track_card)
         )
-        track_layout.addWidget(track_title)
 
         self._track_hint = CaptionLabel(
-            "Добавьте файл и нажмите "
-            "«Загрузить дорожки»",
-            self._track_card,
+            "Добавьте файл и нажмите «Загрузить дорожки»", self._track_card
         )
-        self._track_hint.setStyleSheet(
-            "color: rgba(255, 255, 255, 0.5);"
-        )
-        self._track_hint.setAlignment(
-            Qt.AlignmentFlag.AlignCenter
-        )
+        self._track_hint.setStyleSheet("color: rgba(255, 255, 255, 0.5);")
+        self._track_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         track_layout.addWidget(self._track_hint)
 
         self._tree = TreeWidget(self._track_card)
@@ -462,12 +421,9 @@ class StreamReplaceWidget(QWidget):
 
         layout.addWidget(self._track_card)
 
-        # --- Секция файлов-замен ---
-        repl_label = StrongBodyLabel(
-            "Файлы для подмены дорожек", self
-        )
-        layout.addWidget(repl_label)
-
+    def _init_replacements_section(self, layout: QVBoxLayout) -> None:
+        """Инициализировать секцию вариантов замен."""
+        layout.addWidget(StrongBodyLabel("Файлы для подмены дорожек", self))
         self._replacement_list = FileListWidget(
             allowed_extensions=_ALL_REPLACEMENT_EXTS,
             context_name="Подмена потоков (замены)",
@@ -476,109 +432,66 @@ class StreamReplaceWidget(QWidget):
         self._replacement_list.filesChanged.connect(
             self._on_replacements_changed
         )
-        layout.addWidget(
-            self._replacement_list, stretch=1
-        )
+        layout.addWidget(self._replacement_list, stretch=1)
 
-        # --- Карточка назначений ---
-        self._replacement_card = ReplacementCard(
-            self
-        )
+        self._replacement_card = ReplacementCard(self)
         layout.addWidget(self._replacement_card)
-
-        # При изменении контейнера сбрасываем
-        self._container_list.filesChanged.connect(
-            self._on_container_changed
-        )
-        self._container_list.filesChanged.connect(
-            self.filesChanged.emit
-        )
 
     def _on_load_tracks(self) -> None:
         """Обработчик кнопки «Загрузить дорожки»."""
-        files = self._container_list.files
-        if not files:
-            logger.warning(
-                "Нет контейнера для анализа"
-            )
+        if not self._container_list.files:
+            logger.warning("Нет контейнера для анализа")
             return
 
-        container = files[0]
-        logger.info(
-            "Загрузка дорожек контейнера: '%s'",
-            container.name,
-        )
+        container = self._container_list.files[0]
+        logger.info("Загрузка дорожек контейнера: '%s'", container.name)
 
         self._tree.clear()
         self._tracks.clear()
 
         try:
-            self._tracks = (
-                self._probe.get_tracks(container)
-            )
+            self._tracks = self._probe.get_tracks(container)
         except Exception:
-            logger.exception(
-                "Ошибка анализа контейнера '%s'",
-                container.name,
-            )
+            logger.exception("Ошибка анализа контейнера '%s'", container.name)
             self._tracks = []
 
         if not self._tracks:
-            self._track_hint.setText(
-                "Дорожки не обнаружены"
-            )
-            self._track_hint.setVisible(True)
-            self._tree.setVisible(False)
-            self._replacement_card.clear()
+            self._handle_no_tracks()
             return
 
+        self._handle_tracks_loaded(container)
+
+    def _handle_no_tracks(self) -> None:
+        """Обработка случая, когда дорожки не найдены."""
+        self._track_hint.setText("Дорожки не обнаружены")
+        self._track_hint.setVisible(True)
+        self._tree.setVisible(False)
+        self._replacement_card.clear()
+
+    def _handle_tracks_loaded(self, container: Path) -> None:
+        """Обработка успешной загрузки дорожек."""
         self._track_hint.setVisible(False)
         self._tree.setVisible(True)
 
-        # Строим дерево
         file_item = QTreeWidgetItem(self._tree)
         file_item.setText(0, container.name)
-        file_item.setIcon(
-            0, FluentIcon.MOVIE.icon()
-        )
-        file_item.setData(
-            0,
-            self.ROLE_FILE_PATH,
-            str(container),
-        )
+        file_item.setIcon(0, FluentIcon.MOVIE.icon())
+        file_item.setData(0, self.ROLE_FILE_PATH, str(container))
 
         for track in self._tracks:
             track_item = QTreeWidgetItem(file_item)
-            parts = [
-                track.type_label,
-                track.codec,
-            ]
-            if (
-                track.language
-                and track.language != "und"
-            ):
+            parts = [track.type_label, track.codec]
+            if track.language and track.language != "und":
                 parts.append(track.language)
             if track.name:
                 parts.append(f'"{track.name}"')
-            parts.append(
-                f"ID: {track.track_id}"
-            )
-            label = "  ·  ".join(parts)
-            track_item.setText(0, label)
+            parts.append(f"ID: {track.track_id}")
+            track_item.setText(0, "  ·  ".join(parts))
 
         self._tree.expandAll()
-
-        # Обновляем карточку назначений
-        self._replacement_card.set_tracks(
-            self._tracks
-        )
-        # Обновляем ComboBox файлами-заменами
+        self._replacement_card.set_tracks(self._tracks)
         self._on_replacements_changed()
-
-        logger.info(
-            "Загружено дорожек: %d",
-            len(self._tracks),
-        )
+        logger.info("Загружено дорожек: %d", len(self._tracks))
 
     def _on_container_changed(self) -> None:
         """Обработчик изменения контейнера."""
@@ -586,23 +499,17 @@ class StreamReplaceWidget(QWidget):
             self._tree.clear()
             self._tracks.clear()
             self._track_hint.setText(
-                "Добавьте файл и нажмите "
-                "«Загрузить дорожки»"
+                "Добавьте файл и нажмите " "«Загрузить дорожки»"
             )
             self._track_hint.setVisible(True)
             self._tree.setVisible(False)
             self._replacement_card.clear()
-            logger.info(
-                "Контейнер очищен, "
-                "дерево дорожек сброшено"
-            )
+            logger.info("Контейнер очищен, " "дерево дорожек сброшено")
 
     def _on_replacements_changed(self) -> None:
         """Обновить ComboBox при изменении."""
         files = self._replacement_list.files
-        self._replacement_card.update_replacement_files(
-            files, self._probe
-        )
+        self._replacement_card.update_replacement_files(files, self._probe)
 
     # --- Публичный API для WorkPanel ---
 
@@ -631,7 +538,4 @@ class StreamReplaceWidget(QWidget):
         Returns:
             Словарь {track_id: {"path": Path, "src_id": int}}.
         """
-        return (
-            self._replacement_card
-            .get_replacements()
-        )
+        return self._replacement_card.get_replacements()

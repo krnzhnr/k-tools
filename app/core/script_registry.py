@@ -28,17 +28,17 @@ class ScriptRegistry:
 
         Args:
             script: Экземпляр скрипта для регистрации.
-        
+
         Raises:
             ValueError: Если описание скрипта слишком длинное.
         """
         if len(script.description) > self.MAX_DESCRIPTION_LENGTH:
             raise ValueError(
                 f"Описание скрипта '{script.name}' слишком длинное "
-                f"({len(script.description)} > {self.MAX_DESCRIPTION_LENGTH}). "
-                f"Пожалуйста, сократите его до {self.MAX_DESCRIPTION_LENGTH} символов."
+                f"({len(script.description)} > {self.MAX_DESCRIPTION_LENGTH}). "  # noqa: E501
+                f"Пожалуйста, сократите его до {self.MAX_DESCRIPTION_LENGTH} символов."  # noqa: E501
             )
-            
+
         self._scripts.append(script)
         logger.info(
             "Скрипт '%s' зарегистрирован в реестре",

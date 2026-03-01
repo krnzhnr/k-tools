@@ -8,7 +8,7 @@ from typing import Any
 from app.core.abstract_script import AbstractScript, SettingField, SettingType
 from app.core.output_resolver import OutputResolver
 from app.infrastructure.eac3to_runner import Eac3toRunner
-from app.core.constants import AUDIO_EXTENSIONS
+from app.core.constants import AUDIO_EXTENSIONS, ScriptCategory, ScriptMetadata
 from app.core.settings_manager import SettingsManager
 
 logger = logging.getLogger(__name__)
@@ -30,15 +30,17 @@ class AudioSpeedChangerScript(AbstractScript):
     @property
     def category(self) -> str:
         """Категория скрипта."""
-        return "Аудио"
+        return ScriptCategory.AUDIO
 
     @property
     def name(self) -> str:
-        return "Изменение скорости аудио"
+        """Отображаемое имя скрипта."""
+        return ScriptMetadata.AUDIO_SPEED_NAME
 
     @property
     def description(self) -> str:
-        return "Изменяет скорость/тон аудио (PAL ↔ NTSC, Кино) с помощью eac3to."
+        """Описание скрипта."""
+        return ScriptMetadata.AUDIO_SPEED_DESC
 
     @property
     def icon_name(self) -> str:
@@ -86,52 +88,74 @@ class AudioSpeedChangerScript(AbstractScript):
         output_path: str | None = None,
     ) -> list[str]:
         """Выполнить изменение скорости для одного файла."""
-        mode = settings.get("mode")
-        output_format = settings.get("output_format", "FLAC")
-        output_ext = f".{output_format.lower()}"
-        delete_source = settings.get("delete_source", False)
-        overwrite = SettingsManager().overwrite_existing
-
-        # Определение аргументов eac3to на основе режима
-        eac3to_args = []
-        suffix = ""
-        if mode == "Slowdown (25.000 → 23.976)":
-            eac3to_args.append("-slowdown")
-            suffix = "_slowdown"
-        elif mode == "Speedup (23.976 → 25.000)":
-            eac3to_args.append("-speedup")
-            suffix = "_speedup"
-        elif mode == "Custom (24.000 → 23.976)":
-            eac3to_args.append("-slowdown") 
-            suffix = "_24_to_23"
-        elif mode == "Custom (25.000 → 24.000)":
-            eac3to_args.append("-25.000")
-            eac3to_args.append("-changeTo24.000")
-            suffix = "_25_to_24"
-
         try:
-            target_dir = self._resolver.resolve(file_path, output_path)
-            output_file_path = self._get_safe_output_path(
-                file_path, target_dir / f"{file_path.stem}{suffix}{output_ext}"
+            target_file_path, eac3to_args = self._prepare_speed_change(
+                file_path, settings, output_path
             )
+            if target_file_path is None:
+                return ["⏭ ПРОПУСК (файл уже существует)"]
 
-            if output_file_path.exists() and not overwrite:
-                msg = f"⏭ Пропущен (существует): {output_file_path.name}"
-                logger.info("[%s] %s", self.name, msg)
-                return [msg]
-
-            current_args = [str(file_path), str(output_file_path)] + eac3to_args
+            current_args = [
+                str(file_path),
+                str(target_file_path),
+            ] + eac3to_args
             success = self._runner.run(current_args, cwd=file_path.parent)
 
-            results = []
+            results: list[str] = []
             if success:
-                results.append(f"✅ Успешно: {file_path.name} -> {output_file_path.name}")
-                if delete_source:
+                results.append(
+                    f"✅ УСПЕХ: {file_path.name} -> {target_file_path.name}"
+                )
+                if settings.get("delete_source", False):
                     self._delete_source(file_path, results)
             else:
-                results.append(f"❌ Ошибка eac3to: {file_path.name}")
+                if self.is_cancelled:
+                    self._cleanup_if_cancelled(target_file_path)
+                    results.append(f"⚠ Отменено: {target_file_path.name}")
+                else:
+                    results.append(f"❌ ОШИБКА eac3to: {file_path.name}")
             return results
 
         except Exception as e:
-            logger.exception("Ошибка при изменении скорости '%s'", file_path.name)
-            return [f"❌ Ошибка: {file_path.name} ({e})"]
+            logger.exception(
+                "Ошибка при изменении скорости '%s'", file_path.name
+            )
+            return [f"❌ ОШИБКА: {file_path.name} ({e})"]
+
+    def _prepare_speed_change(
+        self,
+        file_path: Path,
+        settings: dict[str, Any],
+        output_path: str | None,
+    ) -> tuple[Path | None, list[str]]:
+        """Определить пути и аргументы для изменения скорости."""
+        mode = settings.get("mode")
+        output_ext = f".{settings.get('output_format', 'FLAC').lower()}"
+
+        eac3to_args, suffix = [], ""
+        if mode == "Slowdown (25.000 → 23.976)":
+            eac3to_args, suffix = ["-slowdown"], "_slowdown"
+        elif mode == "Speedup (23.976 → 25.000)":
+            eac3to_args, suffix = ["-speedup"], "_speedup"
+        elif mode == "Custom (24.000 → 23.976)":
+            eac3to_args, suffix = ["-slowdown"], "_24_to_23"
+        elif mode == "Custom (25.000 → 24.000)":
+            eac3to_args, suffix = ["-25.000", "-changeTo24.000"], "_25_to_24"
+
+        target_dir = self._resolver.resolve(file_path, output_path)
+        output_file_path = self._get_safe_output_path(
+            file_path, target_dir / f"{file_path.stem}{suffix}{output_ext}"
+        )
+
+        if (
+            output_file_path.exists()
+            and not SettingsManager().overwrite_existing
+        ):
+            logger.info(
+                "[%s] ПРОПУСК (существует): %s",
+                self.name,
+                output_file_path.name,
+            )
+            return None, []
+
+        return output_file_path, eac3to_args
