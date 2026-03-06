@@ -81,7 +81,13 @@ class TrackExtractorScript(AbstractScript):
                     "{original}_{id}_{lang}",
                     "{original}_{lang}",
                 ],
-            )
+            ),
+            SettingField(
+                key="create_subfolders",
+                label="Создавать отдельную подпапку для каждого файла",
+                setting_type=SettingType.CHECKBOX,
+                default=False,
+            ),
         ]
 
     @property
@@ -175,6 +181,16 @@ class TrackExtractorScript(AbstractScript):
             return [tracks_or_msg]
 
         target_dir = self._resolver.resolve(file_path, output_path)
+
+        # Если включена опция подпапок, создаем папку по имени файла
+        if settings.get("create_subfolders", False):
+            target_dir = target_dir / file_path.stem
+            target_dir.mkdir(parents=True, exist_ok=True)
+            logger.info(
+                "[%s] Создана подпапка для извлечения: %s",
+                self.name,
+                target_dir,
+            )
 
         ffmpeg_args, extracted_files, output_results = (
             self._build_extraction_args(
