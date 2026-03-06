@@ -33,6 +33,7 @@ AUDIO_STREAMS = frozenset(
         ".opus",
         ".ac3",
         ".eac3",
+        ".ec3",
         ".dts",
         ".wv",
         ".aac",
@@ -105,6 +106,7 @@ ISO_LANG_MAP: dict[str, str] = {
 RAW_EXTENSIONS: dict[str, str] = {
     "AC-3": ".ac3",
     "E-AC-3": ".eac3",
+    "E-AC-3+": ".ec3",
     "DTS": ".dts",
     "DTS-HD Master Audio": ".dts",
     "AAC": ".aac",

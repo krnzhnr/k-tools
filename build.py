@@ -271,7 +271,7 @@ SetupIconFile={icon_p}
 Compression=lzma2/ultra64
 SolidCompression=yes
 LZMADictionarySize=65536
-ArchitecturesInstallIn64BitMode=x64
+ArchitecturesInstallIn64BitMode=x64compatible
 
 [Tasks]
 Name: "desktopicon"; Description: "{{cm:CreateDesktopIcon}}"; \\

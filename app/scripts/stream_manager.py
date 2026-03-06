@@ -5,7 +5,12 @@
 только выбранные из контейнеров MKV и MP4.
 """
 
-from app.core.constants import MEDIA_CONTAINERS, ScriptCategory, ScriptMetadata
+from app.core.constants import (
+    MEDIA_CONTAINERS,
+    RAW_EXTENSIONS,
+    ScriptCategory,
+    ScriptMetadata,
+)
 import logging
 from pathlib import Path
 from typing import Any
@@ -25,20 +30,6 @@ logger = logging.getLogger(__name__)
 
 MODE_REMOVE = "Удалить выбранные"
 MODE_KEEP = "Сохранить только выбранные"
-
-RAW_EXTENSIONS = {
-    "AC-3": ".ac3",
-    "E-AC-3": ".eac3",
-    "DTS": ".dts",
-    "AAC": ".aac",
-    "Opus": ".opus",
-    "FLAC": ".flac",
-    "Vorbis": ".ogg",
-    "MP3": ".mp3",
-    "TrueHD": ".thd",
-    "PCM": ".wav",
-    "MPEG Audio": ".mp3",
-}
 
 
 class StreamManagerScript(AbstractScript):

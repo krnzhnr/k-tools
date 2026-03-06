@@ -189,7 +189,8 @@ class MuxingTableWidget(QTableWidget):
         # Формируем фильтры для всех поддерживаемых типов
         video_filters = "*.mkv *.mp4 *.avi *.mov *.webm"
         audio_filters = (
-            "*.mp3 *.aac *.ac3 *.dts *.eac3 *.flac *.wav *.m4a *.ogg *.mka"
+            "*.mp3 *.aac *.ac3 *.ec3 *.dts *.eac3 "
+            "*.flac *.wav *.m4a *.ogg *.mka"
         )
         subs_filters = "*.srt *.ass *.ssa *.sub"
 
