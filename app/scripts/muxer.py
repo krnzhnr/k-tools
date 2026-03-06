@@ -2,6 +2,7 @@
 """Скрипт муксинга видео, аудио и субтитров."""
 
 from app.core.constants import (
+    VIDEO_CONTAINERS,
     MEDIA_CONTAINERS,
     AUDIO_EXTENSIONS,
     SUBTITLE_EXTENSIONS,
@@ -199,7 +200,7 @@ class MuxerScript(AbstractScript):
             stem = file_path.stem
             ext = file_path.suffix.lower()
 
-            if ext in MEDIA_CONTAINERS:
+            if ext in VIDEO_CONTAINERS:
                 if groups[stem]["video"] is None:
                     groups[stem]["video"] = file_path
             elif ext in AUDIO_EXTENSIONS:

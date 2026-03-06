@@ -139,12 +139,25 @@ def clean() -> None:
 
 def create_version_file(version_str: str) -> None:
     """Создать файл версии Windows."""
-    parts = version_str.split(".")
-    v_parts = [int(p) for p in parts]
-    while len(v_parts) < 4:
+    # Пытаемся извлечь номер RC (например, 1 из -rc1)
+    rc_match = re.search(r"-rc(\d+)", version_str)
+    rc_num = int(rc_match.group(1)) if rc_match else 0
+
+    # Извлекаем основные цифры версии (напр. 1.5.2 из 1.5.2-rc1)
+    numeric_match = re.match(r"^([\d\.]+)", version_str)
+    if numeric_match:
+        # Берем только первые три части версии
+        parts = numeric_match.group(1).split(".")
+        v_parts = [int(p) for p in parts][:3]
+    else:
+        v_parts = [1, 0, 0]
+
+    # Дополняем до 3 элементов, если их меньше (напр. 1.5 -> 1.5.0)
+    while len(v_parts) < 3:
         v_parts.append(0)
 
-    v_tuple = tuple(v_parts)
+    # Технический кортеж всегда должен иметь 4 числа для Windows
+    v_tuple = (v_parts[0], v_parts[1], v_parts[2], rc_num)
 
     version_info = f"""# UTF-8
 VSVersionInfo(
@@ -235,6 +248,16 @@ def create_inno_setup_script(
     cwd = str(BASE_DIR).replace("\\", "\\\\")
     icon_p = str(ICON).replace("\\", "\\\\")
 
+    # Определяем имя выходного файла инсталлятора
+    ci_version = os.environ.get("CI_VERSION", "")
+    if "-rc" in ci_version:
+        output_filename = f"{EXE_BASE_NAME}_PreRelease_Setup"
+        print(
+            f"[*] CI/CD (Pre-release): Фиксированное имя файла: {output_filename}"
+        )
+    else:
+        output_filename = f"{EXE_BASE_NAME}_v{version_str}_setup"
+
     iss_content = f"""
 [Setup]
 AppId=krnzhnr.ktools.v1
@@ -243,7 +266,7 @@ AppVersion={version_str}
 DefaultDirName={{autopf}}\\{EXE_BASE_NAME}
 DefaultGroupName={EXE_BASE_NAME}
 OutputDir={cwd}\\setup_output
-OutputBaseFilename={EXE_BASE_NAME}_v{version_str}_setup
+OutputBaseFilename={output_filename}
 SetupIconFile={icon_p}
 Compression=lzma2/ultra64
 SolidCompression=yes

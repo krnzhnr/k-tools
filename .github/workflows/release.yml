@@ -54,17 +54,44 @@ jobs:
     - name: Extract Changelog Notes
       id: extract_changelog
       run: |
-        VERSION=$(echo "${{ github.ref_name }}" | sed 's/^v//')
-        awk -v ver="$VERSION" '
+        # Извлекаем чистую версию (например, из v1.5.2-rc1 получаем 1.5.2)
+        CLEAN_VERSION=$(echo "${{ github.ref_name }}" | sed -E 's/^v//; s/-rc.*//')
+        
+        echo "Извлечение заметок для версии: $CLEAN_VERSION"
+        
+        awk -v ver="$CLEAN_VERSION" '
           $0 ~ "^# " ver {p=1; next}
           $0 ~ "^# " && p {p=0}
           p {print}
         ' CHANGELOG.md > release_notes.md
+        
+        if [ ! -s release_notes.md ]; then
+          echo "Предупреждение: Заметки для версии $CLEAN_VERSION не найдены в CHANGELOG.md"
+          echo "Обновление пререлиза" > release_notes.md
+        fi
 
-    - name: Create GitHub Release
-      uses: softprops/action-gh-release@v1
+    - name: Prepare Release Variables
+      id: prep
+      run: |
+        # Определяем, является ли тег пререлизом (содержит -rc)
+        if [[ "${{ github.ref_name }}" == *"-rc"* ]]; then
+          echo "IS_PRERELEASE=true" >> $GITHUB_ENV
+          echo "RELEASE_TAG=pre-release" >> $GITHUB_ENV
+          echo "MAKE_LATEST=false" >> $GITHUB_ENV
+        else
+          echo "IS_PRERELEASE=false" >> $GITHUB_ENV
+          echo "RELEASE_TAG=${{ github.ref_name }}" >> $GITHUB_ENV
+          echo "MAKE_LATEST=true" >> $GITHUB_ENV
+        fi
+
+    - name: Create or Update GitHub Release
+      uses: softprops/action-gh-release@v2
       with:
+        tag_name: ${{ env.RELEASE_TAG }}
+        name: ${{ github.ref_name }}
         body_path: release_notes.md
+        prerelease: ${{ env.IS_PRERELEASE == 'true' }}
+        make_latest: ${{ env.MAKE_LATEST }}
         files: setup_output/KTools_*.exe
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
