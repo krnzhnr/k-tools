@@ -64,7 +64,7 @@ class DeewRunner(metaclass=SingletonMeta):
         bitrate: str,
         output_format: str = "ddp",
         channels: int = 2,
-    ) -> bool:
+    ) -> Path | None:
         """Запустить deew через python -m deew.
 
         Args:
@@ -75,7 +75,7 @@ class DeewRunner(metaclass=SingletonMeta):
             channels: Количество каналов (2 для стерео).
 
         Returns:
-            True при успешном завершении, False при ошибке.
+            Путь к созданному файлу или None при ошибке.
         """
         is_safe = all(ord(c) < 128 for c in str(input_path) + str(output_path))
         base_cmd = self._build_base_cmd(output_format, channels, bitrate)
@@ -83,9 +83,19 @@ class DeewRunner(metaclass=SingletonMeta):
 
         if not is_safe:
             return self._run_safe_mode(
-                input_path, output_path, base_cmd, env, output_format
+                input_path,
+                output_path,
+                base_cmd,
+                env,
+                output_format,
             )
-        return self._run_normal_mode(input_path, output_path, base_cmd, env)
+        return self._run_normal_mode(
+            input_path,
+            output_path,
+            base_cmd,
+            env,
+            output_format,
+        )
 
     def _build_base_cmd(
         self, output_format: str, channels: int, bitrate: str
@@ -123,7 +133,7 @@ class DeewRunner(metaclass=SingletonMeta):
         base_cmd: list[str],
         env: dict[str, str],
         output_format: str,
-    ) -> bool:
+    ) -> Path | None:
         """Запуск deew с обходом кириллицы только для целевого пути.
 
         FFmpeg (под капотом deew) нормально читает файлы с не-ASCII путями,
@@ -134,7 +144,8 @@ class DeewRunner(metaclass=SingletonMeta):
         только направляем вывод.
         """
         logger.info(
-            "Обнаружена кириллица. Используется безопасный режим (вывод во временную папку)."  # noqa: E501
+            "Обнаружена кириллица. Используется безопасный "
+            "режим (вывод во временную папку)."
         )
         dee_dir = str(Path(self._dee_path).parent)
         from app.core.temp_file_manager import TempFileManager
@@ -154,10 +165,13 @@ class DeewRunner(metaclass=SingletonMeta):
             )
 
             if not self._execute_safe_process(cmd, dee_dir, env):
-                return False
+                return None
 
             return self._move_safe_output(
-                temp_dir_path, input_path.stem, output_format, output_path
+                temp_dir_path,
+                input_path.stem,
+                output_format,
+                output_path,
             )
         finally:
             TempFileManager().delete_path(temp_dir_path)
@@ -199,22 +213,56 @@ class DeewRunner(metaclass=SingletonMeta):
         return True
 
     def _move_safe_output(
-        self, temp_dir: Path, safe_name: str, fmt: str, out_path: Path
-    ) -> bool:
+        self,
+        temp_dir: Path,
+        safe_name: str,
+        fmt: str,
+        out_path: Path,
+    ) -> Path | None:
         """Перемещение выходного файла из временной папки."""
-        ext = ".ec3" if fmt == "ddp" else ".ac3"
-        temp_output = temp_dir / f"{safe_name}{ext}"
-        if not temp_output.exists():
-            alt_ext = ".eac3" if fmt == "ddp" else ".ac3"
-            temp_output = temp_dir / f"{safe_name}{alt_ext}"
+        found = self._find_deew_output(temp_dir, safe_name, fmt)
 
-        if temp_output.exists():
-            shutil.move(temp_output, out_path)
-            logger.info("deew успешно обработал файл: %s", out_path.name)
-            return True
+        if found:
+            shutil.move(str(found), out_path)
+            logger.info(
+                "deew успешно обработал файл: %s",
+                out_path.name,
+            )
+            return out_path
 
         logger.error("Выходной файл не найден во временной папке!")
-        return False
+        return None
+
+    @staticmethod
+    def _find_deew_output(
+        directory: Path,
+        stem: str,
+        fmt: str,
+    ) -> Path | None:
+        """Найти выходной файл deew в директории.
+
+        deew может создать файл с расширением .ec3 или .eac3
+        для формата ddp. Метод проверяет оба варианта.
+
+        Args:
+            directory: Директория поиска.
+            stem: Имя файла без расширения.
+            fmt: Формат вывода (ddp или dd).
+
+        Returns:
+            Путь к найденному файлу или None.
+        """
+        candidates = [".ec3", ".eac3"] if fmt == "ddp" else [".ac3"]
+        for ext in candidates:
+            candidate = directory / f"{stem}{ext}"
+            logger.debug(
+                "Поиск выходного файла deew: %s " "(существует: %s)",
+                candidate,
+                candidate.exists(),
+            )
+            if candidate.exists():
+                return candidate
+        return None
 
     def _run_normal_mode(
         self,
@@ -222,10 +270,17 @@ class DeewRunner(metaclass=SingletonMeta):
         output_path: Path,
         base_cmd: list[str],
         env: dict[str, str],
-    ) -> bool:
+        output_format: str,
+    ) -> Path | None:
         """Обычный запуск deew."""
         dee_dir = str(Path(self._dee_path).parent)
-        cmd = base_cmd + ["-i", str(input_path), "-o", str(output_path.parent)]
+        out_dir = output_path.parent
+        cmd = base_cmd + [
+            "-i",
+            str(input_path),
+            "-o",
+            str(out_dir),
+        ]
 
         try:
             process = subprocess.Popen(
@@ -247,7 +302,7 @@ class DeewRunner(metaclass=SingletonMeta):
 
             if ProcessManager().was_cancelled(process):
                 logger.info("deew прерван пользователем.")
-                return False
+                return None
 
             if stdout and stdout.strip():
                 logger.debug("Вывод deew:\n%s", stdout.strip())
@@ -257,13 +312,28 @@ class DeewRunner(metaclass=SingletonMeta):
                     "Ошибка deew: %s",
                     (stderr and stderr.strip()) or (stdout and stdout.strip()),
                 )
-                return False
+                return None
+
+            # Проверяем фактическое наличие выходного файла
+            found = self._find_deew_output(
+                out_dir,
+                input_path.stem,
+                output_format,
+            )
+            if not found:
+                logger.error(
+                    "DEE завершился без ошибки, но выходной "
+                    "файл не создан: %s",
+                    input_path.name,
+                )
+                return None
 
             logger.info("deew успешно обработал: %s", input_path.name)
-            return True
+            return found
 
         except Exception:
             logger.exception(
-                "Ошибка при запуске deew для '%s'", input_path.name
+                "Ошибка при запуске deew для '%s'",
+                input_path.name,
             )
-            return False
+            return None

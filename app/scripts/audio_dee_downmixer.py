@@ -101,13 +101,15 @@ class AudioDeeDownmixerScript(AbstractScript):
     ) -> list[str]:
         """Выполнить даунмикс для одного файла."""
         try:
-            target_file_path, output_format = self._prepare_downmix_target(
-                file_path, settings, output_path
+            target_file_path, output_format = (
+                self._prepare_downmix_target(
+                    file_path, settings, output_path,
+                )
             )
             if target_file_path is None:
                 return ["⏭ ПРОПУСК (файл уже существует)"]
 
-            success = self._runner.run(
+            result_path = self._runner.run(
                 input_path=file_path,
                 output_path=target_file_path,
                 bitrate=settings.get("bitrate", "192"),
@@ -115,23 +117,41 @@ class AudioDeeDownmixerScript(AbstractScript):
                 channels=2,
             )
 
-            results = []
-            if success:
+            results: list[str] = []
+            if result_path:
+                # deew может создать файл с другим расширением
+                if result_path != target_file_path:
+                    final = result_path.rename(
+                        target_file_path
+                    )
+                else:
+                    final = result_path
                 results.append(
-                    f"✅ УСПЕХ: {file_path.name} -> {target_file_path.name}"
+                    f"✅ УСПЕХ: {file_path.name}"
+                    f" -> {final.name}"
                 )
                 if settings.get("delete_source", False):
                     self._delete_source(file_path, results)
             else:
                 if self.is_cancelled:
-                    self._cleanup_if_cancelled(target_file_path)
-                    results.append(f"⚠ Отменено: {target_file_path.name}")
+                    self._cleanup_if_cancelled(
+                        target_file_path
+                    )
+                    results.append(
+                        f"⚠ Отменено: "
+                        f"{target_file_path.name}"
+                    )
                 else:
-                    results.append(f"❌ ОШИБКА DEE: {file_path.name}")
+                    results.append(
+                        f"❌ ОШИБКА DEE: {file_path.name}"
+                    )
             return results
 
         except Exception as e:
-            logger.exception("Ошибка при даунмиксе '%s'", file_path.name)
+            logger.exception(
+                "Ошибка при даунмиксе '%s'",
+                file_path.name,
+            )
             return [f"❌ ОШИБКА: {file_path.name} ({e})"]
 
     def _prepare_downmix_target(
