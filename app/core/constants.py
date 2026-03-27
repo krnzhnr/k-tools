@@ -149,6 +149,7 @@ class ScriptCategory:
     AUDIO = "Аудио"
     VIDEO = "Видео"
     CONTAINERS = "Контейнеры"
+    SUBTITLES = "Субтитры"
 
 
 class ScriptMetadata:
@@ -214,6 +215,13 @@ class ScriptMetadata:
         "Массовое извлечение потоков из контейнера с авто-именованием."
     )
 
+    # Субтитры
+    ASS_TO_VTT_NAME = "ASS → VTT"
+    ASS_TO_VTT_DESC = (
+        "Конвертация субтитров ASS/SSA в WebVTT с "
+        "фильтрацией по актёрам и очисткой тегов."
+    )
+
 
 # Конфигурация категорий для UI
 # Порядок в словаре определяет порядок отображения
@@ -232,6 +240,11 @@ CATEGORY_CONFIG = {
         "icon": "SHARE",
         "nav_key": "containers",
         "color": ("rgba(235, 110, 77, 0.2)", "#EB6E4D"),  # Терракотовый
+    },
+    ScriptCategory.SUBTITLES: {
+        "icon": "FONT",
+        "nav_key": "subtitles",
+        "color": ("rgba(168, 120, 232, 0.2)", "#A878E8"),  # Фиолетовый
     },
 }
 

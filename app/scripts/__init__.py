@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Реализации скриптов обработки медиафайлов."""
 
+from . import ass_to_vtt_converter
 from . import audio_converter
 from . import audio_dee_downmixer
 from . import audio_speed_changer
@@ -14,6 +15,7 @@ from . import track_extractor
 
 # Список всех модулей для удобства регистрации
 SCRIPT_MODULES = [
+    ass_to_vtt_converter,
     audio_converter,
     audio_dee_downmixer,
     audio_speed_changer,

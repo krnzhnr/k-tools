@@ -26,11 +26,13 @@ from qfluentwidgets import (
     ComboBox,
     LineEdit,
     PrimaryPushButton,
+    PushButton,
     ProgressBar,
     IndeterminateProgressBar,
     SmoothScrollArea,
     StrongBodyLabel,
     SubtitleLabel,
+    CaptionLabel,
     FluentIcon,
     InfoBar,
     InfoBarPosition,
@@ -48,7 +50,7 @@ from app.ui.muxing_table_widget import MuxingTableWidget
 from app.ui.track_list_widget import TrackListWidget
 from app.ui.stream_replace_widget import StreamReplaceWidget
 from app.ui.track_extract_widget import TrackExtractWidget
-from app.ui.elided_label import ElidedLabel
+from app.ui.ass_filter_widget import AssFilterWidget
 
 logger = logging.getLogger(__name__)
 
@@ -277,6 +279,7 @@ class ScriptPage(QWidget):
         self._track_widget: TrackListWidget | None = None
         self._stream_replace_widget: StreamReplaceWidget | None = None
         self._track_extract_widget: TrackExtractWidget | None = None
+        self._ass_filter_widget: AssFilterWidget | None = None
         self._file_list: Any = None
         self._settings_manager = SettingsManager()
 
@@ -296,6 +299,7 @@ class ScriptPage(QWidget):
         # Scroll area для прокрутки контента
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
 
         scroll = SmoothScrollArea(self)
         scroll.setWidgetResizable(True)
@@ -322,11 +326,11 @@ class ScriptPage(QWidget):
         # Лог выполнения
         self._add_log_area(layout)
 
-        # Прогресс бар и кнопка
-        self._add_bottom_bar(layout)
-
         scroll.setWidget(container)
         outer.addWidget(scroll)
+
+        # Компактная кнопка, путь и прогресс снизу (фиксированные)
+        self._add_fixed_bottom_bar(outer)
 
     def _add_header(self, layout: QVBoxLayout) -> None:
         """Добавить заголовок и описание скрипта.
@@ -517,6 +521,8 @@ class ScriptPage(QWidget):
             self._create_track_extract_widget(layout)
         elif self._script.use_custom_widget and "поток" in script_name.lower():
             self._create_stream_manager_widget(layout)
+        elif self._script.use_custom_widget and "VTT" in script_name:
+            self._create_ass_filter_widget(layout)
         else:
             self._create_generic_file_list(layout)
 
@@ -569,6 +575,30 @@ class ScriptPage(QWidget):
         self._file_list.filesChanged.connect(self._update_path_placeholder)
         layout.addWidget(self._file_list, stretch=1)
 
+    def _create_ass_filter_widget(
+        self, layout: QVBoxLayout,
+    ) -> None:
+        """Создать виджет фильтрации актёров ASS."""
+        self._ass_filter_widget = AssFilterWidget(self)
+        self._file_list = self._ass_filter_widget
+        layout.addWidget(self._ass_filter_widget, stretch=1)
+        self._ass_filter_widget.filesChanged.connect(
+            self._update_path_placeholder
+        )
+
+        # Если есть настройка удаления тегов, связываем её с предпросмотром
+        if "strip_formatting" in self._settings_widgets:
+            cb = self._settings_widgets["strip_formatting"]
+            if isinstance(cb, CheckBox):
+                # Инициализируем начальное состояние
+                self._ass_filter_widget.set_strip_formatting(cb.isChecked())
+                # Подключаем сигнал для живого обновления предпросмотра
+                cb.checkStateChanged.connect(
+                    lambda: self._ass_filter_widget.set_strip_formatting(
+                        cb.isChecked()
+                    )
+                )
+
     def _on_files_changed(self) -> None:
         """Обработчик изменения списка файлов."""
         if self._file_list is not None and self._track_widget is not None:
@@ -596,8 +626,7 @@ class ScriptPage(QWidget):
             )
             return
         logger.info(
-            "[Управление потоками] Загрузка " "дорожек для %d файлов",
-            len(paths),
+            "[Управление потоками] Загрузка дорожек для %d файлов", len(paths)
         )
         self._track_widget.load_files(paths)
 
@@ -618,44 +647,60 @@ class ScriptPage(QWidget):
         )
         layout.addWidget(self._log_area)
 
-    def _add_bottom_bar(self, layout: QVBoxLayout) -> None:
-        """Добавить прогресс-бар и кнопку выполнения."""
-        self._progress = ProgressBar(self)
+    def _add_fixed_bottom_bar(self, layout: QVBoxLayout) -> None:
+        """Добавить компактную фиксированную нижнюю панель."""
+        self.bottom_widget = QWidget(self)
+        self.bottom_widget.setObjectName("fixedBottomBar")
+        self.bottom_widget.setFixedHeight(106)
+        self.bottom_widget.setStyleSheet(
+            """
+            QWidget#fixedBottomBar {
+                background-color: transparent;
+                border-top: 1px solid rgba(255, 255, 255, 0.08);
+            }
+            """
+        )
+
+        # Главный макет панели
+        panel_layout = QVBoxLayout(self.bottom_widget)
+        panel_layout.setContentsMargins(24, 6, 24, 16)
+        panel_layout.setSpacing(12)
+
+        # 1. Прогресс-бар (теперь выровнен по отступам 24px)
+        progress_container = QWidget(self.bottom_widget)
+        progress_layout = QVBoxLayout(progress_container)
+        progress_layout.setContentsMargins(0, 6, 0, 0)
+        progress_layout.setSpacing(12)
+
+        self._progress = ProgressBar(progress_container)
+        self._progress.setFixedHeight(4)
         self._progress.setVisible(True)
-        layout.addWidget(self._progress)
+
+        self._status_label = CaptionLabel(progress_container)
+        self._status_label.setText("Ожидание запуска...")
+
+        progress_layout.addWidget(self._status_label)
+        progress_layout.addWidget(self._progress)
 
         try:
-            self._indeterminate_progress = IndeterminateProgressBar(self)
+            self._indeterminate_progress = IndeterminateProgressBar(
+                progress_container
+            )
             self._indeterminate_progress.setVisible(False)
-            layout.addWidget(self._indeterminate_progress)
+            self._indeterminate_progress.setFixedHeight(4)
+            progress_layout.addWidget(self._indeterminate_progress)
         except (NameError, ImportError):
             self._indeterminate_progress = None
 
-        self._status_label = ElidedLabel("Готов к работе", self)
-        self._status_label.setElideMode(Qt.TextElideMode.ElideRight)
-        self._status_label.setVisible(True)
-        layout.addWidget(self._status_label)
+        panel_layout.addWidget(progress_container)
 
-        self._execute_btn = PrimaryPushButton(
-            FluentIcon.PLAY, "Выполнить", self
-        )
-        self._execute_btn.setMinimumHeight(38)
-        self._execute_btn.clicked.connect(self._on_execute_clicked)
+        # 2. Кнопки и путь в одну строку
+        btns_layout = QHBoxLayout()
+        btns_layout.setSpacing(12)
 
-        self._add_output_path_selector(layout)
-        layout.addWidget(self._execute_btn)
-
-    def _add_output_path_selector(self, layout: QVBoxLayout) -> None:
-        """Добавить селектор пути сохранения."""
-        path_label = StrongBodyLabel("Путь сохранения", self)
-        layout.addSpacing(10)
-        layout.addWidget(path_label)
-
-        path_layout = QHBoxLayout()
-        path_layout.setSpacing(8)
-
-        self._output_path_edit = LineEdit(self)
+        self._output_path_edit = LineEdit(self.bottom_widget)
         self._update_path_placeholder()
+        self._output_path_edit.setFixedHeight(36)
         self._output_path_edit.textChanged.connect(
             lambda t: logger.info(
                 "[%s] Ручной путь сохранения изменен на: '%s'",
@@ -663,16 +708,27 @@ class ScriptPage(QWidget):
                 t,
             )
         )
-        path_layout.addWidget(self._output_path_edit)
+        btns_layout.addWidget(self._output_path_edit, stretch=1)
 
-        self._browse_output_btn = PrimaryPushButton(
-            FluentIcon.FOLDER, "Обзор", self
+        self._browse_output_btn = PushButton(
+            FluentIcon.FOLDER, "Обзор", self.bottom_widget
         )
         self._browse_output_btn.setFixedWidth(100)
+        self._browse_output_btn.setFixedHeight(36)
         self._browse_output_btn.clicked.connect(self._on_browse_output_clicked)
-        path_layout.addWidget(self._browse_output_btn)
+        btns_layout.addWidget(self._browse_output_btn)
 
-        layout.addLayout(path_layout)
+        self._execute_btn = PrimaryPushButton(
+            FluentIcon.PLAY, "Выполнить", self.bottom_widget
+        )
+        self._execute_btn.setFixedWidth(140)
+        self._execute_btn.setFixedHeight(36)
+        self._execute_btn.clicked.connect(self._on_execute_clicked)
+        btns_layout.addWidget(self._execute_btn)
+
+        panel_layout.addLayout(btns_layout)
+
+        layout.addWidget(self.bottom_widget)
 
     def _on_browse_output_clicked(self) -> None:
         """Обработчик нажатия кнопки выбора папки."""
@@ -745,7 +801,6 @@ class ScriptPage(QWidget):
             logger.info("Пользователь нажал 'Остановить'")
             self._worker.cancel()
             self._execute_btn.setEnabled(False)
-            self._status_label.setText("Остановка...")
             return
 
         # Сбросим флаг отмены у скрипта перед новым запуском
@@ -769,7 +824,8 @@ class ScriptPage(QWidget):
         self._inject_script_settings(settings)
 
         logger.info(
-            "Пользователь нажал 'Выполнить' для скрипта '%s'. Файлов: %d. Настройки: %s",  # noqa: E501
+            "Пользователь нажал 'Выполнить' для скрипта '%s'. "
+            "Файлов: %d. Настройки: %s",
             self._script.name,
             len(files),
             settings,
@@ -799,9 +855,6 @@ class ScriptPage(QWidget):
         else:
             self._progress.setVisible(True)
             self._progress.setRange(0, 0)
-
-        self._status_label.setText("Запуск...")
-        self._status_label.setVisible(True)
 
     def _inject_script_settings(self, settings: dict[str, Any]) -> None:
         if self._track_widget is not None:
@@ -833,6 +886,19 @@ class ScriptPage(QWidget):
                 len(replacements),
             )
 
+        if self._ass_filter_widget is not None:
+            excluded = self._ass_filter_widget.get_excluded_actors()
+            settings["excluded_actors"] = excluded
+            excluded_styles = (
+                self._ass_filter_widget.get_excluded_styles()
+            )
+            settings["excluded_styles"] = excluded_styles
+            logger.info(
+                "[ASS → VTT] Исключённые актёры: %s, исключённые стили: %s",
+                excluded,
+                excluded_styles,
+            )
+
     def _on_progress(
         self,
         current: int,
@@ -862,8 +928,9 @@ class ScriptPage(QWidget):
             self._progress.setRange(0, 100)
 
         self._progress.setValue(percent)
-
-        self._status_label.setText(f"{current}/{total}: {message}")
+        self._status_label.setText(
+            f"Обработано: {current}/{total} - {message}"
+        )
 
     def _on_finished(self, results: list[str]) -> None:
         """Обработка завершения выполнения."""
@@ -939,7 +1006,6 @@ class ScriptPage(QWidget):
 
         self._progress.setRange(0, 100)
         self._progress.setVisible(True)
-        self._status_label.setVisible(True)
 
         InfoBar.error(
             title="Ошибка",
