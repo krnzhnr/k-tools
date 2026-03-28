@@ -366,5 +366,5 @@ class TestAssToVttScript:
         vtt = tmp_path / "test.vtt"
         content = vtt.read_text(encoding="utf-8")
 
-        # Первая строка: 0:00:01.00 → 00:00:01.000
-        assert "00:00:01.000 --> 00:00:03.500" in content
+        # Первая строка: 0:00:01.00 → 00:01.000 (FFmpeg опускает часы)
+        assert "00:01.000 --> 00:03.500" in content

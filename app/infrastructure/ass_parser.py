@@ -5,6 +5,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from app.core.singleton import SingletonMeta
 
@@ -323,24 +324,78 @@ class AssParser(metaclass=SingletonMeta):
             Таймкод в формате WebVTT.
         """
         try:
-            # Разбиваем по ":" и "."
-            time_part, centiseconds_str = ass_time.rsplit(".", 1)
-            parts = time_part.split(":")
+            # Математически точная конвертация через секунды
+            # (защита от round-ошибок)
+            h_str, m_str, s_rest = ass_time.split(":")
+            s_str, cs_str = s_rest.split(".")
 
-            hours = int(parts[0])
-            minutes = int(parts[1])
-            seconds = int(parts[2])
-            centiseconds = int(centiseconds_str)
-            milliseconds = centiseconds * 10
-
-            return (
-                f"{hours:02d}:{minutes:02d}:"
-                f"{seconds:02d}.{milliseconds:03d}"
+            # Считаем общее количество секунд (float)
+            total_seconds = (
+                int(h_str) * 3600 +
+                int(m_str) * 60 +
+                int(s_str) +
+                int(cs_str) / 100
             )
-        except (ValueError, IndexError):
+
+            # Разложение обратно в VTT формат
+            ms = int(round((total_seconds % 1) * 1000))
+            total_int = int(total_seconds)
+            s = total_int % 60
+            m = (total_int // 60) % 60
+            h = total_int // 3600
+
+            # Коррекция переполнения при округлении (напр. 59.999 -> 60.000)
+            if ms == 1000:
+                ms = 0
+                s += 1
+                if s == 60:
+                    s = 0
+                    m += 1
+                    if m == 60:
+                        m = 0
+                        h += 1
+
+            return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
+        except (ValueError, IndexError, ZeroDivisionError):
             logger.warning(
                 "Некорректный таймкод ASS: '%s', "
                 "используется нулевой",
                 ass_time,
             )
             return "00:00:00.000"
+
+    @staticmethod
+    def to_ass_line(dialogue: Any) -> str:
+        """Собрать объект диалога обратно в строку формата ASS.
+
+        Использует стандартный порядок полей v4.00+.
+
+        Args:
+            dialogue: Объект диалога (AssDialogue).
+
+        Returns:
+            Строка Dialogue:...
+        """
+        # Текст может содержать переносы строк, заменяем их обратно на \N
+        text = dialogue.text.replace("\n", "\\N")
+        return (
+            f"Dialogue: 0,{dialogue.start},{dialogue.end},"
+            f"{dialogue.style},{dialogue.actor},0,0,0,,{text}"
+        )
+
+    @staticmethod
+    def get_minimal_header() -> str:
+        """Получить минимальный заголовок ASS-файла для FFmpeg.
+
+        Returns:
+            Строка с заголовком и структурой [Events].
+        """
+        return (
+            "[Script Info]\n"
+            "ScriptType: v4.00+\n"
+            "PlayResX: 1920\n"
+            "PlayResY: 1080\n\n"
+            "[Events]\n"
+            "Format: Layer, Start, End, Style, Name, "
+            "MarginL, MarginR, MarginV, Effect, Text\n"
+        )

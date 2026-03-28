@@ -887,17 +887,26 @@ class ScriptPage(QWidget):
             )
 
         if self._ass_filter_widget is not None:
-            excluded = self._ass_filter_widget.get_excluded_actors()
-            settings["excluded_actors"] = excluded
-            excluded_styles = (
-                self._ass_filter_widget.get_excluded_styles()
-            )
+            excluded_actors = self._ass_filter_widget.get_excluded_actors()
+            settings["excluded_actors"] = excluded_actors
+            excluded_styles = self._ass_filter_widget.get_excluded_styles()
             settings["excluded_styles"] = excluded_styles
-            logger.info(
-                "[ASS → VTT] Исключённые актёры: %s, исключённые стили: %s",
-                excluded,
-                excluded_styles,
+
+            # Добавляем ручные исключения конкретных строк
+            manual_excl = self._ass_filter_widget.get_manual_exclusions()
+            settings["manual_exclusions"] = manual_excl
+
+            total_manual = sum(
+                len(indices) for indices in manual_excl.values()
             )
+            if total_manual > 0 or excluded_actors or excluded_styles:
+                logger.info(
+                    "[ASS → VTT] Исключено: актёров: %d, стилей: %d, "
+                    "строк вручную: %d",
+                    len(excluded_actors),
+                    len(excluded_styles),
+                    total_manual,
+                )
 
     def _on_progress(
         self,

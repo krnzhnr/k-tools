@@ -30,6 +30,10 @@ from qfluentwidgets import (
     SegmentedWidget,
     TreeWidget,
     SearchLineEdit,
+    ToolButton,
+    FluentWindow,
+    setTheme,
+    qconfig,
 )
 
 from app.infrastructure.ass_parser import AssParser, AssData
@@ -84,6 +88,41 @@ class RichTextDelegate(QStyledItemDelegate):
         return doc.size().toSize()
 
 
+class ExternalFilterWindow(FluentWindow):
+    """Отдельное окно для отображения панели фильтров и предпросмотра."""
+
+    closed = pyqtSignal()
+
+    def __init__(self, content_widget: QWidget):
+        super().__init__(None)  # Создаем без родителя
+        self.content_widget = content_widget
+
+        # Настройка: скрываем навигацию и добавляем контент
+        self.navigationInterface.hide()
+        self.stackedWidget.addWidget(content_widget)
+        self.stackedWidget.setCurrentWidget(content_widget)
+
+        # Синхронизация темы
+        setTheme(qconfig.theme)
+
+        self.setWindowTitle("Настройка фильтров и предпросмотр — K-Tools")
+        self.resize(1000, 800)
+
+        # Центрируем на экране
+        from PyQt6.QtWidgets import QApplication
+        screen = QApplication.primaryScreen()
+        if screen:
+            geo = screen.availableGeometry()
+            self.move(
+                (geo.width() - self.width()) // 2,
+                (geo.height() - self.height()) // 2,
+            )
+
+    def closeEvent(self, event):
+        self.closed.emit()
+        super().closeEvent(event)
+
+
 class AssFilterWidget(QWidget):
     """Виджет для управления файлами ASS и фильтрации.
 
@@ -107,7 +146,9 @@ class AssFilterWidget(QWidget):
         self._file_data: dict[Path, AssData] = {}
         self._actor_checkboxes: dict[str, CheckBox] = {}
         self._style_checkboxes: dict[str, CheckBox] = {}
-        self._strip_formatting = True  # Состояние из настроек скрипта
+        self._strip_formatting = True
+        self._manual_exclusions: dict[Path, set[int]] = {}
+        self._detached_window: ExternalFilterWindow | None = None
 
         # Таймер для отложенного обновления предпросмотра
         self._preview_timer = QTimer(self)
@@ -165,14 +206,32 @@ class AssFilterWidget(QWidget):
         content_layout.setContentsMargins(16, 12, 16, 12)
         content_layout.setSpacing(8)
 
-        # SegmentedWidget с вкладками
+        # SegmentedWidget с вкладками + кнопка расширения
+        tab_header_layout = QHBoxLayout()
+        tab_header_layout.setContentsMargins(0, 0, 0, 0)
+
         self._segmented = SegmentedWidget(self._content_card)
+        # Растягиваем на всю ширину
+        from PyQt6.QtWidgets import QSizePolicy
+        self._segmented.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+
         self._segmented.addItem("actors", "Актёры", self._on_tab_changed)
         self._segmented.addItem("styles", "Стили", self._on_tab_changed)
         self._segmented.addItem(
             "preview", "Предпросмотр", self._on_tab_changed
         )
-        content_layout.addWidget(self._segmented)
+        tab_header_layout.addWidget(self._segmented, 1)
+
+        self._expand_btn = ToolButton(
+            FluentIcon.FULL_SCREEN, self._content_card
+        )
+        self._expand_btn.setToolTip("Открыть в отдельном окне")
+        self._expand_btn.clicked.connect(self._on_expand_clicked)
+        tab_header_layout.addWidget(self._expand_btn)
+
+        content_layout.addLayout(tab_header_layout)
 
         # Стек панелей
         self._stack = QStackedWidget(self._content_card)
@@ -243,6 +302,7 @@ class AssFilterWidget(QWidget):
         self._preview_tree.setItemDelegateForColumn(
             3, RichTextDelegate(self._preview_tree)
         )
+        self._preview_tree.itemChanged.connect(self._on_preview_item_changed)
 
         preview_layout.addWidget(self._preview_tree)
         self._stack.addWidget(self._preview_panel)
@@ -300,6 +360,7 @@ class AssFilterWidget(QWidget):
             return
 
         self._file_data.clear()
+        self._manual_exclusions.clear()
         all_actors: set[str] = set()
         all_styles: set[str] = set()
         for p in paths:
@@ -341,9 +402,9 @@ class AssFilterWidget(QWidget):
     def _run_preview_update(self) -> None:
         if not self._content_card.isVisible():
             return
+
+        self._preview_tree.blockSignals(True)
         self._preview_tree.clear()
-        excluded_actors = set(self.get_excluded_actors())
-        excluded_styles = set(self.get_excluded_styles())
         search_text = self._search_box.text().lower()
 
         for path, data in self._file_data.items():
@@ -351,91 +412,20 @@ class AssFilterWidget(QWidget):
             file_item.setIcon(0, FluentIcon.FOLDER.icon())
             added_any = False
 
-            for d in data.dialogues:
-                is_excluded = (
-                    d.actor in excluded_actors or d.style in excluded_styles
-                )
-                original_text = d.text
-
-                # Если удаление тегов выключено, считаем что текст "не
-                # меняется" (хотя ASS теги в VTT не приветствуются, мы
-                # показываем выбор пользователя)
-                if self._strip_formatting:
-                    cleaned_text = self._parser.strip_tags(original_text)
-                else:
-                    cleaned_text = original_text
-
-                is_changed = original_text != cleaned_text
-                is_empty = not cleaned_text.strip()
-
-                if search_text and search_text not in original_text.lower():
+            for dialogue_index, d in enumerate(data.dialogues):
+                if search_text and search_text not in d.text.lower():
                     continue
 
-                status, color_hex, is_deleted = "", "", False
-                if is_excluded:
-                    status, color_hex, is_deleted = (
-                        "УДАЛЕНО (Фильтр)",
-                        "#ff4d4f",
-                        True,
-                    )
-                elif is_empty:
-                    # Пустой строка считается только если МЫ ее очищаем.
-                    # Если пользователь оставил теги и строка не пуста -
-                    # она не удалится.
-                    status, color_hex, is_deleted = (
-                        "УДАЛЕНО (Пусто)",
-                        "#ffa940",
-                        True,
-                    )
-                elif is_changed:
-                    status, color_hex = "ИЗМЕНЕНО", "#1890ff"
-                else:
-                    # Если изменений нет и не удалено, показываем только при
-                    # поиске или если это обычная строка (но дерево будет
-                    # слишком большим, так что показываем только "активные"
-                    # действия)
-                    continue
-
-                escaped_orig = html.escape(original_text)
                 item = QTreeWidgetItem(
-                    [status, d.start, f"{d.actor or '<нет>'} / {d.style}", ""]
+                    ["", d.start, f"{d.actor or '<нет>'} / {d.style}", ""]
                 )
-                if color_hex:
-                    item.setForeground(0, QColor(color_hex))
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                item.setData(
+                    0, Qt.ItemDataRole.UserRole, (path, dialogue_index)
+                )
 
-                # Формируем HTML для отображения в 3-й колонке (делегат)
-                if is_deleted:
-                    html_text = (
-                        f'<span style="color: {color_hex}; '
-                        f'text-decoration: line-through;">'
-                        f'{escaped_orig}</span>'
-                    )
-                elif is_changed and self._strip_formatting:
-                    # Теги выделяем красным (если удаляем)
-                    def _wrap_tag(match: Any) -> str:
-                        res = html.escape(match.group(0))
-                        return (
-                            f'<span style="color: #ff3333; '
-                            f'text-decoration: line-through;">{res}</span>'
-                        )
-
-                    highlighted = re.sub(r"\{[^}]*\}", _wrap_tag, escaped_orig)
-                    highlighted = highlighted.replace(
-                        "\\N", '<span style="color: #ff3333;">\\N</span>'
-                    ).replace(
-                        "\\n", '<span style="color: #ff3333;">\\n</span>'
-                    )
-                    html_text = highlighted
-                else:
-                    html_text = escaped_orig
-
-                item.setText(3, html_text)
-
-                # Обновленный ToolTip для удаленных строк
-                if is_deleted:
-                    item.setToolTip(3, "Результат VTT: <СТРОКА БУДЕТ УДАЛЕНА>")
-                else:
-                    item.setToolTip(3, f"Результат VTT:\n{cleaned_text}")
+                # Применяем все визуальные стили (текст, цвета, чекбокс)
+                self._refresh_item_visuals(item)
 
                 file_item.addChild(item)
                 added_any = True
@@ -450,6 +440,7 @@ class AssFilterWidget(QWidget):
                     True
                 )
                 file_item.setExpanded(True)
+        self._preview_tree.blockSignals(False)
 
     def _on_select_all_actors(self):
         for cb in self._actor_checkboxes.values():
@@ -479,3 +470,189 @@ class AssFilterWidget(QWidget):
         return [
             n for n, cb in self._style_checkboxes.items() if cb.isChecked()
         ]
+
+    def get_manual_exclusions(self) -> dict[str, list[int]]:
+        """Получить список вручную исключенных строк для каждого файла.
+
+        Returns:
+            Словарь {путь_к_файлу: [список_индексов]}.
+        """
+        return {
+            str(path): sorted(list(indices))
+            for path, indices in self._manual_exclusions.items()
+        }
+
+    def _on_preview_item_changed(
+        self, item: QTreeWidgetItem, column: int
+    ) -> None:
+        """Обработчик изменения состояния чекбокса в дереве предпросмотра."""
+        if column != 0:
+            return
+
+        data = item.data(0, Qt.ItemDataRole.UserRole)
+        if not data or not isinstance(data, tuple):
+            return
+
+        path, index = data
+        is_checked = item.checkState(0) == Qt.CheckState.Checked
+
+        if is_checked:
+            # Если поставили галочку — убираем из списка исключений
+            if path in self._manual_exclusions:
+                self._manual_exclusions[path].discard(index)
+                if not self._manual_exclusions[path]:
+                    del self._manual_exclusions[path]
+        else:
+            # Если сняли галочку — добавляем в список исключений
+            if path not in self._manual_exclusions:
+                self._manual_exclusions[path] = set()
+            self._manual_exclusions[path].add(index)
+
+        # Обновляем визуальное состояние строки напрямую
+        self._refresh_item_visuals(item)
+
+    def _refresh_item_visuals(self, item: QTreeWidgetItem) -> None:
+        """Обновить визуальное состояние одного элемента."""
+        data_info = item.data(0, Qt.ItemDataRole.UserRole)
+        if not data_info or not isinstance(data_info, tuple):
+            return
+
+        path, idx = data_info
+        d = self._file_data[path].dialogues[idx]
+
+        excluded_actors = set(self.get_excluded_actors())
+        excluded_styles = set(self.get_excluded_styles())
+
+        is_excluded = (
+            d.actor in excluded_actors or d.style in excluded_styles
+        )
+        is_manually_excluded = (
+            path in self._manual_exclusions and
+            idx in self._manual_exclusions[path]
+        )
+
+        original_text = d.text
+        ffmpeg_sim_text = self._parser.strip_tags(original_text)
+        is_changed = original_text != ffmpeg_sim_text
+        is_empty = not ffmpeg_sim_text.strip()
+
+        status, color_hex, is_deleted = "", "", False
+        if is_excluded:
+            status, color_hex, is_deleted = (
+                "УДАЛЕНО (Фильтр)", "#ff4d4f", True
+            )
+        elif is_manually_excluded:
+            status, color_hex, is_deleted = (
+                "УДАЛЕНО (Вручную)", "#ff4d4f", True
+            )
+        elif is_empty:
+            status, color_hex, is_deleted = "УДАЛЕНО (Пусто)", "#ffa940", True
+        elif is_changed:
+            if self._strip_formatting:
+                status, color_hex = "ИЗМЕНЕНО", "#1890ff"
+            else:
+                status, color_hex = "FFmpeg (Очистка)", "#722ed1"
+        else:
+            status, color_hex = "ОК", ""
+
+        # Блокируем сигналы, чтобы установка CheckState не вызвала рекурсию
+        self._preview_tree.blockSignals(True)
+        item.setText(0, status)
+        check_state = (
+            Qt.CheckState.Unchecked
+            if is_manually_excluded or is_excluded
+            else Qt.CheckState.Checked
+        )
+        item.setCheckState(0, check_state)
+
+        # Визуальное оформление текста
+        if color_hex:
+            item.setForeground(0, QColor(color_hex))
+        else:
+            item.setData(0, Qt.ItemDataRole.ForegroundRole, None)
+
+        escaped_orig = html.escape(original_text)
+        if is_deleted:
+            html_text = (
+                f'<span style="color: {color_hex}; '
+                f'text-decoration: line-through;">{escaped_orig}</span>'
+            )
+        elif is_changed:
+            def _wrap_tag(match: Any) -> str:
+                res = html.escape(match.group(0))
+                color = "#ff3333" if self._strip_formatting else "#9254de"
+                return (
+                    f'<span style="color: {color}; '
+                    f'text-decoration: line-through;">{res}</span>'
+                )
+
+            highlighted = re.sub(r"\{[^}]*\}", _wrap_tag, escaped_orig)
+            line_break_color = (
+                "#ff3333" if self._strip_formatting else "#9254de"
+            )
+            highlighted = highlighted.replace(
+                "\\N", f'<span style="color: {line_break_color};">\\N</span>'
+            ).replace(
+                "\\n", f'<span style="color: {line_break_color};">\\n</span>'
+            )
+            html_text = highlighted
+        else:
+            html_text = escaped_orig
+
+        item.setText(3, html_text)
+
+        # ToolTip
+        if is_deleted:
+            item.setToolTip(3, "Результат VTT: <СТРОКА БУДЕТ УДАЛЕНА>")
+        elif is_changed:
+            if self._strip_formatting:
+                item.setToolTip(3, f"Результат VTT:\n{ffmpeg_sim_text}")
+            else:
+                item.setToolTip(
+                    3,
+                    "FFmpeg автоматически удалит теги "
+                    "и очистит форматирование."
+                )
+        else:
+            item.setToolTip(3, f"Результат VTT:\n{original_text}")
+
+        self._preview_tree.blockSignals(False)
+
+    def _on_expand_clicked(self) -> None:
+        """Обработчик нажатия на кнопку расширения окна."""
+        if self._detached_window:
+            self._detached_window.activateWindow()
+            return
+
+        # Запоминаем текущий индекс в основном макете, чтобы вернуть на место
+        layout = self.layout()
+        if not isinstance(layout, QVBoxLayout):
+            return
+
+        self._content_card_index = layout.indexOf(self._content_card)
+
+        # Переносим виджет в отдельное окно (без родителя)
+        self._content_card.setParent(None)
+        self._detached_window = ExternalFilterWindow(self._content_card)
+        self._detached_window.closed.connect(self._on_window_closed)
+        self._detached_window.show()
+
+        # Визуальная пометка в основном окне
+        self._expand_btn.setVisible(False)
+        logger.info("Панель фильтров перенесена во внешнее окно")
+
+    def _on_window_closed(self) -> None:
+        """Обработчик закрытия внешнего окна: возврат виджета домой."""
+        if not self._detached_window:
+            return
+
+        layout = self.layout()
+        if isinstance(layout, QVBoxLayout):
+            # Возвращаем виджет обратно в основной макет
+            self._content_card.setParent(self)
+            layout.insertWidget(self._content_card_index, self._content_card)
+            self._content_card.show()
+            self._expand_btn.setVisible(True)
+
+        self._detached_window = None
+        logger.info("Панель фильтров возвращена в основное окно")
