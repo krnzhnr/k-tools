@@ -11,6 +11,7 @@ def test_work_panel_signals_direct(qtbot):
     script = MockScript()
     page = ScriptPage(script)
     qtbot.addWidget(page)
+    page.preload_ui()
 
     # Имитируем состояние выполнения
     page._progress.setVisible(True)

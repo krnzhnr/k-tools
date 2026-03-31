@@ -17,11 +17,20 @@ class Eac3toRunner(metaclass=SingletonMeta):
 
     def __init__(self):
         """Инициализация runner'а."""
-        self._executable = path_utils.get_binary_path("eac3to")
-        logger.debug(
-            "Eac3toRunner инициализирован. Путь к бинарнику: %s",
-            self._executable,
-        )
+        self.__executable: str | None = None
+
+    @property
+    def _executable(self) -> str:
+        """Ленивая загрузка пути к бинарнику."""
+        if self.__executable is None:
+            self.__executable = path_utils.get_binary_path("eac3to")
+            logger.debug(
+                "Eac3toRunner инициализирован. Путь к бинарнику: %s",
+                self.__executable,
+            )
+        if self.__executable is None:
+            raise FileNotFoundError("Исполняемый файл eac3to не найден")
+        return self.__executable
 
     def run(
         self, args: list[str], cwd: Path | None = None, overwrite: bool = False

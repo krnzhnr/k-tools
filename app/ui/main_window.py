@@ -226,6 +226,16 @@ class MainWindow(FluentWindow):
             len(self._script_pages),
         )
 
+        # ФОНОВАЯ ИНИЦИАЛИЗАЦИЯ (Истинный Lazy Load):
+        # Даем главному окну 500мс на 100% плавную отрисовку, а затем тихо
+        # строим интерфейсы остальных вкладок по очереди с шагом 150мс.
+        from PyQt6.QtCore import QTimer
+
+        delay = 500
+        for page in self._script_pages.values():
+            QTimer.singleShot(delay, page.preload_ui)
+            delay += 150
+
     def _group_scripts(self) -> dict[str, list[AbstractScript]]:
         """Группировка скриптов по категориям."""
         categories: dict[str, list[AbstractScript]] = {}

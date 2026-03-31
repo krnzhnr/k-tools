@@ -19,11 +19,18 @@ class MKVMergeRunner(metaclass=SingletonMeta):
 
     def __init__(self) -> None:
         """Инициализация runner'а."""
-        self._mkvmerge_path = path_utils.get_binary_path("mkvmerge")
-        logger.debug(
-            "MKVMergeRunner инициализирован. Путь к бинарнику: %s",
-            self._mkvmerge_path,
-        )
+        self.__mkvmerge_path: str | None = None
+
+    @property
+    def _mkvmerge_path(self) -> str:
+        """Ленивая загрузка пути к бинарнику."""
+        if self.__mkvmerge_path is None:
+            self.__mkvmerge_path = path_utils.get_binary_path("mkvmerge")
+            logger.debug(
+                "MKVMergeRunner инициализирован. Путь к бинарнику: %s",
+                self.__mkvmerge_path,
+            )
+        return self.__mkvmerge_path
 
     def run(
         self,

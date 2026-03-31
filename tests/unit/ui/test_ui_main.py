@@ -36,6 +36,7 @@ def test_work_panel_no_files_warning(qtbot, mocker):
     script = MockScript()
     page = ScriptPage(script)
     qtbot.addWidget(page)
+    page.preload_ui()
 
     # Мокаем InfoBar.warning
     mocker.patch("qfluentwidgets.InfoBar.warning")

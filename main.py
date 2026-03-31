@@ -10,9 +10,7 @@ import sys
 from typing import Any
 import os
 import ctypes
-import darkdetect
 from datetime import datetime
-import atexit
 
 # Принудительная установка UTF-8 для подпроцессов и консоли
 os.environ["PYTHONIOENCODING"] = "utf-8"
@@ -81,23 +79,7 @@ if len(sys.argv) >= 3 and sys.argv[1] == "-m":
                 setattr(sys, "frozen", True)
         sys.exit(0)
 
-from PyQt6.QtCore import QObject, pyqtSignal, QThread  # noqa: E402
-from PyQt6.QtWidgets import QApplication  # noqa: E402
-from PyQt6.QtGui import QIcon  # noqa: E402
-from qfluentwidgets import setTheme, Theme, qconfig, MessageBox  # noqa: E402
-
-from app.core.resource_utils import get_resource_path  # noqa: E402
-from app.core.script_registry import ScriptRegistry  # noqa: E402
-from app.core.abstract_script import AbstractScript  # noqa: E402
-import importlib  # noqa: E402
-import pkgutil  # noqa: E402
-import app.scripts  # noqa: E402
-from app.core.settings_manager import SettingsManager  # noqa: E402
-from app.ui.main_window import MainWindow  # noqa: E402
-from app.core.temp_file_manager import TempFileManager  # noqa: E402
-
 logger = logging.getLogger(__name__)
-
 
 from pathlib import Path  # noqa: E402
 
@@ -188,12 +170,18 @@ def _setup_logging() -> None:
     )
 
 
-def _create_registry() -> ScriptRegistry:
+def _create_registry() -> Any:
     """Создать и заполнить реестр скриптов.
 
     Использует как явный список из app.scripts, так и
     динамическое сканирование для максимальной надежности.
     """
+    from app.core.script_registry import ScriptRegistry
+    from app.core.abstract_script import AbstractScript
+    import pkgutil
+    import importlib
+    import app.scripts
+
     registry = ScriptRegistry()
 
     # Сначала пытаемся загрузить из явного списка (надежнее для EXE)
@@ -256,41 +244,58 @@ def _create_registry() -> ScriptRegistry:
     return registry
 
 
-class ThemeSignal(QObject):
-    """Класс-сигнал для обработки изменений темы из сторонних потоков."""
-
-    themeChanged = pyqtSignal(str)
-
-
-class ThemeWorker(QThread):
-    """Поток для прослушивания системной темы."""
-
-    def __init__(self, signal: ThemeSignal) -> None:
-        super().__init__()
-        self.signal = signal
-
-    def run(self) -> None:
-        """Запуск слушателя."""
-        try:
-            darkdetect.listener(lambda t: self.signal.themeChanged.emit(t))
-        except Exception:
-            # На случай ошибок в сторонней библиотеке
-            pass
-
-
 def main() -> None:
     """Главная функция запуска приложения."""
     _setup_logging()
     logger.info("Запуск K-Tools")
 
-    # Очистка временных файлов от предыдущих сессий
-    TempFileManager().cleanup_on_startup()
-
-    # Регистрация очистки при выходе
-    atexit.register(TempFileManager().cleanup)
+    # Сначала минимальные и быстрые импорты для отрисовки сплеш-скрина
+    from PyQt6.QtWidgets import QApplication, QSplashScreen
+    from PyQt6.QtGui import QIcon
+    from PyQt6.QtCore import Qt
+    from app.core.resource_utils import get_resource_path
 
     app = QApplication(sys.argv)
-    app.setWindowIcon(QIcon(get_resource_path("app_icon.ico")))
+
+    icon_path = get_resource_path("app_icon.ico")
+    app.setWindowIcon(QIcon(icon_path))
+
+    # Показываем логотип приложения МГНОВЕННО (до загрузки Theme и MainWindow)
+    splash = QSplashScreen(
+        QIcon(icon_path).pixmap(128, 128),
+        Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.FramelessWindowHint,
+    )
+    splash.show()
+    app.processEvents()
+
+    # Сплеш-скрин уже на экране. Теперь выполняем тяжелые импорты "под капотом"
+    from app.core.temp_file_manager import TempFileManager
+    from app.core.settings_manager import SettingsManager
+    from qfluentwidgets import setTheme, Theme, qconfig, MessageBox
+    from PyQt6.QtCore import QObject, pyqtSignal, QThread
+    from app.ui.main_window import MainWindow
+
+    class ThemeSignal(QObject):
+        themeChanged = pyqtSignal(str)
+
+    class ThemeWorker(QThread):
+        def __init__(self, signal: ThemeSignal) -> None:
+            super().__init__()
+            self.signal = signal
+
+        def run(self) -> None:
+            import darkdetect
+
+            try:
+                darkdetect.listener(lambda t: self.signal.themeChanged.emit(t))
+            except Exception:
+                pass
+
+    # Очистка временных файлов от предыдущих сессий
+    TempFileManager().cleanup_on_startup()
+    import atexit
+
+    atexit.register(TempFileManager().cleanup)
 
     # Загрузка настроек темы
     settings = SettingsManager()
@@ -307,11 +312,9 @@ def main() -> None:
         qconfig.theme = Theme.AUTO
         setTheme(Theme.AUTO)
 
-    # Создаем объект-сигнал для связи между потоками
     theme_signal = ThemeSignal()
 
     def on_theme_changed(theme: str) -> None:
-        """Обработка сигнала смены темы."""
         try:
             if window and window.isVisible():
                 msg = MessageBox(
@@ -331,16 +334,16 @@ def main() -> None:
         except (NameError, AttributeError):
             pass
 
-    # Соединяем сигнал с обработчиком
     theme_signal.themeChanged.connect(on_theme_changed)
 
-    # Запускаем системный слушатель в отдельном потоке (асинхронно)
     theme_worker = ThemeWorker(theme_signal)
     theme_worker.start()
 
     registry = _create_registry()
     window = MainWindow(registry=registry)
     window.show()
+
+    splash.finish(window)
 
     logger.info("Окно приложения отображено")
     sys.exit(app.exec())

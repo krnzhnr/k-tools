@@ -283,15 +283,25 @@ class ScriptPage(QWidget):
         self._file_list: Any = None
         self._settings_manager = SettingsManager()
 
-        self._init_ui()
+        self._is_initialized = False
+
         logger.info(
-            "Страница скрипта '%s' создана",
+            "Страница скрипта '%s' создана (без UI)",
             script.name,
         )
+
+    def preload_ui(self) -> None:
+        """Предзагрузка интерфейса в фоновом режиме через очередь событий."""
+        if not self._is_initialized:
+            logger.info("Сборка интерфейса UI для '%s'...", self._script.name)
+            self._init_ui()
+            self._update_visibility()
+            self._is_initialized = True
 
     def showEvent(self, event: Any) -> None:
         """Событие отображения страницы."""
         super().showEvent(event)
+        self.preload_ui()
         self._update_path_placeholder()
 
     def _init_ui(self) -> None:
@@ -467,20 +477,47 @@ class ScriptPage(QWidget):
             self._script.name, field.key, bool(field.default)
         )
         widget.setChecked(bool(saved_val))
-        widget.stateChanged.connect(
-            lambda state: SettingsManager().set_script_setting(
-                self._script.name, field.key, bool(state)
+
+        # Специальная логика для подмены оригинала
+        if field.key == "overwrite_source":
+            # При инициализации проверяем, не заблокирован ли он уже
+            has_edit = hasattr(self, "_output_path_edit")
+            if has_edit and self._output_path_edit.text():
+                widget.setChecked(False)
+                widget.setEnabled(False)
+
+        def on_state_changed(state: int) -> None:
+            is_checked = bool(state)
+            SettingsManager().set_script_setting(
+                self._script.name, field.key, is_checked
             )
-        )
-        widget.stateChanged.connect(
-            lambda state: logger.info(
+            logger.info(
                 "[%s] Настройка '%s' (%s) изменена на: %s",
                 self._script.name,
                 field.label,
                 field.key,
-                "ВКЛ" if state else "ВЫКЛ",
+                "ВКЛ" if is_checked else "ВЫКЛ",
             )
-        )
+
+            # Если включаем подмену при заданном пути — сбрасываем путь
+            if field.key == "overwrite_source" and is_checked:
+                if (
+                    hasattr(self, "_output_path_edit")
+                    and self._output_path_edit.text().strip()
+                ):
+                    self._output_path_edit.clear()
+                    InfoBar.info(
+                        title="Путь сброшен",
+                        content="Выходной путь сброшен к оригиналу, "
+                        "так как включена подмена файла.",
+                        orient=Qt.Orientation.Horizontal,
+                        isClosable=True,
+                        position=InfoBarPosition.TOP,
+                        duration=5000,
+                        parent=self,
+                    )
+
+        widget.stateChanged.connect(on_state_changed)
         return widget
 
     def _update_visibility(self) -> None:
@@ -576,7 +613,8 @@ class ScriptPage(QWidget):
         layout.addWidget(self._file_list, stretch=1)
 
     def _create_ass_filter_widget(
-        self, layout: QVBoxLayout,
+        self,
+        layout: QVBoxLayout,
     ) -> None:
         """Создать виджет фильтрации актёров ASS."""
         self._ass_filter_widget = AssFilterWidget(self)
@@ -652,14 +690,12 @@ class ScriptPage(QWidget):
         self.bottom_widget = QWidget(self)
         self.bottom_widget.setObjectName("fixedBottomBar")
         self.bottom_widget.setFixedHeight(106)
-        self.bottom_widget.setStyleSheet(
-            """
+        self.bottom_widget.setStyleSheet("""
             QWidget#fixedBottomBar {
                 background-color: transparent;
                 border-top: 1px solid rgba(255, 255, 255, 0.08);
             }
-            """
-        )
+            """)
 
         # Главный макет панели
         panel_layout = QVBoxLayout(self.bottom_widget)
@@ -702,11 +738,7 @@ class ScriptPage(QWidget):
         self._update_path_placeholder()
         self._output_path_edit.setFixedHeight(36)
         self._output_path_edit.textChanged.connect(
-            lambda t: logger.info(
-                "[%s] Ручной путь сохранения изменен на: '%s'",
-                self._script.name,
-                t,
-            )
+            self._on_output_path_changed
         )
         btns_layout.addWidget(self._output_path_edit, stretch=1)
 
@@ -747,6 +779,9 @@ class ScriptPage(QWidget):
 
     def _update_path_placeholder(self) -> None:
         """Обновить плейсхолдер пути сохранения на базе глобальных настроек."""
+        if not hasattr(self, "_output_path_edit"):
+            return
+
         files = self._file_list.get_file_paths() if self._file_list else []
 
         # 1. Определяем базовую директорию
@@ -767,12 +802,40 @@ class ScriptPage(QWidget):
         placeholder = str(target_dir)
         self._output_path_edit.setPlaceholderText(placeholder)
 
+    def _on_output_path_changed(self, text: str) -> None:
+        """Обработчик изменения текста в поле выходного пути."""
+        logger.info(
+            "[%s] Ручной путь сохранения изменен на: '%s'",
+            self._script.name,
+            text,
+        )
+
+        has_custom_path = bool(text.strip())
+        # Если задан кастомный путь — отключаем чекбокс подмены оригинала
+        if "overwrite_source" in self._settings_widgets:
+            widget = self._settings_widgets["overwrite_source"]
+            if isinstance(widget, CheckBox):
+                if has_custom_path:
+                    # Сначала выключаем, потом блокируем, чтобы не вызвать
+                    # лишних триггеров логики сброса в UI
+                    if widget.isChecked():
+                        widget.blockSignals(True)
+                        widget.setChecked(False)
+                        SettingsManager().set_script_setting(
+                            self._script.name, "overwrite_source", False
+                        )
+                        widget.blockSignals(False)
+                    widget.setEnabled(False)
+                else:
+                    widget.setEnabled(True)
+
     def get_settings(self) -> dict[str, Any]:
         """Получить текущие значения настроек со страницы.
 
         Returns:
             Словарь {ключ: значение} настроек.
         """
+        self.preload_ui()
         return self._get_current_settings()
 
     def _get_current_settings(self) -> dict[str, Any]:
@@ -797,6 +860,7 @@ class ScriptPage(QWidget):
 
     def _on_execute_clicked(self) -> None:
         """Обработчик нажатия кнопки «Выполнить/Остановить»."""
+        self.preload_ui()
         if self._worker is not None and self._worker.isRunning():
             logger.info("Пользователь нажал 'Остановить'")
             self._worker.cancel()
@@ -915,6 +979,7 @@ class ScriptPage(QWidget):
         message: str,
     ) -> None:
         """Обработка прогресса выполнения."""
+        self.preload_ui()
         if total <= 0:
             return
 
@@ -943,6 +1008,7 @@ class ScriptPage(QWidget):
 
     def _on_finished(self, results: list[str]) -> None:
         """Обработка завершения выполнения."""
+        self.preload_ui()
         self._execute_btn.setText("Выполнить")
         self._execute_btn.setIcon(FluentIcon.PLAY)
         self._execute_btn.setEnabled(True)
@@ -1006,6 +1072,7 @@ class ScriptPage(QWidget):
         Args:
             error_text: Текст ошибки.
         """
+        self.preload_ui()
         self._execute_btn.setText("Выполнить")
         self._execute_btn.setIcon(FluentIcon.PLAY)
         self._execute_btn.setEnabled(True)

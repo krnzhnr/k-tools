@@ -2,7 +2,7 @@
 """Централизованные константы медиа-форматов."""
 
 # --- Видео ---
-VIDEO_CONTAINERS = frozenset([".mkv", ".mp4", ".mov", ".webm", ".avi"])
+VIDEO_CONTAINERS = frozenset([".mkv", ".mp4", ".mov", ".webm", ".avi", ".m4s"])
 VIDEO_STREAMS = frozenset(
     [
         ".hevc",

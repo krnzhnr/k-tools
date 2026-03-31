@@ -170,7 +170,7 @@ class StreamReplacerScript(AbstractScript):
 
         results = [msg]
         if success:
-            if overwrite_source:
+            if overwrite_source and not output_path:
                 self._replace_source_with_result(
                     container, output_file_path, results
                 )

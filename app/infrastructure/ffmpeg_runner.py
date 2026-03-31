@@ -21,11 +21,18 @@ class FFmpegRunner(metaclass=SingletonMeta):
 
     def __init__(self) -> None:
         """Инициализация runner'а."""
-        self._ffmpeg_path = path_utils.get_binary_path("ffmpeg")
-        logger.debug(
-            "FFmpegRunner инициализирован. Путь к бинарнику: %s",
-            self._ffmpeg_path,
-        )
+        self.__ffmpeg_path: str | None = None
+
+    @property
+    def _ffmpeg_path(self) -> str:
+        """Ленивая загрузка пути к бинарнику."""
+        if self.__ffmpeg_path is None:
+            self.__ffmpeg_path = path_utils.get_binary_path("ffmpeg")
+            logger.debug(
+                "FFmpegRunner инициализирован. Путь к бинарнику: %s",
+                self.__ffmpeg_path,
+            )
+        return self.__ffmpeg_path
 
     def run(
         self,

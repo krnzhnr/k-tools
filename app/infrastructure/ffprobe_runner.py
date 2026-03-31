@@ -70,11 +70,18 @@ class FFProbeRunner(metaclass=SingletonMeta):
 
     def __init__(self) -> None:
         """Инициализация FFProbeRunner."""
-        self._ffprobe_path = path_utils.get_binary_path("ffprobe")
-        logger.debug(
-            "FFProbeRunner инициализирован. " "Путь к бинарнику: %s",
-            self._ffprobe_path,
-        )
+        self.__ffprobe_path: str | None = None
+
+    @property
+    def _ffprobe_path(self) -> str:
+        """Ленивая загрузка пути к бинарнику."""
+        if self.__ffprobe_path is None:
+            self.__ffprobe_path = path_utils.get_binary_path("ffprobe")
+            logger.debug(
+                "FFProbeRunner инициализирован. Путь к бинарнику: %s",
+                self.__ffprobe_path,
+            )
+        return self.__ffprobe_path
 
     def get_streams(self, file_path: Path) -> list[StreamInfo]:
         """Получить список потоков файла.

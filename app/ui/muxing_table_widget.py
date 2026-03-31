@@ -131,8 +131,7 @@ class MuxingTableWidget(QTableWidget):
         # self._stems: dict[str, int] = {} # Удаляем, т.к. при сортировке индексы "плывут"  # noqa: E501
 
         # Стилизация (опционально, если не хватает Fluent Style)
-        self.setStyleSheet(
-            """
+        self.setStyleSheet("""
             QTableWidget {
                 border: 1px solid rgba(0, 0, 0, 0.1);
                 border-radius: 5px;
@@ -144,8 +143,7 @@ class MuxingTableWidget(QTableWidget):
                 border: none;
                 font-weight: bold;
             }
-        """
-        )
+        """)
 
         # Включаем сортировку
         self.setSortingEnabled(True)

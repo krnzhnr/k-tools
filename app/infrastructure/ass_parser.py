@@ -50,10 +50,9 @@ class AssData:
 
 
 class AssParser(metaclass=SingletonMeta):
-    """Парсер файлов субтитров формата ASS/SSA.
+    """Парсер файлов субтитров в формате ASS/SSA.
 
-    Извлекает строки диалогов, актёров и позволяет
-    удалять теги форматирования из текста.
+    Извлекает диалоги, актёров и деликатно удаляет теги.
     """
 
     def __init__(self) -> None:
@@ -117,7 +116,8 @@ class AssParser(metaclass=SingletonMeta):
             # Парсинг строки Dialogue
             if stripped.startswith(_DIALOGUE_PREFIX):
                 dialogue = self._parse_dialogue_line(
-                    stripped, format_fields,
+                    stripped,
+                    format_fields,
                 )
                 if dialogue is not None:
                     data.dialogues.append(dialogue)
@@ -170,8 +170,7 @@ class AssParser(metaclass=SingletonMeta):
         # Маппинг полей по Format-строке или стандарту
         if format_fields:
             field_map = {
-                name: parts[i].strip()
-                for i, name in enumerate(format_fields)
+                name: parts[i].strip() for i, name in enumerate(format_fields)
             }
         else:
             field_map = {
@@ -186,11 +185,7 @@ class AssParser(metaclass=SingletonMeta):
             start=field_map.get("start", "0:00:00.00"),
             end=field_map.get("end", "0:00:00.00"),
             style=field_map.get("style", ""),
-            actor=(
-                field_map.get("name")
-                or field_map.get("actor")
-                or ""
-            ),
+            actor=(field_map.get("name") or field_map.get("actor") or ""),
             text=field_map.get("text", ""),
         )
 
@@ -331,10 +326,10 @@ class AssParser(metaclass=SingletonMeta):
 
             # Считаем общее количество секунд (float)
             total_seconds = (
-                int(h_str) * 3600 +
-                int(m_str) * 60 +
-                int(s_str) +
-                int(cs_str) / 100
+                int(h_str) * 3600
+                + int(m_str) * 60
+                + int(s_str)
+                + int(cs_str) / 100
             )
 
             # Разложение обратно в VTT формат
@@ -358,8 +353,7 @@ class AssParser(metaclass=SingletonMeta):
             return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
         except (ValueError, IndexError, ZeroDivisionError):
             logger.warning(
-                "Некорректный таймкод ASS: '%s', "
-                "используется нулевой",
+                "Некорректный таймкод ASS: '%s', " "используется нулевой",
                 ass_time,
             )
             return "00:00:00.000"

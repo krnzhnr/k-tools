@@ -1,14 +1,12 @@
 # -*- coding: utf-8 -*-
 """Тесты для парсера ASS и конвертера ASS → VTT."""
 
-from pathlib import Path
 from textwrap import dedent
 
 import pytest
 
 from app.infrastructure.ass_parser import AssParser
 from app.scripts.ass_to_vtt_converter import AssToVttScript
-
 
 # --- Фикстуры ---
 
@@ -135,9 +133,7 @@ class TestStripTags:
 
     def test_remove_position_tag(self):
         """Удаление тега позиционирования."""
-        result = AssParser.strip_tags(
-            "{\\an8}{\\pos(320,50)}Text"
-        )
+        result = AssParser.strip_tags("{\\an8}{\\pos(320,50)}Text")
         assert result == "Text"
 
     def test_convert_newlines(self):
@@ -152,9 +148,7 @@ class TestStripTags:
 
     def test_combined_tags_and_newlines(self):
         """Комбинация тегов и переносов."""
-        result = AssParser.strip_tags(
-            "{\\an8}{\\b1}Hello\\NWorld{\\b0}"
-        )
+        result = AssParser.strip_tags("{\\an8}{\\b1}Hello\\NWorld{\\b0}")
         assert result == "Hello\nWorld"
 
     def test_no_tags(self):
@@ -224,7 +218,9 @@ class TestAssToVttScript:
         }
 
         results = script.execute_single(
-            ass_file, settings, str(tmp_path),
+            ass_file,
+            settings,
+            str(tmp_path),
         )
 
         assert any("✅" in r for r in results)
@@ -236,7 +232,9 @@ class TestAssToVttScript:
         assert "-->" in content
 
     def test_execute_with_actor_filter(
-        self, ass_file, tmp_path,
+        self,
+        ass_file,
+        tmp_path,
     ):
         """Конвертация с исключением актёра."""
         script = AssToVttScript()
@@ -247,7 +245,9 @@ class TestAssToVttScript:
         }
 
         results = script.execute_single(
-            ass_file, settings, str(tmp_path),
+            ass_file,
+            settings,
+            str(tmp_path),
         )
 
         assert any("✅" in r for r in results)
@@ -260,7 +260,9 @@ class TestAssToVttScript:
         assert "Alice again" in content
 
     def test_execute_strips_formatting(
-        self, ass_file, tmp_path,
+        self,
+        ass_file,
+        tmp_path,
     ):
         """Проверка удаления тегов форматирования."""
         script = AssToVttScript()
@@ -271,7 +273,9 @@ class TestAssToVttScript:
         }
 
         script.execute_single(
-            ass_file, settings, str(tmp_path),
+            ass_file,
+            settings,
+            str(tmp_path),
         )
 
         vtt = tmp_path / "test.vtt"
@@ -298,7 +302,9 @@ class TestAssToVttScript:
         }
 
         results = script.execute_single(
-            ass_file, settings, str(tmp_path),
+            ass_file,
+            settings,
+            str(tmp_path),
         )
         assert any("ПРОПУСК" in r for r in results)
 
@@ -323,7 +329,9 @@ class TestAssToVttScript:
         }
 
         results = script.execute_single(
-            ass_file, settings, str(tmp_path),
+            ass_file,
+            settings,
+            str(tmp_path),
         )
 
         assert any("✅" in r for r in results)
@@ -346,7 +354,9 @@ class TestAssToVttScript:
         }
 
         results = script.execute_single(
-            empty, settings, str(tmp_path),
+            empty,
+            settings,
+            str(tmp_path),
         )
         assert any("ПРОПУСК" in r for r in results)
 
@@ -360,7 +370,9 @@ class TestAssToVttScript:
         }
 
         script.execute_single(
-            ass_file, settings, str(tmp_path),
+            ass_file,
+            settings,
+            str(tmp_path),
         )
 
         vtt = tmp_path / "test.vtt"

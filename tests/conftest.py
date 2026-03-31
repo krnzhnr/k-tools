@@ -5,7 +5,7 @@ from pathlib import Path
 # Добавляем корень проекта в sys.path для импорта модулей приложения
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from app.core.singleton import SingletonMeta
+from app.core.singleton import SingletonMeta  # noqa: E402
 
 
 @pytest.fixture

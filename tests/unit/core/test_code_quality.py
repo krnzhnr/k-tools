@@ -58,7 +58,8 @@ def test_custom_code_rules() -> None:
     check_script = root_dir / "check_code.py"
 
     if not check_script.exists():
-        return  # Если скрипт удален, пропускаем (лучше не падать, чтобы не зависеть от него)
+        # Если скрипт удален, пропускаем (лучше не падать, чтобы не зависеть от него)
+        return
 
     cmd = [sys.executable, str(check_script)]
     result = subprocess.run(

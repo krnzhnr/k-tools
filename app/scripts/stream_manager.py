@@ -204,7 +204,7 @@ class StreamManagerScript(AbstractScript):
         if success:
             results.append(f"✅ ОБРАБОТАНО: {output_file_path.name}")
 
-            if overwrite_source:
+            if overwrite_source and not output_path:
                 self._replace_source_with_result(
                     file_path, output_file_path, results
                 )

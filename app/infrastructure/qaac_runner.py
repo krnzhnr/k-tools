@@ -18,13 +18,23 @@ class QaacRunner(metaclass=SingletonMeta):
 
     def __init__(self) -> None:
         """Инициализация runner'а."""
-        self._qaac_path = path_utils.get_binary_path("qaac64")
-        self._ffmpeg_path = path_utils.get_binary_path("ffmpeg")
-        logger.debug(
-            "QaacRunner инициализирован. qaac: %s, ffmpeg for pipe: %s",
-            self._qaac_path,
-            self._ffmpeg_path,
-        )
+        self.__qaac_path: str | None = None
+        self.__ffmpeg_path: str | None = None
+
+    @property
+    def _qaac_path(self) -> str:
+        if self.__qaac_path is None:
+            self.__qaac_path = path_utils.get_binary_path("qaac64")
+            logger.debug(
+                "QaacRunner инициализирован. qaac: %s", self.__qaac_path
+            )
+        return self.__qaac_path
+
+    @property
+    def _ffmpeg_path(self) -> str:
+        if self.__ffmpeg_path is None:
+            self.__ffmpeg_path = path_utils.get_binary_path("ffmpeg")
+        return self.__ffmpeg_path
 
     def run(
         self,

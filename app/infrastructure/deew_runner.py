@@ -26,13 +26,19 @@ class DeewRunner(metaclass=SingletonMeta):
 
     def __init__(self) -> None:
         """Инициализация runner'а."""
-        self._dee_path = path_utils.get_binary_path("dee")
-        logger.debug(
-            "DeewRunner инициализирован. Использование 'python -m deew', "
-            "dee: %s",
-            self._dee_path,
-        )
-        self._ensure_config_exists()
+        self.__dee_path: str | None = None
+        self._config_ensured = False
+
+    @property
+    def _dee_path(self) -> str:
+        if self.__dee_path is None:
+            self.__dee_path = path_utils.get_binary_path("dee")
+            logger.debug(
+                "DeewRunner инициализирован. Использование 'python -m deew', "
+                "dee: %s",
+                self.__dee_path,
+            )
+        return self.__dee_path
 
     def _ensure_config_exists(self) -> None:
         """Инициализирующий запуск для генерации config.toml.
@@ -78,6 +84,11 @@ class DeewRunner(metaclass=SingletonMeta):
             Путь к созданному файлу или None при ошибке.
         """
         is_safe = all(ord(c) < 128 for c in str(input_path) + str(output_path))
+
+        if not self._config_ensured:
+            self._ensure_config_exists()
+            self._config_ensured = True
+
         base_cmd = self._build_base_cmd(output_format, channels, bitrate)
         env = self._prepare_env()
 

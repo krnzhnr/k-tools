@@ -9,7 +9,6 @@ from pathlib import Path
 import threading
 from typing import Any, Callable
 
-
 logger = logging.getLogger(__name__)
 
 
