@@ -151,8 +151,8 @@ class ParseWorker(QThread):
                     # Проверка на CAPS LOCK
                     is_caps = bool(self.parser.CAPS_PATTERN.search(clean_text))
                     # Проверка на полностью заглавную строку (минимум 2 буквы)
-                    only_letters = re.sub(r'[^a-zA-Zа-яА-ЯёЁ]', '', clean_text)
-                    is_full_caps = len(only_letters) >= 2 and only_letters.isupper()
+                    only_l = re.sub(r'[^a-zA-Zа-яА-ЯёЁ]', '', clean_text)
+                    is_full_caps = len(only_l) >= 2 and only_l.isupper()
 
                     cache_list.append(
                         {
@@ -441,7 +441,8 @@ class AssPreviewModel(QAbstractItemModel):
             v[cache_key] = res
             return res
 
-        # Экранируем теги переноса и ASS-теги, чтобы содержимое тегов не считалось КАПСОМ
+        # Экранируем теги переноса и ASS-теги, чтобы содержимое
+        # тегов не считалось КАПСОМ
         # 1. Собираем все теги {...}
         ass_tags = self._parser.TAG_PATTERN.findall(orig)
         masked = orig
@@ -452,7 +453,8 @@ class AssPreviewModel(QAbstractItemModel):
         # 2. Маскируем теги переноса (\x01 и \x02)
         masked = masked.replace("\\N", "\x01").replace("\\n", "\x02")
 
-        # 3. Подсвечиваем CAPS LOCK только на маскированной строке (где тегов уже нет)
+        # 3. Подсвечиваем CAPS LOCK только на маскированной строке
+        # (где тегов уже нет)
         def _wrap_caps(match: Any) -> str:
             res = match.group(0)
             return f'<span style="color: #faad14;">{res}</span>'
@@ -470,12 +472,14 @@ class AssPreviewModel(QAbstractItemModel):
 
             # Восстанавливаем ASS-теги со стилем
             for i, tag in enumerate(ass_tags):
-                processed = processed.replace(f"\x03{i}\x03", _style_tag(tag), 1)
+                processed = processed.replace(
+                    f"\x03{i}\x03", _style_tag(tag), 1
+                )
 
             # Восстанавливаем и красим переносы строк
             lb_color = "#ff3333" if self._strip_formatting else "#9254de"
             lb_style = f'style="color: {lb_color};"'
-            
+
             result = processed.replace(
                 "\x01", f'<span {lb_style}>\\N</span>'
             ).replace(
@@ -485,7 +489,7 @@ class AssPreviewModel(QAbstractItemModel):
             # В обычном режиме просто возвращаем теги как были
             for i, tag in enumerate(ass_tags):
                 processed = processed.replace(f"\x03{i}\x03", tag, 1)
-            
+
             result = processed.replace("\x01", "\\N").replace("\x02", "\\n")
 
         v[cache_key] = result

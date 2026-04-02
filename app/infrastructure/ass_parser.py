@@ -54,7 +54,7 @@ class AssParser(metaclass=SingletonMeta):
     TAG_PATTERN = re.compile(r"\{[^}]*\}")
     # Регулярное выражение для поиска слов в верхнем регистре (от 2-х букв)
     CAPS_PATTERN = re.compile(r"\b[A-ZА-ЯЁ]{2,}\b")
-    # Регулярное выражение для удаления HTML-подобных тегов SRT (<i>, <b>, etc.)
+    # Регэкс для удаления HTML-подобных тегов SRT (<i>, <b>, etc.)
     HTML_TAG_PATTERN = re.compile(r"<[^>]*>")
 
     # Паттерн (префикс) для строки Dialogue в секции [Events]
@@ -176,13 +176,12 @@ class AssParser(metaclass=SingletonMeta):
             if len(lines) < 2:
                 continue
 
-            # Поиск строки с таймкодами (обычно 2-я строка)
             time_line = ""
-            text_lines = []
+            text_lines: list[str] = []
             for i, line in enumerate(lines):
                 if "-->" in line:
                     time_line = line
-                    text_lines = lines[i + 1 :]
+                    text_lines = lines[i + 1:]
                     break
 
             if not time_line:
@@ -303,12 +302,13 @@ class AssParser(metaclass=SingletonMeta):
                 logger.debug("Ошибка извлечения эффектов из %s", path.name)
         return all_effects
 
-    def strip_tags(self, text: str) -> str:
+    @staticmethod
+    def strip_tags(text: str) -> str:
         """Очистить текст субтитров от всех тегов (ASS и HTML)."""
         # Удаляем ASS override-блоки
-        cleaned = self.TAG_PATTERN.sub("", text)
+        cleaned = AssParser.TAG_PATTERN.sub("", text)
         # Удаляем HTML-теги SRT
-        cleaned = self.HTML_TAG_PATTERN.sub("", cleaned)
+        cleaned = AssParser.HTML_TAG_PATTERN.sub("", cleaned)
         # Конвертируем переносы и спецсимволы
         cleaned = cleaned.replace("\\N", "\n").replace("\\n", "\n")
         cleaned = cleaned.replace("\\h", " ")

@@ -472,8 +472,9 @@ class TrackExtractWidget(QWidget):
         if not has_any_active_rules:
             return False
 
-        # ПРИНЦИП "ИЛИ" (Union): дорожка считается подходящей, если она 
-        # соответствует ХОТЯ БЫ ОДНОМУ из активных критериев (язык ИЛИ имя ИЛИ кодек).
+        # ПРИНЦИП "ИЛИ" (Union): дорожка считается подходящей, если она
+        # соответствует ХОТЯ БЫ ОДНОМУ из активных критериев
+        # (язык ИЛИ имя ИЛИ кодек).
         for prop_key, selected_vals in rules.items():
             if not selected_vals:
                 continue
