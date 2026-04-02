@@ -58,7 +58,7 @@ class AssToVttScript(AbstractScript):
     @property
     def file_extensions(self) -> list[str]:
         """Допустимые расширения входных файлов."""
-        return [".ass", ".ssa"]
+        return [".ass", ".ssa", ".srt"]
 
     @property
     def use_custom_widget(self) -> bool:

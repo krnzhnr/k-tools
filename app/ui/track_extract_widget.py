@@ -472,15 +472,17 @@ class TrackExtractWidget(QWidget):
         if not has_any_active_rules:
             return False
 
+        # ПРИНЦИП "ИЛИ" (Union): дорожка считается подходящей, если она 
+        # соответствует ХОТЯ БЫ ОДНОМУ из активных критериев (язык ИЛИ имя ИЛИ кодек).
         for prop_key, selected_vals in rules.items():
             if not selected_vals:
                 continue
 
             track_val = t_data.get(prop_key, "")
-            if track_val not in selected_vals:
-                return False
+            if track_val in selected_vals:
+                return True
 
-        return True
+        return False
 
     def _on_tree_item_changed(
         self, item: QTreeWidgetItem, column: int

@@ -148,12 +148,20 @@ class ParseWorker(QThread):
                     orig_text = d.text
                     clean_text = self.parser.strip_tags(orig_text)
 
+                    # Проверка на CAPS LOCK
+                    is_caps = bool(self.parser.CAPS_PATTERN.search(clean_text))
+                    # Проверка на полностью заглавную строку (минимум 2 буквы)
+                    only_letters = re.sub(r'[^a-zA-Zа-яА-ЯёЁ]', '', clean_text)
+                    is_full_caps = len(only_letters) >= 2 and only_letters.isupper()
+
                     cache_list.append(
                         {
                             "original": orig_text,
                             "clean": clean_text,
                             "is_changed": orig_text != clean_text,
                             "is_empty": not clean_text.strip(),
+                            "is_caps": is_caps,
+                            "is_full_caps": is_full_caps,
                         }
                     )
                 visual_cache[path] = cache_list
@@ -171,8 +179,6 @@ class AssPreviewModel(QAbstractItemModel):
 
     Иерархия: Корень -> Файлы -> Строки диалогов.
     """
-
-    _TAG_PATTERN = re.compile(r"\{[^}]*\}")
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -306,10 +312,16 @@ class AssPreviewModel(QAbstractItemModel):
 
         # --- Данные для ФАЙЛА (верхний уровень) ---
         if path_ptr is None:
+            if row >= len(self._files):
+                return None
             path = self._files[row]
+            f_data = self._file_data.get(path)
+            if not f_data:
+                return None
+
             if role == Qt.ItemDataRole.DisplayRole:
                 if col == 0:
-                    count = len(self._file_data[path].dialogues)
+                    count = len(f_data.dialogues)
                     return f"{path.name} ({count} строк)"
                 return ""
             if role == Qt.ItemDataRole.DecorationRole and col == 0:
@@ -319,11 +331,17 @@ class AssPreviewModel(QAbstractItemModel):
 
         # --- Данные для СТРОКИ ДИАЛОГА (вложенный уровень) ---
         path = path_ptr
-        data_list = self._file_data[path].dialogues
-        if row >= len(data_list):
+        f_data = self._file_data.get(path)
+        v_list = self._visual_cache.get(path)
+        if not f_data or not v_list:
             return None
+
+        data_list = f_data.dialogues
+        if row >= len(data_list) or row >= len(v_list):
+            return None
+
         d = data_list[row]
-        v = self._visual_cache[path][row]
+        v = v_list[row]
 
         is_empty = not self._parser.strip_tags(d.text).strip()
         is_excluded = (
@@ -349,6 +367,8 @@ class AssPreviewModel(QAbstractItemModel):
                 return QBrush(QColor("#ff4d4f"))
             if v["is_empty"]:
                 return QBrush(QColor("#ffa940"))
+            if v["is_full_caps"]:
+                return QBrush(QColor("#faad14"))
             if v["is_changed"]:
                 color = (
                     QColor("#1890ff")
@@ -374,6 +394,8 @@ class AssPreviewModel(QAbstractItemModel):
                     return "УДАЛЕНО (Фильтр)"
                 if is_manually_excluded:
                     return "УДАЛЕНО (Вручную)"
+                if v["is_full_caps"]:
+                    return "CAPS LOCK"
                 if v["is_changed"]:
                     return "ИЗМЕНЕНО" if self._strip_formatting else "Очистка"
                 return "ОК"
@@ -419,29 +441,55 @@ class AssPreviewModel(QAbstractItemModel):
             v[cache_key] = res
             return res
 
-        if v["is_changed"]:
+        # Экранируем теги переноса и ASS-теги, чтобы содержимое тегов не считалось КАПСОМ
+        # 1. Собираем все теги {...}
+        ass_tags = self._parser.TAG_PATTERN.findall(orig)
+        masked = orig
+        for i, tag in enumerate(ass_tags):
+            # Используем уникальный маркер \x03{i}\x03 для каждого тега
+            masked = masked.replace(tag, f"\x03{i}\x03", 1)
 
-            def _wrap_tag(match: Any) -> str:
-                res = html.escape(match.group(0))
+        # 2. Маскируем теги переноса (\x01 и \x02)
+        masked = masked.replace("\\N", "\x01").replace("\\n", "\x02")
+
+        # 3. Подсвечиваем CAPS LOCK только на маскированной строке (где тегов уже нет)
+        def _wrap_caps(match: Any) -> str:
+            res = match.group(0)
+            return f'<span style="color: #faad14;">{res}</span>'
+
+        processed = self._parser.CAPS_PATTERN.sub(_wrap_caps, masked)
+
+        # 4. Восстановление тегов
+        if v["is_changed"]:
+            # В режиме изменений красим теги в фиолетовый/красный
+            def _style_tag(tag_text: str) -> str:
+                t_escaped = html.escape(tag_text)
                 color = "#ff3333" if self._strip_formatting else "#9254de"
                 st = f'style="color: {color}; text-decoration: line-through;"'
-                return f'<span {st}>{res}</span>'
+                return f'<span {st}>{t_escaped}</span>'
 
-            highlighted = self._TAG_PATTERN.sub(_wrap_tag, orig)
-            line_break_color = (
-                "#ff3333" if self._strip_formatting else "#9254de"
-            )
-            style = f'style="color: {line_break_color};"'
-            res = highlighted.replace(
-                "\\N", f'<span {style}>\\N</span>'
+            # Восстанавливаем ASS-теги со стилем
+            for i, tag in enumerate(ass_tags):
+                processed = processed.replace(f"\x03{i}\x03", _style_tag(tag), 1)
+
+            # Восстанавливаем и красим переносы строк
+            lb_color = "#ff3333" if self._strip_formatting else "#9254de"
+            lb_style = f'style="color: {lb_color};"'
+            
+            result = processed.replace(
+                "\x01", f'<span {lb_style}>\\N</span>'
             ).replace(
-                "\\n", f'<span {style}>\\n</span>'
+                "\x02", f'<span {lb_style}>\\n</span>'
             )
-            v[cache_key] = res
-            return res
+        else:
+            # В обычном режиме просто возвращаем теги как были
+            for i, tag in enumerate(ass_tags):
+                processed = processed.replace(f"\x03{i}\x03", tag, 1)
+            
+            result = processed.replace("\x01", "\\N").replace("\x02", "\\n")
 
-        v[cache_key] = orig
-        return orig
+        v[cache_key] = result
+        return result
 
     def flags(self, index: QModelIndex) -> Qt.ItemFlag:
         """Флаги элемента."""
@@ -633,8 +681,8 @@ class AssFilterWidget(QWidget):
 
         # Список файлов
         self._file_list = FileListWidget(
-            allowed_extensions=[".ass", ".ssa"],
-            context_name="ASS → VTT",
+            allowed_extensions=[".ass", ".ssa", ".srt"],
+            context_name="ASS/SRT → VTT",
             parent=self,
         )
         self._file_list.filesChanged.connect(self._on_files_changed)

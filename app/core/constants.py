@@ -2,7 +2,18 @@
 """Централизованные константы медиа-форматов."""
 
 # --- Видео ---
-VIDEO_CONTAINERS = frozenset([".mkv", ".mp4", ".mov", ".webm", ".avi", ".m4s"])
+VIDEO_CONTAINERS = frozenset(
+    [
+        ".mkv",
+        ".mp4",
+        ".mov",
+        ".webm",
+        ".avi",
+        ".m2ts",
+        ".ts",
+        ".m4s",
+    ]
+)
 VIDEO_STREAMS = frozenset(
     [
         ".hevc",
@@ -46,7 +57,7 @@ AUDIO_STREAMS = frozenset(
         ".m2a",
     ]
 )
-AUDIO_EXTENSIONS = AUDIO_CONTAINERS | AUDIO_STREAMS
+AUDIO_EXTENSIONS = AUDIO_CONTAINERS | AUDIO_STREAMS | VIDEO_CONTAINERS
 
 # --- Агрегаты ---
 # Полноценные контейнеры (для демуксинга, очистки метаданных и т.д.)
@@ -54,7 +65,15 @@ MEDIA_CONTAINERS = VIDEO_CONTAINERS | AUDIO_CONTAINERS
 
 # Форматы субтитров
 SUBTITLE_EXTENSIONS = frozenset(
-    [".srt", ".ass", ".ssa", ".sub", ".vtt", ".idx", ".sup"]
+    [
+        ".srt",
+        ".ass",
+        ".ssa",
+        ".sub",
+        ".vtt",
+        ".idx",
+        ".sup",
+    ]
 )
 
 # Маппинг распространенных 3-буквенных ISO 639-2 кодов на 2-буквенные ISO 639-1

@@ -286,7 +286,21 @@ class TrackExtractorScript(AbstractScript):
                 codec_value = "copy"
             elif track.track_type == "audio":
                 codec_flag = "-c:a"
-                codec_value = "copy"
+                # PCM из M2TS (pcm_bluray) не поддерживает режим 'copy' в WAV
+                if (
+                    track.codec == "PCM"
+                    and ext == ".wav"
+                    and file_path.suffix.lower() in [".m2ts", ".ts"]
+                ):
+                    codec_value = "pcm_s24le"
+                    logger.info(
+                        "[%s] Применяется лоссплесс-распаковка для PCM из "
+                        "M2TS (дорожка %d)",
+                        self.name,
+                        track.track_id,
+                    )
+                else:
+                    codec_value = "copy"
             else:
                 codec_flag = "-c:s"
                 convert_to = SUBTITLE_CONVERT_CODECS.get(track.codec)
