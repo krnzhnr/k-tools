@@ -12,6 +12,7 @@ from . import muxer
 from . import stream_manager
 from . import stream_replacer
 from . import track_extractor
+from . import video_processor
 
 # Список всех модулей для удобства регистрации
 SCRIPT_MODULES = [
@@ -26,4 +27,5 @@ SCRIPT_MODULES = [
     stream_manager,
     stream_replacer,
     track_extractor,
+    video_processor,
 ]

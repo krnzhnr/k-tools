@@ -18,6 +18,8 @@ def test_ffmpeg_run_success(mocker):
     mock_popen = MagicMock()
     mock_popen.returncode = 0
     mock_popen.communicate.return_value = ("Success", "")
+    mock_popen.stderr.readline.return_value = ""
+    mock_popen.poll.return_value = 0
     mock_popen._was_cancelled = False
     mocker.patch("subprocess.Popen", return_value=mock_popen)
 
@@ -25,11 +27,37 @@ def test_ffmpeg_run_success(mocker):
     assert result is True
 
 
+def test_ffmpeg_build_cmd_with_input_args(mocker):
+    mocker.patch("app.core.path_utils.get_binary_path", return_value="ffmpeg")
+    runner = FFmpegRunner()
+    input_path = Path("in.mkv")
+    output_path = Path("out.mp4")
+    input_args = ["-hwaccel", "cuda"]
+    extra_args = ["-c:v", "copy"]
+
+    cmd = runner._build_cmd(
+        input_path, output_path, extra_args, input_args, overwrite=True
+    )
+
+    # Проверка порядка аргументов
+    # ffmpeg ... -hwaccel cuda -i in.mkv -c:v copy out.mp4
+    input_args_idx = cmd.index("-hwaccel")
+    input_flag_idx = cmd.index("-i")
+    extra_args_idx = cmd.index("-c:v")
+    output_idx = cmd.index(str(output_path))
+
+    assert input_args_idx < input_flag_idx
+    assert input_flag_idx < extra_args_idx
+    assert extra_args_idx < output_idx
+
+
 def test_ffmpeg_run_failure(mocker):
     runner = FFmpegRunner()
     mock_popen = MagicMock()
     mock_popen.returncode = 1
     mock_popen.communicate.return_value = ("", "Error")
+    mock_popen.stderr.readline.return_value = ""
+    mock_popen.poll.return_value = 1
     mock_popen._was_cancelled = False
     mocker.patch("subprocess.Popen", return_value=mock_popen)
 
@@ -60,6 +88,8 @@ def test_eac3to_run_success(mocker):
     mock_popen = MagicMock()
     mock_popen.returncode = 0
     mock_popen.communicate.return_value = ("Success", "")
+    mock_popen.stderr.readline.return_value = ""
+    mock_popen.poll.return_value = 0
     mock_popen._was_cancelled = False
     mocker.patch("subprocess.Popen", return_value=mock_popen)
 
@@ -73,6 +103,8 @@ def test_eac3to_run_failure(mocker):
     mock_popen = MagicMock()
     mock_popen.returncode = 1
     mock_popen.communicate.return_value = ("", "Error")
+    mock_popen.stderr.readline.return_value = ""
+    mock_popen.poll.return_value = 1
     mock_popen._was_cancelled = False
     mocker.patch("subprocess.Popen", return_value=mock_popen)
 
@@ -99,6 +131,8 @@ def test_mkvmerge_run_mux_success(mocker):
     mock_popen = MagicMock()
     mock_popen.returncode = 0
     mock_popen.communicate.return_value = ("Success", "")
+    mock_popen.stderr.readline.return_value = ""
+    mock_popen.poll.return_value = 0
     mock_popen._was_cancelled = False
     mocker.patch("subprocess.Popen", return_value=mock_popen)
 

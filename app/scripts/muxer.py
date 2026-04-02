@@ -86,9 +86,12 @@ class MuxerScript(AbstractScript):
 
     def execute_single(
         self,
-        file: Path,
+        file_path: Path,
         settings: dict[str, Any],
         output_path: str | None = None,
+        progress_callback: ProgressCallback | None = None,
+        current: int = 0,
+        total: int = 1,
     ) -> list[str]:
         """Не используется в Муксере (переопределен execute)."""
         raise NotImplementedError(
@@ -136,7 +139,7 @@ class MuxerScript(AbstractScript):
 
             completed += 1
             if progress_callback:
-                progress_callback(completed, total, msg)
+                progress_callback(completed, total, msg, 0.0)
 
         return results
 

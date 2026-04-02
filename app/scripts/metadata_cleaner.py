@@ -10,6 +10,7 @@ from app.core.abstract_script import (
     AbstractScript,
     SettingField,
     SettingType,
+    ProgressCallback,
 )
 from app.core.settings_manager import SettingsManager
 from app.core.output_resolver import OutputResolver
@@ -79,6 +80,9 @@ class MetadataCleanerScript(AbstractScript):
         file_path: Path,
         settings: dict[str, Any],
         output_path: str | None = None,
+        progress_callback: ProgressCallback | None = None,
+        current: int = 0,
+        total: int = 1,
     ) -> list[str]:
         """Очистить метаданные одного файла."""
         output_name = f"{file_path.stem}{settings.get('suffix', '_cl')}{file_path.suffix}"  # noqa: E501

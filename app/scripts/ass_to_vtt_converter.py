@@ -9,6 +9,7 @@ from app.core.abstract_script import (
     AbstractScript,
     SettingField,
     SettingType,
+    ProgressCallback,
 )
 from app.core.constants import ScriptCategory, ScriptMetadata
 from app.core.output_resolver import OutputResolver
@@ -76,6 +77,15 @@ class AssToVttScript(AbstractScript):
             SettingField(
                 key="strip_formatting",
                 label="Удалять теги форматирования",
+                comment="Полная очистка всех тегов",
+                setting_type=SettingType.CHECKBOX,
+                default=True,
+            ),
+            SettingField(
+                key="keep_styles",
+                label="Сохранять оформление стилей",
+                comment="Переносить курсив/жирный из заголовков "
+                "стилей ASS в VTT",
                 setting_type=SettingType.CHECKBOX,
                 default=False,
             ),
@@ -89,16 +99,20 @@ class AssToVttScript(AbstractScript):
 
     def execute_single(
         self,
-        file: Path,
+        file_path: Path,
         settings: dict[str, Any],
         output_path: str | None = None,
+        progress_callback: ProgressCallback | None = None,
+        current: int = 0,
+        total: int = 1,
     ) -> list[str]:
         """Конвертировать один ASS-файл в VTT.
 
         Args:
-            file: Путь к входному ASS-файлу.
+            file_path: Путь к входному ASS-файлу.
             settings: Настройки скрипта.
             output_path: Опциональный путь сохранения.
+            progress_callback: Callback для отслеживания прогресса.
 
         Returns:
             Список строк-результатов.
@@ -107,17 +121,17 @@ class AssToVttScript(AbstractScript):
 
         # Парсинг файла
         try:
-            data = self._parser.parse(file)
+            data = self._parser.parse(file_path)
         except Exception:
             logger.exception(
                 "Ошибка парсинга ASS-файла '%s'",
-                file.name,
+                file_path.name,
             )
-            results.append(f"❌ Ошибка парсинга: {file.name}")
+            results.append(f"❌ Ошибка парсинга: {file_path.name}")
             return results
 
         if not data.dialogues:
-            msg = f"⏭ ПРОПУСК (нет строк диалогов): {file.name}"
+            msg = f"⏭ ПРОПУСК (нет строк диалогов): {file_path.name}"
             logger.info("[%s] %s", self.name, msg)
             results.append(msg)
             return results
@@ -125,34 +139,48 @@ class AssToVttScript(AbstractScript):
         # Фильтрация по актёрам и стилям
         excluded: set[str] = set(settings.get("excluded_actors", []))
         excluded_styles = settings.get("excluded_styles", [])
+        excluded_effects = settings.get("excluded_effects", [])
         manual_excl = settings.get("manual_exclusions", {})
         strip_fmt = settings.get("strip_formatting", False)
 
         # Конвертируем индексы исключений для текущего файла
         # в set для быстрого поиска
-        file_excl = set(manual_excl.get(str(file), []))
+        file_excl = set(manual_excl.get(str(file_path), []))
 
         dialogues = [
-            d for i, d in enumerate(data.dialogues)
+            d
+            for i, d in enumerate(data.dialogues)
             if d.actor not in excluded
             and d.style not in excluded_styles
+            and d.effect not in excluded_effects
             and i not in file_excl
+            and self._parser.strip_tags(d.text).strip()
         ]
         # Сортировка по времени начала
         # (строковое сравнение работает для H:MM:SS.CC)
         dialogues.sort(key=lambda x: x.start)
 
-        # Если фильтров нет и удаление тегов отключено в UI —
-        # используем ffmpeg для «умной» очистки от мусора
-        # (Оставляем старую логику прямой конвертации как оптимизацию,
-        # если строк нет для фильтрации)
-        if not excluded and not excluded_styles and not strip_fmt:
-            return self._execute_ffmpeg_conversion(file, output_path)
+        # Если пользователь хочет сохранить стили и не использует фильтры —
+        # используем «быстрый путь» (прямую передачу исходника в FFmpeg).
+        # Это позволяет FFmpeg увидеть оригинальную секцию [V4+ Styles].
+        keep_styles = settings.get("keep_styles", False)
+        if (
+            keep_styles
+            and not excluded
+            and not excluded_styles
+            and not excluded_effects
+            and not strip_fmt
+        ):
+            return self._execute_ffmpeg_conversion(file_path, output_path)
+
+        # В остальных случаях используем режим формирования временного файла
+        # через minimal_header. Если keep_styles=False (по умолчанию), это
+        # нейтрализует стилевое форматирование и дает чистый VTT.
 
         if not dialogues:
             msg = (
                 f"⏭ ПРОПУСК (все строки исключены "
-                f"фильтром): {file.name}"
+                f"фильтром): {file_path.name}"
             )
             logger.info("[%s] %s", self.name, msg)
             results.append(msg)
@@ -165,10 +193,10 @@ class AssToVttScript(AbstractScript):
         # -------------------------------------------------
 
         # Определяем выходной путь
-        target_dir = self._resolver.resolve(file, output_path)
+        target_dir = self._resolver.resolve(file_path, output_path)
         output_file = self._get_safe_output_path(
-            file,
-            target_dir / file.with_suffix(".vtt").name,
+            file_path,
+            target_dir / file_path.with_suffix(".vtt").name,
         )
         overwrite = SettingsManager().overwrite_existing
 
@@ -193,6 +221,7 @@ class AssToVttScript(AbstractScript):
                         end=d.end,
                         style=d.style,
                         actor=d.actor,
+                        effect=d.effect,
                         text=text,
                     )
                     f.write(self._parser.to_ass_line(tmp_d) + "\n")
@@ -208,12 +237,12 @@ class AssToVttScript(AbstractScript):
                 logger.info(
                     "[%s] Конвертация завершена: %s → %s",
                     self.name,
-                    file.name,
+                    file_path.name,
                     output_file.name,
                 )
                 results.append(f"✅ УСПЕХ: {output_file.name}")
                 if settings.get("delete_original", False):
-                    self._delete_source(file, results)
+                    self._delete_source(file_path, results)
             else:
                 results.append(f"❌ Ошибка FFmpeg: {output_file.name}")
 
@@ -227,25 +256,25 @@ class AssToVttScript(AbstractScript):
 
     def _execute_ffmpeg_conversion(
         self,
-        file: Path,
+        file_path: Path,
         output_path: str | None = None,
     ) -> list[str]:
-        """Конвертировать ASS в VTT через FFmpeg.
+        """Конвертировать ASS в VTT через FFmpeg напрямую.
 
-        Используется как fallback для «чистой» конвертации без фильтров.
+        Позволяет сохранить оригинальное оформление стилей (курсив, жирность).
 
         Args:
-            file: Путь к входному файлу.
+            file_path: Путь к входному файлу.
             output_path: Путь сохранения.
 
         Returns:
             Список строк с результатами.
         """
         results: list[str] = []
-        target_dir = self._resolver.resolve(file, output_path)
+        target_dir = self._resolver.resolve(file_path, output_path)
         output_file = self._get_safe_output_path(
-            file,
-            target_dir / file.with_suffix(".vtt").name,
+            file_path,
+            target_dir / file_path.with_suffix(".vtt").name,
         )
         overwrite = SettingsManager().overwrite_existing
 
@@ -256,7 +285,7 @@ class AssToVttScript(AbstractScript):
             return results
 
         success = self._ffmpeg.run(
-            input_path=file,
+            input_path=file_path,
             output_path=output_file,
             overwrite=overwrite,
         )
@@ -267,7 +296,7 @@ class AssToVttScript(AbstractScript):
                 self.name,
                 output_file.name,
             )
-            results.append(f"✅ УСПЕХ (FFmpeg): {output_file.name}")
+            results.append(f"✅ УСПЕХ (Direct): {output_file.name}")
         else:
             results.append(f"❌ Ошибка FFmpeg: {output_file.name}")
 

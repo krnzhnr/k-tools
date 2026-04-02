@@ -78,6 +78,8 @@ class SettingsPage(ScrollArea):
         self._general_group.addSettingCard(self._theme_card)
         self._parallel_card = self._create_parallel_card()
         self._general_group.addSettingCard(self._parallel_card)
+        self._clear_list_card = self._create_clear_list_card()
+        self._general_group.addSettingCard(self._clear_list_card)
 
     def _init_maintenance_group(self) -> None:
         """Инициализация группы обслуживания."""
@@ -104,7 +106,8 @@ class SettingsPage(ScrollArea):
         title = BodyLabel(self.tr("Перезаписывать файлы"), card)
         desc = CaptionLabel(
             self.tr(
-                "Если файл уже существует, он будет перезаписан без предупреждения"  # noqa: E501
+                "Если файл уже существует, он будет перезаписан без "
+                "предупреждения"
             ),
             card,
         )
@@ -143,7 +146,8 @@ class SettingsPage(ScrollArea):
         )
         desc = CaptionLabel(
             self.tr(
-                "Вкл - сохранять результаты в подпапку. Выкл - сохранять рядом с исходником"  # noqa: E501
+                "Вкл - сохранять результаты в подпапку. Выкл - сохранять "
+                "рядом с исходником"
             ),
             card,
         )
@@ -214,7 +218,10 @@ class SettingsPage(ScrollArea):
         text_layout.setSpacing(2)
         title = BodyLabel(self.tr("Тема приложения"), card)
         desc = CaptionLabel(
-            self.tr("Выберите цветовое оформление (ожидается перезапуск)"),
+            self.tr(
+                "Выберите цветовое оформление (может потребоваться "
+                "перезапуск)"
+            ),
             card,
         )
         desc.setStyleSheet("color: rgba(255, 255, 255, 0.6)")
@@ -252,7 +259,9 @@ class SettingsPage(ScrollArea):
         text_layout.setSpacing(2)
         title = BodyLabel(self.tr("Максимум параллельных задач"), card)
         desc = CaptionLabel(
-            self.tr("Количество одновременно обрабатываемых файлов (1-16)"),
+            self.tr(
+                "Количество одновременно обрабатываемых файлов (1-16)"
+            ),
             card,
         )
         desc.setStyleSheet("color: rgba(255, 255, 255, 0.6)")
@@ -269,6 +278,48 @@ class SettingsPage(ScrollArea):
         )
         self._parallel_spin.setFixedWidth(200)
         layout.addWidget(self._parallel_spin)
+        return card
+
+    def _create_clear_list_card(self) -> CardWidget:
+        """Карточка настройки автоочистки списка файлов."""
+        card = CardWidget(self._general_group)
+        card.setMinimumHeight(70)
+        layout = QHBoxLayout(card)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(16)
+
+        icon = IconWidget(FluentIcon.BROOM, card)
+        icon.setFixedSize(16, 16)
+        layout.addWidget(icon)
+
+        text_layout = QVBoxLayout()
+        text_layout.setSpacing(2)
+        title = BodyLabel(
+            self.tr("Очищать список при добавлении новых файлов"), card
+        )
+        desc = CaptionLabel(
+            self.tr(
+                "Если в списке уже есть файлы, они будут заменены на новые "
+                "при добавлении"
+            ),
+            card,
+        )
+        desc.setStyleSheet("color: rgba(255, 255, 255, 0.6)")
+        text_layout.addWidget(title)
+        text_layout.addWidget(desc)
+        layout.addLayout(text_layout)
+        layout.addStretch(1)
+
+        self._clear_list_switch = SwitchButton(card)
+        self._clear_list_switch.setOnText("")
+        self._clear_list_switch.setOffText("")
+        self._clear_list_switch.setChecked(
+            self._settings_manager.clear_list_on_add
+        )
+        self._clear_list_switch.checkedChanged.connect(
+            self._on_clear_list_changed
+        )
+        layout.addWidget(self._clear_list_switch)
         return card
 
     def _create_reset_card(self) -> CardWidget:
@@ -328,7 +379,8 @@ class SettingsPage(ScrollArea):
         """Обработка изменения состояния чекбокса перезаписи."""
         self._settings_manager.overwrite_existing = is_checked
         logger.info(
-            "Глобальная настройка 'Перезаписывать файлы' изменена пользователем на: %s",  # noqa: E501
+            "Глобальная настройка 'Перезаписывать файлы' изменена "
+            "пользователем на: %s",
             "ВКЛ" if is_checked else "ВЫКЛ",
         )
 
@@ -363,7 +415,8 @@ class SettingsPage(ScrollArea):
         self._show_restart_dialog(
             self.tr("Смена темы"),
             self.tr(
-                "Для применения новой темы необходимо перезапустить приложение. Перезагрузить сейчас?"  # noqa: E501
+                "Для применения новой темы необходимо перезапустить "
+                "приложение. Перезагрузить сейчас?"
             ),
         )
 
@@ -371,14 +424,24 @@ class SettingsPage(ScrollArea):
         """Обработка изменения количества параллельных задач."""
         self._settings_manager.max_parallel_tasks = value
         logger.info(
-            "Настройка 'Максимум параллельных задач' изменена на: %d", value
+            "Настройка 'max_parallel_tasks' изменена на: %d", value
+        )
+
+    def _on_clear_list_changed(self, is_checked: bool) -> None:
+        """Обработка изменения настройки автоочистки списка."""
+        self._settings_manager.clear_list_on_add = is_checked
+        logger.info(
+            "Глобальная настройка 'Очищать список при добавлении' изменена "
+            "на: %s",
+            "ВКЛ" if is_checked else "ВЫКЛ",
         )
 
     def _show_reset_dialog(self) -> None:
         """Показать диалог подтверждения сброса."""
         title = self.tr("Сброс настроек")
         content = self.tr(
-            "Вы уверены, что хотите сбросить все настройки? Это действие нельзя отменить."  # noqa: E501
+            "Вы уверены, что хотите сбросить все настройки? Это действие "
+            "нельзя отменить."
         )
         w = MessageBox(title, content, self.window())
         w.yesButton.setText(self.tr("Сбросить"))
@@ -399,6 +462,9 @@ class SettingsPage(ScrollArea):
             self._parallel_spin.setValue(
                 self._settings_manager.max_parallel_tasks
             )
+            self._clear_list_switch.setChecked(
+                self._settings_manager.clear_list_on_add
+            )
 
             # Сброс комбобокса темы
             self._theme_combo.setCurrentIndex(0)
@@ -409,7 +475,9 @@ class SettingsPage(ScrollArea):
             self._show_restart_dialog(
                 self.tr("Перезапуск"),
                 self.tr(
-                    "Настройки сброшены. Рекомендуется перезапустить приложение для полного применения изменений. Перезагрузить сейчас?"  # noqa: E501
+                    "Настройки сброшены. Рекомендуется перезапустить "
+                    "приложение для полного применения изменений. "
+                    "Перезагрузить сейчас?"
                 ),
             )
 

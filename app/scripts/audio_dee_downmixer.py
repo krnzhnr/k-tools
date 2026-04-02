@@ -15,7 +15,12 @@ from pathlib import Path
 from typing import Any
 
 # Local
-from app.core.abstract_script import AbstractScript, SettingField, SettingType
+from app.core.abstract_script import (
+    AbstractScript,
+    SettingField,
+    SettingType,
+    ProgressCallback,
+)
 from app.core.output_resolver import OutputResolver
 from app.infrastructure.deew_runner import DeewRunner
 
@@ -23,7 +28,10 @@ logger = logging.getLogger(__name__)
 
 
 class AudioDeeDownmixerScript(AbstractScript):
-    """Скрипт для даунмикса многоканального аудио в Stereo (Dolby Digital Plus / DD)."""  # noqa: E501
+    """
+    Скрипт для даунмикса многоканального
+    аудио в Stereo (Dolby Digital Plus / DD).
+    """
 
     def __init__(self):
         """Инициализация скрипта."""
@@ -98,6 +106,9 @@ class AudioDeeDownmixerScript(AbstractScript):
         file_path: Path,
         settings: dict[str, Any],
         output_path: str | None = None,
+        progress_callback: ProgressCallback | None = None,
+        current: int = 0,
+        total: int = 1,
     ) -> list[str]:
         """Выполнить даунмикс для одного файла."""
         try:

@@ -35,6 +35,7 @@ class AssDialogue:
     end: str
     style: str
     actor: str
+    effect: str
     text: str
 
 
@@ -186,6 +187,7 @@ class AssParser(metaclass=SingletonMeta):
             end=field_map.get("end", "0:00:00.00"),
             style=field_map.get("style", ""),
             actor=(field_map.get("name") or field_map.get("actor") or ""),
+            effect=field_map.get("effect", ""),
             text=field_map.get("text", ""),
         )
 
@@ -281,6 +283,52 @@ class AssParser(metaclass=SingletonMeta):
         )
         return all_styles
 
+    def get_effects(self, path: Path) -> set[str]:
+        """Извлечь множество уникальных эффектов из ASS-файла.
+
+        Args:
+            path: Путь к ASS-файлу.
+
+        Returns:
+            Множество имён эффектов (поле Effect в Dialogue).
+        """
+        data = self.parse(path)
+        effects = {d.effect for d in data.dialogues if d.effect}
+        logger.info(
+            "Из '%s' извлечено %d уникальных эффектов",
+            path.name,
+            len(effects),
+        )
+        return effects
+
+    def get_effects_from_files(
+        self,
+        paths: list[Path],
+    ) -> set[str]:
+        """Извлечь уникальные эффекты из нескольких ASS-файлов.
+
+        Args:
+            paths: Список путей к ASS-файлам.
+
+        Returns:
+            Объединённое множество эффектов без дублей.
+        """
+        all_effects: set[str] = set()
+        for path in paths:
+            try:
+                all_effects |= self.get_effects(path)
+            except Exception:
+                logger.exception(
+                    "Ошибка при извлечении эффектов из '%s'",
+                    path.name,
+                )
+        logger.info(
+            "Всего уникальных эффектов из %d файлов: %d",
+            len(paths),
+            len(all_effects),
+        )
+        return all_effects
+
     @staticmethod
     def strip_tags(text: str) -> str:
         """Удалить теги форматирования ASS из текста.
@@ -374,7 +422,8 @@ class AssParser(metaclass=SingletonMeta):
         text = dialogue.text.replace("\n", "\\N")
         return (
             f"Dialogue: 0,{dialogue.start},{dialogue.end},"
-            f"{dialogue.style},{dialogue.actor},0,0,0,,{text}"
+            f"{dialogue.style},{dialogue.actor},0,0,0,"
+            f"{dialogue.effect},{text}"
         )
 
     @staticmethod

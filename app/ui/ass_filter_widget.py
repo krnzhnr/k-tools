@@ -27,6 +27,7 @@ from PyQt6.QtWidgets import (
     QStyle,
     QMainWindow,
     QTreeView,
+    QHeaderView,
 )
 from qfluentwidgets import (
     CardWidget,
@@ -180,10 +181,14 @@ class AssPreviewModel(QAbstractItemModel):
         self._visual_cache: dict[Path, list[dict[str, Any]]] = {}
         self._excluded_actors: set[str] = set()
         self._excluded_styles: set[str] = set()
+        self._excluded_effects: set[str] = set()
         self._manual_exclusions: dict[Path, set[int]] = {}
         self._strip_formatting = True
-        self._headers = ["Статус", "Время", "Актёр/Стиль", "Изменения (ASS)"]
+        self._headers = [
+            "Статус", "Время", "Актёр/Стиль/Эффект", "Изменения (ASS)"
+        ]
         self._folder_icon = FluentIcon.FOLDER.icon()
+        self._parser = AssParser()
 
     def update_data(
         self,
@@ -201,11 +206,13 @@ class AssPreviewModel(QAbstractItemModel):
         self,
         excluded_actors: list[str],
         excluded_styles: list[str],
+        excluded_effects: list[str],
         strip_formatting: bool,
     ) -> None:
         """Обновить фильтры и уведомить об изменении данных."""
         self._excluded_actors = set(excluded_actors)
         self._excluded_styles = set(excluded_styles)
+        self._excluded_effects = set(excluded_effects)
         self._strip_formatting = strip_formatting
         # При изменении фильтров нужно обновить все отображаемые данные
         self.dataChanged.emit(
@@ -318,9 +325,12 @@ class AssPreviewModel(QAbstractItemModel):
         d = data_list[row]
         v = self._visual_cache[path][row]
 
+        is_empty = not self._parser.strip_tags(d.text).strip()
         is_excluded = (
-            d.actor in self._excluded_actors
+            is_empty
+            or d.actor in self._excluded_actors
             or d.style in self._excluded_styles
+            or d.effect in self._excluded_effects
         )
         is_manually_excluded = (
             path in self._manual_exclusions
@@ -358,29 +368,42 @@ class AssPreviewModel(QAbstractItemModel):
 
         if role == Qt.ItemDataRole.DisplayRole:
             if col == 0:
+                if is_empty:
+                    return "УДАЛЕНО (пустая)"
                 if is_excluded:
                     return "УДАЛЕНО (Фильтр)"
                 if is_manually_excluded:
                     return "УДАЛЕНО (Вручную)"
-                if v["is_empty"]:
-                    return "УДАЛЕНО (Пусто)"
                 if v["is_changed"]:
                     return "ИЗМЕНЕНО" if self._strip_formatting else "Очистка"
                 return "ОК"
             if col == 1:
                 return d.start
             if col == 2:
-                return f"{d.actor or '<нет>'} / {d.style}"
+                actor = d.actor or "<нет>"
+                res = f"{actor} / {d.style}"
+                if d.effect:
+                    res += f" / {d.effect}"
+                return res
             if col == 3:
                 # Делегат использует DisplayRole для HTML
                 return self._get_html_text(
-                    d, v, is_excluded or is_manually_excluded, path, row
+                    d,
+                    v,
+                    is_excluded or is_manually_excluded,
+                    path,
+                    row,
                 )
 
         return None
 
     def _get_html_text(
-        self, d: AssDialogue, v: dict, is_deleted: bool, path: Path, row: int
+        self,
+        d: AssDialogue,
+        v: dict[str, Any],
+        is_deleted: bool,
+        path: Path,
+        row: int,
     ) -> str:
         """Подготовить HTML-текст с кэшированием."""
         # Ключ кэша отражает текущее визуальное состояние ячейки
@@ -567,6 +590,7 @@ class AssFilterWidget(QWidget):
         self._parser = AssParser()
         self._actor_checkboxes: dict[str, CheckBox] = {}
         self._style_checkboxes: dict[str, CheckBox] = {}
+        self._effect_checkboxes: dict[str, CheckBox] = {}
         self._strip_formatting = True
         self._manual_exclusions: dict[Path, set[int]] = {}
         self._detached_window: ExternalFilterWindow | None = None
@@ -592,6 +616,7 @@ class AssFilterWidget(QWidget):
             self._model.set_filters(
                 self.get_excluded_actors(),
                 self.get_excluded_styles(),
+                self.get_excluded_effects(),
                 self._strip_formatting,
             )
 
@@ -600,6 +625,11 @@ class AssFilterWidget(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
+
+        # Подключаем автоматическое применение растягивания имен файлов
+        # при каждом сбросе модели (например, после поиска или сканирования)
+        self._proxy.modelReset.connect(self._apply_spans)
+        self._proxy.layoutChanged.connect(self._apply_spans)
 
         # Список файлов
         self._file_list = FileListWidget(
@@ -651,6 +681,7 @@ class AssFilterWidget(QWidget):
 
         self._segmented.addItem("actors", "Актёры", self._on_tab_changed)
         self._segmented.addItem("styles", "Стили", self._on_tab_changed)
+        self._segmented.addItem("effects", "Эффекты", self._on_tab_changed)
         self._segmented.addItem(
             "preview", "Предпросмотр", self._on_tab_changed
         )
@@ -687,6 +718,16 @@ class AssFilterWidget(QWidget):
         )
         self._stack.addWidget(self._styles_panel)
         self._styles_flow = self._styles_panel.findChild(FlowLayout)
+
+        # --- Панель «Эффекты» ---
+        self._effects_panel = self._create_filter_panel(
+            "Исключить эффекты",
+            "Строки с данными эффектами будут удалены целиком",
+            self._on_select_all_effects,
+            self._on_deselect_all_effects,
+        )
+        self._stack.addWidget(self._effects_panel)
+        self._effects_flow = self._effects_panel.findChild(FlowLayout)
 
         # --- Панель «Предпросмотр» ---
         self._preview_panel = QWidget()
@@ -726,18 +767,16 @@ class AssFilterWidget(QWidget):
         # Это заставляет Qt рассчитывать ширину для тысяч строк,
         # что роняет FPS до 10.
         header = self._preview_view.header()
-        from PyQt6.QtWidgets import QHeaderView
 
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)
-        header.setStretchLastSection(False)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        header.setStretchLastSection(True)
 
-        self._preview_view.setColumnWidth(0, 160)
-        self._preview_view.setColumnWidth(1, 140)
-        self._preview_view.setColumnWidth(2, 180)
-        self._preview_view.setColumnWidth(3, 800)
+        self._preview_view.setColumnWidth(0, 220)
+        self._preview_view.setColumnWidth(1, 120)
+        self._preview_view.setColumnWidth(2, 220)
 
         # Экстремальная оптимизация QTreeView:
         # Указывает движку Qt, что все строки имеют одинаковую высоту,
@@ -792,11 +831,14 @@ class AssFilterWidget(QWidget):
             self._stack.setCurrentWidget(self._actors_panel)
         elif route == "styles":
             self._stack.setCurrentWidget(self._styles_panel)
+        elif route == "effects":
+            self._stack.setCurrentWidget(self._effects_panel)
         elif route == "preview":
             self._stack.setCurrentWidget(self._preview_panel)
             self._model.set_filters(
                 self.get_excluded_actors(),
                 self.get_excluded_styles(),
+                self.get_excluded_effects(),
                 self._strip_formatting,
             )
 
@@ -831,9 +873,11 @@ class AssFilterWidget(QWidget):
         # Сбор уникальных актёров и стилей
         all_actors: set[str] = set()
         all_styles: set[str] = set()
+        all_effects: set[str] = set()
         for data in file_data.values():
             all_actors.update(d.actor for d in data.dialogues if d.actor)
             all_styles.update(d.style for d in data.dialogues if d.style)
+            all_effects.update(d.effect for d in data.dialogues if d.effect)
 
         self._update_checkboxes(
             all_actors, self._actor_checkboxes, self._actors_flow, "актёр"
@@ -841,9 +885,13 @@ class AssFilterWidget(QWidget):
         self._update_checkboxes(
             all_styles, self._style_checkboxes, self._styles_flow, "стиль"
         )
+        self._update_checkboxes(
+            all_effects, self._effect_checkboxes, self._effects_flow, "эффект"
+        )
 
         # Обновление модели
         self._model.update_data(file_data, visual_cache)
+        self._apply_spans()
 
         self._content_card.setVisible(True)
         self._segmented.setCurrentItem("actors")
@@ -874,6 +922,7 @@ class AssFilterWidget(QWidget):
         self._model.set_filters(
             self.get_excluded_actors(),
             self.get_excluded_styles(),
+            self.get_excluded_effects(),
             self._strip_formatting,
         )
 
@@ -911,6 +960,19 @@ class AssFilterWidget(QWidget):
         return [
             n for n, cb in self._style_checkboxes.items() if cb.isChecked()
         ]
+
+    def get_excluded_effects(self) -> list[str]:
+        return [
+            n for n, cb in self._effect_checkboxes.items() if cb.isChecked()
+        ]
+
+    def _on_select_all_effects(self):
+        for cb in self._effect_checkboxes.values():
+            cb.setChecked(True)
+
+    def _on_deselect_all_effects(self):
+        for cb in self._effect_checkboxes.values():
+            cb.setChecked(False)
 
     def get_manual_exclusions(self) -> dict[str, list[int]]:
         """Получить список вручную исключенных строк для каждого файла.
@@ -959,4 +1021,16 @@ class AssFilterWidget(QWidget):
 
         self._content_card.setVisible(True)
         self._detached_window = None
+        self._apply_spans()
         logger.info("Панель фильтров возвращена в основное окно")
+
+    def _apply_spans(self) -> None:
+        """Растянуть имена файлов (корневые элементы) на всю ширину дерева."""
+        # Для QTreeView нужно явно указывать span для каждой строки
+        # через setFirstColumnSpanned.
+        from PyQt6.QtCore import QModelIndex
+
+        # Проходим по всем корневым элементам в прокси-модели
+        row_count = self._proxy.rowCount(QModelIndex())
+        for i in range(row_count):
+            self._preview_view.setFirstColumnSpanned(i, QModelIndex(), True)

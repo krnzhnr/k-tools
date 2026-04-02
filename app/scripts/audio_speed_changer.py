@@ -5,7 +5,12 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from app.core.abstract_script import AbstractScript, SettingField, SettingType
+from app.core.abstract_script import (
+    AbstractScript,
+    SettingField,
+    SettingType,
+    ProgressCallback,
+)
 from app.core.output_resolver import OutputResolver
 from app.infrastructure.eac3to_runner import Eac3toRunner
 from app.core.constants import AUDIO_EXTENSIONS, ScriptCategory, ScriptMetadata
@@ -86,6 +91,9 @@ class AudioSpeedChangerScript(AbstractScript):
         file_path: Path,
         settings: dict[str, Any],
         output_path: str | None = None,
+        progress_callback: ProgressCallback | None = None,
+        current: int = 0,
+        total: int = 1,
     ) -> list[str]:
         """Выполнить изменение скорости для одного файла."""
         try:

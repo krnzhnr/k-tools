@@ -100,9 +100,12 @@ class StreamReplacerScript(AbstractScript):
 
     def execute_single(
         self,
-        file: Path,
+        file_path: Path,
         settings: dict[str, Any],
         output_path: str | None = None,
+        progress_callback: ProgressCallback | None = None,
+        current: int = 0,
+        total: int = 1,
     ) -> list[str]:
         """Не используется в Подмене потоков (переопределен execute)."""
         raise NotImplementedError(
@@ -129,6 +132,7 @@ class StreamReplacerScript(AbstractScript):
             return [msg]
 
         replacements = self._prepare_replacements(raw_replacements)
+        assert container is not None
         logger.info(
             "Подмена потоков: контейнер='%s', замен=%d",
             container.name,
@@ -147,7 +151,7 @@ class StreamReplacerScript(AbstractScript):
             msg = f"⏭ Пропущен (файл существует): {output_file_path.name}"
             logger.info(msg)
             if progress_callback:
-                progress_callback(1, 1, msg)
+                progress_callback(1, 1, msg, 0.0)
             return [msg]
 
         is_mp4 = container.suffix.lower() == ".mp4"
@@ -178,7 +182,7 @@ class StreamReplacerScript(AbstractScript):
                 self._delete_source(container, results)
 
         if progress_callback:
-            progress_callback(1, 1, results[0])
+            progress_callback(1, 1, results[0], 100.0)
         return results
 
     def _check_container(
@@ -233,7 +237,7 @@ class StreamReplacerScript(AbstractScript):
             return False, f"❌ Ошибка анализа: {container.name}"
 
         if progress_callback:
-            progress_callback(0, 1, f"Сборка {container.stem}...")
+            progress_callback(0, 1, f"Сборка {container.stem}...", 0.0)
 
         # Вычисляем track-order
         # Формат: вход_id:дорожка_id[,...]
@@ -340,7 +344,7 @@ class StreamReplacerScript(AbstractScript):
             return False, f"❌ Ошибка анализа: {container.name}"
 
         if progress_callback:
-            progress_callback(0, 1, f"Сборка {container.stem}...")
+            progress_callback(0, 1, f"Сборка {container.stem}...", 0.0)
 
         full_args = self._prepare_mp4_args(streams, replacements)
 

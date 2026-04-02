@@ -9,7 +9,8 @@ def test_ffmpeg_termination_on_error(mocker):
 
     # Мокаем Popen
     mock_popen = MagicMock()
-    mock_popen.poll.return_value = None  # Процесс еще идет
+    mock_popen.poll.return_value = 1  # Процесс завершен
+    mock_popen.stderr.readline.return_value = ""  # EOF
     mock_popen.communicate.return_value = (
         b"",
         "Критическая ошибка FFmpeg".encode("utf-8"),
@@ -33,6 +34,8 @@ def test_infrastructure_path_isolation(mocker):
 
     # Мокаем Popen чтобы перехватить env
     mock_popen = MagicMock()
+    mock_popen.poll.return_value = 0
+    mock_popen.stderr.readline.return_value = ""
     mock_popen.communicate.return_value = (b"", b"")
     mock_popen.returncode = 0
     mock_popen._was_cancelled = False

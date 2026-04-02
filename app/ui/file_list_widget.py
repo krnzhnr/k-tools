@@ -8,6 +8,7 @@ from typing import Sequence
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import QAbstractItemView, QListWidgetItem, QFileDialog
 from qfluentwidgets import ListWidget, RoundMenu, Action, FluentIcon
+from app.core.settings_manager import SettingsManager
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +110,17 @@ class FileListWidget(ListWidget):
         Args:
             paths: Список путей к файлам.
         """
+        if (
+            SettingsManager().clear_list_on_add
+            and self._file_paths
+            and paths
+        ):
+            self.clear_files()
+            logger.info(
+                "[%s] Список очищен перед программным добавлением согласно настройкам",  # noqa: E501
+                self._context_name,
+            )
+
         added_count = 0
         for p in paths:
             file_path = Path(p)
@@ -125,7 +137,8 @@ class FileListWidget(ListWidget):
             )
         else:
             logger.warning(
-                "[%s] При попытке программного добавления ни один файл не прошел валидацию",  # noqa: E501
+                "[%s] При попытке программного добавления ни один файл не "
+                "прошел валидацию",
                 self._context_name,
             )
 
@@ -171,6 +184,13 @@ class FileListWidget(ListWidget):
             event.ignore()
             return
 
+        if SettingsManager().clear_list_on_add and self._file_paths:
+            self.clear_files()
+            logger.info(
+                "[%s] Список очищен перед drag-n-drop согласно настройкам",
+                self._context_name,
+            )
+
         added_count = 0
         for url in event.mimeData().urls():
             file_path = Path(url.toLocalFile())
@@ -187,7 +207,8 @@ class FileListWidget(ListWidget):
             self.filesChanged.emit()
         else:
             logger.warning(
-                "[%s] Сброшенные файлы не прошли валидацию по расширению или не являются файлами",  # noqa: E501
+                "[%s] Сброшенные файлы не прошли валидацию по расширению "
+                "или не являются файлами",
                 self._context_name,
             )
         event.acceptProposedAction()

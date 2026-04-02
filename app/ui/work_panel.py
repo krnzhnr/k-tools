@@ -3,7 +3,7 @@
 
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from PyQt6.QtCore import (
     Qt,
@@ -13,11 +13,14 @@ from PyQt6.QtCore import (
     QThreadPool,
     QObject,
     QMutex,
+    QSize,
 )
 from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
+    QStackedWidget,
+    QSizePolicy,
 )
 from qfluentwidgets import (
     BodyLabel,
@@ -37,6 +40,8 @@ from qfluentwidgets import (
     InfoBar,
     InfoBarPosition,
     TextEdit,
+    SegmentedWidget,
+    SpinBox,
 )
 
 from app.core.abstract_script import (
@@ -51,6 +56,7 @@ from app.ui.track_list_widget import TrackListWidget
 from app.ui.stream_replace_widget import StreamReplaceWidget
 from app.ui.track_extract_widget import TrackExtractWidget
 from app.ui.ass_filter_widget import AssFilterWidget
+from app.ui.keyword_manager_widget import KeywordManagerWidget
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +119,7 @@ class ScriptWorker(QThread):
         error: Текст ошибки.
     """
 
-    progress = pyqtSignal(int, int, str)
+    progress = pyqtSignal(int, int, str, float)
     finished = pyqtSignal(list)
     error = pyqtSignal(str)
 
@@ -185,7 +191,7 @@ class ScriptWorker(QThread):
             files=self._files,
             settings=self._settings,
             output_path=self._output_path,
-            progress_callback=self._on_progress,
+            progress_callback=cast(Any, self._on_progress),
         )
         self.finished.emit(results)
 
@@ -216,7 +222,7 @@ class ScriptWorker(QThread):
 
                 # Сообщаем о прогрессе в UI
                 last_msg = res[-1] if res else ""
-                self.progress.emit(completed, total, last_msg)
+                self.progress.emit(completed, total, last_msg, 0.0)
             finally:
                 mutex.unlock()
 
@@ -242,6 +248,7 @@ class ScriptWorker(QThread):
         current: int,
         total: int,
         message: str,
+        intra_percent: float = 0.0,
     ) -> None:
         """Callback прогресса выполнения.
 
@@ -249,8 +256,33 @@ class ScriptWorker(QThread):
             current: Текущий обработанный файл.
             total: Общее количество файлов.
             message: Сообщение о статусе.
+            intra_percent: Процент выполнения внутри файла (0-100).
         """
-        self.progress.emit(current, total, message)
+        self.progress.emit(current, total, message, intra_percent)
+
+
+class AdaptiveStackedWidget(QStackedWidget):
+    """QStackedWidget, который меняет размер под текущий виджет."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.currentChanged.connect(self._on_current_changed)
+
+    def _on_current_changed(self, index: int) -> None:
+        """Обработчик смены текущей страницы."""
+        self.updateGeometry()
+
+    def sizeHint(self) -> QSize:
+        """Размер для текущего виджета."""
+        if widget := self.currentWidget():
+            return widget.sizeHint()
+        return super().sizeHint()
+
+    def minimumSizeHint(self) -> QSize:
+        """Минимальный размер для текущего виджета."""
+        if widget := self.currentWidget():
+            return widget.minimumSizeHint()
+        return super().minimumSizeHint()
 
 
 class ScriptPage(QWidget):
@@ -282,6 +314,7 @@ class ScriptPage(QWidget):
         self._ass_filter_widget: AssFilterWidget | None = None
         self._file_list: Any = None
         self._settings_manager = SettingsManager()
+        self._vproc_backup: dict[str, Any] = {}
 
         self._is_initialized = False
 
@@ -321,7 +354,7 @@ class ScriptPage(QWidget):
         container.setStyleSheet("background: transparent;")
         layout = QVBoxLayout(container)
         layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(16)
+        layout.setSpacing(15)
 
         # Заголовок и описание
         self._add_header(layout)
@@ -332,6 +365,7 @@ class ScriptPage(QWidget):
 
         # Список файлов
         self._add_file_list(layout)
+        layout.setStretchFactor(self._file_list, 1)
 
         # Лог выполнения
         self._add_log_area(layout)
@@ -358,24 +392,101 @@ class ScriptPage(QWidget):
     def _add_settings(self, layout: QVBoxLayout) -> None:
         """Добавить секцию настроек скрипта.
 
-        Args:
-            layout: Родительский layout.
+        Группирует настройки по вкладкам, если их больше одной.
         """
-        settings_card = CardWidget(self)
-        card_layout = QVBoxLayout(settings_card)
+        schema = self._script.settings_schema
+        if not schema:
+            return
+
+        # Группируем поля по атрибуту group
+        groups: dict[str, list[SettingField]] = {}
+        for field in schema:
+            groups.setdefault(field.group, []).append(field)
+
+        # Если группа только одна — используем старый вид без вкладок
+        if len(groups) <= 1:
+            group_name = list(groups.keys())[0] if groups else "Настройки"
+            settings_card = self._create_settings_group_card(
+                group_name, groups.get(group_name, [])
+            )
+            layout.addWidget(settings_card)
+        else:
+            # Несколько групп — создаем вкладки (как в track_extract_widget)
+            self._segmented_widget = SegmentedWidget(self)
+            self._rules_stack = AdaptiveStackedWidget(self)
+
+            for i, (group_name, fields) in enumerate(groups.items()):
+                page = QWidget()
+                page.setStyleSheet("background: transparent;")
+                main_layout = QVBoxLayout(page)
+                main_layout.setContentsMargins(0, 0, 0, 0)
+                main_layout.setSpacing(
+                    15
+                )  # Фиксированный интервал между блоками
+                main_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+                card = self._create_settings_group_card(group_name, fields)
+                main_layout.addWidget(card)
+
+                self._rules_stack.addWidget(page)
+                self._segmented_widget.addItem(
+                    routeKey=group_name,
+                    text=group_name,
+                    onClick=lambda _, idx=i: self._rules_stack.setCurrentIndex(
+                        idx
+                    ),
+                )
+
+            self._segmented_widget.setCurrentItem(list(groups.keys())[0])
+            layout.addWidget(self._segmented_widget)
+
+            # Ограничиваем вертикальный размер стека настроек
+            self._rules_stack.setSizePolicy(
+                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum
+            )
+            layout.addWidget(self._rules_stack)
+
+        self._update_visibility()
+
+    def _create_settings_group_card(
+        self, title: str, fields: list[SettingField]
+    ) -> CardWidget:
+        """Создать карточку с группой настроек."""
+        card = CardWidget(self)
+        card_layout = QVBoxLayout(card)
         card_layout.setContentsMargins(16, 12, 16, 12)
         card_layout.setSpacing(10)
 
-        settings_title = StrongBodyLabel("Настройки", settings_card)
-        card_layout.addWidget(settings_title)
+        card_title = StrongBodyLabel(title, card)
+        card_layout.addWidget(card_title)
+        for field in fields:
+            if field.setting_type == SettingType.SUBTITLE:
+                subtitle_label = StrongBodyLabel(field.label, card)
+                subtitle_label.setStyleSheet(
+                    "margin-top: 12px; margin-bottom: 2px;"
+                )
+                card_layout.addWidget(subtitle_label)
+                self._settings_widgets[field.key] = subtitle_label
+                self._settings_rows[field.key] = subtitle_label
+                continue
 
-        for field in self._script.settings_schema:
-            row_widget = QWidget(settings_card)
+            # Контейнер для поля (ряд + опциональный комментарий)
+            field_container = QWidget(card)
+            field_v_layout = QVBoxLayout(field_container)
+            field_v_layout.setContentsMargins(0, 0, 0, 0)
+            field_v_layout.setSpacing(2)
+
+            row_widget = QWidget(field_container)
             row_layout = QHBoxLayout(row_widget)
             row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(10)
 
-            widget = self._create_setting_widget(field, settings_card)
+            widget = self._create_setting_widget(field, row_widget)
             self._settings_widgets[field.key] = widget
+
+            # Установка подсказки
+            if field.comment:
+                widget.setToolTip(field.comment)
 
             # Подключение сигналов для динамической видимости
             if isinstance(widget, ComboBox):
@@ -390,16 +501,30 @@ class ScriptPage(QWidget):
             if field.setting_type == SettingType.CHECKBOX:
                 row_layout.addWidget(widget)
             else:
-                label = BodyLabel(field.label, settings_card)
+                label = BodyLabel(field.label, row_widget)
                 label.setMinimumWidth(150)
                 row_layout.addWidget(label)
                 row_layout.addWidget(widget)
 
-            card_layout.addWidget(row_widget)
-            self._settings_rows[field.key] = row_widget
+            field_v_layout.addWidget(row_widget)
 
-        self._update_visibility()
-        layout.addWidget(settings_card)
+            # Добавляем поясняющий текст, если он есть
+            if field.comment:
+                comment_label = CaptionLabel(field.comment, field_container)
+                comment_label.setStyleSheet(
+                    "color: #808080; margin-left: 2px;"
+                )
+                # Смещение для чекбокса, чтобы текст был под текстом чекбокса
+                if field.setting_type == SettingType.CHECKBOX:
+                    comment_label.setStyleSheet(
+                        "color: #808080; margin-left: 28px;"
+                    )
+                field_v_layout.addWidget(comment_label)
+
+            card_layout.addWidget(field_container)
+            self._settings_rows[field.key] = field_container
+
+        return card
 
     def _create_setting_widget(
         self, field: SettingField, parent: QWidget
@@ -411,6 +536,10 @@ class ScriptPage(QWidget):
             return self._create_combo_setting_widget(field, parent)
         if field.setting_type == SettingType.CHECKBOX:
             return self._create_checkbox_setting_widget(field, parent)
+        if field.setting_type == SettingType.KEYWORD_LIST:
+            return self._create_keyword_list_widget(field, parent)
+        if field.setting_type == SettingType.INT:
+            return self._create_int_setting_widget(field, parent)
 
         widget = LineEdit(parent)
         widget.setText(str(field.default))
@@ -421,7 +550,7 @@ class ScriptPage(QWidget):
     ) -> LineEdit:
         widget = LineEdit(parent)
         saved_val = SettingsManager().get_script_setting(
-            self._script.name, field.key, str(field.default)
+            self._script.name, field.key, str(field.default), type_hint=str
         )
         widget.setText(str(saved_val))
         widget.setPlaceholderText(field.label)
@@ -447,7 +576,7 @@ class ScriptPage(QWidget):
         widget = ComboBox(parent)
         widget.addItems(field.options)
         saved_val = SettingsManager().get_script_setting(
-            self._script.name, field.key, str(field.default)
+            self._script.name, field.key, str(field.default), type_hint=str
         )
         if saved_val in field.options:
             widget.setCurrentText(str(saved_val))
@@ -473,10 +602,6 @@ class ScriptPage(QWidget):
         self, field: SettingField, parent: QWidget
     ) -> CheckBox:
         widget = CheckBox(field.label, parent)
-        saved_val = SettingsManager().get_script_setting(
-            self._script.name, field.key, bool(field.default)
-        )
-        widget.setChecked(bool(saved_val))
 
         # Специальная логика для подмены оригинала
         if field.key == "overwrite_source":
@@ -498,7 +623,6 @@ class ScriptPage(QWidget):
                 field.key,
                 "ВКЛ" if is_checked else "ВЫКЛ",
             )
-
             # Если включаем подмену при заданном пути — сбрасываем путь
             if field.key == "overwrite_source" and is_checked:
                 if (
@@ -517,7 +641,130 @@ class ScriptPage(QWidget):
                         parent=self,
                     )
 
+            # --- Логика для VideoProcessor: Lossless зависимости ---
+            if (
+                self._script.name == "Видео-процессор"
+                and field.key == "lossless"
+            ):
+                # Принудительно обновляем видимость
+                self._update_visibility()
+
+                relevant_keys = [
+                    "nvenc_rc",
+                    "v_qp",
+                    "nvenc_preset",
+                    "audio_codec",
+                ]
+
+                if is_checked:
+                    # 1. ЗАПОМИНАЕМ текущие значения перед включением
+                    for key in relevant_keys:
+                        w = self._settings_widgets.get(key)
+                        if w:
+                            if isinstance(w, ComboBox):
+                                self._vproc_backup[key] = w.currentText()
+                            elif isinstance(w, SpinBox):
+                                self._vproc_backup[key] = w.value()
+
+                    # 2. ПРИМЕНЯЕМ оптимизацию
+                    updates = {
+                        "nvenc_rc": "constqp",
+                        "v_qp": 0,
+                        "nvenc_preset": "p1",
+                        "audio_codec": "copy",
+                    }
+                    for key, val in updates.items():
+                        # В конфиг
+                        SettingsManager().set_script_setting(
+                            self._script.name, key, val
+                        )
+                        # В UI
+                        w = self._settings_widgets.get(key)
+                        if w:
+                            if isinstance(w, ComboBox):
+                                w.setCurrentText(str(val))
+                            elif isinstance(w, SpinBox):
+                                try:
+                                    w.setValue(int(str(val)))
+                                except (ValueError, TypeError):
+                                    pass
+
+                    # Принудительно обновляем блокировку и видимость
+                    self._update_visibility()
+                else:
+                    # 3. ВОЗВРАЩАЕМ старые значения
+                    for key in relevant_keys:
+                        w = self._settings_widgets.get(key)
+                        if w:
+                            # Восстанавливаем из бэкапа, если он есть
+                            if key in self._vproc_backup:
+                                val = self._vproc_backup[key]
+                                if isinstance(w, ComboBox):
+                                    w.setCurrentText(str(val))
+                                elif isinstance(w, SpinBox):
+                                    w.setValue(int(val))
+
+                                SettingsManager().set_script_setting(
+                                    self._script.name, key, val
+                                )
+
+                    # Принудительно обновляем блокировку и видимость
+                    self._update_visibility()
+
+        # Подключаем сигнал ДО установки начального значения. Это гарантирует
+        # срабатывание логики (например, lossless) при старте UI
         widget.stateChanged.connect(on_state_changed)
+
+        # Устанавливаем сохраненное значение
+        saved_val = SettingsManager().get_script_setting(
+            self._script.name, field.key, bool(field.default), type_hint=bool
+        )
+        widget.setChecked(saved_val)
+
+        return widget
+
+    def _create_int_setting_widget(
+        self, field: SettingField, parent: QWidget
+    ) -> SpinBox:
+        widget = SpinBox(parent)
+        widget.setRange(0, 1000000)
+        saved_val = SettingsManager().get_script_setting(
+            self._script.name, field.key, int(field.default), type_hint=int
+        )
+        widget.setValue(saved_val)
+        widget.valueChanged.connect(
+            lambda val: SettingsManager().set_script_setting(
+                self._script.name, field.key, val
+            )
+        )
+        widget.valueChanged.connect(
+            lambda val: logger.info(
+                "[%s] Настройка '%s' (%s) изменена на: %d",
+                self._script.name,
+                field.label,
+                field.key,
+                val,
+            )
+        )
+        return widget
+
+    def _create_keyword_list_widget(
+        self, field: SettingField, parent: QWidget
+    ) -> KeywordManagerWidget:
+        """Создать виджет управления списком ключевых слов."""
+        widget = KeywordManagerWidget(field.label, parent)
+        saved_val = SettingsManager().get_script_setting(
+            self._script.name, field.key, None
+        )
+        if saved_val is None:
+            saved_val = list(field.default)
+        widget.set_keywords(list(saved_val))
+
+        widget.keywordsChanged.connect(
+            lambda keywords: SettingsManager().set_script_setting(
+                self._script.name, field.key, keywords
+            )
+        )
         return widget
 
     def _update_visibility(self) -> None:
@@ -537,6 +784,16 @@ class ScriptPage(QWidget):
 
             if row := self._settings_rows.get(field.key):
                 row.setVisible(is_visible)
+
+        # Дополнительная логика блокировки (enabled/disabled)
+        if self._script.name == "Видео-процессор":
+            is_lossless = bool(current_settings.get("lossless", False))
+            relevant_keys = ["nvenc_rc", "v_qp", "nvenc_preset", "audio_codec"]
+            for key in relevant_keys:
+                if widget := self._settings_widgets.get(key):
+                    # Если режим Lossless, блокируем выбор параметров
+                    # битрейта/QP/пресета/аудио
+                    widget.setEnabled(not is_lossless)
 
     def _add_file_list(self, layout: QVBoxLayout) -> None:
         """Добавить секцию списка файлов."""
@@ -690,12 +947,14 @@ class ScriptPage(QWidget):
         self.bottom_widget = QWidget(self)
         self.bottom_widget.setObjectName("fixedBottomBar")
         self.bottom_widget.setFixedHeight(106)
-        self.bottom_widget.setStyleSheet("""
+        self.bottom_widget.setStyleSheet(
+            """
             QWidget#fixedBottomBar {
                 background-color: transparent;
                 border-top: 1px solid rgba(255, 255, 255, 0.08);
             }
-            """)
+            """
+        )
 
         # Главный макет панели
         panel_layout = QVBoxLayout(self.bottom_widget)
@@ -853,6 +1112,10 @@ class ScriptPage(QWidget):
                 settings[key] = widget.currentText()
             elif isinstance(widget, CheckBox):
                 settings[key] = widget.isChecked()
+            elif isinstance(widget, SpinBox):
+                settings[key] = widget.value()
+            elif isinstance(widget, KeywordManagerWidget):
+                settings[key] = widget.get_keywords()
             else:
                 settings[key] = ""
 
@@ -902,15 +1165,59 @@ class ScriptPage(QWidget):
             output_path=self._output_path_edit.text(),
             parent=self,
         )
-        self._worker.progress.connect(self._on_progress)
+        self._worker.progress.connect(self._on_progress_received)
         self._worker.finished.connect(self._on_finished)
         self._worker.error.connect(self._on_error)
         self._worker.start()
+
+    def _on_progress_received(
+        self,
+        current: int,
+        total: int,
+        message: str,
+        intra_percent: float | None = 0.0,
+    ) -> None:
+        """Обработка сигнала прогресса."""
+        if (
+            self._indeterminate_progress
+            and self._indeterminate_progress.isVisible()
+        ):
+            self._indeterminate_progress.stop()
+            self._indeterminate_progress.setVisible(False)
+            self._progress.setVisible(True)
+
+        if self._progress.maximum() != 1000:
+            self._progress.setRange(0, 1000)  # Используем 1000 для плавности
+
+        # Расчет общего процента (0-1000)
+        total_float = float(total) if total > 0 else 1.0
+        # Базовый прогресс по файлам + прогресс внутри текущего файла
+        intra_val = intra_percent if intra_percent is not None else 0.0
+        real_current = float(current) + (intra_val / 100.0)
+        overall_percent = (real_current / total_float) * 1000.0
+
+        self._progress.setValue(int(overall_percent))
+
+        # Формируем текст статуса
+        if total > 1:
+            status_text = f"Обработано: {current}/{total}"
+            if message:
+                status_text += f" - {message}"
+        else:
+            # Для одного файла не пишем 0/1 или 1/1, показываем
+            # только сообщение
+            status_text = message or f"Обработка: {current}/{total}"
+
+        self._status_label.setText(status_text)
 
     def _prepare_execution_ui(self) -> None:
         self._log_area.clear()
         self._execute_btn.setText("Остановить")
         self._execute_btn.setIcon(FluentIcon.CLOSE)
+
+        # Сброс прогресс-бара в неопределенное состояние перед запуском
+        self._progress.setRange(0, 0)
+        self._progress.setValue(0)
 
         if getattr(self, "_indeterminate_progress", None):
             self._progress.setVisible(False)
@@ -955,6 +1262,8 @@ class ScriptPage(QWidget):
             settings["excluded_actors"] = excluded_actors
             excluded_styles = self._ass_filter_widget.get_excluded_styles()
             settings["excluded_styles"] = excluded_styles
+            excluded_effects = self._ass_filter_widget.get_excluded_effects()
+            settings["excluded_effects"] = excluded_effects
 
             # Добавляем ручные исключения конкретных строк
             manual_excl = self._ass_filter_widget.get_manual_exclusions()
@@ -963,12 +1272,18 @@ class ScriptPage(QWidget):
             total_manual = sum(
                 len(indices) for indices in manual_excl.values()
             )
-            if total_manual > 0 or excluded_actors or excluded_styles:
+            if (
+                total_manual > 0
+                or excluded_actors
+                or excluded_styles
+                or excluded_effects
+            ):
                 logger.info(
                     "[ASS → VTT] Исключено: актёров: %d, стилей: %d, "
-                    "строк вручную: %d",
+                    "эффектов: %d, строк вручную: %d",
                     len(excluded_actors),
                     len(excluded_styles),
+                    len(excluded_effects),
                     total_manual,
                 )
 
@@ -977,6 +1292,7 @@ class ScriptPage(QWidget):
         current: int,
         total: int,
         message: str,
+        intra_percent: float | None = None,
     ) -> None:
         """Обработка прогресса выполнения."""
         self.preload_ui()
@@ -992,7 +1308,6 @@ class ScriptPage(QWidget):
             self._indeterminate_progress
             and self._indeterminate_progress.isVisible()
             and current > 0
-            and total > 1
         ):
             self._indeterminate_progress.stop()
             self._indeterminate_progress.setVisible(False)

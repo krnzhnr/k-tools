@@ -24,6 +24,12 @@ def test_settings_manager_save_load():
     s.overwrite_existing = False
     assert s.overwrite_existing is False
 
+    s.clear_list_on_add = True
+    assert s.clear_list_on_add is True
+
+    s.clear_list_on_add = False
+    assert s.clear_list_on_add is False
+
     if os.path.exists("settings.ini"):
         os.remove("settings.ini")
 
@@ -35,8 +41,17 @@ def test_settings_page_init(qtbot):
     assert page.objectName() == "settingsPage"
     assert page._overwrite_card is not None
     assert page._switch_btn is not None
+    assert page._clear_list_card is not None
+    assert page._clear_list_switch is not None
+
     # Проверка начального значения из менеджера
-    assert page._switch_btn.isChecked() == SettingsManager().overwrite_existing
+    assert (
+        page._switch_btn.isChecked() == SettingsManager().overwrite_existing
+    )
+    assert (
+        page._clear_list_switch.isChecked()
+        == SettingsManager().clear_list_on_add
+    )
 
 
 def test_settings_page_toggle(qtbot):

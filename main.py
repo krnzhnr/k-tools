@@ -340,6 +340,8 @@ def main() -> None:
     theme_worker.start()
 
     registry = _create_registry()
+    # Инициализация всех настроек по умолчанию в settings.ini
+    SettingsManager().initialize_all_defaults(registry)
     window = MainWindow(registry=registry)
     window.show()
 

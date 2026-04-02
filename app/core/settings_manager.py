@@ -155,6 +155,59 @@ class SettingsManager(metaclass=SingletonMeta):
             self._settings.sync()
         logger.info("Настройка 'max_parallel_tasks' изменена на: %d", value)
 
+    @property
+    def clear_list_on_add(self) -> bool:
+        """Очищать ли список перед добавлением новых файлов."""
+        with self._lock:
+            return self._settings.value(
+                "General/clear_list_on_add", False, type=bool
+            )
+
+    @clear_list_on_add.setter
+    def clear_list_on_add(self, value: bool) -> None:
+        """Установить режим очистки списка при добавлении."""
+        with self._lock:
+            self._settings.setValue("General/clear_list_on_add", value)
+            self._settings.sync()
+        logger.info("Настройка 'clear_list_on_add' изменена на: %s", value)
+
+    def initialize_all_defaults(self, registry: Any) -> None:
+        """Инициализировать отсутствующие настройки значениями по умолчанию.
+
+        Args:
+            registry: Реестр скриптов (ScriptRegistry).
+        """
+        import os
+
+        # 1. Общие настройки
+        gen_defaults = {
+            "General/theme": "Dark",
+            "General/overwrite_existing": False,
+            "General/default_output_subfolder": "KTools_Result",
+            "General/use_auto_subfolder": False,
+            "General/max_parallel_tasks": max(1, (os.cpu_count() or 2) // 2),
+            "General/clear_list_on_add": False,
+        }
+
+        with self._lock:
+            # Сначала общие
+            for key, val in gen_defaults.items():
+                if not self._settings.contains(key):
+                    self._settings.setValue(key, val)
+
+            # Теперь настройки скриптов
+            for script in registry.scripts:
+                group = self._get_safe_script_name(script.name)
+                for field in script.settings_schema:
+                    full_key = f"{group}/{field.key}"
+                    if not self._settings.contains(full_key):
+                        self._settings.setValue(full_key, field.default)
+
+            self._settings.sync()
+        logger.info(
+            "Завершена инициализация настроек по умолчанию в settings.ini"
+        )
+
     def _get_safe_script_name(self, script_name: str) -> str:
         """Нормализовать имя скрипта для использования в качестве имени секции (группы).  # noqa: E501
 
@@ -166,7 +219,7 @@ class SettingsManager(metaclass=SingletonMeta):
         return f"Script_{safe_name}"
 
     def get_script_setting(
-        self, script_name: str, key: str, default: Any
+        self, script_name: str, key: str, default: Any, type_hint: Any = None
     ) -> Any:
         """Получить настройку для конкретного скрипта.
 
@@ -174,9 +227,14 @@ class SettingsManager(metaclass=SingletonMeta):
             script_name: Имя скрипта (секция).
             key: Ключ настройки.
             default: Значение по умолчанию.
+            type_hint: Ожидаемый тип данных (int, bool, str и т.д.).
         """
         group = self._get_safe_script_name(script_name)
         with self._lock:
+            if type_hint is not None:
+                return self._settings.value(
+                    f"{group}/{key}", default, type=type_hint
+                )
             return self._settings.value(f"{group}/{key}", default)
 
     def set_script_setting(

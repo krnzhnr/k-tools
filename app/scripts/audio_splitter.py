@@ -15,6 +15,7 @@ from app.core.abstract_script import (
     AbstractScript,
     SettingField,
     SettingType,
+    ProgressCallback,
 )
 from app.core.settings_manager import SettingsManager
 from app.core.output_resolver import OutputResolver
@@ -91,6 +92,9 @@ class AudioSplitterScript(AbstractScript):
         file_path: Path,
         settings: dict[str, Any],
         output_path: str | None = None,
+        progress_callback: ProgressCallback | None = None,
+        current: int = 0,
+        total: int = 1,
     ) -> list[str]:
         """Разделить один аудиофайл."""
         delete_original = settings.get("delete_original", False)

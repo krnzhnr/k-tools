@@ -229,7 +229,7 @@ class TestExecuteEarlyReturns:
         results = script.execute([], settings, progress_callback=cb)
         assert len(results) == 1
         assert "Пропущен" in results[0]
-        cb.assert_called_once_with(1, 1, results[0])
+        cb.assert_called_once_with(1, 1, results[0], 0.0)
 
 
 # -----------------------------------------------
@@ -292,7 +292,8 @@ class TestExecuteMKV:
 
         # Проверка вызова callback
         assert cb.call_count == 2
-        cb.assert_any_call(0, 1, f"Сборка {container.stem}...")
+        cb.assert_any_call(0, 1, f"Сборка {container.stem}...", 0.0)
+        cb.assert_any_call(1, 1, results[0], 100.0)
 
     def test_mkv_runner_failure(
         self,

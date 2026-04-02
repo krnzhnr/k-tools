@@ -18,6 +18,9 @@ class SettingType(Enum):
     TEXT = "text"
     COMBO = "combo"
     CHECKBOX = "checkbox"
+    KEYWORD_LIST = "keyword_list"
+    INT = "int"
+    SUBTITLE = "subtitle"
 
 
 @dataclass(frozen=True)
@@ -36,12 +39,16 @@ class SettingField:
     label: str
     setting_type: SettingType
     default: Any = ""
+    group: str = "Общие"
+    comment: str = ""
     options: list[str] = field(default_factory=list)
     visible_if: dict[str, list[Any]] = field(default_factory=dict)
 
 
 # Тип callback-функции для отчёта о прогрессе.
-ProgressCallback = Callable[[int, int, str], None]
+# Аргументы: (текущий_файл_индекс, всего_файлов, сообщение,
+# внутрифайловый_процент_0_100)
+ProgressCallback = Callable[[int, int, str, float | None], None]
 
 
 class AbstractScript(ABC):
@@ -298,11 +305,20 @@ class AbstractScript(ABC):
                 break
 
             if progress_callback:
-                progress_callback(i, total, f"Обработка: {file_path.name}")
+                progress_callback(
+                    i, total, f"Обработка: {file_path.name}", 0.0
+                )
 
             # Обработка одного файла
             try:
-                res = self.execute_single(file_path, settings, output_path)
+                res = self.execute_single(
+                    file_path,
+                    settings,
+                    output_path,
+                    progress_callback,
+                    i,
+                    total,
+                )
                 results.extend(res)
             except Exception as e:
                 msg = f"❌ Критическая ошибка при обработке {file_path.name}: {e}"  # noqa: E501
@@ -312,7 +328,7 @@ class AbstractScript(ABC):
             if progress_callback:
                 # Показываем результат последнего обработанного файла в статусе
                 status_msg = results[-1] if results else ""
-                progress_callback(i + 1, total, status_msg)
+                progress_callback(i + 1, total, status_msg, 0.0)
 
         return results
 
@@ -322,6 +338,9 @@ class AbstractScript(ABC):
         file: Path,
         settings: dict[str, Any],
         output_path: str | None = None,
+        progress_callback: ProgressCallback | None = None,
+        current: int = 0,
+        total: int = 1,
     ) -> list[str]:
         """Обработать один файл.
 

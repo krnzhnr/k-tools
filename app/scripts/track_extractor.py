@@ -16,6 +16,7 @@ from app.core.abstract_script import (
     AbstractScript,
     SettingField,
     SettingType,
+    ProgressCallback,
 )
 from app.core.settings_manager import SettingsManager
 from app.core.output_resolver import OutputResolver
@@ -164,6 +165,9 @@ class TrackExtractorScript(AbstractScript):
         file_path: Path,
         settings: dict[str, Any],
         output_path: str | None = None,
+        progress_callback: ProgressCallback | None = None,
+        current: int = 0,
+        total: int = 1,
     ) -> list[str]:
         """Обработать один файл (массовое извлечение выбранных дорожек)."""
         per_file = settings.get("selected_tracks_per_file", {})
