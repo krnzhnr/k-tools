@@ -342,7 +342,10 @@ class SettingsPage(ScrollArea):
         text_layout.setSpacing(2)
         title = BodyLabel(self.tr("Показывать вкладку логов"), card)
         desc = CaptionLabel(
-            self.tr("Отображает лог работы программы в реальном времени в нижнем меню навигации"), # noqa: E501
+            self.tr(
+                "Отображает лог работы программы в реальном времени "
+                "в нижнем меню навигации"
+            ),
             card,
         )
         desc.setStyleSheet("color: rgba(255, 255, 255, 0.6)")

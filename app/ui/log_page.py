@@ -2,7 +2,7 @@
 """Виджет для отображения логов приложения в реальном времени."""
 
 import logging
-from PyQt6.QtCore import Qt, pyqtSignal, QObject, QUrl
+from PyQt6.QtCore import pyqtSignal, QObject, QUrl
 from PyQt6.QtGui import QTextCursor, QColor, QTextCharFormat, QDesktopServices
 from PyQt6.QtWidgets import (
     QWidget,
@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 class LogSignalEmitter(QObject):
     """Эмиттер сигналов для логирования, обеспечивающий потокобезопасность."""
+
     log_received = pyqtSignal(str, int)
 
 
@@ -33,10 +34,12 @@ class QtLogHandler(logging.Handler):
         super().__init__()
         self.emitter = emitter
         # Используем тот же формат, что и в основном файле логов
-        self.setFormatter(logging.Formatter(
-            "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-            datefmt="%H:%M:%S"
-        ))
+        self.setFormatter(
+            logging.Formatter(
+                "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+                datefmt="%H:%M:%S",
+            )
+        )
 
     def emit(self, record: logging.LogRecord) -> None:
         """Перехват записи лога и испускание сигнала."""
@@ -54,11 +57,11 @@ class LogPage(QWidget):
 
         # Цвета для уровней логирования в UI
         self._level_colors = {
-            logging.DEBUG: QColor("#808080"),    # Серый
-            logging.INFO: QColor("#FFFFFF"),     # Белый
+            logging.DEBUG: QColor("#808080"),  # Серый
+            logging.INFO: QColor("#FFFFFF"),  # Белый
             logging.WARNING: QColor("#FFB800"),  # Оранжево-желтый
-            logging.ERROR: QColor("#FF4D4D"),    # Светло-красный
-            logging.CRITICAL: QColor("#FF0000"), # Ярко-красный
+            logging.ERROR: QColor("#FF4D4D"),  # Светло-красный
+            logging.CRITICAL: QColor("#FF0000"),  # Ярко-красный
         }
 
         self._signal_emitter = LogSignalEmitter()
@@ -90,7 +93,9 @@ class LogPage(QWidget):
         self._folder_btn.clicked.connect(self._open_log_folder)
         header_layout.addWidget(self._folder_btn)
 
-        self._clear_btn = PrimaryPushButton(FluentIcon.DELETE, "Очистить", self)
+        self._clear_btn = PrimaryPushButton(
+            FluentIcon.DELETE, "Очистить", self
+        )
         self._clear_btn.clicked.connect(self._clear_logs)
         header_layout.addWidget(self._clear_btn)
 
@@ -105,7 +110,8 @@ class LogPage(QWidget):
         self._log_view.setReadOnly(True)
         self._log_view.setUndoRedoEnabled(False)
         self._log_view.setMaximumBlockCount(self._max_lines)
-        self._log_view.setStyleSheet("""
+        self._log_view.setStyleSheet(
+            """
             QPlainTextEdit {
                 background-color: transparent;
                 border: none;
@@ -113,7 +119,8 @@ class LogPage(QWidget):
                 font-size: 13px;
                 color: rgba(255, 255, 255, 0.8);
             }
-        """)
+        """
+        )
         card_layout.addWidget(self._log_view)
         layout.addWidget(self._card)
 
@@ -136,8 +143,8 @@ class LogPage(QWidget):
 
     def _open_log_folder(self) -> None:
         """Открыть директорию с логами в проводнике."""
-        import os
         from pathlib import Path
+
         log_dir = Path("logs").absolute()
         if not log_dir.exists():
             log_dir.mkdir(parents=True, exist_ok=True)
@@ -153,8 +160,10 @@ class LogPage(QWidget):
     def _copy_all(self) -> None:
         """Копирование всех логов в буфер обмена."""
         from PyQt6.QtWidgets import QApplication
-        QApplication.clipboard().setText(self._log_view.toPlainText())
-        logger.info("Логи скопированы в буфер обмена")
+
+        if clipboard := QApplication.clipboard():
+            clipboard.setText(self._log_view.toPlainText())
+            logger.info("Логи скопированы в буфер обмена")
 
     def cleanup(self) -> None:
         """Отключение обработчика логов и очистка ресурсов."""

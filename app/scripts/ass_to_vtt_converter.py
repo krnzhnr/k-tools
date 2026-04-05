@@ -226,7 +226,8 @@ class AssToVttScript(AbstractScript):
                     if strip_fmt:
                         text = self._parser.strip_tags(text)
 
-                    # Проверяем, остался ли в строке хоть какой-то текст (без учета тегов).
+                    # Проверяем, остался ли в строке хоть какой-то текст
+                    # (без учета тегов).
                     # Если строка пуста (весь капс вырезан), пропускаем её.
                     if not self._parser.strip_tags(text).strip():
                         continue

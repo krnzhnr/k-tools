@@ -897,15 +897,13 @@ class ScriptPage(QWidget):
         if "strip_caps" in self._settings_widgets:
             cb = self._settings_widgets["strip_caps"]
             if isinstance(cb, CheckBox):
-                self._ass_filter_widget._strip_caps_cb.setChecked(
-                    cb.isChecked()
-                )
+                target_cb = self._ass_filter_widget._strip_caps_cb
+                target_cb.setChecked(cb.isChecked())
+
                 cb.checkStateChanged.connect(
-                    lambda: self._ass_filter_widget._strip_caps_cb.setChecked(
-                        cb.isChecked()
-                    )
+                    lambda: target_cb.setChecked(cb.isChecked())
                 )
-                self._ass_filter_widget._strip_caps_cb.checkStateChanged.connect(
+                target_cb.checkStateChanged.connect(
                     lambda: cb.setChecked(
                         self._ass_filter_widget.get_strip_caps()
                     )

@@ -384,7 +384,8 @@ class AssPreviewModel(QAbstractItemModel):
         d = data_list[row]
         v = v_list[row]
 
-        # Теперь мы берем флаг пустоты из кэша, который учитывает удаление капса
+        # Теперь мы берем флаг пустоты из кэша, который учитывает
+        # удаление капса
         is_empty = v["is_empty"]
         is_excluded = (
             is_empty
@@ -422,11 +423,19 @@ class AssPreviewModel(QAbstractItemModel):
 
         if role == Qt.ItemDataRole.ToolTipRole and col == 3:
             if is_excluded or is_manually_excluded:
-                return f"Исходный текст:\n{d.text}\n\nРезультат VTT: <СТРОКА БУДЕТ УДАЛЕНА>"
+                return (
+                    f"Исходный текст:\n{d.text}\n\n"
+                    "Результат VTT: <СТРОКА БУДЕТ УДАЛЕНА>"
+                )
             if v["is_empty"]:
-                return f"Исходный текст:\n{d.text}\n\nРезультат VTT: <ПУСТАЯ СТРОКА>"
+                return (
+                    f"Исходный текст:\n{d.text}\n\n"
+                    "Результат VTT: <ПУСТАЯ СТРОКА>"
+                )
 
-            res_text = v["clean"] if self._strip_formatting else v["original"]
+            res_text = (
+                v["clean"] if self._strip_formatting else v["original"]
+            )
             return f"Исходный текст:\n{d.text}\n\nРезультат VTT:\n{res_text}"
 
         if role == Qt.ItemDataRole.DisplayRole:
@@ -517,15 +526,26 @@ class AssPreviewModel(QAbstractItemModel):
             is_full_caps = self._parser.is_full_caps(part)
 
             if is_full_caps and self._strip_caps:
-                # Если удаление ВКЛЮЧЕНО и это полный капс — зачеркиваем красным
-                style = 'style="color: #ff3333; text-decoration: line-through;"'
+                # Если удаление ВКЛЮЧЕНО и это полный капс —
+                # зачеркиваем красным
+                style = (
+                    'style="color: #ff3333; '
+                    'text-decoration: line-through;"'
+                )
                 final_parts.append(f'<span {style}>{part}</span>')
             else:
-                # В остальных случаях подсвечиваем отдельные слова CAPS LOCK желтым
+                # В остальных случаях подсвечиваем отдельные слова
+                # CAPS LOCK желтым
                 def _wrap_yellow(match: Any) -> str:
-                    return f'<span style="color: #faad14;">{match.group(0)}</span>'
+                    color = "#faad14"
+                    return (
+                        f'<span style="color: {color};">'
+                        f'{match.group(0)}</span>'
+                    )
 
-                sub_processed = self._parser.CAPS_PATTERN.sub(_wrap_yellow, part)
+                sub_processed = self._parser.CAPS_PATTERN.sub(
+                    _wrap_yellow, part
+                )
                 final_parts.append(sub_processed)
 
         processed = "".join(final_parts)
@@ -592,7 +612,7 @@ class AssPreviewModel(QAbstractItemModel):
                 return False
 
             row = index.row()
-            
+
             # В PyQt6 значение может прийти как int или как enum
             if isinstance(value, int):
                 is_checked = value == Qt.CheckState.Checked.value
@@ -607,7 +627,8 @@ class AssPreviewModel(QAbstractItemModel):
                     self._manual_exclusions[path] = set()
                 self._manual_exclusions[path].add(row)
 
-            # Генерируем сигнал изменения для всей строки, чтобы полностью обновилось отображение
+            # Генерируем сигнал изменения для всей строки,
+            # чтобы полностью обновилось отображение
             self.dataChanged.emit(
                 self.index(row, 0, index.parent()),
                 self.index(row, self.columnCount() - 1, index.parent()),
@@ -819,7 +840,8 @@ class AssFilterWidget(QWidget):
 
         self._strip_caps_cb = CheckBox("Удалять КАПС", self._content_card)
         self._strip_caps_cb.setToolTip(
-            "Автоматически вырезать надписи в верхнем регистре (из всех файлов)"
+            "Автоматически вырезать надписи в верхнем регистре "
+            "(из всех файлов)"
         )
         self._strip_caps_cb.checkStateChanged.connect(self._on_filters_changed)
         tab_header_layout.addWidget(self._strip_caps_cb)

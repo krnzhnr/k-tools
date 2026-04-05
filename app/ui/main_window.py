@@ -52,7 +52,7 @@ class MainWindow(FluentWindow):
         self._script_pages: dict[str, ScriptPage] = {}
         self._shown = False
         self._settings_manager = SettingsManager()
-        self._log_page = None
+        self._log_page: LogPage | None = None
 
         # DrillIn-анимация переходов
         self._replace_stacked_view()
@@ -346,10 +346,11 @@ class MainWindow(FluentWindow):
             return
 
         self._log_page = LogPage(self)
+        log_page = self._log_page
 
         # Добавляем вкладку логов в нижнюю часть навигации
         self.addSubInterface(
-            interface=self._log_page,
+            interface=log_page,
             icon=FluentIcon.COMMAND_PROMPT,
             text="Логи",
             position=NavigationItemPosition.BOTTOM,
@@ -359,7 +360,7 @@ class MainWindow(FluentWindow):
         # в bottomLayout навигационной панели
         panel = self.navigationInterface.panel
         settings_key = self._settings_page.objectName()
-        log_key = self._log_page.objectName()
+        log_key = log_page.objectName()
         settings_nav = panel.items[settings_key].widget
         log_nav = panel.items[log_key].widget
 
