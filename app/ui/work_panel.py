@@ -894,6 +894,23 @@ class ScriptPage(QWidget):
                     )
                 )
 
+        if "strip_caps" in self._settings_widgets:
+            cb = self._settings_widgets["strip_caps"]
+            if isinstance(cb, CheckBox):
+                self._ass_filter_widget._strip_caps_cb.setChecked(
+                    cb.isChecked()
+                )
+                cb.checkStateChanged.connect(
+                    lambda: self._ass_filter_widget._strip_caps_cb.setChecked(
+                        cb.isChecked()
+                    )
+                )
+                self._ass_filter_widget._strip_caps_cb.checkStateChanged.connect(
+                    lambda: cb.setChecked(
+                        self._ass_filter_widget.get_strip_caps()
+                    )
+                )
+
     def _on_files_changed(self) -> None:
         """Обработчик изменения списка файлов."""
         if self._file_list is not None and self._track_widget is not None:
@@ -1265,7 +1282,8 @@ class ScriptPage(QWidget):
             excluded_effects = self._ass_filter_widget.get_excluded_effects()
             settings["excluded_effects"] = excluded_effects
 
-            # Добавляем ручные исключения конкретных строк
+            # Добавляем капс и ручные исключения конкретных строк
+            settings["strip_caps"] = self._ass_filter_widget.get_strip_caps()
             manual_excl = self._ass_filter_widget.get_manual_exclusions()
             settings["manual_exclusions"] = manual_excl
 

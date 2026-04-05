@@ -190,6 +190,7 @@ class AssPreviewModel(QAbstractItemModel):
         self._excluded_effects: set[str] = set()
         self._manual_exclusions: dict[Path, set[int]] = {}
         self._strip_formatting = True
+        self._strip_caps = False
         self._headers = [
             "Статус", "Время", "Актёр/Стиль/Эффект", "Изменения (ASS)"
         ]
@@ -206,6 +207,15 @@ class AssPreviewModel(QAbstractItemModel):
         self._file_data = file_data
         self._visual_cache = visual_cache
         self._files = sorted(list(file_data.keys()))
+
+        # Принудительно применяем текущие фильтры (капс, теги) к новым данным
+        self._apply_filters(
+            list(self._excluded_actors),
+            list(self._excluded_styles),
+            list(self._excluded_effects),
+            self._strip_formatting,
+            self._strip_caps,
+        )
         self.endResetModel()
 
     def set_filters(
@@ -214,17 +224,48 @@ class AssPreviewModel(QAbstractItemModel):
         excluded_styles: list[str],
         excluded_effects: list[str],
         strip_formatting: bool,
+        strip_caps: bool = False,
     ) -> None:
         """Обновить фильтры и уведомить об изменении данных."""
+        self.layoutAboutToBeChanged.emit()
+        self._apply_filters(
+            excluded_actors,
+            excluded_styles,
+            excluded_effects,
+            strip_formatting,
+            strip_caps,
+        )
+        self.layoutChanged.emit()
+
+    def _apply_filters(
+        self,
+        excluded_actors: list[str],
+        excluded_styles: list[str],
+        excluded_effects: list[str],
+        strip_formatting: bool,
+        strip_caps: bool = False,
+    ) -> None:
+        """Внутренняя логика применения фильтров без ResetModel."""
         self._excluded_actors = set(excluded_actors)
         self._excluded_styles = set(excluded_styles)
         self._excluded_effects = set(excluded_effects)
         self._strip_formatting = strip_formatting
+        self._strip_caps = strip_caps
+
         # При изменении фильтров нужно обновить все отображаемые данные
-        self.dataChanged.emit(
-            self.index(0, 0),
-            self.index(self.rowCount() - 1, len(self._headers) - 1),
-        )
+        for path, cache_list in self._visual_cache.items():
+            dialogues = self._file_data[path].dialogues
+            for i, d in enumerate(dialogues):
+                text = d.text
+                if self._strip_caps:
+                    text = self._parser.strip_caps(text)
+
+                clean = self._parser.strip_tags(text)
+                cache_list[i]["clean"] = clean
+                cache_list[i]["original"] = text
+                cache_list[i]["is_changed"] = d.text != text or d.text != clean
+                cache_list[i]["is_empty"] = not clean.strip()
+                cache_list[i]["is_full_caps"] = self._parser.is_full_caps(text)
 
     def set_manual_exclusions(self, manual: dict[Path, set[int]]) -> None:
         """Обновить список ручных исключений."""
@@ -343,7 +384,8 @@ class AssPreviewModel(QAbstractItemModel):
         d = data_list[row]
         v = v_list[row]
 
-        is_empty = not self._parser.strip_tags(d.text).strip()
+        # Теперь мы берем флаг пустоты из кэша, который учитывает удаление капса
+        is_empty = v["is_empty"]
         is_excluded = (
             is_empty
             or d.actor in self._excluded_actors
@@ -380,11 +422,12 @@ class AssPreviewModel(QAbstractItemModel):
 
         if role == Qt.ItemDataRole.ToolTipRole and col == 3:
             if is_excluded or is_manually_excluded:
-                return "Результат VTT: <СТРОКА БУДЕТ УДАЛЕНА>"
+                return f"Исходный текст:\n{d.text}\n\nРезультат VTT: <СТРОКА БУДЕТ УДАЛЕНА>"
             if v["is_empty"]:
-                return "Результат VTT: <ПУСТАЯ СТРОКА>"
-            text = v["clean"] if self._strip_formatting else v["original"]
-            return f"Результат VTT:\n{text}"
+                return f"Исходный текст:\n{d.text}\n\nРезультат VTT: <ПУСТАЯ СТРОКА>"
+
+            res_text = v["clean"] if self._strip_formatting else v["original"]
+            return f"Исходный текст:\n{d.text}\n\nРезультат VTT:\n{res_text}"
 
         if role == Qt.ItemDataRole.DisplayRole:
             if col == 0:
@@ -429,12 +472,17 @@ class AssPreviewModel(QAbstractItemModel):
     ) -> str:
         """Подготовить HTML-текст с кэшированием."""
         # Ключ кэша отражает текущее визуальное состояние ячейки
-        cache_key = f"html_del:{is_deleted}_strip:{self._strip_formatting}"
+        cache_key = (
+            f"html_del:{is_deleted}_strip:{self._strip_formatting}_"
+            f"caps:{self._strip_caps}"
+        )
 
         if cache_key in v:
             return v[cache_key]
 
-        orig = html.escape(d.original if hasattr(d, "original") else d.text)
+        # Мы всегда используем оригинальный текст d.text для построения HTML,
+        # чтобы иметь возможность показать зачеркнутым то, что будет удалено.
+        orig = html.escape(d.text)
         if is_deleted:
             style = 'style="color: #ff4d4f; text-decoration: line-through;"'
             res = f'<span {style}>{orig}</span>'
@@ -453,13 +501,34 @@ class AssPreviewModel(QAbstractItemModel):
         # 2. Маскируем теги переноса (\x01 и \x02)
         masked = masked.replace("\\N", "\x01").replace("\\n", "\x02")
 
-        # 3. Подсвечиваем CAPS LOCK только на маскированной строке
-        # (где тегов уже нет)
-        def _wrap_caps(match: Any) -> str:
-            res = match.group(0)
-            return f'<span style="color: #faad14;">{res}</span>'
+        # 3. Подсвечиваем CAPS LOCK
+        # Мы разбиваем строку на части по переносам (маркеры \x01, \x02),
+        # так как удаление капса работает именно на уровне таких частей.
+        parts = re.split("(\x01|\x02)", masked)
+        final_parts = []
 
-        processed = self._parser.CAPS_PATTERN.sub(_wrap_caps, masked)
+        for part in parts:
+            if part in ("\x01", "\x02"):
+                final_parts.append(part)
+                continue
+
+            # Проверяем, является ли эта часть "Полным КАПСОМ"
+            # (используем тот же алгоритм, что и в парсере)
+            is_full_caps = self._parser.is_full_caps(part)
+
+            if is_full_caps and self._strip_caps:
+                # Если удаление ВКЛЮЧЕНО и это полный капс — зачеркиваем красным
+                style = 'style="color: #ff3333; text-decoration: line-through;"'
+                final_parts.append(f'<span {style}>{part}</span>')
+            else:
+                # В остальных случаях подсвечиваем отдельные слова CAPS LOCK желтым
+                def _wrap_yellow(match: Any) -> str:
+                    return f'<span style="color: #faad14;">{match.group(0)}</span>'
+
+                sub_processed = self._parser.CAPS_PATTERN.sub(_wrap_yellow, part)
+                final_parts.append(sub_processed)
+
+        processed = "".join(final_parts)
 
         # 4. Восстановление тегов
         if v["is_changed"]:
@@ -523,7 +592,12 @@ class AssPreviewModel(QAbstractItemModel):
                 return False
 
             row = index.row()
-            is_checked = value == Qt.CheckState.Checked
+            
+            # В PyQt6 значение может прийти как int или как enum
+            if isinstance(value, int):
+                is_checked = value == Qt.CheckState.Checked.value
+            else:
+                is_checked = value == Qt.CheckState.Checked
 
             if is_checked:
                 if path in self._manual_exclusions:
@@ -533,8 +607,10 @@ class AssPreviewModel(QAbstractItemModel):
                     self._manual_exclusions[path] = set()
                 self._manual_exclusions[path].add(row)
 
+            # Генерируем сигнал изменения для всей строки, чтобы полностью обновилось отображение
             self.dataChanged.emit(
-                index, index, [Qt.ItemDataRole.CheckStateRole]
+                self.index(row, 0, index.parent()),
+                self.index(row, self.columnCount() - 1, index.parent()),
             )
             return True
         return False
@@ -644,6 +720,7 @@ class AssFilterWidget(QWidget):
         self._style_checkboxes: dict[str, CheckBox] = {}
         self._effect_checkboxes: dict[str, CheckBox] = {}
         self._strip_formatting = True
+        self._strip_caps = False
         self._manual_exclusions: dict[Path, set[int]] = {}
         self._detached_window: ExternalFilterWindow | None = None
 
@@ -670,6 +747,7 @@ class AssFilterWidget(QWidget):
                 self.get_excluded_styles(),
                 self.get_excluded_effects(),
                 self._strip_formatting,
+                self._strip_caps_cb.isChecked(),
             )
 
     def _init_ui(self) -> None:
@@ -738,6 +816,13 @@ class AssFilterWidget(QWidget):
             "preview", "Предпросмотр", self._on_tab_changed
         )
         tab_header_layout.addWidget(self._segmented, 1)
+
+        self._strip_caps_cb = CheckBox("Удалять КАПС", self._content_card)
+        self._strip_caps_cb.setToolTip(
+            "Автоматически вырезать надписи в верхнем регистре (из всех файлов)"
+        )
+        self._strip_caps_cb.checkStateChanged.connect(self._on_filters_changed)
+        tab_header_layout.addWidget(self._strip_caps_cb)
 
         self._expand_btn = ToolButton(
             FluentIcon.FULL_SCREEN, self._content_card
@@ -892,6 +977,7 @@ class AssFilterWidget(QWidget):
                 self.get_excluded_styles(),
                 self.get_excluded_effects(),
                 self._strip_formatting,
+                self._strip_caps_cb.isChecked(),
             )
 
     def _on_files_changed(self) -> None:
@@ -971,11 +1057,13 @@ class AssFilterWidget(QWidget):
 
     def _on_filters_changed(self) -> None:
         """Обновить фильтры в модели."""
+        self._strip_caps = self._strip_caps_cb.isChecked()
         self._model.set_filters(
             self.get_excluded_actors(),
             self.get_excluded_styles(),
             self.get_excluded_effects(),
             self._strip_formatting,
+            self._strip_caps,
         )
 
     def _on_search_text_changed(self, text: str) -> None:
@@ -1017,6 +1105,10 @@ class AssFilterWidget(QWidget):
         return [
             n for n, cb in self._effect_checkboxes.items() if cb.isChecked()
         ]
+
+    def get_strip_caps(self) -> bool:
+        """Получить состояние настройки удаления капса."""
+        return self._strip_caps_cb.isChecked()
 
     def _on_select_all_effects(self):
         for cb in self._effect_checkboxes.values():

@@ -171,6 +171,22 @@ class SettingsManager(metaclass=SingletonMeta):
             self._settings.sync()
         logger.info("Настройка 'clear_list_on_add' изменена на: %s", value)
 
+    @property
+    def show_logs_tab(self) -> bool:
+        """Показывать ли вкладку логов."""
+        with self._lock:
+            return self._settings.value(
+                "General/show_logs_tab", False, type=bool
+            )
+
+    @show_logs_tab.setter
+    def show_logs_tab(self, value: bool) -> None:
+        """Установить отображение вкладки логов."""
+        with self._lock:
+            self._settings.setValue("General/show_logs_tab", value)
+            self._settings.sync()
+        logger.info("Настройка 'show_logs_tab' изменена на: %s", value)
+
     def initialize_all_defaults(self, registry: Any) -> None:
         """Инициализировать отсутствующие настройки значениями по умолчанию.
 
@@ -187,6 +203,7 @@ class SettingsManager(metaclass=SingletonMeta):
             "General/use_auto_subfolder": False,
             "General/max_parallel_tasks": max(1, (os.cpu_count() or 2) // 2),
             "General/clear_list_on_add": False,
+            "General/show_logs_tab": False,
         }
 
         with self._lock:

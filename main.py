@@ -84,6 +84,32 @@ logger = logging.getLogger(__name__)
 from pathlib import Path  # noqa: E402
 
 
+class ColorFormatter(logging.Formatter):
+    """Форматтер логов с поддержкой ANSI-цветов для терминала."""
+
+    GREY = "\x1b[90m"
+    WHITE = "\x1b[37m"
+    YELLOW = "\x1b[33m"
+    RED = "\x1b[31m"
+    RESET = "\x1b[0m"
+
+    COLORS = {
+        logging.DEBUG: GREY,
+        logging.INFO: WHITE,
+        logging.WARNING: YELLOW,
+        logging.ERROR: RED,
+        logging.CRITICAL: RED,
+    }
+
+    def format(self, record: logging.LogRecord) -> str:
+        log_color = self.COLORS.get(record.levelno, self.WHITE)
+        format_orig = self._style._fmt
+        self._style._fmt = f"{log_color}{format_orig}{self.RESET}"
+        result = super().format(record)
+        self._style._fmt = format_orig
+        return result
+
+
 def _cleanup_old_logs(log_dir: Path, days: int = 10) -> None:
     """Удалить лог-файлы старше указанного количества дней.
 
@@ -143,7 +169,13 @@ def _setup_logging() -> None:
 
     log_format = "%(asctime)s | %(levelname)-8s | " "%(name)s | %(message)s"
 
-    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+    # Консольный хендлер с цветами
+    stream_handler = logging.StreamHandler(sys.stdout)
+    stream_handler.setFormatter(
+        ColorFormatter(log_format, datefmt="%H:%M:%S")
+    )
+
+    handlers: list[logging.Handler] = [stream_handler]
 
     if log_file:
         try:

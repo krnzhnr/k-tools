@@ -91,6 +91,7 @@ class TrackExtractWidget(QWidget):
         }
 
         self._badges: Dict[str, Any] = {}
+        self._select_all_checkboxes: Dict[str, CheckBox] = {}
 
         self._init_ui()
         logger.info("Виджет массового извлечения инициализирован (Dynamic UI)")
@@ -232,6 +233,7 @@ class TrackExtractWidget(QWidget):
             has_any = False
 
             global_cb_all = CheckBox("Выбрать все", layout.parentWidget())
+            self._select_all_checkboxes[ttype] = global_cb_all
             layout.addWidget(global_cb_all)
             all_tab_checkboxes: List[CheckBox] = []
 
@@ -402,9 +404,9 @@ class TrackExtractWidget(QWidget):
             prop_val,
             is_checked,
         )
-        self._apply_rules()
+        self._apply_rules(track_type)
 
-    def _apply_rules(self) -> None:
+    def _apply_rules(self, track_type: str | None = None) -> None:
         """Применить все умные правила к дереву."""
         self._tree.blockSignals(True)
         try:
@@ -414,6 +416,10 @@ class TrackExtractWidget(QWidget):
                 for j in range(file_node.childCount()):
                     track_node = file_node.child(j)
                     t_type = track_node.data(0, self.ROLE_TRACK_TYPE)
+
+                    if track_type is not None and t_type != track_type:
+                        continue
+
                     t_data = track_node.data(0, self.ROLE_TRACK_DATA)
 
                     if t_type is None or not t_data:
@@ -519,6 +525,22 @@ class TrackExtractWidget(QWidget):
                     t_type = track_node.data(0, self.ROLE_TRACK_TYPE)
                     if t_type in counts:
                         counts[t_type] += 1
+
+        # Обновляем состояние чекбоксов "Выбрать все"
+        total_counts = {"video": 0, "audio": 0, "subtitles": 0}
+        for tracks in self._file_tracks.values():
+            for tr in tracks:
+                if tr.track_type in total_counts:
+                    total_counts[tr.track_type] += 1
+
+        for t_type, count in counts.items():
+            if t_type in self._select_all_checkboxes:
+                cb = self._select_all_checkboxes[t_type]
+                total = total_counts.get(t_type, 0)
+                is_all = (count == total) if total > 0 else False
+                cb.blockSignals(True)
+                cb.setChecked(is_all)
+                cb.blockSignals(False)
 
         titles = {"video": "Видео", "audio": "Аудио", "subtitles": "Субтитры"}
 

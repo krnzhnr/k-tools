@@ -22,6 +22,8 @@ from app.core.resource_utils import get_resource_path
 from app.ui.work_panel import ScriptPage
 from app.ui.settings_page import SettingsPage
 from app.ui.home_page import HomePage
+from app.ui.log_page import LogPage
+from app.core.settings_manager import SettingsManager
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +51,8 @@ class MainWindow(FluentWindow):
         self._registry = registry
         self._script_pages: dict[str, ScriptPage] = {}
         self._shown = False
+        self._settings_manager = SettingsManager()
+        self._log_page = None
 
         # DrillIn-анимация переходов
         self._replace_stacked_view()
@@ -210,6 +214,14 @@ class MainWindow(FluentWindow):
             position=NavigationItemPosition.BOTTOM,
         )
 
+        self._settings_page.showLogsChanged.connect(
+            self._on_show_logs_changed
+        )
+
+        # Добавление вкладки логов, если включено
+        if self._settings_manager.show_logs_tab:
+            self._add_log_interface()
+
         self.stackedWidget.currentChanged.connect(
             self._on_current_page_changed
         )
@@ -320,3 +332,66 @@ class MainWindow(FluentWindow):
                 icon_name,
             )
             return FluentIcon.COMMAND_PROMPT
+
+    def _on_show_logs_changed(self, show: bool) -> None:
+        """Динамическое добавление или удаление вкладки логов."""
+        if show:
+            self._add_log_interface()
+        else:
+            self._remove_log_interface()
+
+    def _add_log_interface(self) -> None:
+        """Добавить интерфейс логов в навигацию."""
+        if self._log_page:
+            return
+
+        self._log_page = LogPage(self)
+
+        # Добавляем вкладку логов в нижнюю часть навигации
+        self.addSubInterface(
+            interface=self._log_page,
+            icon=FluentIcon.COMMAND_PROMPT,
+            text="Логи",
+            position=NavigationItemPosition.BOTTOM,
+        )
+
+        # Переставляем кнопку логов ПЕРЕД кнопкой настроек
+        # в bottomLayout навигационной панели
+        panel = self.navigationInterface.panel
+        settings_key = self._settings_page.objectName()
+        log_key = self._log_page.objectName()
+        settings_nav = panel.items[settings_key].widget
+        log_nav = panel.items[log_key].widget
+
+        panel.bottomLayout.removeWidget(log_nav)
+        settings_idx = panel.bottomLayout.indexOf(settings_nav)
+        panel.bottomLayout.insertWidget(
+            settings_idx, log_nav, 0,
+            Qt.AlignmentFlag.AlignBottom,
+        )
+
+        logger.info(
+            "Вкладка логов добавлена в навигацию над настройками"
+        )
+
+    def _remove_log_interface(self) -> None:
+        """Удалить интерфейс логов из навигации."""
+        if not self._log_page:
+            return
+
+        # Важно очистить ресурсы (удалить обработчик логов)
+        self._log_page.cleanup()
+
+        route_key = self._log_page.objectName()
+
+        # Удаление из stacked widget (до удаления из панели,
+        # чтобы panel.removeWidget не удалил уже удалённый виджет)
+        self.stackedWidget.removeWidget(self._log_page)
+
+        # Полное удаление кнопки из навигационной панели.
+        # panel.removeWidget(routeKey: str) удаляет элемент
+        # из items dict, layout и вызывает deleteLater.
+        self.navigationInterface.panel.removeWidget(route_key)
+
+        self._log_page = None
+        logger.info("Вкладка логов удалена из навигации")

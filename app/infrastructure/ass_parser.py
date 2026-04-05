@@ -54,8 +54,9 @@ class AssParser(metaclass=SingletonMeta):
     TAG_PATTERN = re.compile(r"\{[^}]*\}")
     # Регулярное выражение для поиска слов в верхнем регистре (от 2-х букв)
     CAPS_PATTERN = re.compile(r"\b[A-ZА-ЯЁ]{2,}\b")
-    # Регэкс для удаления HTML-подобных тегов SRT (<i>, <b>, etc.)
-    HTML_TAG_PATTERN = re.compile(r"<[^>]*>")
+    # Регэкс для удаления HTML-подобных тегов SRT/VTT (<i>, <b>, <font>, etc.)
+    # Реализован так, чтобы не задевать декоративные << >> и кириллицу.
+    HTML_TAG_PATTERN = re.compile(r"(?i)</?[a-z][a-z0-9]*(?:\s+[^>]*?)?>")
 
     # Паттерн (префикс) для строки Dialogue в секции [Events]
     DIALOGUE_PREFIX = "Dialogue:"
@@ -313,6 +314,46 @@ class AssParser(metaclass=SingletonMeta):
         cleaned = cleaned.replace("\\N", "\n").replace("\\n", "\n")
         cleaned = cleaned.replace("\\h", " ")
         return cleaned.strip()
+
+    def is_full_caps(self, text: str) -> bool:
+        """Проверить, является ли текст полным капсом.
+
+        Текст считается капсом, если после очистки от тегов он
+        состоит только из заглавных букв и знаков препинания.
+        Игнорируются строки короче 2-х символов.
+        """
+        clean = self.strip_tags(text).strip()
+        if len(clean) < 2:
+            return False
+
+        # Оставляем только буквы для проверки регистра
+        letters = "".join(filter(str.isalpha, clean))
+        # Фраза считается капсом, если в ней > 1 буквы и все они заглавные.
+        # Это защищает от удаления коротких реакций ("Э...", "Я", "А?")
+        return len(letters) > 1 and letters.isupper()
+
+    def strip_caps(self, text: str) -> str:
+        """Удалить из текста части (разделенные \\N), состоящие из капса."""
+        # Разделяем по \N и \n
+        parts = re.split(r"(\\N|\\n)", text)
+        result_parts: list[str] = []
+
+        # re.split c группой возвращает разделители в списке
+        # [part1, separator, part2, separator, ...]
+        for i in range(0, len(parts), 2):
+            part = parts[i]
+            if not self.is_full_caps(part):
+                result_parts.append(part)
+                # Если за этой частью следует разделитель, добавляем его
+                if i + 1 < len(parts):
+                    result_parts.append(parts[i + 1])
+
+        # Очистка от висящих разделителей в конце/начале
+        res = "".join(result_parts)
+        # Убираем повторные \N\N и висящие края
+        res = re.sub(r"(\\N|\\n){2,}", r"\1", res)
+        res = res.strip("\\N").strip("\\n")
+        return res
 
     @staticmethod
     def ass_time_to_vtt(ass_time: str) -> str:

@@ -90,6 +90,14 @@ class AssToVttScript(AbstractScript):
                 default=False,
             ),
             SettingField(
+                key="strip_caps",
+                label="Удалять текст в верхнем регистре (КАПС)",
+                comment="Автоматическое вырезание надписей, "
+                "сделанных капсом (\"SIGN\\NDialogue\" -> \"Dialogue\")",
+                setting_type=SettingType.CHECKBOX,
+                default=False,
+            ),
+            SettingField(
                 key="delete_original",
                 label="Удалить исходный файл",
                 setting_type=SettingType.CHECKBOX,
@@ -142,6 +150,7 @@ class AssToVttScript(AbstractScript):
         excluded_effects = settings.get("excluded_effects", [])
         manual_excl = settings.get("manual_exclusions", {})
         strip_fmt = settings.get("strip_formatting", False)
+        strip_caps = settings.get("strip_caps", False)
 
         # Конвертируем индексы исключений для текущего файла
         # в set для быстрого поиска
@@ -210,10 +219,17 @@ class AssToVttScript(AbstractScript):
             with open(temp_ass, "w", encoding="utf-8") as f:
                 f.write(self._parser.get_minimal_header())
                 for d in dialogues:
-                    # Применяем ручную чистку тегов, если заказано
+                    # Применяем ручную чистку тегов и капса, если заказано
                     text = d.text
+                    if strip_caps:
+                        text = self._parser.strip_caps(text)
                     if strip_fmt:
                         text = self._parser.strip_tags(text)
+
+                    # Проверяем, остался ли в строке хоть какой-то текст (без учета тегов).
+                    # Если строка пуста (весь капс вырезан), пропускаем её.
+                    if not self._parser.strip_tags(text).strip():
+                        continue
 
                     # Создаем временный объект для сборки строки
                     tmp_d = AssDialogue(

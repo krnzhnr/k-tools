@@ -63,6 +63,94 @@ class DeewRunner(metaclass=SingletonMeta):
         except Exception as exc:
             logger.debug("Ошибка при инициализации конфига deew: %s", exc)
 
+    def _get_input_channels(self, path: Path) -> int:
+        """Получить количество аудиоканалов во входном файле.
+
+        Args:
+            path: Путь к файлу.
+
+        Returns:
+            Количество каналов.
+        """
+        ffprobe_path = path_utils.get_binary_path("ffprobe")
+        cmd = [
+            ffprobe_path,
+            "-v", "error",
+            "-select_streams", "a:0",
+            "-show_entries", "stream=channels",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            str(path.absolute()),
+        ]
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                timeout=10,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return int(result.stdout.strip())
+        except Exception as exc:
+            logger.debug(
+                "Ошибка при определении числа каналов для '%s': %s",
+                path.name,
+                exc,
+            )
+        return 2  # По умолчанию считаем стерео при ошибке
+
+    def _prepare_intermediate_audio(self, input_path: Path) -> Path | None:
+        """Апмикс аудио до стандартного количества каналов (6 или 8).
+
+        Args:
+            input_path: Путь к исходному файлу.
+
+        Returns:
+            Путь к временному WAV файлу или None при ошибке.
+        """
+        channels = self._get_input_channels(input_path)
+        if channels in [1, 2, 6, 8]:
+            return None
+
+        # Определяем целевое число каналов
+        target_channels = 6 if channels < 6 else 8
+        logger.info(
+            "Нестандартное число каналов (%d). "
+            "Выполняется апмикс до %d каналов для DEE...",
+            channels,
+            target_channels,
+        )
+
+        from app.core.temp_file_manager import TempFileManager
+        temp_dir = TempFileManager().create_temp_dir()
+        temp_wav = temp_dir / f"{input_path.stem}_prep.wav"
+
+        ffmpeg_path = path_utils.get_binary_path("ffmpeg")
+        cmd = [
+            ffmpeg_path,
+            "-i", str(input_path.absolute()),
+            "-ac", str(target_channels),
+            "-y",
+            str(temp_wav.absolute()),
+        ]
+
+        try:
+            subprocess.run(
+                cmd,
+                capture_output=True,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                timeout=60,
+            )
+            if temp_wav.exists():
+                return temp_wav
+        except Exception:
+            logger.exception(
+                "Ошибка при создании временного аудио для '%s'",
+                input_path.name,
+            )
+        return None
+
     def run(
         self,
         input_path: Path,
@@ -89,24 +177,35 @@ class DeewRunner(metaclass=SingletonMeta):
             self._ensure_config_exists()
             self._config_ensured = True
 
+        # Проверка и подготовка промежуточного аудио при необходимости
+        intermediate_path = self._prepare_intermediate_audio(input_path)
+        actual_input = intermediate_path or input_path
+
         base_cmd = self._build_base_cmd(output_format, channels, bitrate)
         env = self._prepare_env()
 
-        if not is_safe:
-            return self._run_safe_mode(
-                input_path,
-                output_path,
-                base_cmd,
-                env,
-                output_format,
-            )
-        return self._run_normal_mode(
-            input_path,
-            output_path,
-            base_cmd,
-            env,
-            output_format,
-        )
+        try:
+            if not is_safe:
+                res = self._run_safe_mode(
+                    actual_input,
+                    output_path,
+                    base_cmd,
+                    env,
+                    output_format,
+                )
+            else:
+                res = self._run_normal_mode(
+                    actual_input,
+                    output_path,
+                    base_cmd,
+                    env,
+                    output_format,
+                )
+            return res
+        finally:
+            if intermediate_path:
+                from app.core.temp_file_manager import TempFileManager
+                TempFileManager().delete_path(intermediate_path.parent)
 
     def _build_base_cmd(
         self, output_format: str, channels: int, bitrate: str
@@ -122,6 +221,8 @@ class DeewRunner(metaclass=SingletonMeta):
             str(channels),
             "-b",
             bitrate,
+            "-r", "film_standard",  # Сохраняем динамику кино
+            "-dn", "-31",  # Отключаем авто-нормализацию громкости
             "-la",  # local-audio
             "-np",  # no-progress
         ]

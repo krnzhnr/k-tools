@@ -103,7 +103,6 @@ class QaacRunner(metaclass=SingletonMeta):
             self._qaac_path,
             "--tvbr",
             tvbr,
-            "--ignorelength",
             "-",
             "-o",
             str(output_path),

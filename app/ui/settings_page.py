@@ -2,7 +2,7 @@
 """Страница настроек приложения."""
 
 import logging
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout
 from qfluentwidgets import (
     SettingCardGroup,
@@ -33,6 +33,8 @@ class SettingsPage(ScrollArea):
     Позволяет пользователю изменять глобальные параметры приложения,
     такие как перезапись существующих файлов.
     """
+
+    showLogsChanged = pyqtSignal(bool)
 
     def __init__(self, parent=None) -> None:
         """Инициализация страницы настроек."""
@@ -80,6 +82,8 @@ class SettingsPage(ScrollArea):
         self._general_group.addSettingCard(self._parallel_card)
         self._clear_list_card = self._create_clear_list_card()
         self._general_group.addSettingCard(self._clear_list_card)
+        self._logs_card = self._create_logs_card()
+        self._general_group.addSettingCard(self._logs_card)
 
     def _init_maintenance_group(self) -> None:
         """Инициализация группы обслуживания."""
@@ -322,6 +326,43 @@ class SettingsPage(ScrollArea):
         layout.addWidget(self._clear_list_switch)
         return card
 
+    def _create_logs_card(self) -> CardWidget:
+        """Карточка настройки отображения вкладок логов."""
+        card = CardWidget(self._general_group)
+        card.setMinimumHeight(70)
+        layout = QHBoxLayout(card)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(16)
+
+        icon = IconWidget(FluentIcon.COMMAND_PROMPT, card)
+        icon.setFixedSize(16, 16)
+        layout.addWidget(icon)
+
+        text_layout = QVBoxLayout()
+        text_layout.setSpacing(2)
+        title = BodyLabel(self.tr("Показывать вкладку логов"), card)
+        desc = CaptionLabel(
+            self.tr("Отображает лог работы программы в реальном времени в нижнем меню навигации"), # noqa: E501
+            card,
+        )
+        desc.setStyleSheet("color: rgba(255, 255, 255, 0.6)")
+        text_layout.addWidget(title)
+        text_layout.addWidget(desc)
+        layout.addLayout(text_layout)
+        layout.addStretch(1)
+
+        self._show_logs_switch = SwitchButton(card)
+        self._show_logs_switch.setOnText("")
+        self._show_logs_switch.setOffText("")
+        self._show_logs_switch.setChecked(
+            self._settings_manager.show_logs_tab
+        )
+        self._show_logs_switch.checkedChanged.connect(
+            self._on_show_logs_changed
+        )
+        layout.addWidget(self._show_logs_switch)
+        return card
+
     def _create_reset_card(self) -> CardWidget:
         """Карточка сброса настроек."""
         card = CardWidget(self._maintenance_group)
@@ -436,6 +477,15 @@ class SettingsPage(ScrollArea):
             "ВКЛ" if is_checked else "ВЫКЛ",
         )
 
+    def _on_show_logs_changed(self, is_checked: bool) -> None:
+        """Обработка изменения состояния вкладки логов."""
+        self._settings_manager.show_logs_tab = is_checked
+        self.showLogsChanged.emit(is_checked)
+        logger.info(
+            "Глобальная настройка 'Показывать вкладку логов' изменена на: %s",
+            "ВКЛ" if is_checked else "ВЫКЛ",
+        )
+
     def _show_reset_dialog(self) -> None:
         """Показать диалог подтверждения сброса."""
         title = self.tr("Сброс настроек")
@@ -464,6 +514,9 @@ class SettingsPage(ScrollArea):
             )
             self._clear_list_switch.setChecked(
                 self._settings_manager.clear_list_on_add
+            )
+            self._show_logs_switch.setChecked(
+                self._settings_manager.show_logs_tab
             )
 
             # Сброс комбобокса темы
