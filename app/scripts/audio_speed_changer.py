@@ -146,7 +146,7 @@ class AudioSpeedChangerScript(AbstractScript):
         elif mode == "Speedup (23.976 → 25.000)":
             eac3to_args, suffix = ["-speedup"], "_speedup"
         elif mode == "Custom (24.000 → 23.976)":
-            eac3to_args, suffix = ["-slowdown"], "_24_to_23"
+            eac3to_args, suffix = ["-24.000", "-slowdown"], "_24_to_23"
         elif mode == "Custom (25.000 → 24.000)":
             eac3to_args, suffix = ["-25.000", "-changeTo24.000"], "_25_to_24"
 

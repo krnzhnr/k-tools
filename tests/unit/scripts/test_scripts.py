@@ -1,3 +1,5 @@
+import pytest
+
 from app.scripts.metadata_cleaner import MetadataCleanerScript
 from app.scripts.container_converter import ContainerConverterScript
 from app.scripts.audio_converter import AudioConverterScript
@@ -68,7 +70,17 @@ def test_audio_converter_execute(mocker, temp_dir):
 # --- AudioSpeedChangerScript Tests ---
 
 
-def test_audio_speed_changer_execute(mocker, temp_dir):
+@pytest.mark.parametrize(
+    "mode, expected_args",
+    [
+        ("Slowdown (25.000 → 23.976)", ["-slowdown"]),
+        ("Speedup (23.976 → 25.000)", ["-speedup"]),
+        ("Custom (24.000 → 23.976)", ["-24.000", "-slowdown"]),
+        ("Custom (25.000 → 24.000)", ["-25.000", "-changeTo24.000"]),
+    ],
+)
+def test_audio_speed_changer_execute(mocker, temp_dir, mode, expected_args):
+    """Тестирование всех режимов изменения скорости аудио."""
     script = AudioSpeedChangerScript()
     mocker.patch.object(script._runner, "run", return_value=True)
 
@@ -77,7 +89,7 @@ def test_audio_speed_changer_execute(mocker, temp_dir):
 
     files = [file_path]
     settings = {
-        "mode": "Slowdown (25.000 → 23.976)",
+        "mode": mode,
         "output_format": "FLAC",
         "delete_source": False,
     }
@@ -87,8 +99,12 @@ def test_audio_speed_changer_execute(mocker, temp_dir):
     assert len(results) == 1
     assert "УСПЕХ" in results[0]
 
-    # Check arguments
+    # Проверка аргументов eac3to
     script._runner.run.assert_called_once()
-    args = script._runner.run.call_args[0][0]
-    assert "-slowdown" in args
-    assert str(args[1]).endswith(".flac")
+    actual_args = script._runner.run.call_args[0][0]
+
+    # Аргументы должны быть в конце списка команд
+    for arg in expected_args:
+        assert arg in actual_args
+
+    assert str(actual_args[1]).endswith(".flac")
