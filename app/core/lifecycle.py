@@ -41,7 +41,8 @@ def restart_current_app() -> None:
     logger.info("Выполняется автоматический перезапуск приложения...")
 
     try:
-        # Получаем путь к исполняемому файлу (python.exe или скомпилированный exe)  # noqa: E501
+        # Получаем путь к исполняемому файлу
+        # (python.exe или скомпилированный exe)
         executable = sys.executable
         # Аргументы командной строки
         args = sys.argv

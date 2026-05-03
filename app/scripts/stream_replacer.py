@@ -348,11 +348,26 @@ class StreamReplacerScript(AbstractScript):
 
         full_args = self._prepare_mp4_args(streams, replacements)
 
+        # Получаем длительность для прогресса
+        info = self._ffmpeg.get_video_info(container)
+        format_info = info.get("format", {}) if info else {}
+        duration = float(format_info.get("duration", 0))
+
+        def on_ffmpeg_progress(p_info: Any) -> None:
+            if progress_callback:
+                msg = (
+                    f"Сборка MP4 | {p_info.percent:.1f}% | "
+                    f"Speed: {p_info.speed or 0}x"
+                )
+                progress_callback(0, 1, msg, p_info.percent)
+
         success = self._ffmpeg.run(
             input_path=container,
             output_path=output_path,
             extra_args=full_args,
             overwrite=overwrite,
+            total_duration=duration,
+            on_progress=on_ffmpeg_progress,
         )
         if not success:
             if self.is_cancelled:

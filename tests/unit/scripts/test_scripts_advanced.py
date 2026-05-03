@@ -108,7 +108,11 @@ def test_audio_converter_all_codecs():
             # Проверяем вызов ffmpeg
             args = script._ffmpeg.run.call_args[1].get("extra_args", [])
             assert "-c:a" in args
-            assert config["codec"] in args
+            # Для WAV по умолчанию используется 24-bit (pcm_s24le)
+            expected_codec = (
+                "pcm_s24le" if fmt == "WAV" else config["codec"]
+            )
+            assert expected_codec in args
             if fmt in ["MP3", "AAC", "OGG"]:
                 assert "192k" in args
 

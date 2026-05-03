@@ -202,7 +202,7 @@ class TestAssToVttScript:
     def test_script_properties(self):
         """Проверка свойств скрипта."""
         script = AssToVttScript()
-        assert script.name == "ASS → VTT"
+        assert script.name == "ASS/SRT → VTT"
         assert script.category == "Субтитры"
         assert ".ass" in script.file_extensions
         assert ".ssa" in script.file_extensions

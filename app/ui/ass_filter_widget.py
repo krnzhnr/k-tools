@@ -160,6 +160,7 @@ class ParseWorker(QThread):
                             "clean": clean_text,
                             "is_changed": orig_text != clean_text,
                             "is_empty": not clean_text.strip(),
+                            "is_originally_empty": not clean_text.strip(),
                             "is_caps": is_caps,
                             "is_full_caps": is_full_caps,
                         }
@@ -189,6 +190,7 @@ class AssPreviewModel(QAbstractItemModel):
         self._excluded_styles: set[str] = set()
         self._excluded_effects: set[str] = set()
         self._manual_exclusions: dict[Path, set[int]] = {}
+        self._manual_inclusions: dict[Path, set[int]] = {}
         self._strip_formatting = True
         self._strip_caps = False
         self._headers = [
@@ -387,9 +389,8 @@ class AssPreviewModel(QAbstractItemModel):
         # Теперь мы берем флаг пустоты из кэша, который учитывает
         # удаление капса
         is_empty = v["is_empty"]
-        is_excluded = (
-            is_empty
-            or d.actor in self._excluded_actors
+        is_filtered = (
+            d.actor in self._excluded_actors
             or d.style in self._excluded_styles
             or d.effect in self._excluded_effects
         )
@@ -397,17 +398,37 @@ class AssPreviewModel(QAbstractItemModel):
             path in self._manual_exclusions
             and row in self._manual_exclusions[path]
         )
+        is_manually_included = (
+            path in self._manual_inclusions
+            and row in self._manual_inclusions[path]
+        )
+        is_originally_empty = v.get("is_originally_empty", False)
+
+        # Строка считается удаленной, если:
+        # 1. Она изначально пустая (всегда удаляется)
+        # 2. Она явно исключена пользователем вручную
+        # 3. Она пустая после фильтра КАПСА и не включена вручную
+        # 4. Она попала под фильтр И не была
+        #     явно включена пользователем вручную
+        is_deleted = (
+            is_originally_empty
+            or is_manually_excluded
+            or (is_empty and not is_manually_included)
+            or (is_filtered and not is_manually_included)
+        )
 
         if role == Qt.ItemDataRole.CheckStateRole and col == 0:
             return (
                 Qt.CheckState.Unchecked
-                if is_excluded or is_manually_excluded
+                if is_deleted
                 else Qt.CheckState.Checked
             )
 
         if role == Qt.ItemDataRole.ForegroundRole:
-            if is_excluded or is_manually_excluded:
+            if is_deleted:
                 return QBrush(QColor("#ff4d4f"))
+            if is_manually_included:
+                return QBrush(QColor("#faad14"))
             if v["is_empty"]:
                 return QBrush(QColor("#ffa940"))
             if v["is_full_caps"]:
@@ -422,30 +443,30 @@ class AssPreviewModel(QAbstractItemModel):
             return None
 
         if role == Qt.ItemDataRole.ToolTipRole and col == 3:
-            if is_excluded or is_manually_excluded:
+            if is_deleted:
                 return (
                     f"Исходный текст:\n{d.text}\n\n"
                     "Результат VTT: <СТРОКА БУДЕТ УДАЛЕНА>"
                 )
-            if v["is_empty"]:
-                return (
-                    f"Исходный текст:\n{d.text}\n\n"
-                    "Результат VTT: <ПУСТАЯ СТРОКА>"
-                )
 
-            res_text = (
-                v["clean"] if self._strip_formatting else v["original"]
+            vtt_preview = self._get_vtt_preview(d, v, is_manually_included)
+            return (
+                f"Исходный текст:\n{d.text}\n\n"
+                f"Результат VTT:\n{vtt_preview}"
             )
-            return f"Исходный текст:\n{d.text}\n\nРезультат VTT:\n{res_text}"
 
         if role == Qt.ItemDataRole.DisplayRole:
             if col == 0:
-                if is_empty:
+                if is_originally_empty:
                     return "УДАЛЕНО (пустая)"
-                if is_excluded:
-                    return "УДАЛЕНО (Фильтр)"
                 if is_manually_excluded:
                     return "УДАЛЕНО (Вручную)"
+                if is_manually_included:
+                    return "ВКЛЮЧЕНО (Вручную)"
+                if is_empty:
+                    return "УДАЛЕНО (CAPS)"
+                if is_filtered:
+                    return "УДАЛЕНО (Фильтр)"
                 if v["is_full_caps"]:
                     return "CAPS LOCK"
                 if v["is_changed"]:
@@ -464,7 +485,7 @@ class AssPreviewModel(QAbstractItemModel):
                 return self._get_html_text(
                     d,
                     v,
-                    is_excluded or is_manually_excluded,
+                    is_deleted,
                     path,
                     row,
                 )
@@ -479,11 +500,15 @@ class AssPreviewModel(QAbstractItemModel):
         path: Path,
         row: int,
     ) -> str:
-        """Подготовить HTML-текст с кэшированием."""
+        is_manually_included = (
+            path in self._manual_inclusions
+            and row in self._manual_inclusions[path]
+        )
+
         # Ключ кэша отражает текущее визуальное состояние ячейки
         cache_key = (
-            f"html_del:{is_deleted}_strip:{self._strip_formatting}_"
-            f"caps:{self._strip_caps}"
+            f"html_del:{is_deleted}_man:{is_manually_included}_"
+            f"strip:{self._strip_formatting}_caps:{self._strip_caps}"
         )
 
         if cache_key in v:
@@ -500,10 +525,14 @@ class AssPreviewModel(QAbstractItemModel):
 
         # Экранируем теги переноса и ASS-теги, чтобы содержимое
         # тегов не считалось КАПСОМ
-        # 1. Собираем все теги {...}
+        # 1. Собираем все теги {...} и <...>
         ass_tags = self._parser.TAG_PATTERN.findall(orig)
+        html_tags = self._parser.HTML_TAG_PATTERN.findall(orig)
+
+        # Объединяем и маскируем
+        all_tags = ass_tags + html_tags
         masked = orig
-        for i, tag in enumerate(ass_tags):
+        for i, tag in enumerate(all_tags):
             # Используем уникальный маркер \x03{i}\x03 для каждого тега
             masked = masked.replace(tag, f"\x03{i}\x03", 1)
 
@@ -525,7 +554,7 @@ class AssPreviewModel(QAbstractItemModel):
             # (используем тот же алгоритм, что и в парсере)
             is_full_caps = self._parser.is_full_caps(part)
 
-            if is_full_caps and self._strip_caps:
+            if is_full_caps and self._strip_caps and not is_manually_included:
                 # Если удаление ВКЛЮЧЕНО и это полный капс —
                 # зачеркиваем красным
                 style = (
@@ -559,8 +588,8 @@ class AssPreviewModel(QAbstractItemModel):
                 st = f'style="color: {color}; text-decoration: line-through;"'
                 return f'<span {st}>{t_escaped}</span>'
 
-            # Восстанавливаем ASS-теги со стилем
-            for i, tag in enumerate(ass_tags):
+            # Восстанавливаем теги со стилем
+            for i, tag in enumerate(all_tags):
                 processed = processed.replace(
                     f"\x03{i}\x03", _style_tag(tag), 1
                 )
@@ -576,7 +605,7 @@ class AssPreviewModel(QAbstractItemModel):
             )
         else:
             # В обычном режиме просто возвращаем теги как были
-            for i, tag in enumerate(ass_tags):
+            for i, tag in enumerate(all_tags):
                 processed = processed.replace(f"\x03{i}\x03", tag, 1)
 
             result = processed.replace("\x01", "\\N").replace("\x02", "\\n")
@@ -594,6 +623,16 @@ class AssPreviewModel(QAbstractItemModel):
             # Чекбоксы только для строк диалогов
             flags |= Qt.ItemFlag.ItemIsUserCheckable
         return flags
+
+    def _get_vtt_preview(
+        self, d: AssDialogue, v: dict[str, Any], is_manually_included: bool
+    ) -> str:
+        """Подготовить текст для предпросмотра результата VTT в тултипе."""
+        # Если строка включена вручную, фильтры к ней не применяются
+        text = d.text if is_manually_included else v["clean"]
+        if not text.strip():
+            return "<ПУСТАЯ СТРОКА>"
+        return text
 
     def setData(
         self,
@@ -619,13 +658,52 @@ class AssPreviewModel(QAbstractItemModel):
             else:
                 is_checked = value == Qt.CheckState.Checked
 
+            # Получаем текущее состояние фильтрации для этой строки
+            f_data = self._file_data.get(path)
+            v_cache = self._visual_cache.get(path)
+            if not f_data or not v_cache or row >= len(v_cache):
+                return False
+
+            d = f_data.dialogues[row]
+            v = v_cache[row]
+
+            # Строка считается "проблемной" (требующей ручного включения),
+            # если она либо пуста после фильтров,
+            # либо попала под фильтр актёров/стилей
+            is_filtered_by_tags = (
+                d.actor in self._excluded_actors
+                or d.style in self._excluded_styles
+                or d.effect in self._excluded_effects
+            )
+            is_empty_after_filters = v["is_empty"]
+
+            # Если мы ставим галочку на строку, которая сейчас скрыта
+            # (по любой причине, кроме изначальной пустоты),
+            # её нужно добавить в manual_inclusions.
+            should_be_manual = is_filtered_by_tags or is_empty_after_filters
+
             if is_checked:
+                # Пользователь хочет ВКЛЮЧИТЬ строку
+                # 1. Удаляем из ручных исключений
                 if path in self._manual_exclusions:
                     self._manual_exclusions[path].discard(row)
+
+                # 2. Если фильтр ее не пускал, добавляем в ручные включения
+                if should_be_manual:
+                    if path not in self._manual_inclusions:
+                        self._manual_inclusions[path] = set()
+                    self._manual_inclusions[path].add(row)
             else:
-                if path not in self._manual_exclusions:
-                    self._manual_exclusions[path] = set()
-                self._manual_exclusions[path].add(row)
+                # Пользователь хочет ВЫКЛЮЧИТЬ строку
+                # 1. Удаляем из ручных включений
+                if path in self._manual_inclusions:
+                    self._manual_inclusions[path].discard(row)
+
+                # 2. Если фильтр ее пускал, добавляем в ручные исключения
+                if not should_be_manual:
+                    if path not in self._manual_exclusions:
+                        self._manual_exclusions[path] = set()
+                    self._manual_exclusions[path].add(row)
 
             # Генерируем сигнал изменения для всей строки,
             # чтобы полностью обновилось отображение
@@ -1149,6 +1227,19 @@ class AssFilterWidget(QWidget):
         return {
             str(path): sorted(list(indices))
             for path, indices in self._model._manual_exclusions.items()
+            if indices
+        }
+
+    def get_manual_inclusions(self) -> dict[str, list[int]]:
+        """Получить список вручную включенных строк для каждого файла.
+
+        Returns:
+            Словарь {путь_к_файлу: [список_индексов]}.
+        """
+        return {
+            str(path): sorted(list(indices))
+            for path, indices in self._model._manual_inclusions.items()
+            if indices
         }
 
     def _on_expand_clicked(self) -> None:

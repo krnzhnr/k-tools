@@ -206,7 +206,13 @@ class TrackExtractorScript(AbstractScript):
             return output_results
 
         return self._run_extraction_pipeline(
-            file_path, ffmpeg_args, extracted_files, overwrite
+            file_path,
+            ffmpeg_args,
+            extracted_files,
+            overwrite,
+            progress_callback,
+            current,
+            total,
         )
 
     def _get_tracks_to_extract(
@@ -220,7 +226,10 @@ class TrackExtractorScript(AbstractScript):
             ]
 
             if not tracks_to_extract:
-                return f"⏭ Пропущен (нет валидных дорожек для извлечения): {file_path.name}"  # noqa: E501
+                return (
+                    f"⏭ Пропущен (нет валидных дорожек для извлечения): "
+                    f"{file_path.name}"
+                )
 
             return tracks_to_extract
         except Exception:
@@ -339,6 +348,9 @@ class TrackExtractorScript(AbstractScript):
         ffmpeg_args: List[str],
         extracted_files: List[Path],
         overwrite: bool,
+        progress_callback: ProgressCallback | None = None,
+        current: int = 0,
+        total: int = 1,
     ) -> List[str]:
         """Запуск процесса извлечения FFmpeg."""
         logger.info(
@@ -351,11 +363,26 @@ class TrackExtractorScript(AbstractScript):
         main_output = ffmpeg_args[-1]
         args_without_main_output = ffmpeg_args[:-1]
 
+        # Получаем длительность для прогресса
+        info = self._ffmpeg.get_video_info(file_path)
+        format_info = info.get("format", {}) if info else {}
+        duration = float(format_info.get("duration", 0))
+
+        def on_ffmpeg_progress(p_info: Any) -> None:
+            if progress_callback:
+                msg = (
+                    f"Извлечение | {p_info.percent:.1f}% | "
+                    f"Speed: {p_info.speed or 0}x"
+                )
+                progress_callback(current, total, msg, p_info.percent)
+
         success = self._ffmpeg.run(
             input_path=file_path,
             output_path=Path(main_output),
             extra_args=args_without_main_output,
             overwrite=overwrite,
+            total_duration=duration,
+            on_progress=on_ffmpeg_progress,
         )
 
         if success:
@@ -365,7 +392,10 @@ class TrackExtractorScript(AbstractScript):
                 [f.name for f in extracted_files],
             )
             return [
-                f"✅ Извлечено из {file_path.name}: {len(extracted_files)} файл(ов)"  # noqa: E501
+                (
+                    f"✅ Извлечено из {file_path.name}: "
+                    f"{len(extracted_files)} файл(ов)"
+                )
             ]
         else:
             if self.is_cancelled:

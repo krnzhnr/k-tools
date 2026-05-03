@@ -82,7 +82,10 @@ class StreamManagerScript(AbstractScript):
             ),
             SettingField(
                 key="use_m4a_container_audio_only",
-                label="Упаковать аудио в M4A (только при сохранении одной дорожки)",  # noqa: E501
+                label=(
+                    "Упаковать аудио в M4A "
+                    "(только при сохранении одной дорожки)"
+                ),
                 setting_type=SettingType.CHECKBOX,
                 default=False,
             ),

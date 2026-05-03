@@ -48,7 +48,8 @@ def test_file_list_clear_on_add_enabled(qtbot, mocker):
     widget.add_files(["file2.ass", "file3.ass"])
     # Старый файл должен удалиться, остаться только новые 2
     assert widget.count() == 2
-    assert "file1.ass" not in [widget.item(i).text() for i in range(2)]
+    item_texts = [widget.itemWidget(widget.item(i)).name_label.text() for i in range(2)]
+    assert "file1.ass" not in item_texts
     assert len(widget.files) == 2
 
 
@@ -84,5 +85,7 @@ def test_file_list_drop_event_clear_logic(qtbot, mocker):
 
     # Список должен очиститься перед добавлением сброшенного файла
     assert widget.count() == 1
-    assert widget.item(0).text() == "dropped.ass"
+    item = widget.item(0)
+    item_widget = widget.itemWidget(item)
+    assert item_widget.name_label.text() == "dropped.ass"
     assert len(widget.files) == 1

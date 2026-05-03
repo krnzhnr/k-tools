@@ -43,6 +43,9 @@ class SettingField:
     comment: str = ""
     options: list[str] = field(default_factory=list)
     visible_if: dict[str, list[Any]] = field(default_factory=dict)
+    requires_warning: bool = False
+    warning_title: str = ""
+    warning_text: str = ""
 
 
 # Тип callback-функции для отчёта о прогрессе.
@@ -207,7 +210,8 @@ class AbstractScript(ABC):
         Защищает исходный файл от перезаписи (добавляет '_processed').
         """
         try:
-            # Используем resolve() и сравнение строк в нижнем регистре для Windows  # noqa: E501
+            # Используем resolve() и сравнение строк
+            # в нижнем регистре для Windows
             in_resolved = str(input_path.resolve()).lower()
             out_resolved = str(output_path.resolve()).lower()
 
@@ -305,9 +309,7 @@ class AbstractScript(ABC):
                 break
 
             if progress_callback:
-                progress_callback(
-                    i, total, f"Обработка: {file_path.name}", 0.0
-                )
+                progress_callback(i, total, "Обработка файлов...", 0.0)
 
             # Обработка одного файла
             try:
@@ -321,14 +323,17 @@ class AbstractScript(ABC):
                 )
                 results.extend(res)
             except Exception as e:
-                msg = f"❌ Критическая ошибка при обработке {file_path.name}: {e}"  # noqa: E501
+                msg = (
+                    f"❌ Критическая ошибка при обработке "
+                    f"{file_path.name}: {e}"
+                )
                 logger.exception(msg)
                 results.append(msg)
 
             if progress_callback:
                 # Показываем результат последнего обработанного файла в статусе
                 status_msg = results[-1] if results else ""
-                progress_callback(i + 1, total, status_msg, 0.0)
+                progress_callback(i, total, status_msg, 100.0)
 
         return results
 

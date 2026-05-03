@@ -52,7 +52,8 @@ class ElideMiddleDelegate(QStyledItemDelegate):
 
         painter.save()
 
-        # Рисуем фон (выделение и т.д.) через стиль, чтобы не ломать внешний вид  # noqa: E501
+        # Рисуем фон (выделение и т.д.) через стиль,
+        # чтобы не ломать внешний вид
         widget = option.widget
         style = widget.style() if widget else QApplication.style()
         style.drawPrimitive(
@@ -127,8 +128,10 @@ class MuxingTableWidget(QTableWidget):
         # Drag-n-Drop
         self.setAcceptDrops(True)
 
-        # Данные: словарь {stem: row_index} для быстрого поиска строки по имени файла  # noqa: E501
-        # self._stems: dict[str, int] = {} # Удаляем, т.к. при сортировке индексы "плывут"  # noqa: E501
+        # Данные: словарь {stem: row_index} для
+        # быстрого поиска строки по имени файла
+        # self._stems: dict[str, int] = {}
+        # Удаляем, т.к. при сортировке индексы "плывут"
 
         # Стилизация (опционально, если не хватает Fluent Style)
         self.setStyleSheet("""

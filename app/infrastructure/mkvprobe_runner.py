@@ -168,7 +168,8 @@ class MKVProbeRunner(metaclass=SingletonMeta):
 
         for raw_track in data.get("tracks", []):
             props = raw_track.get("properties", {})
-            # Если есть тег IETF (н-р es-419), берем его, иначе fallback на IANA/ISO  # noqa: E501
+            # Если есть тег IETF (н-р es-419), берем его,
+            # иначе fallback на IANA/ISO
             lang_raw = props.get("language_ietf", props.get("language", "und"))
             lang_norm = normalize_language(lang_raw)
 

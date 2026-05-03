@@ -38,6 +38,14 @@ AUDIO_FORMATS = {
     "ADPCM": {"ext": ".wav", "codec": "adpcm_ima_wav"},
 }
 
+# Маппинг битности WAV на кодеки FFmpeg
+WAV_BIT_DEPTHS = {
+    "16-bit": "pcm_s16le",
+    "24-bit": "pcm_s24le",
+    "32-bit": "pcm_s32le",
+    "32-bit Float": "pcm_f32le",
+}
+
 # Группы форматов для видимости настроек
 LOSSY_FORMATS = [
     "MP3",
@@ -115,12 +123,27 @@ class AudioConverterScript(AbstractScript):
             self._get_bitrate_field(),
             self._get_compression_field(),
             self._get_qaac_quality_field(),
+            self._get_wav_bit_depth_field(),
             SettingField(
                 key="use_m4a_container",
                 label="Упаковать в контейнер (m4a)",
                 setting_type=SettingType.CHECKBOX,
-                default=False,
+                default=True,
                 visible_if={"target_format": ["QAAC", "AAC", "ALAC"]},
+                requires_warning=True,
+                warning_title="ВНИМАНИЕ! АЛЯРМ! НЕ ТРОЖЬ!!!111",
+                warning_text=(
+                    "Если вы отключите эту опцию, то плееры, проводник Windows"
+                    " или Telegram могут показывать"
+                    " неправильную длительность аудио"
+                    " (чаще всего - очень большую длительность вплоть до"
+                    " десятков часов).\n\n"
+                    "Это лишь ошибка отображения — сам звук будет"
+                    " в полном порядке, а"
+                    " внутри файла ничего не сломано. Рекомендуется"
+                    " оставить упаковку"
+                    " включенной для вашего удобства и душевного спокойствия."
+                ),
             ),
             SettingField(
                 key="delete_original",
@@ -175,6 +198,17 @@ class AudioConverterScript(AbstractScript):
             visible_if={"target_format": ["QAAC"]},
         )
 
+    def _get_wav_bit_depth_field(self) -> SettingField:
+        """Поле настройки битности WAV."""
+        return SettingField(
+            key="wav_bit_depth",
+            label="Битность WAV",
+            setting_type=SettingType.COMBO,
+            default="24-bit",
+            options=list(WAV_BIT_DEPTHS.keys()),
+            visible_if={"target_format": ["WAV"]},
+        )
+
     def execute_single(
         self,
         file_path: Path,
@@ -196,7 +230,10 @@ class AudioConverterScript(AbstractScript):
             file_path.suffix.lower() == target_ext
             and target_fmt_key not in LOSSY_FORMATS
         ):
-            msg = f"⏭ ПРОПУСК (файл уже в формате {target_fmt_key}): {file_path.name}"  # noqa: E501
+            msg = (
+                "⏭ ПРОПУСК (файл уже в формате "
+                f"{target_fmt_key}): {file_path.name}"
+            )
             logger.info("[%s] %s", self.name, msg)
             return [msg]
 
@@ -218,6 +255,9 @@ class AudioConverterScript(AbstractScript):
             target_fmt_key,
             settings,
             overwrite,
+            progress_callback,
+            current,
+            total,
         )
 
         if success:
@@ -241,10 +281,12 @@ class AudioConverterScript(AbstractScript):
         codec = fmt_info["codec"]
         use_m4a = settings.get("use_m4a_container", False)
 
-        if target_fmt_key in ["AAC", "QAAC"]:
-            target_ext = ".m4a" if use_m4a else ".aac"
+        if use_m4a and target_fmt_key in ["AAC", "QAAC", "ALAC"]:
+            target_ext = ".m4a"
+        elif target_fmt_key in ["AAC", "QAAC"]:
+            target_ext = ".aac"
         elif target_fmt_key == "ALAC":
-            target_ext = ".m4a" if use_m4a else ".alac"
+            target_ext = ".alac"
 
         return target_ext, codec
 
@@ -256,9 +298,18 @@ class AudioConverterScript(AbstractScript):
         target_fmt_key: str,
         settings: dict[str, Any],
         overwrite: bool,
+        progress_callback: ProgressCallback | None = None,
+        current: int = 0,
+        total: int = 1,
     ) -> bool:
         """Запуск раннера FFmpeg или QAAC."""
-        extra_args = ["-c:a", codec, "-map_metadata", "-1"]
+        # Определение кодека для WAV на основе настроек
+        current_codec = codec
+        if target_fmt_key == "WAV":
+            wav_depth = settings.get("wav_bit_depth", "24-bit")
+            current_codec = WAV_BIT_DEPTHS.get(wav_depth, codec)
+
+        extra_args = ["-c:a", current_codec, "-map_metadata", "-1"]
         if target_fmt_key in LOSSLESS_COMPRESSED:
             extra_args.extend(
                 ["-compression_level", settings.get("compression", "5")]
@@ -280,9 +331,23 @@ class AudioConverterScript(AbstractScript):
         if output_file_path.suffix.lower() == ".alac":
             extra_args = ["-f", "caf"] + extra_args
 
+        # Получаем длительность для отслеживания прогресса
+        info = self._ffmpeg.get_video_info(file_path)
+        duration = float(info.get("format", {}).get("duration", 0))
+
+        def on_ffmpeg_progress(p_info):
+            if progress_callback:
+                msg = (
+                    f"Кодирование | {p_info.percent:.1f}% | "
+                    f"Speed: {p_info.speed or 0}x"
+                )
+                progress_callback(current, total, msg, p_info.percent)
+
         return self._ffmpeg.run(
             input_path=file_path,
             output_path=output_file_path,
             extra_args=extra_args,
             overwrite=overwrite,
+            total_duration=duration,
+            on_progress=on_ffmpeg_progress,
         )

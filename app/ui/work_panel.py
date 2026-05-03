@@ -42,6 +42,7 @@ from qfluentwidgets import (
     TextEdit,
     SegmentedWidget,
     SpinBox,
+    MessageBox,
 )
 
 from app.core.abstract_script import (
@@ -65,6 +66,7 @@ class TaskSignals(QObject):
     """Сигналы для отдельной задачи в пуле воркеров."""
 
     finished = pyqtSignal(list, Path)
+    progress = pyqtSignal(int, int, str, float)
 
 
 class TaskRunnable(QRunnable):
@@ -76,6 +78,8 @@ class TaskRunnable(QRunnable):
         file_path: Path,
         settings: dict[str, Any],
         output_path: str | None = None,
+        file_index: int = 0,
+        total_count: int = 1,
     ) -> None:
         super().__init__()
         self.script = script
@@ -83,6 +87,8 @@ class TaskRunnable(QRunnable):
         self.settings = settings
         self.output_path = output_path
         self.signals = TaskSignals()
+        self.file_index = file_index
+        self.total_count = total_count
 
     def run(self) -> None:
         """Выполнение задачи."""
@@ -92,10 +98,19 @@ class TaskRunnable(QRunnable):
             return
 
         try:
+            # Прокси-callback для передачи прогресса из задачи в сигналы
+            def task_progress_callback(
+                curr: int, tot: int, msg: str, perc: float | None
+            ):
+                self.signals.progress.emit(curr, tot, msg, perc or 0.0)
+
             results = self.script.execute_single(
                 self.file_path,
                 self.settings,
                 self.output_path,
+                task_progress_callback,
+                getattr(self, "file_index", 0),
+                getattr(self, "total_count", 1),
             )
             self.signals.finished.emit(results, self.file_path)
         except Exception as exc:
@@ -220,20 +235,34 @@ class ScriptWorker(QThread):
                 completed += 1
                 all_results.extend(res)
 
-                # Сообщаем о прогрессе в UI
-                last_msg = res[-1] if res else ""
-                self.progress.emit(completed, total, last_msg, 0.0)
+                # Находим индекс завершенного файла
+                try:
+                    idx = self._files.index(fpath)
+                except ValueError:
+                    idx = completed - 1
+
+                # Сообщаем о завершении конкретного файла (100%)
+                last_msg = res[-1] if res else "Готово"
+                self.progress.emit(idx, total, last_msg, 100.0)
             finally:
                 mutex.unlock()
 
-        for file_path in self._files:
+        for i, file_path in enumerate(self._files):
             runnable = TaskRunnable(
                 self._script, file_path, self._settings, self._output_path
             )
-            # ВАЖНО: Используем DirectConnection, так как поток воркера
-            # блокируется waitForDone и не имеет цикла событий.
+            # Передаем индексы для корректной идентификации в сигналах
+            runnable.file_index = i
+            runnable.total_count = total
+
+            # Подключаем финиш
             runnable.signals.finished.connect(
                 on_task_finished,
+                Qt.ConnectionType.DirectConnection,  # type: ignore[call-arg]
+            )
+            # Подключаем промежуточный прогресс
+            runnable.signals.progress.connect(
+                self.progress.emit,
                 Qt.ConnectionType.DirectConnection,  # type: ignore[call-arg]
             )
             pool.start(runnable)
@@ -292,6 +321,10 @@ class ScriptPage(QWidget):
     прогресс-бар и кнопку выполнения.
     """
 
+    _files_progress: dict[int, float]
+    _files_messages: dict[int, str]
+    _finished_indices: set[int]
+
     def __init__(
         self,
         script: AbstractScript,
@@ -315,6 +348,11 @@ class ScriptPage(QWidget):
         self._file_list: Any = None
         self._settings_manager = SettingsManager()
         self._vproc_backup: dict[str, Any] = {}
+
+        # Хранилища для отслеживания прогресса (используются в UI)
+        self._files_progress: dict[int, float] = {}
+        self._files_messages: dict[int, str] = {}
+        self._finished_indices: set[int] = set()
 
         self._is_initialized = False
 
@@ -613,6 +651,25 @@ class ScriptPage(QWidget):
 
         def on_state_changed(state: int) -> None:
             is_checked = bool(state)
+
+            # Всплывающее предупреждение при отключении (если требуется)
+            if field.requires_warning and not is_checked:
+                title = field.warning_title or "Внимание"
+                msg = field.warning_text or (
+                    "Отключение этой опции может привести к некорректному "
+                    "отображению длительности аудио в плеерах."
+                )
+                w = MessageBox(title, msg, self.window())
+                w.yesButton.setText("Я понимаю")
+                w.cancelButton.setText("Отмена")
+
+                if not w.exec():
+                    # Если пользователь нажал отмену — возвращаем галочку
+                    widget.blockSignals(True)
+                    widget.setChecked(True)
+                    widget.blockSignals(False)
+                    return
+
             SettingsManager().set_script_setting(
                 self._script.name, field.key, is_checked
             )
@@ -1161,7 +1218,34 @@ class ScriptPage(QWidget):
             )
             return
 
+        self._execution_files = list(files)
+        self._last_processing_index = -1
+        self._files_progress = {}  # Сброс прогресса отдельных файлов
+        self._files_messages = {}  # Сброс сообщений отдельных файлов
+        self._finished_indices = set()  # Список индексов завершенных файлов
+
+        import time
+
+        self._start_time = time.time()
+
         self._prepare_execution_ui()
+
+        # Распределение начальных статусов
+        from app.core.settings_manager import SettingsManager
+
+        mgr = SettingsManager()
+        self._max_parallel = mgr.max_parallel_tasks
+
+        # Если скрипт не поддерживает параллелизм, форсируем 1
+        if not self._script.supports_parallel:
+            self._max_parallel = 1
+
+        if hasattr(self._file_list, "update_file_status"):
+            for i, f_path in enumerate(self._execution_files):
+                # Первые N файлов в работе, остальные ждут
+                status = "processing" if i < self._max_parallel else "pending"
+                self._file_list.update_file_status(f_path, status)
+
         settings = self._get_current_settings()
         self._inject_script_settings(settings)
 
@@ -1202,33 +1286,88 @@ class ScriptPage(QWidget):
             self._progress.setVisible(True)
 
         if self._progress.maximum() != 1000:
-            self._progress.setRange(0, 1000)  # Используем 1000 для плавности
+            self._progress.setRange(0, 1000)
 
-        # Расчет общего процента (0-1000)
-        total_float = float(total) if total > 0 else 1.0
-        # Базовый прогресс по файлам + прогресс внутри текущего файла
+        # 1. Обновление хранилища прогресса и сообщений
         intra_val = intra_percent if intra_percent is not None else 0.0
-        real_current = float(current) + (intra_val / 100.0)
-        overall_percent = (real_current / total_float) * 1000.0
+        self._files_progress[current] = intra_val
+        self._files_messages[current] = message
 
+        # 2. Обновление общего прогресс-бара
+        total_p = sum(self._files_progress.values())
+        overall_percent = (total_p / (total * 100.0)) * 1000.0
         self._progress.setValue(int(overall_percent))
 
-        # Формируем текст статуса
-        if total > 1:
-            status_text = f"Обработано: {current}/{total}"
-            if message:
-                status_text += f" - {message}"
-        else:
-            # Для одного файла не пишем 0/1 или 1/1, показываем
-            # только сообщение
-            status_text = message or f"Обработка: {current}/{total}"
+        # 2. Расчет общего ETA (время до конца очереди)
+        import time
 
-        self._status_label.setText(status_text)
+        elapsed = time.time() - getattr(self, "_start_time", time.time())
+        eta_str = "-"
+
+        if (
+            overall_percent > 10
+        ):  # Начинаем считать после 1% (10 из 1000) для стабильности
+            total_est = elapsed / (overall_percent / 1000.0)
+            remaining = total_est - elapsed
+            if remaining > 0:
+                rem_m = int(remaining // 60)
+                rem_s = int(remaining % 60)
+                if rem_m > 60:
+                    rem_h = rem_m // 60
+                    rem_m = rem_m % 60
+                    eta_str = f"{rem_h:02}:{rem_m:02}:{rem_s:02}"
+                else:
+                    eta_str = f"{rem_m:02}:{rem_s:02}"
+
+        if intra_val >= 100.0:
+            self._finished_indices.add(current)
+
+        # 3. Формирование текста статуса (Максимально информативно)
+        finished_count = len(self._finished_indices)
+        perc_val = overall_percent / 10.0
+
+        # Общая статистика очереди
+        queue_stats = f"Готово: {finished_count}/{total} ({perc_val:.1f}%)"
+
+        # Если есть сообщение от скрипта (например, FPS, битрейт)
+        # Убираем дублирование процентов из сообщения скрипта
+        perc_str = f"{intra_val:.1f}%"
+        parts = [p.strip() for p in message.split("|")]
+        # Оставляем только те части, которые не являются процентами и не пусты
+        clean_parts = [p for p in parts if p and perc_str not in p]
+        clean_msg = " | ".join(clean_parts)
+
+        display_text = (
+            f"{queue_stats} | {clean_msg} | Осталось (очередь): {eta_str}"
+        )
+
+        self._status_label.setText(display_text)
+
+        # 4. Обновление статусов файлов в списке (иконки/кольца оставляем)
+        files = getattr(self, "_execution_files", [])
+        if (
+            files
+            and hasattr(self._file_list, "update_file_status")
+            and current < len(files)
+        ):
+            if intra_val >= 100.0:
+                self._file_list.update_file_status(files[current], "success")
+            else:
+                self._file_list.update_file_status(
+                    files[current], "processing"
+                )
+                # Показываем кольцо даже на малых значениях для плавности
+                if intra_val > 0.01:
+                    self._file_list.update_file_progress(
+                        files[current], intra_val
+                    )
+
+            self._last_processing_index = current
 
     def _prepare_execution_ui(self) -> None:
         self._log_area.clear()
         self._execute_btn.setText("Остановить")
-        self._execute_btn.setIcon(FluentIcon.CLOSE)
+        self._execute_btn.setIcon(FluentIcon.CANCEL)
 
         # Сброс прогресс-бара в неопределенное состояние перед запуском
         self._progress.setRange(0, 0)
@@ -1280,27 +1419,34 @@ class ScriptPage(QWidget):
             excluded_effects = self._ass_filter_widget.get_excluded_effects()
             settings["excluded_effects"] = excluded_effects
 
-            # Добавляем капс и ручные исключения конкретных строк
+            # Добавляем капс, ручные исключения и включения конкретных строк
             settings["strip_caps"] = self._ass_filter_widget.get_strip_caps()
             manual_excl = self._ass_filter_widget.get_manual_exclusions()
             settings["manual_exclusions"] = manual_excl
+            manual_incl = self._ass_filter_widget.get_manual_inclusions()
+            settings["manual_inclusions"] = manual_incl
 
-            total_manual = sum(
+            total_manual_ex = sum(
                 len(indices) for indices in manual_excl.values()
             )
+            total_manual_in = sum(
+                len(indices) for indices in manual_incl.values()
+            )
             if (
-                total_manual > 0
+                total_manual_ex > 0
+                or total_manual_in > 0
                 or excluded_actors
                 or excluded_styles
                 or excluded_effects
             ):
                 logger.info(
-                    "[ASS → VTT] Исключено: актёров: %d, стилей: %d, "
-                    "эффектов: %d, строк вручную: %d",
+                    "[ASS → VTT] Фильтры: актёров: %d, стилей: %d, "
+                    "эффектов: %d | Ручные правки: искл: %d, вкл: %d",
                     len(excluded_actors),
                     len(excluded_styles),
                     len(excluded_effects),
-                    total_manual,
+                    total_manual_ex,
+                    total_manual_in,
                 )
 
     def _on_progress(
@@ -1343,6 +1489,7 @@ class ScriptPage(QWidget):
         self._execute_btn.setText("Выполнить")
         self._execute_btn.setIcon(FluentIcon.PLAY)
         self._execute_btn.setEnabled(True)
+
         if getattr(self, "_indeterminate_progress", None):
             self._indeterminate_progress.setVisible(False)
             self._indeterminate_progress.stop()
@@ -1355,6 +1502,26 @@ class ScriptPage(QWidget):
         success = sum(1 for r in results if r.startswith("✅"))
         skipped = sum(1 for r in results if r.startswith("⏭"))
         errors = sum(1 for r in results if r.startswith("❌"))
+
+        # Обновление статусов файлов по результатам
+        files = getattr(self, "_execution_files", [])
+        if files and hasattr(self._file_list, "update_file_status"):
+            for i, f in enumerate(files):
+                if i < len(results):
+                    r = results[i]
+                    if r.startswith("✅") or r.startswith("⏭"):
+                        self._file_list.update_file_status(f, "success")
+                    elif r.startswith("❌") or r.startswith("⚠"):
+                        self._file_list.update_file_status(f, "error")
+                    else:
+                        self._file_list.update_file_status(f, "success")
+                else:
+                    self._file_list.update_file_status(f, "success")
+
+        if errors > 0:
+            self._status_label.setText("Завершено с ошибками")
+        else:
+            self._status_label.setText("Выполнено успешно")
 
         self._show_finished_notification(success, skipped, errors)
 
@@ -1407,6 +1574,8 @@ class ScriptPage(QWidget):
         self._execute_btn.setText("Выполнить")
         self._execute_btn.setIcon(FluentIcon.PLAY)
         self._execute_btn.setEnabled(True)
+        self._status_label.setText("Ошибка выполнения")
+
         if getattr(self, "_indeterminate_progress", None):
             self._indeterminate_progress.setVisible(False)
             self._indeterminate_progress.stop()

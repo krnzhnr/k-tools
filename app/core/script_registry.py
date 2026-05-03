@@ -35,8 +35,10 @@ class ScriptRegistry:
         if len(script.description) > self.MAX_DESCRIPTION_LENGTH:
             raise ValueError(
                 f"Описание скрипта '{script.name}' слишком длинное "
-                f"({len(script.description)} > {self.MAX_DESCRIPTION_LENGTH}). "  # noqa: E501
-                f"Пожалуйста, сократите его до {self.MAX_DESCRIPTION_LENGTH} символов."  # noqa: E501
+                f"({len(script.description)} > "
+                f"{self.MAX_DESCRIPTION_LENGTH}). "
+                f"Пожалуйста, сократите его до {self.MAX_DESCRIPTION_LENGTH} "
+                "символов."
             )
 
         self._scripts.append(script)

@@ -75,7 +75,10 @@ class AudioSplitterScript(AbstractScript):
         return [
             SettingField(
                 key="merge_stereo",
-                label="Склеивать каналы (только для 5.1 / 7.1: L+R → LR, SL+SR → SLSR, BL+BR → BLBR)",  # noqa: E501
+                label=(
+                    "Склеивать каналы (только для 5.1 / 7.1: "
+                    "L+R → LR, SL+SR → SLSR, BL+BR → BLBR)"
+                ),
                 setting_type=SettingType.CHECKBOX,
                 default=True,
             ),
@@ -108,8 +111,9 @@ class AudioSplitterScript(AbstractScript):
                 file_path, target_dir / (file_path.stem + ".wavs")
             )
 
-            # Команда eac3to "input" "output.wavs"
-            # Если eac3to видит расширение .wavs, он создает папку с моно-файлами  # noqa: E501
+            # Команда eac3to "input" "output.wavs".
+            # Если eac3to видит расширение .wavs,
+            # он создает папку с моно-файлами.
             args = [str(file_path), str(output_pattern)]
 
             # runner просто передает список аргументов.
@@ -213,7 +217,9 @@ class AudioSplitterScript(AbstractScript):
             try:
                 left_path.unlink()
                 right_path.unlink()
-                logger.debug("Моно-файлы %s и %s удалены", left_sfx, right_sfx)
+                logger.debug(
+                    "Моно-файлы %s и %s удалены", left_sfx, right_sfx
+                )
             except Exception as e:
                 logger.error(
                     "Не удалось удалить моно-файлы после склейки: %s", e

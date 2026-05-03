@@ -40,37 +40,23 @@ class SettingsManager(metaclass=SingletonMeta):
 
     def _determine_settings_path(self) -> Path:
         """Определить путь для сохранения файла настроек."""
-        import os
         import tempfile
+        from app.core.path_utils import get_app_data_dir, ensure_dir
 
-        settings_path = Path("settings.ini").absolute()
+        app_data_dir = get_app_data_dir()
 
+        if ensure_dir(app_data_dir):
+            return app_data_dir / "settings.ini"
+
+        # Крайний случай - системный temp
         try:
-            test_path = (
-                settings_path
-                if settings_path.exists()
-                else settings_path.parent
+            temp_path = (
+                Path(tempfile.gettempdir())
+                / "ktools_settings_fallback.ini"
             )
-            if not os.access(test_path, os.W_OK):
-                fallback_dir = (
-                    Path(
-                        os.getenv(
-                            "LOCALAPPDATA", Path.home() / "AppData" / "Local"
-                        )
-                    )
-                    / "KTools"
-                )
-                fallback_dir.mkdir(parents=True, exist_ok=True)
-                return fallback_dir / "settings.ini"
-            return settings_path
+            return temp_path
         except Exception:
-            try:
-                return (
-                    Path(tempfile.gettempdir())
-                    / "ktools_settings_fallback.ini"
-                )
-            except Exception:
-                return Path("memory_settings_fallback.ini")
+            return Path("memory_settings_fallback.ini")
 
     @property
     def overwrite_existing(self) -> bool:
@@ -226,7 +212,8 @@ class SettingsManager(metaclass=SingletonMeta):
         )
 
     def _get_safe_script_name(self, script_name: str) -> str:
-        """Нормализовать имя скрипта для использования в качестве имени секции (группы).  # noqa: E501
+        """Нормализовать имя скрипта для использования
+        в качестве имени секции (группы).
 
         Заменяет слэши и другие спецсимволы, которые QSettings
         может интерпретировать как разделители подгрупп в INI.

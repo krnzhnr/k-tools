@@ -135,47 +135,52 @@ def _cleanup_old_logs(log_dir: Path, days: int = 10) -> None:
         print(f"[LogCleanup] Критическая ошибка при очистке: {e}")
 
 
-def _setup_logging() -> None:
+def _setup_logging(manual_dir: Path | None = None) -> bool:
     """Настройка логирования приложения.
 
-    Создает папку logs/ и настраивает вывод в консоль
-    и в файл с временной меткой.
+    Использует централизованную функцию get_log_dir для определения
+    папки логов и настраивает вывод в консоль и в файл.
+
+    Args:
+        manual_dir: Опциональный путь, выбранный пользователем вручную.
+
+    Returns:
+        True, если файловое логирование успешно инициализировано.
     """
-    log_dir = Path("logs")
+    from app.core.path_utils import get_log_dir, ensure_dir
+
+    if manual_dir:
+        log_dir = manual_dir
+    else:
+        log_dir = get_log_dir()
+
     _cleanup_old_logs(log_dir)
 
-    try:
-        if not log_dir.exists():
-            log_dir.mkdir(parents=True, exist_ok=True)
-
+    log_file: Path | None = None
+    if ensure_dir(log_dir):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         log_file = log_dir / f"ktools_{timestamp}.log"
-    except Exception as e:
-        print(f"[Logging] Ошибка при подготовке папки логов: {e}")
-        import os
-
-        fallback_dir = (
-            Path(os.getenv("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
-            / "KTools"
-            / "logs"
-        )
+    elif not manual_dir:
+        # Если даже через fallback не удалось получить рабочую папку
+        # Используем корень домашней папки как последний шанс
         try:
-            fallback_dir.mkdir(parents=True, exist_ok=True)
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            log_file = fallback_dir / f"ktools_fallback_{timestamp}.log"
-        except Exception as fallback_e:
-            print(f"[Logging] Ошибка резервной директории: {fallback_e}")
-            log_file = Path.home() / "ktools_fallback.log"
+            log_file = Path.home() / "ktools_emergency.log"
+            print(f"[Logging] Использование экстренного лога: {log_file}")
+        except Exception as e:
+            print(
+                "[Logging] Не удалось инициализировать "
+                f"даже экстренный лог: {e}"
+            )
+            log_file = None
 
     log_format = "%(asctime)s | %(levelname)-8s | " "%(name)s | %(message)s"
 
     # Консольный хендлер с цветами
     stream_handler = logging.StreamHandler(sys.stdout)
-    stream_handler.setFormatter(
-        ColorFormatter(log_format, datefmt="%H:%M:%S")
-    )
+    stream_handler.setFormatter(ColorFormatter(log_format, datefmt="%H:%M:%S"))
 
     handlers: list[logging.Handler] = [stream_handler]
+    file_log_success = False
 
     if log_file:
         try:
@@ -183,6 +188,7 @@ def _setup_logging() -> None:
             with open(log_file, "a", encoding="utf-8"):
                 pass
             handlers.append(logging.FileHandler(log_file, encoding="utf-8"))
+            file_log_success = True
         except Exception as e:
             print(
                 f"[Logging] Критическая ошибка доступа к файлу лога "
@@ -199,7 +205,9 @@ def _setup_logging() -> None:
         format=log_format,
         datefmt="%H:%M:%S",
         handlers=handlers,
+        force=True,  # Позволяет переинициализировать логгер
     )
+    return file_log_success
 
 
 def _create_registry() -> Any:
@@ -278,16 +286,46 @@ def _create_registry() -> Any:
 
 def main() -> None:
     """Главная функция запуска приложения."""
-    _setup_logging()
-    logger.info("Запуск K-Tools")
+    log_success = _setup_logging()
 
     # Сначала минимальные и быстрые импорты для отрисовки сплеш-скрина
-    from PyQt6.QtWidgets import QApplication, QSplashScreen
+    from PyQt6.QtWidgets import (
+        QApplication,
+        QSplashScreen,
+        QFileDialog,
+        QMessageBox,
+    )
     from PyQt6.QtGui import QIcon
     from PyQt6.QtCore import Qt
     from app.core.resource_utils import get_resource_path
 
     app = QApplication(sys.argv)
+
+    if not log_success:
+        msg = QMessageBox()
+        msg.setIcon(QMessageBox.Icon.Warning)
+        msg.setWindowTitle("Ошибка логирования")
+        msg.setText(
+            "Приложению не удалось найти доступную для записи папку "
+            "для хранения логов."
+        )
+        msg.setInformativeText(
+            "Пожалуйста, выберите папку вручную, иначе логи будут "
+            "выводиться только в консоль."
+        )
+        msg.setStandardButtons(
+            QMessageBox.StandardButton.Open | QMessageBox.StandardButton.Ignore
+        )
+        msg.setDefaultButton(QMessageBox.StandardButton.Open)
+
+        if msg.exec() == QMessageBox.StandardButton.Open:
+            selected_dir = QFileDialog.getExistingDirectory(
+                None, "Выберите папку для логов"
+            )
+            if selected_dir:
+                _setup_logging(Path(selected_dir))
+
+    logger.info("Запуск K-Tools")
 
     icon_path = get_resource_path("app_icon.ico")
     app.setWindowIcon(QIcon(icon_path))
@@ -374,7 +412,7 @@ def main() -> None:
     registry = _create_registry()
     # Инициализация всех настроек по умолчанию в settings.ini
     SettingsManager().initialize_all_defaults(registry)
-    window = MainWindow(registry=registry)
+    window = MainWindow(registry=registry, force_logs_tab=not log_success)
     window.show()
 
     splash.finish(window)

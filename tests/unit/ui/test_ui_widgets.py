@@ -26,7 +26,9 @@ def test_file_list_widget_add_remove(qtbot, mocker):
     widget.add_files(test_files)
 
     assert widget.count() == 2
-    assert "test1.mkv" in widget.item(0).text()
+    item = widget.item(0)
+    item_widget = widget.itemWidget(item)
+    assert "test1.mkv" in item_widget.name_label.text()
 
     # Удаление выбранного (нужно имитировать выбор)
     widget.setCurrentRow(0)
@@ -34,7 +36,9 @@ def test_file_list_widget_add_remove(qtbot, mocker):
     widget._remove_selected()
 
     assert widget.count() == 1
-    assert "test2.mp4" in widget.item(0).text()
+    item = widget.item(0)
+    item_widget = widget.itemWidget(item)
+    assert "test2.mp4" in item_widget.name_label.text()
 
 
 def test_script_page_settings_generation(qtbot):

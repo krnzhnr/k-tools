@@ -41,14 +41,18 @@ class MainWindow(FluentWindow):
     def __init__(
         self,
         registry: ScriptRegistry,
+        force_logs_tab: bool = False,
     ) -> None:
         """Инициализация главного окна.
 
         Args:
             registry: Реестр зарегистрированных скриптов.
+            force_logs_tab: Принудительно показать
+                и активировать вкладку логов.
         """
         super().__init__()
         self._registry = registry
+        self._force_logs_tab = force_logs_tab
         self._script_pages: dict[str, ScriptPage] = {}
         self._shown = False
         self._settings_manager = SettingsManager()
@@ -68,8 +72,10 @@ class MainWindow(FluentWindow):
         self._setup_navigation()
 
         logger.info(
-            "Главное окно инициализируется " "с %d скриптами в реестре",
+            "Главное окно инициализируется "
+            "с %d скриптами в реестре (force_logs=%s)",
             len(registry),
+            force_logs_tab,
         )
 
     def _replace_stacked_view(self) -> None:
@@ -214,13 +220,16 @@ class MainWindow(FluentWindow):
             position=NavigationItemPosition.BOTTOM,
         )
 
-        self._settings_page.showLogsChanged.connect(
-            self._on_show_logs_changed
-        )
+        self._settings_page.showLogsChanged.connect(self._on_show_logs_changed)
 
-        # Добавление вкладки логов, если включено
-        if self._settings_manager.show_logs_tab:
+        # Добавление вкладки логов, если включено или требуется принудительно
+        if self._settings_manager.show_logs_tab or self._force_logs_tab:
             self._add_log_interface()
+            if self._force_logs_tab:
+                logger.warning(
+                    "Вкладка логов добавлена в навигацию принудительно "
+                    "из-за ошибок файлового логирования"
+                )
 
         self.stackedWidget.currentChanged.connect(
             self._on_current_page_changed
@@ -367,13 +376,13 @@ class MainWindow(FluentWindow):
         panel.bottomLayout.removeWidget(log_nav)
         settings_idx = panel.bottomLayout.indexOf(settings_nav)
         panel.bottomLayout.insertWidget(
-            settings_idx, log_nav, 0,
+            settings_idx,
+            log_nav,
+            0,
             Qt.AlignmentFlag.AlignBottom,
         )
 
-        logger.info(
-            "Вкладка логов добавлена в навигацию над настройками"
-        )
+        logger.info("Вкладка логов добавлена в навигацию над настройками")
 
     def _remove_log_interface(self) -> None:
         """Удалить интерфейс логов из навигации."""

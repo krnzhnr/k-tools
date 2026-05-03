@@ -85,7 +85,10 @@ class MetadataCleanerScript(AbstractScript):
         total: int = 1,
     ) -> list[str]:
         """Очистить метаданные одного файла."""
-        output_name = f"{file_path.stem}{settings.get('suffix', '_cl')}{file_path.suffix}"  # noqa: E501
+        output_name = (
+            f"{file_path.stem}{settings.get('suffix', '_cl')}"
+            f"{file_path.suffix}"
+        )
         target_dir = self._resolver.resolve(file_path, output_path)
         output_file_path = self._get_safe_output_path(
             file_path, target_dir / output_name
@@ -101,6 +104,9 @@ class MetadataCleanerScript(AbstractScript):
             output_file_path,
             settings.get("delete_original", False),
             overwrite,
+            progress_callback,
+            current,
+            total,
         )
 
     def _run_cleaning(
@@ -109,14 +115,33 @@ class MetadataCleanerScript(AbstractScript):
         output_file_path: Path,
         delete_original: bool,
         overwrite: bool,
+        progress_callback: ProgressCallback | None = None,
+        current: int = 0,
+        total: int = 1,
     ) -> list[str]:
         """Запуск FFmpeg для очистки метаданных."""
         logger.debug("Вызов FFmpeg для удаления метаданных")
+
+        # Получаем длительность для прогресса
+        info = self._ffmpeg.get_video_info(file_path)
+        format_info = info.get("format", {}) if info else {}
+        duration = float(format_info.get("duration", 0))
+
+        def on_ffmpeg_progress(p_info: Any) -> None:
+            if progress_callback:
+                msg = (
+                    f"Очистка | {p_info.percent:.1f}% | "
+                    f"Speed: {p_info.speed or 0}x"
+                )
+                progress_callback(current, total, msg, p_info.percent)
+
         success = self._ffmpeg.run(
             input_path=file_path,
             output_path=output_file_path,
             extra_args=["-map_metadata", "-1", "-c:v", "copy", "-c:a", "copy"],
             overwrite=overwrite,
+            total_duration=duration,
+            on_progress=on_ffmpeg_progress,
         )
 
         results: list[str] = []

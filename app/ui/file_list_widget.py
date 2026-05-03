@@ -5,12 +5,128 @@ import logging
 from pathlib import Path
 from typing import Sequence
 
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtWidgets import QAbstractItemView, QListWidgetItem, QFileDialog
-from qfluentwidgets import ListWidget, RoundMenu, Action, FluentIcon
+from PyQt6.QtCore import (
+    Qt, pyqtSignal, QSize, QPropertyAnimation, QEasingCurve
+)
+from PyQt6.QtWidgets import (
+    QAbstractItemView,
+    QListWidgetItem,
+    QFileDialog,
+    QWidget,
+    QHBoxLayout,
+    QLabel,
+)
+from qfluentwidgets import (
+    ListWidget,
+    RoundMenu,
+    Action,
+    FluentIcon,
+    IndeterminateProgressRing,
+    ProgressRing,
+    IconWidget,
+)
 from app.core.settings_manager import SettingsManager
 
 logger = logging.getLogger(__name__)
+
+
+class FileItemWidget(QWidget):
+    """Виджет элемента списка файлов с индикацией статуса."""
+
+    def __init__(self, file_path: Path, parent=None):
+        super().__init__(parent)
+        self.file_path = file_path
+        self._current_status = "idle"
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
+        self.setFixedHeight(36)
+        self._init_ui()
+
+    def _init_ui(self):
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setSpacing(8)
+
+        self.name_label = QLabel(self.file_path.name)
+        self.name_label.setStyleSheet("font-size: 13px;")
+
+        self.status_icon = IconWidget(FluentIcon.COMPLETED, self)
+        self.status_icon.setFixedSize(16, 16)
+        self.status_icon.setVisible(False)
+
+        self.spinner = IndeterminateProgressRing(self)
+        self.spinner.setFixedSize(16, 16)
+        self.spinner.setStrokeWidth(2)
+        self.spinner.setVisible(False)
+
+        self.progress_ring = ProgressRing(self)
+        self.progress_ring.setFixedSize(16, 16)
+        self.progress_ring.setStrokeWidth(2)
+        self.progress_ring.setTextVisible(False)
+        self.progress_ring.setVisible(False)
+
+        # Анимация для плавного движения кольца
+        self.progress_anim = QPropertyAnimation(self.progress_ring, b"value")
+        self.progress_anim.setDuration(350)
+        self.progress_anim.setEasingCurve(QEasingCurve.Type.OutQuad)
+
+        layout.addWidget(self.name_label)
+        layout.addStretch(1)
+        layout.addWidget(self.status_icon)
+        layout.addWidget(self.spinner)
+        layout.addWidget(self.progress_ring)
+
+    def set_status(self, status: str):
+        """Установить визуальный статус файла."""
+        if self._current_status == status:
+            return
+
+        self._current_status = status
+
+        # Сброс
+        self.spinner.stop()
+        self.spinner.setVisible(False)
+        self.progress_ring.setVisible(False)
+        self.status_icon.setVisible(False)
+
+        if status == "processing":
+            self.spinner.setVisible(True)
+            self.spinner.start()
+        elif status == "pending":
+            self.status_icon.setIcon(FluentIcon.HISTORY)
+            self.status_icon.setVisible(True)
+        elif status == "success":
+            self.status_icon.setIcon(FluentIcon.COMPLETED)
+            self.status_icon.setVisible(True)
+        elif status == "error":
+            self.status_icon.setIcon(FluentIcon.CANCEL)
+            self.status_icon.setVisible(True)
+        elif status == "idle":
+            pass
+
+        # Принудительная немедленная перерисовка виджета
+        self.repaint()
+
+    def set_progress(self, value: float):
+        """Установить значение прогресса для файла."""
+        target_val = int(value)
+        if target_val < 1:
+            return
+
+        # Если есть прогресс — скрываем спиннер и показываем кольцо
+        if self.spinner.isVisible():
+            self.spinner.stop()
+            self.spinner.setVisible(False)
+
+        if not self.progress_ring.isVisible():
+            self.progress_ring.setVisible(True)
+
+        # Запускаем плавную анимацию до нового значения
+        if self.progress_anim.endValue() != target_val:
+            self.progress_anim.stop()
+            self.progress_anim.setEndValue(target_val)
+            self.progress_anim.start()
+
+        self.repaint()
 
 
 class FileListWidget(ListWidget):
@@ -44,6 +160,7 @@ class FileListWidget(ListWidget):
         self._allowed_extensions: list[str] = allowed_extensions or []
         self._context_name = context_name
         self._file_paths: list[Path] = []
+        self._item_map: dict[Path, FileItemWidget] = {}
 
         self._setup_drag_drop()
         self._setup_context_menu()
@@ -117,7 +234,8 @@ class FileListWidget(ListWidget):
         ):
             self.clear_files()
             logger.info(
-                "[%s] Список очищен перед программным добавлением согласно настройкам",  # noqa: E501
+                "[%s] Список очищен перед программным добавлением "
+                "согласно настройкам",
                 self._context_name,
             )
 
@@ -145,6 +263,7 @@ class FileListWidget(ListWidget):
     def clear_files(self) -> None:
         """Очистить список файлов."""
         self._file_paths.clear()
+        self._item_map.clear()
         self.clear()
         self.filesChanged.emit()
         logger.info(
@@ -245,9 +364,15 @@ class FileListWidget(ListWidget):
             return
 
         self._file_paths.append(path)
-        item = QListWidgetItem(path.name)
+        item = QListWidgetItem(self)
+        item.setSizeHint(QSize(-1, 36))
         item.setToolTip(str(path))
+
+        widget = FileItemWidget(path, self)
+        self._item_map[path] = widget
+
         self.addItem(item)
+        self.setItemWidget(item, widget)
         logger.info(
             "[%s] Новый файл успешно добавлен в список: %s (путь: %s)",
             self._context_name,
@@ -314,6 +439,8 @@ class FileListWidget(ListWidget):
         for row in selected_rows:
             if 0 <= row < len(self._file_paths):
                 removed = self._file_paths.pop(row)
+                if removed in self._item_map:
+                    del self._item_map[removed]
                 self.takeItem(row)
                 logger.info(
                     "[%s] Пользователь удалил файл из списка: %s (индекс: %d)",
@@ -324,6 +451,43 @@ class FileListWidget(ListWidget):
 
         if selected_rows:
             self.filesChanged.emit()
+
+    def update_file_status(self, file_path: Path, status: str):
+        """Обновить статус отображения для конкретного файла."""
+        # Пытаемся найти по объекту Path или по строке для надежности
+        widget = self._item_map.get(file_path)
+        if not widget:
+            # Поиск по строковому представлению
+            search_str = str(file_path).lower()
+            for path, w in self._item_map.items():
+                if str(path).lower() == search_str:
+                    widget = w
+                    break
+
+        if widget:
+            widget.set_status(status)
+            # Принудительно перерисовываем вьюпорт немедленно
+            self.viewport().repaint()
+        else:
+            # Поиск по имени, если путь не совпал (полезно при пересоздании)
+            for path, widget in self._item_map.items():
+                if path.name == file_path.name:
+                    widget.set_status(status)
+                    break
+
+    def update_file_progress(self, file_path: Path, value: float):
+        """Обновить прогресс обработки для конкретного файла."""
+        widget = self._item_map.get(file_path)
+        if not widget:
+            search_str = str(file_path).lower()
+            for path, w in self._item_map.items():
+                if str(path).lower() == search_str:
+                    widget = w
+                    break
+
+        if widget:
+            widget.set_progress(value)
+            self.viewport().repaint()
 
     def paintEvent(self, event) -> None:
         """Отрисовка placeholder-текста при пустом списке.
@@ -337,10 +501,12 @@ class FileListWidget(ListWidget):
             from PyQt6.QtGui import QPainter, QColor
 
             painter = QPainter(self.viewport())
-            painter.setPen(QColor(128, 128, 128))
-            painter.drawText(
-                self.viewport().rect(),
-                Qt.AlignmentFlag.AlignCenter,
-                self.PLACEHOLDER_TEXT,
-            )
-            painter.end()
+            try:
+                painter.setPen(QColor(128, 128, 128))
+                painter.drawText(
+                    self.viewport().rect(),
+                    Qt.AlignmentFlag.AlignCenter,
+                    self.PLACEHOLDER_TEXT,
+                )
+            finally:
+                painter.end()

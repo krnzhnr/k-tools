@@ -59,7 +59,9 @@ class MuxerScript(AbstractScript):
     @property
     def file_extensions(self) -> list[str]:
         """Допустимые расширения файлов."""
-        return list(MEDIA_CONTAINERS | AUDIO_EXTENSIONS | SUBTITLE_EXTENSIONS)
+        return list(
+            MEDIA_CONTAINERS | AUDIO_EXTENSIONS | SUBTITLE_EXTENSIONS
+        )
 
     @property
     def use_custom_widget(self) -> bool:
@@ -117,13 +119,18 @@ class MuxerScript(AbstractScript):
         clean_tracks = settings.get("clean_tracks", True)
 
         logger.info(
-            "Настройки муксинга: заголовок сабов='%s', очистка дорожек=%s, файлов=%d",  # noqa: E501
+            "Настройки муксинга: заголовок сабов='%s', "
+            "очистка дорожек=%s, файлов=%d",
             subs_title,
             clean_tracks,
             total,
         )
 
         for stem, components in valid_groups.items():
+            if self.is_cancelled:
+                results.append("⚠ Операция прервана пользователем")
+                break
+
             if components["video"] is None:
                 continue
 
@@ -140,6 +147,9 @@ class MuxerScript(AbstractScript):
             completed += 1
             if progress_callback:
                 progress_callback(completed, total, msg, 0.0)
+
+            if self.is_cancelled:
+                break
 
         return results
 

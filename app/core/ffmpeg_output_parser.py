@@ -36,13 +36,13 @@ class FFmpegOutputParser:
     # Регулярное выражение для поиска времени
     # (time=00:01:23.45 или time=00:01:23,45)
     TIME_REGEX = re.compile(
-        r'(?:^|[\s(\[])time=(\d{2}):(\d{2}):(\d{2})[\.\,](\d+)'
+        r"(?:^|[\s(\[])time=(\d{2}):(\d{2}):(\d{2})[\.\,](\d+)"
     )
 
     # Более гибкие регулярные выражения для остальных метрик
-    FPS_REGEX = re.compile(r'fps=\s*([\d\.]+)')
-    BITRATE_REGEX = re.compile(r'bitrate=\s*([\d\.N/A]+\s*[kmg]?bits/s|N/A)')
-    SPEED_REGEX = re.compile(r'speed=\s*([\d\.]+)x')
+    FPS_REGEX = re.compile(r"fps=\s*([\d\.]+)")
+    BITRATE_REGEX = re.compile(r"bitrate=\s*([\d\.N/A]+\s*[kmg]?bits/s|N/A)")
+    SPEED_REGEX = re.compile(r"speed=\s*([\d\.]+)x")
 
     @classmethod
     def parse_line(
@@ -66,7 +66,7 @@ class FFmpegOutputParser:
             h, m, s, ms_str = time_match.groups()
             h, m, s = map(int, [h, m, s])
             # Учитываем дробную часть любой длины (обычно .CC или .CCC)
-            ms = int(ms_str) / (10**len(ms_str))
+            ms = int(ms_str) / (10 ** len(ms_str))
             current_time = h * 3600 + m * 60 + s + ms
         except (ValueError, TypeError, ZeroDivisionError):
             return None

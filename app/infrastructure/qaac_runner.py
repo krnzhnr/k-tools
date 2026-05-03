@@ -216,7 +216,9 @@ class QaacRunner(metaclass=SingletonMeta):
 
         if qaac_proc.returncode != 0:
             logger.error(
-                "QAAC завершился с ошибкой (%d).\nSTDERR: %s\nFFmpeg STDERR: %s",  # noqa: E501
+                "QAAC завершился с ошибкой (%d).\n"
+                "STDERR: %s\n"
+                "FFmpeg STDERR: %s",
                 qaac_proc.returncode,
                 qaac_stderr.strip(),
                 ffmpeg_stderr.strip(),
@@ -225,7 +227,8 @@ class QaacRunner(metaclass=SingletonMeta):
 
         if ffmpeg_proc.returncode != 0:
             logger.error(
-                "FFmpeg (декодер) завершился с ошибкой (%d).\nSTDERR: %s",
+                "FFmpeg (декодер) завершился с ошибкой (%d).\n"
+                "STDERR: %s",
                 ffmpeg_proc.returncode,
                 ffmpeg_stderr.strip(),
             )

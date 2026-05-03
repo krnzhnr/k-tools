@@ -3,7 +3,81 @@
 
 import sys
 import shutil
+import os
+import logging
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+
+def get_app_data_dir() -> Path:
+    """Определить базовую директорию для записи данных приложения.
+
+    Если текущая директория доступна для записи (Portable-режим),
+    возвращает её. В противном случае возвращает подпапку в %LOCALAPPDATA%.
+
+    Returns:
+        Объект Path к доступной для записи директории.
+    """
+    local_dir = _get_base_dir()
+
+    # Пытаемся проверить права доступа через создание временного файла
+    test_file = local_dir / ".write_test"
+    try:
+        with open(test_file, "w") as f:
+            f.write("test")
+        test_file.unlink()
+        return local_dir
+    except (PermissionError, OSError):
+        # Если записи нет - используем LOCALAPPDATA
+        appdata = os.getenv("LOCALAPPDATA")
+        if appdata:
+            fallback = Path(appdata) / "KTools"
+        else:
+            # Если совсем беда - используем домашнюю папку
+            fallback = Path.home() / ".ktools"
+
+        return fallback
+
+
+def get_log_dir() -> Path:
+    """Получить путь к директории логов.
+
+    Сначала пытается использовать папку 'logs' в корне приложения (Portable),
+    затем переключается на AppData.
+
+    Returns:
+        Объект Path к директории логов.
+    """
+    app_data = get_app_data_dir()
+    log_dir = app_data / "logs"
+    return log_dir
+
+
+def ensure_dir(path: Path) -> bool:
+    """Безопасно создать директорию и проверить доступ.
+
+    Args:
+        path: Путь к директории.
+
+    Returns:
+        True, если директория существует и доступна для записи.
+    """
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+
+        # Проверка на запись через временный файл
+        test_file = path / ".write_test"
+        with open(test_file, "w") as f:
+            f.write("test")
+        test_file.unlink()
+        return True
+    except Exception:
+        logger.debug(
+            "Не удалось создать или проверить директорию: %s",
+            path,
+        )
+        return False
 
 
 def get_binary_path(binary_name: str) -> str:

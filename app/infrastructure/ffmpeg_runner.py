@@ -99,7 +99,8 @@ class FFmpegRunner(metaclass=SingletonMeta):
         """Формирование команды FFmpeg."""
         overwrite_flag = "-y" if overwrite else "-n"
         logger.info(
-            "Подготовка команды FFmpeg. Файл на входе: '%s', файл на выходе: '%s'. "  # noqa: E501
+            "Подготовка команды FFmpeg. Файл на входе: "
+            "'%s', файл на выходе: '%s'. "
             "Режим перезаписи: %s (флаг: %s)",
             input_path.name,
             output_path.name,
@@ -113,6 +114,7 @@ class FFmpegRunner(metaclass=SingletonMeta):
             "-loglevel",
             "info",
             "-stats",
+            "-stats_period", "0.5",
             overwrite_flag,
         ]
 

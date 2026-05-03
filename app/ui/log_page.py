@@ -143,14 +143,36 @@ class LogPage(QWidget):
 
     def _open_log_folder(self) -> None:
         """Открыть директорию с логами в проводнике."""
-        from pathlib import Path
+        from app.core.path_utils import get_log_dir, ensure_dir
+        from qfluentwidgets import MessageBox
 
-        log_dir = Path("logs").absolute()
-        if not log_dir.exists():
-            log_dir.mkdir(parents=True, exist_ok=True)
+        log_dir = get_log_dir()
+        if not ensure_dir(log_dir):
+            msg = MessageBox(
+                "Ошибка доступа",
+                f"Не удалось создать директорию для логов: {log_dir}.\n"
+                "Проверьте права доступа приложения.",
+                self,
+            )
+            msg.exec()
+            return
 
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(log_dir)))
-        logger.info("Открыта папка логов: %s", log_dir)
+        try:
+            success = QDesktopServices.openUrl(
+                QUrl.fromLocalFile(str(log_dir))
+            )
+            if not success:
+                logger.error("Проводник не смог открыть путь: %s", log_dir)
+            else:
+                logger.info("Открыта папка логов: %s", log_dir)
+        except Exception as e:
+            logger.exception("Критическая ошибка при открытии папки логов")
+            msg = MessageBox(
+                "Ошибка проводника",
+                f"Не удалось открыть папку: {e}",
+                self,
+            )
+            msg.exec()
 
     def _clear_logs(self) -> None:
         """Очистка окна логов."""

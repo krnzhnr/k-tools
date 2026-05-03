@@ -38,7 +38,9 @@ logger = logging.getLogger(__name__)
 
 
 class TrackExtractWidget(QWidget):
-    """Виджет массового извлечения дорожек с умными правилами и разделенным UI."""  # noqa: E501
+    """Виджет массового извлечения дорожек с
+    умными правилами и разделенным UI.
+    """
 
     filesChanged = pyqtSignal()
 
@@ -56,7 +58,8 @@ class TrackExtractWidget(QWidget):
         self._probe = MKVProbeRunner()
         self._file_tracks: Dict[Path, List[TrackInfo]] = {}
 
-        # Хранение динамических опций по типам: type -> property_name -> set(values)  # noqa: E501
+        # Хранение динамических опций по типам:
+        # type -> property_name -> set(values)
         self._dynamic_options: Dict[str, Dict[str, Set[str]]] = {
             "video": {
                 "language": set(),
@@ -70,7 +73,11 @@ class TrackExtractWidget(QWidget):
                 "channels": set(),
                 "name": set(),
             },
-            "subtitles": {"language": set(), "codec": set(), "name": set()},
+            "subtitles": {
+                "language": set(),
+                "codec": set(),
+                "name": set(),
+            },
         }
 
         # Выбранные правила: type -> property_name -> set(selected_values)
@@ -87,14 +94,20 @@ class TrackExtractWidget(QWidget):
                 "channels": set(),
                 "name": set(),
             },
-            "subtitles": {"language": set(), "codec": set(), "name": set()},
+            "subtitles": {
+                "language": set(),
+                "codec": set(),
+                "name": set(),
+            },
         }
 
         self._badges: Dict[str, Any] = {}
         self._select_all_checkboxes: Dict[str, CheckBox] = {}
 
         self._init_ui()
-        logger.info("Виджет массового извлечения инициализирован (Dynamic UI)")
+        logger.info(
+            "Виджет массового извлечения " "инициализирован (Dynamic UI)"
+        )
 
     def _init_ui(self) -> None:
         """Настройка пользовательского интерфейса с двумя карточками."""
@@ -180,7 +193,9 @@ class TrackExtractWidget(QWidget):
             )
 
     def _collect_dynamic_options(self) -> None:
-        """Собрать уникальные свойства дорожек для генерации чекбоксов."""
+        """Собрать уникальные свойства дорожек для
+        генерации чекбоксов.
+        """
         # Очистка старых данных
         for t in self._dynamic_options:
             for k in self._dynamic_options[t]:
@@ -257,8 +272,8 @@ class TrackExtractWidget(QWidget):
 
             if has_any:
                 global_cb_all.stateChanged.connect(
-                    lambda state, tt=ttype, cbs=all_tab_checkboxes: self._on_select_all_changed(  # noqa: E501
-                        state, tt, cbs
+                    lambda state, tt=ttype, cbs=all_tab_checkboxes: (
+                        self._on_select_all_changed(state, tt, cbs)
                     )
                 )
                 layout.addSpacing(8)
@@ -266,8 +281,9 @@ class TrackExtractWidget(QWidget):
                 global_cb_all.setVisible(False)
                 layout.addWidget(
                     StrongBodyLabel(
-                        "Нет доступных фильтров для данного типа", None
-                    )
+                        "Нет доступных фильтров для данного типа",
+                        None,
+                    ),
                 )
 
             layout.addStretch(1)
@@ -310,8 +326,8 @@ class TrackExtractWidget(QWidget):
         for val in values:
             cb = CheckBox(val, flow_widget)
             cb.stateChanged.connect(
-                lambda state, tt=ttype, pk=prop_key, pv=val, gcb=global_cb: self._on_rule_changed(  # noqa: E501
-                    tt, pk, pv, state, gcb
+                lambda state, tt=ttype, pk=prop_key, pv=val, gcb=global_cb: (
+                    self._on_rule_changed(tt, pk, pv, state, gcb)
                 )
             )
             flow_layout.addWidget(cb)
@@ -323,7 +339,8 @@ class TrackExtractWidget(QWidget):
     def _on_select_all_changed(
         self, state: int, track_type: str, checkboxes: List[CheckBox]
     ) -> None:
-        """Обработка нажатия на 'Выбрать все' (выделяет дорожки нужного типа в дереве напрямую)."""  # noqa: E501
+        """Обработка нажатия на 'Выбрать все' (выделяет дорожки нужного
+        типа в дереве напрямую)."""
         is_checked = state == Qt.CheckState.Checked.value
 
         if is_checked:
@@ -391,7 +408,9 @@ class TrackExtractWidget(QWidget):
         else:
             rules.discard(prop_val)
 
-        # Если фильтр изменен пользователем вручную - сбрасываем галочку "Выбрать все" (без вызова _on_select_all_changed)  # noqa: E501
+        # Если фильтр изменен пользователем вручную -
+        # сбрасываем галочку "Выбрать все"
+        # (без вызова _on_select_all_changed)
         if global_cb and global_cb.isChecked():
             global_cb.blockSignals(True)
             global_cb.setChecked(False)
@@ -669,7 +688,9 @@ class TrackExtractWidget(QWidget):
     def _format_track_label_data(
         self, track: TrackInfo
     ) -> tuple[str, Dict[str, Any]]:
-        """Форматировать текст для узла дерева и получить словарь данных фильтрации."""  # noqa: E501
+        """Форматировать текст для узла дерева и
+        получить словарь данных фильтрации.
+        """
         parts = [track.type_label]
         if track.codec:
             parts.append(track.codec)

@@ -93,7 +93,7 @@ class AssToVttScript(AbstractScript):
                 key="strip_caps",
                 label="Удалять текст в верхнем регистре (КАПС)",
                 comment="Автоматическое вырезание надписей, "
-                "сделанных капсом (\"SIGN\\NDialogue\" -> \"Dialogue\")",
+                'сделанных капсом ("SIGN\\NDialogue" -> "Dialogue")',
                 setting_type=SettingType.CHECKBOX,
                 default=False,
             ),
@@ -149,25 +149,40 @@ class AssToVttScript(AbstractScript):
         excluded_styles = settings.get("excluded_styles", [])
         excluded_effects = settings.get("excluded_effects", [])
         manual_excl = settings.get("manual_exclusions", {})
+        manual_incl = settings.get("manual_inclusions", {})
         strip_fmt = settings.get("strip_formatting", False)
         strip_caps = settings.get("strip_caps", False)
 
-        # Конвертируем индексы исключений для текущего файла
-        # в set для быстрого поиска
+        # Конвертируем индексы исключений и включений для текущего файла
         file_excl = set(manual_excl.get(str(file_path), []))
+        file_incl = set(manual_incl.get(str(file_path), []))
 
-        dialogues = [
-            d
-            for i, d in enumerate(data.dialogues)
-            if d.actor not in excluded
-            and d.style not in excluded_styles
-            and d.effect not in excluded_effects
-            and i not in file_excl
-            and self._parser.strip_tags(d.text).strip()
-        ]
+        dialogues_with_idx: list[tuple[int, AssDialogue]] = []
+        for i, d in enumerate(data.dialogues):
+            # Проверка на пустую строку
+            if not self._parser.strip_tags(d.text).strip():
+                continue
+
+            # Если строка исключена вручную — пропускаем
+            if i in file_excl:
+                continue
+
+            # Если строка включена вручную — добавляем безусловно
+            # (поверх фильтров)
+            if i in file_incl:
+                dialogues_with_idx.append((i, d))
+                continue
+
+            # Проверка стандартных фильтров (актёры, стили, эффекты)
+            if (
+                d.actor not in excluded
+                and d.style not in excluded_styles
+                and d.effect not in excluded_effects
+            ):
+                dialogues_with_idx.append((i, d))
+
         # Сортировка по времени начала
-        # (строковое сравнение работает для H:MM:SS.CC)
-        dialogues.sort(key=lambda x: x.start)
+        dialogues_with_idx.sort(key=lambda x: x[1].start)
 
         # Если пользователь хочет сохранить стили и не использует фильтры —
         # используем «быстрый путь» (прямую передачу исходника в FFmpeg).
@@ -179,6 +194,8 @@ class AssToVttScript(AbstractScript):
             and not excluded_styles
             and not excluded_effects
             and not strip_fmt
+            and not file_excl
+            and not file_incl
         ):
             return self._execute_ffmpeg_conversion(file_path, output_path)
 
@@ -186,7 +203,7 @@ class AssToVttScript(AbstractScript):
         # через minimal_header. Если keep_styles=False (по умолчанию), это
         # нейтрализует стилевое форматирование и дает чистый VTT.
 
-        if not dialogues:
+        if not dialogues_with_idx:
             msg = (
                 f"⏭ ПРОПУСК (все строки исключены "
                 f"фильтром): {file_path.name}"
@@ -218,10 +235,12 @@ class AssToVttScript(AbstractScript):
         try:
             with open(temp_ass, "w", encoding="utf-8") as f:
                 f.write(self._parser.get_minimal_header())
-                for d in dialogues:
+                for i, d in dialogues_with_idx:
                     # Применяем ручную чистку тегов и капса, если заказано
+                    # Применяем КАПС-фильтр, только если строка не была
+                    # принудительно включена пользователем
                     text = d.text
-                    if strip_caps:
+                    if strip_caps and i not in file_incl:
                         text = self._parser.strip_caps(text)
                     if strip_fmt:
                         text = self._parser.strip_tags(text)

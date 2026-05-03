@@ -121,6 +121,9 @@ class ContainerConverterScript(AbstractScript):
             output_file_path,
             settings.get("delete_original", False),
             overwrite,
+            progress_callback,
+            current,
+            total,
         )
 
     def _run_conversion(
@@ -129,14 +132,33 @@ class ContainerConverterScript(AbstractScript):
         output_file_path: Path,
         delete_original: bool,
         overwrite: bool,
+        progress_callback: ProgressCallback | None = None,
+        current: int = 0,
+        total: int = 1,
     ) -> list[str]:
         """Вызов FFmpeg для смены контейнера."""
         logger.debug("Старт FFmpeg для смены контейнера (copy)")
+
+        # Получаем длительность для прогресса
+        info = self._ffmpeg.get_video_info(file_path)
+        format_info = info.get("format", {}) if info else {}
+        duration = float(format_info.get("duration", 0))
+
+        def on_ffmpeg_progress(p_info: Any) -> None:
+            if progress_callback:
+                msg = (
+                    f"Конвертация | {p_info.percent:.1f}% | "
+                    f"Speed: {p_info.speed or 0}x"
+                )
+                progress_callback(current, total, msg, p_info.percent)
+
         success = self._ffmpeg.run(
             input_path=file_path,
             output_path=output_file_path,
             extra_args=["-c", "copy"],
             overwrite=overwrite,
+            total_duration=duration,
+            on_progress=on_ffmpeg_progress,
         )
 
         results: list[str] = []

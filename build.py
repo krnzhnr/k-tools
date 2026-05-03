@@ -66,7 +66,8 @@ def extract_version_from_changelog() -> str:
 def prompt_version_update() -> str:
     """Определить версию для сборки.
 
-    Автоматически берет версию из окружения (CI) или из CHANGELOG.md (Локально).
+    Автоматически берет версию из окружения (CI)
+    или из CHANGELOG.md (Локально).
 
     Returns:
         Строка версии.
@@ -253,7 +254,8 @@ def create_inno_setup_script(
     if "-rc" in ci_version:
         output_filename = f"{EXE_BASE_NAME}_PreRelease_Setup"
         print(
-            f"[*] CI/CD (Pre-release): Фиксированное имя файла: {output_filename}"
+            f"[*] CI/CD (Pre-release): Фиксированное имя файла: "
+            f"{output_filename}"
         )
     else:
         output_filename = f"{EXE_BASE_NAME}_v{version_str}_setup"

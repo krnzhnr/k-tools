@@ -137,7 +137,10 @@ class FFProbeRunner(metaclass=SingletonMeta):
                 raise RuntimeError(error_msg)
 
             if process.returncode != 0:
-                err = f"ffprobe вернул код {process.returncode}: {stderr}"  # noqa: E501
+                err = (
+                    f"ffprobe вернул код {process.returncode}: "
+                    f"{stderr}"
+                )
                 logger.error(err)
                 raise RuntimeError(err)
             return json.loads(stdout)
@@ -191,7 +194,8 @@ class FFProbeRunner(metaclass=SingletonMeta):
             )
 
         logger.info(
-            "Извлечено потоков из '%s': %d (видео: %d, аудио: %d, субтитры: %d)",  # noqa: E501
+            "Извлечено потоков из '%s': %d "
+            "(видео: %d, аудио: %d, субтитры: %d)",
             file_name,
             len(streams),
             len([s for s in streams if s.stream_type == "video"]),

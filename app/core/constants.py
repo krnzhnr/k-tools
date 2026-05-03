@@ -241,9 +241,9 @@ class ScriptMetadata:
     )
 
     # Субтитры
-    ASS_TO_VTT_NAME = "ASS → VTT"
+    ASS_TO_VTT_NAME = "ASS/SRT → VTT"
     ASS_TO_VTT_DESC = (
-        "Конвертация субтитров ASS/SSA в WebVTT с "
+        "Конвертация субтитров ASS/SSA/SRT в WebVTT с "
         "фильтрацией по актёрам и очисткой тегов."
     )
 

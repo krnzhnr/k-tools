@@ -360,19 +360,21 @@ class VideoProcessorScript(AbstractScript):
 
             def on_ffmpeg_progress(p_info: ProgressInfo) -> None:
                 if progress_callback:
-                    # Формируем информативную строку статуса
-                    b_str = f"{p_info.bitrate} | " if p_info.bitrate else ""
-                    fps_str = (
-                        f"FPS: {int(p_info.fps)} | " if p_info.fps else ""
-                    )
-                    msg = (
-                        f"Обработка: {file_path.name} | "
-                        f"{p_info.percent:.1f}% | "
-                        f"{fps_str}"
-                        f"{b_str}"
-                        f"Speed: {p_info.speed or 0}x | "
-                        f"ETA: {p_info.eta}"
-                    )
+                    # Информативная строка статуса через список частей
+                    parts = ["Кодирование"]
+                    parts.append(f"{p_info.percent:.1f}%")
+
+                    if p_info.fps:
+                        parts.append(f"FPS: {int(p_info.fps)}")
+                    if p_info.bitrate:
+                        parts.append(p_info.bitrate)
+
+                    parts.append(f"Speed: {p_info.speed or 0}x")
+
+                    if p_info.eta:
+                        parts.append(f"ETA: {p_info.eta}")
+
+                    msg = " | ".join(parts)
                     progress_callback(current, total, msg, p_info.percent)
 
             success = self._ffmpeg.run(
