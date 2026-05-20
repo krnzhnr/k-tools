@@ -42,6 +42,8 @@ class SettingField:
     group: str = "Общие"
     comment: str = ""
     options: list[str] = field(default_factory=list)
+    column: int = 0
+    col_span: int = 2
     visible_if: dict[str, list[Any]] = field(default_factory=dict)
     requires_warning: bool = False
     warning_title: str = ""

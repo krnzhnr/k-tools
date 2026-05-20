@@ -287,3 +287,11 @@ def normalize_language(lang: str) -> str:
     base_lang = lang.split("-")[0].lower()
 
     return ISO_LANG_MAP.get(base_lang, base_lang)
+
+
+# Конфигурация цветов для статусов файлов в UI
+STATUS_COLORS = {
+    "pending": "#1B9DE3",  # Синий (ожидание)
+    "success": "#28CAC6",  # Бирюзово-зеленый (успешно выполнено)
+    "error": "#EB6E4D",  # Красно-оранжевый (ошибка)
+}

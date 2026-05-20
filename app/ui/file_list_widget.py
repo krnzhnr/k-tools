@@ -26,6 +26,8 @@ from qfluentwidgets import (
     IconWidget,
 )
 from app.core.settings_manager import SettingsManager
+from app.core.constants import STATUS_COLORS
+from PyQt6.QtGui import QColor
 
 logger = logging.getLogger(__name__)
 
@@ -92,13 +94,22 @@ class FileItemWidget(QWidget):
             self.spinner.setVisible(True)
             self.spinner.start()
         elif status == "pending":
-            self.status_icon.setIcon(FluentIcon.HISTORY)
+            color_str = STATUS_COLORS.get("pending", "#1B9DE3")
+            self.status_icon.setIcon(
+                FluentIcon.HISTORY.icon(color=QColor(color_str))
+            )
             self.status_icon.setVisible(True)
         elif status == "success":
-            self.status_icon.setIcon(FluentIcon.COMPLETED)
+            color_str = STATUS_COLORS.get("success", "#28CAC6")
+            self.status_icon.setIcon(
+                FluentIcon.COMPLETED.icon(color=QColor(color_str))
+            )
             self.status_icon.setVisible(True)
         elif status == "error":
-            self.status_icon.setIcon(FluentIcon.CANCEL)
+            color_str = STATUS_COLORS.get("error", "#EB6E4D")
+            self.status_icon.setIcon(
+                FluentIcon.CANCEL.icon(color=QColor(color_str))
+            )
             self.status_icon.setVisible(True)
         elif status == "idle":
             pass

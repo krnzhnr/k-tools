@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
+    QGridLayout,
     QStackedWidget,
     QSizePolicy,
 )
@@ -377,39 +378,101 @@ class ScriptPage(QWidget):
 
     def _init_ui(self) -> None:
         """Инициализация пользовательского интерфейса."""
-        # Scroll area для прокрутки контента
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        scroll = SmoothScrollArea(self)
-        scroll.setWidgetResizable(True)
-        scroll.setStyleSheet(
-            "QScrollArea { background: transparent; " "border: none; }"
+        # Создаем SmoothScrollArea для предотвращения принудительного
+        # раздувания размеров родительского окна при пересчете геометрии
+        self.scroll_area = SmoothScrollArea(self)
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.scroll_area.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        self.scroll_area.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }"
         )
 
+        # Главный контейнер содержимого
         container = QWidget()
         container.setStyleSheet("background: transparent;")
         layout = QVBoxLayout(container)
-        layout.setContentsMargins(24, 24, 24, 24)
+        # Убираем нижний отступ, так как внизу фиксированная панель
+        layout.setContentsMargins(24, 24, 24, 0)
         layout.setSpacing(15)
 
         # Заголовок и описание
         self._add_header(layout)
 
-        # Настройки скрипта
+        # Если есть настройки, делаем двухвкладочный вид
         if self._script.settings_schema:
-            self._add_settings(layout)
+            # Создаем переключатель вкладок верхнего уровня
+            self._main_segmented = SegmentedWidget(container)
+            self._main_stack = QStackedWidget(container)
 
-        # Список файлов
-        self._add_file_list(layout)
-        layout.setStretchFactor(self._file_list, 1)
+            # --- Страница 1: Файлы и результаты ---
+            files_page = QWidget()
+            files_page.setStyleSheet("background: transparent;")
+            files_layout = QVBoxLayout(files_page)
+            # Убираем отступы по краям для идеального выравнивания
+            files_layout.setContentsMargins(0, 10, 0, 0)
+            files_layout.setSpacing(15)
 
-        # Лог выполнения
-        self._add_log_area(layout)
+            self._add_file_list(files_layout)
+            files_layout.setStretchFactor(self._file_list, 1)
+            self._add_log_area(files_layout)
 
-        scroll.setWidget(container)
-        outer.addWidget(scroll)
+            # --- Страница 2: Настройки ---
+            settings_page = QWidget()
+            settings_page.setStyleSheet("background: transparent;")
+            settings_page_layout = QVBoxLayout(settings_page)
+            settings_page_layout.setContentsMargins(0, 10, 0, 0)
+            settings_page_layout.setSpacing(0)
+
+            # Настройки теперь лежат напрямую в settings_page без
+            # локального скролла, так как у нас есть внешний общий скролл
+            settings_widget = QWidget()
+            settings_widget.setStyleSheet("background: transparent;")
+            settings_layout = QVBoxLayout(settings_widget)
+            # Отступ справа под скроллбар
+            settings_layout.setContentsMargins(0, 0, 8, 0)
+            settings_layout.setSpacing(15)
+            settings_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+            self._add_settings(settings_layout)
+            settings_page_layout.addWidget(settings_widget)
+
+            # Добавляем страницы в стек
+            self._main_stack.addWidget(files_page)
+            self._main_stack.addWidget(settings_page)
+
+            # Настраиваем переключатель вкладок
+            self._main_segmented.addItem(
+                routeKey="files",
+                text="Файлы",
+                onClick=lambda: self._main_stack.setCurrentIndex(0),
+            )
+            self._main_segmented.addItem(
+                routeKey="settings",
+                text="Настройки",
+                onClick=lambda: self._main_stack.setCurrentIndex(1),
+            )
+            self._main_segmented.setCurrentItem("files")
+
+            layout.addWidget(self._main_segmented)
+            layout.addWidget(self._main_stack)
+            layout.setStretchFactor(self._main_stack, 1)
+        else:
+            # Однопанельный вид для скриптов без настроек
+            self._add_file_list(layout)
+            layout.setStretchFactor(self._file_list, 1)
+            self._add_log_area(layout)
+
+        self.scroll_area.setWidget(container)
+        outer.addWidget(self.scroll_area)
 
         # Компактная кнопка, путь и прогресс снизу (фиксированные)
         self._add_fixed_bottom_bar(outer)
@@ -430,55 +493,81 @@ class ScriptPage(QWidget):
     def _add_settings(self, layout: QVBoxLayout) -> None:
         """Добавить секцию настроек скрипта.
 
-        Группирует настройки по вкладкам, если их больше одной.
+        Разбивает плоскую схему настроек на группы и подгруппы,
+        создавая для каждой подгруппы отдельную карточку параметров,
+        которые последовательно выводятся одна под другой для
+        максимальной компактности и наглядности. При наличии
+        нескольких основных групп создает вкладки верхнего уровня.
         """
         schema = self._script.settings_schema
         if not schema:
             return
 
-        # Группируем поля по атрибуту group
-        groups: dict[str, list[SettingField]] = {}
+        # Группируем поля: { "Группа": { "Подгруппа": [fields] } }
+        hierarchical_groups: dict[
+            str, dict[str, list[SettingField]]
+        ] = {}
         for field in schema:
-            groups.setdefault(field.group, []).append(field)
+            parts = field.group.split(":", 1)
+            main_group = parts[0]
+            sub_group = parts[1] if len(parts) > 1 else ""
 
-        # Если группа только одна — используем старый вид без вкладок
-        if len(groups) <= 1:
-            group_name = list(groups.keys())[0] if groups else "Настройки"
-            settings_card = self._create_settings_group_card(
-                group_name, groups.get(group_name, [])
+            if main_group not in hierarchical_groups:
+                hierarchical_groups[main_group] = {}
+            if sub_group not in hierarchical_groups[main_group]:
+                hierarchical_groups[main_group][sub_group] = []
+
+            hierarchical_groups[main_group][sub_group].append(field)
+
+        # Если основная группа только одна — рендерим подгруппы карточками
+        if len(hierarchical_groups) <= 1:
+            main_name = (
+                list(hierarchical_groups.keys())[0]
+                if hierarchical_groups
+                else "Настройки"
             )
-            layout.addWidget(settings_card)
+            subs = hierarchical_groups.get(main_name, {})
+
+            for sub_name, fields in subs.items():
+                card = self._create_settings_group_card(
+                    sub_name or main_name, fields
+                )
+                layout.addWidget(card)
         else:
-            # Несколько групп — создаем вкладки (как в track_extract_widget)
+            # Несколько основных групп — создаем вкладки первого уровня
             self._segmented_widget = SegmentedWidget(self)
             self._rules_stack = AdaptiveStackedWidget(self)
 
-            for i, (group_name, fields) in enumerate(groups.items()):
+            for i, (main_group, subs) in enumerate(
+                hierarchical_groups.items()
+            ):
                 page = QWidget()
                 page.setStyleSheet("background: transparent;")
                 main_layout = QVBoxLayout(page)
                 main_layout.setContentsMargins(0, 0, 0, 0)
-                main_layout.setSpacing(
-                    15
-                )  # Фиксированный интервал между блоками
+                main_layout.setSpacing(15)
                 main_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
-                card = self._create_settings_group_card(group_name, fields)
-                main_layout.addWidget(card)
+                # Рендерим каждую подгруппу как отдельную карточку
+                for sub_name, fields in subs.items():
+                    card = self._create_settings_group_card(
+                        sub_name or main_group, fields
+                    )
+                    main_layout.addWidget(card)
 
                 self._rules_stack.addWidget(page)
                 self._segmented_widget.addItem(
-                    routeKey=group_name,
-                    text=group_name,
-                    onClick=lambda _, idx=i: self._rules_stack.setCurrentIndex(
-                        idx
+                    routeKey=main_group,
+                    text=main_group,
+                    onClick=lambda _, idx=i: (
+                        self._rules_stack.setCurrentIndex(idx)
                     ),
                 )
 
-            self._segmented_widget.setCurrentItem(list(groups.keys())[0])
+            self._segmented_widget.setCurrentItem(
+                list(hierarchical_groups.keys())[0]
+            )
             layout.addWidget(self._segmented_widget)
-
-            # Ограничиваем вертикальный размер стека настроек
             self._rules_stack.setSizePolicy(
                 QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum
             )
@@ -489,26 +578,66 @@ class ScriptPage(QWidget):
     def _create_settings_group_card(
         self, title: str, fields: list[SettingField]
     ) -> CardWidget:
-        """Создать карточку с группой настроек."""
+        """Создать карточку с группой настроек.
+
+        Использует сеточную верстку с алгоритмом автоматического
+        поиска ячеек. Совместимые виджеты распределяются в разные
+        ячейки, а взаимоисключающие могут делить одну и ту же ячейку,
+        чтобы оставаться на одной строке с соседними виджетами.
+        """
+        def are_compatible(f1: SettingField, f2: SettingField) -> bool:
+            # Проверяем, могут ли два виджета отображаться одновременно.
+            # Если у них есть одинаковый ключ в visible_if с разными
+            # значениями, то они взаимоисключающие.
+            vis1 = getattr(f1, "visible_if", None) or {}
+            vis2 = getattr(f2, "visible_if", None) or {}
+            for k in vis1:
+                if k in vis2:
+                    v1 = vis1[k]
+                    v2 = vis2[k]
+                    lst1 = v1 if isinstance(v1, list) else [v1]
+                    lst2 = v2 if isinstance(v2, list) else [v2]
+                    if not (set(lst1) & set(lst2)):
+                        return False
+            return True
+
         card = CardWidget(self)
-        card_layout = QVBoxLayout(card)
+        card_layout = QGridLayout(card)
         card_layout.setContentsMargins(16, 12, 16, 12)
         card_layout.setSpacing(10)
+        card_layout.setColumnStretch(0, 1)
+        card_layout.setColumnStretch(1, 1)
 
         card_title = StrongBodyLabel(title, card)
-        card_layout.addWidget(card_title)
+        card_layout.addWidget(card_title, 0, 0, 1, 2)
+
+        # Текущая строка в сетке
+        grid_row = 1
+        # Поля в каждой ячейке сетки для предотвращения наложений
+        cell_fields: dict[tuple[int, int], list[SettingField]] = {}
+
         for field in fields:
             if field.setting_type == SettingType.SUBTITLE:
                 subtitle_label = StrongBodyLabel(field.label, card)
                 subtitle_label.setStyleSheet(
                     "margin-top: 12px; margin-bottom: 2px;"
                 )
-                card_layout.addWidget(subtitle_label)
+
+                # Ищем свободную строку для заголовка раздела настроек
+                while any(
+                    (grid_row, c) in cell_fields for c in (0, 1)
+                ):
+                    grid_row += 1
+
+                card_layout.addWidget(subtitle_label, grid_row, 0, 1, 2)
+                cell_fields[(grid_row, 0)] = [field]
+                cell_fields[(grid_row, 1)] = [field]
                 self._settings_widgets[field.key] = subtitle_label
                 self._settings_rows[field.key] = subtitle_label
+                grid_row += 1
                 continue
 
-            # Контейнер для поля (ряд + опциональный комментарий)
+            # Контейнер для поля
             field_container = QWidget(card)
             field_v_layout = QVBoxLayout(field_container)
             field_v_layout.setContentsMargins(0, 0, 0, 0)
@@ -522,11 +651,10 @@ class ScriptPage(QWidget):
             widget = self._create_setting_widget(field, row_widget)
             self._settings_widgets[field.key] = widget
 
-            # Установка подсказки
             if field.comment:
                 widget.setToolTip(field.comment)
 
-            # Подключение сигналов для динамической видимости
+            # Сигналы для динамической видимости
             if isinstance(widget, ComboBox):
                 widget.currentTextChanged.connect(
                     lambda _: self._update_visibility()
@@ -535,32 +663,68 @@ class ScriptPage(QWidget):
                 widget.stateChanged.connect(
                     lambda _: self._update_visibility()
                 )
+            elif isinstance(widget, SpinBox):
+                widget.valueChanged.connect(
+                    lambda _: self._update_visibility()
+                )
 
             if field.setting_type == SettingType.CHECKBOX:
                 row_layout.addWidget(widget)
             else:
                 label = BodyLabel(field.label, row_widget)
-                label.setMinimumWidth(150)
+                label.setMinimumWidth(100)
                 row_layout.addWidget(label)
                 row_layout.addWidget(widget)
 
             field_v_layout.addWidget(row_widget)
 
-            # Добавляем поясняющий текст, если он есть
             if field.comment:
-                comment_label = CaptionLabel(field.comment, field_container)
+                comment_label = CaptionLabel(
+                    field.comment, field_container
+                )
                 comment_label.setStyleSheet(
                     "color: #808080; margin-left: 2px;"
                 )
-                # Смещение для чекбокса, чтобы текст был под текстом чекбокса
                 if field.setting_type == SettingType.CHECKBOX:
                     comment_label.setStyleSheet(
                         "color: #808080; margin-left: 28px;"
                     )
                 field_v_layout.addWidget(comment_label)
 
-            card_layout.addWidget(field_container)
+            # --- Размещение в сетке ---
+            col = getattr(field, 'column', 0)
+            span = getattr(field, 'col_span', 2)
+
+            # Ищем первую строку, где свободны все необходимые колонки
+            current_row = grid_row
+            while True:
+                is_free = True
+                for c in range(col, col + span):
+                    cell_key = (current_row, c)
+                    if cell_key in cell_fields:
+                        for existing in cell_fields[cell_key]:
+                            if are_compatible(field, existing):
+                                is_free = False
+                                break
+                    if not is_free:
+                        break
+                if is_free:
+                    break
+                current_row += 1
+
+            # Помечаем выбранные ячейки как занятые
+            for c in range(col, col + span):
+                cell_key = (current_row, c)
+                if cell_key not in cell_fields:
+                    cell_fields[cell_key] = []
+                cell_fields[cell_key].append(field)
+
+            card_layout.addWidget(
+                field_container, current_row, col, 1, span
+            )
+
             self._settings_rows[field.key] = field_container
+            grid_row = max(grid_row, current_row)
 
         return card
 
@@ -1351,7 +1515,14 @@ class ScriptPage(QWidget):
             and current < len(files)
         ):
             if intra_val >= 100.0:
-                self._file_list.update_file_status(files[current], "success")
+                if message.startswith("❌") or message.startswith("⚠"):
+                    self._file_list.update_file_status(
+                        files[current], "error"
+                    )
+                else:
+                    self._file_list.update_file_status(
+                        files[current], "success"
+                    )
             else:
                 self._file_list.update_file_status(
                     files[current], "processing"
@@ -1507,16 +1678,8 @@ class ScriptPage(QWidget):
         files = getattr(self, "_execution_files", [])
         if files and hasattr(self._file_list, "update_file_status"):
             for i, f in enumerate(files):
-                if i < len(results):
-                    r = results[i]
-                    if r.startswith("✅") or r.startswith("⏭"):
-                        self._file_list.update_file_status(f, "success")
-                    elif r.startswith("❌") or r.startswith("⚠"):
-                        self._file_list.update_file_status(f, "error")
-                    else:
-                        self._file_list.update_file_status(f, "success")
-                else:
-                    self._file_list.update_file_status(f, "success")
+                if i not in self._finished_indices:
+                    self._file_list.update_file_status(f, "error")
 
         if errors > 0:
             self._status_label.setText("Завершено с ошибками")

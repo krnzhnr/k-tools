@@ -97,17 +97,24 @@ def test_script_page_dynamic_visibility(qtbot):
     script = VisibilityMockScript()
     page = ScriptPage(script)
     qtbot.addWidget(page)
-    page.show()  # Важно для корректной работы isVisible()
+    page.show()
+    QApplication.processEvents()
 
-    # Изначально 'target' не должен быть виден
+    # Принудительно сбрасываем trigger в False (SettingsManager может
+    # хранить True от предыдущих прогонов)
+    trigger_widget = page._settings_widgets["trigger"]
+    trigger_widget.setChecked(False)
+    QApplication.processEvents()
+
+    # Изначально 'target' скрыт (trigger = False)
     target_row = page._settings_rows["target"]
     assert target_row.isHidden()
 
-    # Меняем состояние чекбокса напрямую
-    trigger_widget = page._settings_widgets["trigger"]
+    # Включаем trigger
     trigger_widget.setChecked(True)
     QApplication.processEvents()
 
-    # Теперь должен быть виден
+    # Теперь target должен быть виден
     assert not target_row.isHidden()
-    assert target_row.isVisible()
+
+

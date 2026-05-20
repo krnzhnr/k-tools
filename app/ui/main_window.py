@@ -174,7 +174,6 @@ class MainWindow(FluentWindow):
         super().showEvent(event)
         if not self._shown:
             self._shown = True
-            self.adjustSize()
             self.resize(
                 self.WINDOW_WIDTH,
                 self.WINDOW_HEIGHT,

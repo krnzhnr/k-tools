@@ -71,64 +71,34 @@ class VideoProcessorScript(AbstractScript):
         )
 
         return [
-            # --- Основные ---
-            SettingField(
-                key="sub_base",
-                label="Основные параметры",
-                setting_type=SettingType.SUBTITLE,
-                default="",
-                group="Видео",
-            ),
+            # --- Вкладка Видео: Энкодер ---
             SettingField(
                 key="encoder",
                 label="Энкодер",
                 setting_type=SettingType.COMBO,
                 default=default_encoder,
-                group="Видео",
+                group="Видео:Энкодер",
                 options=["NVENC (GPU)", "x265 (CPU)"],
-            ),
-            # Настройки NVENC
-            SettingField(
-                key="sub_nv_enc",
-                label="Параметры NVENC",
-                setting_type=SettingType.SUBTITLE,
-                default="",
-                group="Видео",
-                visible_if={"encoder": ["NVENC (GPU)"]},
+                column=0,
+                col_span=1,
             ),
             SettingField(
                 key="nvenc_preset",
                 label="Пресет NVENC",
                 setting_type=SettingType.COMBO,
                 default="p7",
-                group="Видео",
+                group="Видео:Энкодер",
                 options=["p1", "p2", "p3", "p4", "p5", "p6", "p7"],
                 visible_if={"encoder": ["NVENC (GPU)"]},
-            ),
-            SettingField(
-                key="nvenc_rc",
-                label="Режим управления битрейтом",
-                setting_type=SettingType.COMBO,
-                default="vbr_hq",
-                group="Видео",
-                options=["cbr", "vbr", "vbr_hq", "constqp"],
-                visible_if={"encoder": ["NVENC (GPU)"], "lossless": [False]},
-            ),
-            # Настройки CPU
-            SettingField(
-                key="sub_cpu_enc",
-                label="Параметры CPU (x265)",
-                setting_type=SettingType.SUBTITLE,
-                default="",
-                group="Видео",
-                visible_if={"encoder": ["x265 (CPU)"]},
+                column=1,
+                col_span=1,
             ),
             SettingField(
                 key="cpu_preset",
                 label="Пресет CPU",
                 setting_type=SettingType.COMBO,
                 default="medium",
-                group="Видео",
+                group="Видео:Энкодер",
                 options=[
                     "ultrafast",
                     "superfast",
@@ -141,84 +111,213 @@ class VideoProcessorScript(AbstractScript):
                     "veryslow",
                 ],
                 visible_if={"encoder": ["x265 (CPU)"]},
-            ),
-            SettingField(
-                key="cpu_crf",
-                label="CRF",
-                setting_type=SettingType.INT,
-                default=23,
-                group="Видео",
-                visible_if={"encoder": ["x265 (CPU)"], "lossless": [False]},
-            ),
-            # Общие настройки видео
-            SettingField(
-                key="sub_common",
-                label="Общие параметры качества",
-                setting_type=SettingType.SUBTITLE,
-                default="",
-                group="Видео",
-            ),
-            SettingField(
-                key="lossless",
-                label="Режим Lossless",
-                setting_type=SettingType.CHECKBOX,
-                default=False,
-                group="Видео",
-            ),
-            SettingField(
-                key="v_bitrate",
-                label="Битрейт видео (кбит/с)",
-                setting_type=SettingType.INT,
-                default=4000,
-                group="Видео",
-                visible_if={
-                    "nvenc_rc": ["cbr", "vbr", "vbr_hq"],
-                    "lossless": [False],
-                },
-            ),
-            SettingField(
-                key="v_qp",
-                label="QP/Quality",
-                comment="0-51. Меньше = лучше, 0 - без потерь",
-                setting_type=SettingType.INT,
-                default=0,
-                group="Видео",
-                visible_if={"nvenc_rc": ["constqp"]},
+                column=1,
+                col_span=1,
             ),
             SettingField(
                 key="force_10bit",
                 label="Принудительно 10-бит (Main10)",
                 setting_type=SettingType.CHECKBOX,
                 default=False,
-                group="Видео",
+                group="Видео:Энкодер",
+                column=0,
+                col_span=2,
             ),
-            # Расширенные NVENC
+            # --- Вкладка Видео: Битрейт ---
             SettingField(
-                key="sub_nv_extra",
-                label="Расширенные функции NVENC",
+                key="lossless",
+                label="Режим Lossless",
+                setting_type=SettingType.CHECKBOX,
+                default=False,
+                group="Видео:Битрейт",
+                column=0,
+                col_span=2,
+            ),
+            # NVENC: режим управления битрейтом
+            SettingField(
+                key="nvenc_rc",
+                label="Режим битрейта",
+                setting_type=SettingType.COMBO,
+                default="vbr_hq",
+                group="Видео:Битрейт",
+                options=["cbr", "vbr", "vbr_hq", "constqp"],
+                visible_if={
+                    "encoder": ["NVENC (GPU)"],
+                    "lossless": [False],
+                },
+                column=0,
+                col_span=1,
+            ),
+            # x265: выбор между CRF и ABR
+            SettingField(
+                key="cpu_rc",
+                label="Режим качества",
+                setting_type=SettingType.COMBO,
+                default="CRF",
+                group="Видео:Битрейт",
+                options=["CRF", "Битрейт (ABR)"],
+                visible_if={
+                    "encoder": ["x265 (CPU)"],
+                    "lossless": [False],
+                },
+                column=0,
+                col_span=1,
+            ),
+            # NVENC: битрейт для cbr/vbr/vbr_hq
+            SettingField(
+                key="v_bitrate",
+                label="Битрейт (кбит/с)",
+                setting_type=SettingType.INT,
+                default=4000,
+                group="Видео:Битрейт",
+                visible_if={
+                    "encoder": ["NVENC (GPU)"],
+                    "nvenc_rc": ["cbr", "vbr", "vbr_hq"],
+                    "lossless": [False],
+                },
+                column=1,
+                col_span=1,
+            ),
+            # x265: значение CRF
+            SettingField(
+                key="cpu_crf",
+                label="CRF",
+                comment="0-51. Меньше = лучше качество",
+                setting_type=SettingType.INT,
+                default=23,
+                group="Видео:Битрейт",
+                visible_if={
+                    "encoder": ["x265 (CPU)"],
+                    "cpu_rc": ["CRF"],
+                    "lossless": [False],
+                },
+                column=1,
+                col_span=1,
+            ),
+            # x265: битрейт для ABR
+            SettingField(
+                key="cpu_v_bitrate",
+                label="Битрейт (кбит/с)",
+                setting_type=SettingType.INT,
+                default=4000,
+                group="Видео:Битрейт",
+                visible_if={
+                    "encoder": ["x265 (CPU)"],
+                    "cpu_rc": ["Битрейт (ABR)"],
+                    "lossless": [False],
+                },
+                column=1,
+                col_span=1,
+            ),
+            # NVENC: QP для constqp
+            SettingField(
+                key="v_qp",
+                label="QP/Quality",
+                comment="0-51. Меньше = лучше, 0 - без потерь",
+                setting_type=SettingType.INT,
+                default=0,
+                group="Видео:Битрейт",
+                visible_if={
+                    "encoder": ["NVENC (GPU)"],
+                    "nvenc_rc": ["constqp"],
+                    "lossless": [False],
+                },
+                column=1,
+                col_span=1,
+            ),
+            # --- Вкладка Видео: Фильтры (заглушка) ---
+            SettingField(
+                key="sub_filters_placeholder",
+                label="Фильтры пока не настроены",
                 setting_type=SettingType.SUBTITLE,
                 default="",
-                group="Видео",
-                visible_if={"encoder": ["NVENC (GPU)"]},
+                group="Видео:Фильтры",
+                comment=(
+                    "Здесь будут доступны видеофильтры: "
+                    "ресайз, обрезка чёрных полос и др."
+                ),
             ),
+            # --- Вкладка Видео: Дополнительно ---
+            SettingField(
+                key="sub_advanced_placeholder",
+                label="Расширенные параметры энкодера",
+                setting_type=SettingType.SUBTITLE,
+                default="",
+                group="Видео:Дополнительно",
+            ),
+            # NVENC: Lookahead
             SettingField(
                 key="nv_lookahead",
                 label="Lookahead",
                 setting_type=SettingType.COMBO,
                 default="32",
-                group="Видео",
+                group="Видео:Дополнительно",
                 options=["Выкл", "8", "16", "24", "32"],
                 visible_if={"encoder": ["NVENC (GPU)"]},
+                column=0,
+                col_span=1,
             ),
+            # NVENC: Spatial AQ
             SettingField(
                 key="nv_aq",
                 label="Spatial AQ",
                 setting_type=SettingType.CHECKBOX,
                 default=True,
-                group="Видео",
+                group="Видео:Дополнительно",
                 visible_if={"encoder": ["NVENC (GPU)"]},
+                column=1,
+                col_span=1,
             ),
-            # Вкладка: Аудио
+            # x265: Tune
+            SettingField(
+                key="cpu_tune",
+                label="Tune",
+                setting_type=SettingType.COMBO,
+                default="Нет",
+                group="Видео:Дополнительно",
+                options=[
+                    "Нет",
+                    "grain",
+                    "animation",
+                    "fastdecode",
+                    "zerolatency",
+                    "psnr",
+                    "ssim",
+                ],
+                visible_if={"encoder": ["x265 (CPU)"]},
+                column=0,
+                col_span=1,
+            ),
+            # x265: AQ Mode
+            SettingField(
+                key="cpu_aq_mode",
+                label="AQ Mode",
+                comment=(
+                    "0 - выкл, 1 - вкл, 2 - авто, "
+                    "3 - авто + смещение к тёмным сценам"
+                ),
+                setting_type=SettingType.COMBO,
+                default="2",
+                group="Видео:Дополнительно",
+                options=["0", "1", "2", "3"],
+                visible_if={"encoder": ["x265 (CPU)"]},
+                column=1,
+                col_span=1,
+            ),
+            # x265: Lookahead
+            SettingField(
+                key="cpu_lookahead",
+                label="Lookahead",
+                setting_type=SettingType.COMBO,
+                default="20",
+                group="Видео:Дополнительно",
+                options=["Выкл", "10", "20", "30", "40"],
+                visible_if={"encoder": ["x265 (CPU)"]},
+                column=0,
+                col_span=2,
+            ),
+
+            # --- Вкладка: Аудио ---
             SettingField(
                 key="audio_codec",
                 label="Кодек аудио",
@@ -226,6 +325,8 @@ class VideoProcessorScript(AbstractScript):
                 default="copy",
                 group="Аудио",
                 options=["copy", "aac", "ac3", "flac"],
+                column=0,
+                col_span=1,
             ),
             SettingField(
                 key="audio_bitrate",
@@ -235,6 +336,8 @@ class VideoProcessorScript(AbstractScript):
                 group="Аудио",
                 options=["128k", "192k", "256k", "320k", "448k", "640k"],
                 visible_if={"audio_codec": ["aac", "ac3"]},
+                column=1,
+                col_span=1,
             ),
             SettingField(
                 key="audio_channels",
@@ -244,14 +347,18 @@ class VideoProcessorScript(AbstractScript):
                 group="Аудио",
                 options=["Original", "1", "2", "6"],
                 visible_if={"audio_codec": ["aac", "ac3", "flac"]},
+                column=0,
+                col_span=2,
             ),
-            # Вкладка: Субтитры
+            # --- Вкладка: Субтитры ---
             SettingField(
                 key="sub_keywords",
                 label="Ключевые слова для поиска надписей",
                 setting_type=SettingType.KEYWORD_LIST,
                 default=[{"word": "Надписи", "active": True}],
                 group="Субтитры",
+                column=0,
+                col_span=2,
             ),
             SettingField(
                 key="strip_keywords",
@@ -281,14 +388,18 @@ class VideoProcessorScript(AbstractScript):
                     },
                 ],
                 group="Субтитры",
+                column=0,
+                col_span=2,
             ),
-            # Вкладка: Общие
+            # --- Вкладка: Общие ---
             SettingField(
                 key="overwrite_source",
                 label="Заменить исходный файл после обработки",
                 setting_type=SettingType.CHECKBOX,
                 default=False,
                 group="Общие",
+                column=0,
+                col_span=2,
             ),
         ]
 
@@ -736,35 +847,61 @@ class VideoProcessorScript(AbstractScript):
         args.extend(["-c:v", "libx265", "-pix_fmt", pix_fmt])
         args.extend(["-preset", settings.get("cpu_preset", "medium")])
 
-        if settings.get("lossless"):
-            args.extend(["-x265-params", "lossless=1"])
-        else:
-            # Безопасное получение CRF
-            cpu_crf_val = settings.get("cpu_crf")
-            cpu_crf = (
-                int(str(cpu_crf_val)) if str(cpu_crf_val).isdigit() else 23
-            )
-            args.extend(["-crf", str(cpu_crf)])
+        # Сбор x265-params
+        x265_params: list[str] = []
 
-            # Безопасное получение битрейта
-            v_br_val = settings.get("v_bitrate")
-            if v_br_val and str(v_br_val).isdigit():
-                v_br = int(str(v_br_val))
-                min_br = v_br
+        if settings.get("lossless"):
+            x265_params.append("lossless=1")
+        else:
+            cpu_rc = settings.get("cpu_rc", "CRF")
+
+            if cpu_rc == "CRF":
+                # Режим CRF (постоянное качество)
+                cpu_crf_val = settings.get("cpu_crf")
+                cpu_crf = (
+                    int(str(cpu_crf_val))
+                    if str(cpu_crf_val).isdigit()
+                    else 23
+                )
+                args.extend(["-crf", str(cpu_crf)])
+            else:
+                # Режим ABR (средний битрейт)
+                v_br_val = settings.get("cpu_v_bitrate")
+                v_br = (
+                    int(str(v_br_val))
+                    if str(v_br_val).isdigit()
+                    else 4000
+                )
                 max_br = v_br * 2
                 buf_size = max_br * 2
                 args.extend(
                     [
                         "-b:v",
                         f"{v_br}k",
-                        "-minrate",
-                        f"{min_br}k",
                         "-maxrate",
                         f"{max_br}k",
                         "-bufsize",
                         f"{buf_size}k",
                     ]
                 )
+
+        # Tune (grain, animation и т.д.)
+        cpu_tune = settings.get("cpu_tune", "Нет")
+        if cpu_tune and cpu_tune != "Нет":
+            args.extend(["-tune", cpu_tune])
+
+        # AQ Mode
+        aq_mode = settings.get("cpu_aq_mode", "2")
+        x265_params.append(f"aq-mode={aq_mode}")
+
+        # Lookahead
+        cpu_la = settings.get("cpu_lookahead", "20")
+        if cpu_la and cpu_la != "Выкл":
+            x265_params.append(f"rc-lookahead={cpu_la}")
+
+        # Применение x265-params
+        if x265_params:
+            args.extend(["-x265-params", ":".join(x265_params)])
 
     def _append_audio_args(
         self,
