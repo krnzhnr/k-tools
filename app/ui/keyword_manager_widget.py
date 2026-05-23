@@ -2,6 +2,7 @@
 """Виджет управления списком ключевых слов для поиска субтитров."""
 
 import logging
+from typing import Callable
 from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget,
@@ -30,16 +31,23 @@ class KeywordManagerWidget(QWidget):
 
     keywordsChanged = pyqtSignal(list)
 
-    def __init__(self, label: str, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        label: str,
+        parent: QWidget | None = None,
+        validator: Callable[[str], bool] | None = None,
+    ) -> None:
         """Инициализация виджета.
 
         Args:
             label: Текст на кнопке.
             parent: Родительский виджет.
+            validator: Необязательная функция-валидатор для проверки слов.
         """
         super().__init__(parent)
         self._keywords: list[dict[str, bool | str]] = []
         self._label = label
+        self._validator = validator
         self._init_ui()
 
     def _init_ui(self) -> None:
@@ -175,6 +183,12 @@ class KeywordManagerWidget(QWidget):
         """Добавить новое ключевое слово."""
         word = self._new_word_edit.text().strip()
         if not word:
+            return
+
+        if self._validator and not self._validator(word):
+            logger.warning(
+                "Попытка добавить некорректное значение: '%s'", word
+            )
             return
 
         if any(k["word"] == word for k in self._keywords):

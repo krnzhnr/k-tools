@@ -119,6 +119,8 @@ class AudioConverterScript(AbstractScript):
                 setting_type=SettingType.COMBO,
                 default="QAAC",
                 options=list(AUDIO_FORMATS.keys()),
+                column=0,
+                col_span=1,
             ),
             self._get_bitrate_field(),
             self._get_compression_field(),
@@ -174,6 +176,8 @@ class AudioConverterScript(AbstractScript):
                 "640k",
             ],
             visible_if={"target_format": BITRATE_FORMATS},
+            column=1,
+            col_span=1,
         )
 
     def _get_compression_field(self) -> SettingField:
@@ -185,6 +189,8 @@ class AudioConverterScript(AbstractScript):
             default="5",
             options=[str(i) for i in range(13)],
             visible_if={"target_format": LOSSLESS_COMPRESSED},
+            column=1,
+            col_span=1,
         )
 
     def _get_qaac_quality_field(self) -> SettingField:
@@ -196,6 +202,8 @@ class AudioConverterScript(AbstractScript):
             default="127",
             options=[str(i) for i in range(0, 128, 16)] + ["127"],
             visible_if={"target_format": ["QAAC"]},
+            column=1,
+            col_span=1,
         )
 
     def _get_wav_bit_depth_field(self) -> SettingField:
@@ -207,6 +215,8 @@ class AudioConverterScript(AbstractScript):
             default="24-bit",
             options=list(WAV_BIT_DEPTHS.keys()),
             visible_if={"target_format": ["WAV"]},
+            column=1,
+            col_span=1,
         )
 
     def execute_single(

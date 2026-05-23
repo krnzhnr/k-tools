@@ -604,11 +604,13 @@ class ScriptPage(QWidget):
         card = CardWidget(self)
         card_layout = QGridLayout(card)
         card_layout.setContentsMargins(16, 12, 16, 12)
-        card_layout.setSpacing(10)
+        card_layout.setHorizontalSpacing(16)
+        card_layout.setVerticalSpacing(14)
         card_layout.setColumnStretch(0, 1)
         card_layout.setColumnStretch(1, 1)
 
         card_title = StrongBodyLabel(title, card)
+        card_title.setContentsMargins(0, 0, 0, 6)
         card_layout.addWidget(card_title, 0, 0, 1, 2)
 
         # Текущая строка в сетке
@@ -640,7 +642,7 @@ class ScriptPage(QWidget):
             # Контейнер для поля
             field_container = QWidget(card)
             field_v_layout = QVBoxLayout(field_container)
-            field_v_layout.setContentsMargins(0, 0, 0, 0)
+            field_v_layout.setContentsMargins(0, 0, 0, 4)
             field_v_layout.setSpacing(2)
 
             row_widget = QWidget(field_container)
@@ -973,7 +975,9 @@ class ScriptPage(QWidget):
         self, field: SettingField, parent: QWidget
     ) -> KeywordManagerWidget:
         """Создать виджет управления списком ключевых слов."""
-        widget = KeywordManagerWidget(field.label, parent)
+        widget = KeywordManagerWidget(
+            field.label, parent, validator=field.validator
+        )
         saved_val = SettingsManager().get_script_setting(
             self._script.name, field.key, None
         )
@@ -1015,6 +1019,44 @@ class ScriptPage(QWidget):
                     # Если режим Lossless, блокируем выбор параметров
                     # битрейта/QP/пресета/аудио
                     widget.setEnabled(not is_lossless)
+
+            # Логика автоматического расчета параметров битрейта
+            is_auto = bool(current_settings.get("auto_bitrate", True))
+            auto_keys = ["min_bitrate", "max_bitrate", "bufsize"]
+
+            # Блокируем или разблокируем поля в зависимости от галочки
+            for key in auto_keys:
+                if widget := self._settings_widgets.get(key):
+                    widget.setEnabled(not is_auto)
+
+            # Если включен авторасчет, рассчитываем значения в реальном времени
+            if is_auto:
+                v_br_val = current_settings.get("v_bitrate", 4000)
+                try:
+                    v_br = int(v_br_val)
+                except (ValueError, TypeError):
+                    v_br = 4000
+
+                min_br = v_br
+                max_br = v_br * 2
+                buf_size = max_br * 2
+
+                updates = {
+                    "min_bitrate": min_br,
+                    "max_bitrate": max_br,
+                    "bufsize": buf_size,
+                }
+                for key, val in updates.items():
+                    if widget := self._settings_widgets.get(key):
+                        if isinstance(widget, SpinBox):
+                            # Блокируем сигналы во избежание рекурсии
+                            widget.blockSignals(True)
+                            widget.setValue(val)
+                            widget.blockSignals(False)
+                            # Записываем в менеджер настроек
+                            SettingsManager().set_script_setting(
+                                self._script.name, key, val
+                            )
 
     def _add_file_list(self, layout: QVBoxLayout) -> None:
         """Добавить секцию списка файлов."""
@@ -1515,9 +1557,13 @@ class ScriptPage(QWidget):
             and current < len(files)
         ):
             if intra_val >= 100.0:
-                if message.startswith("❌") or message.startswith("⚠"):
+                if message.startswith("❌"):
                     self._file_list.update_file_status(
                         files[current], "error"
+                    )
+                elif message.startswith("⚠") or message.startswith("⏭"):
+                    self._file_list.update_file_status(
+                        files[current], "warning"
                     )
                 else:
                     self._file_list.update_file_status(

@@ -98,3 +98,28 @@ def test_work_panel_finished_with_errors(qtbot, mocker):
     InfoBar.error.assert_called_once()
     assert "✅ OK" in page._log_area.toPlainText()
     assert "❌ Fail" in page._log_area.toPlainText()
+
+
+def test_work_panel_progress_warning(qtbot, mocker):
+    # Тестирование присвоения статуса warning при пропуске
+    script = MockScript()
+    page = ScriptPage(script)
+    page.preload_ui()
+    qtbot.addWidget(page)
+
+    mock_file_list = mocker.MagicMock()
+    page._file_list = mock_file_list
+    page._execution_files = [Path("test_file.mkv")]
+
+    # 1. Пропуск со значком ⏭
+    page._on_progress_received(0, 1, "⏭ ПРОПУСК", 100.0)
+    mock_file_list.update_file_status.assert_called_with(
+        Path("test_file.mkv"), "warning"
+    )
+
+    # 2. Пропуск со значком ⚠
+    mock_file_list.reset_mock()
+    page._on_progress_received(0, 1, "⚠ ПРОПУСК", 100.0)
+    mock_file_list.update_file_status.assert_called_with(
+        Path("test_file.mkv"), "warning"
+    )

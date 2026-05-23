@@ -187,3 +187,5 @@ bin/eac3to/log*.txt
 version.txt
 file_version_info.txt
 /.antigravity
+CLAUDE.md
+.claudeignore

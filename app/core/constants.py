@@ -121,6 +121,18 @@ ISO_LANG_MAP: dict[str, str] = {
 }
 
 
+def is_valid_language_code(code: str) -> bool:
+    """Проверка языкового кода на корректность.
+
+    Возвращает True, если переданный код языка является валидным
+    3-буквенным или 2-буквенным кодом, присутствующим в ISO_LANG_MAP.
+    """
+    if not code:
+        return False
+    c = code.lower().strip()
+    return c in ISO_LANG_MAP or c in ISO_LANG_MAP.values()
+
+
 # Расширения для извлекаемых форматов на основе поля codec из mkvmerge
 RAW_EXTENSIONS: dict[str, str] = {
     "AC-3": ".ac3",

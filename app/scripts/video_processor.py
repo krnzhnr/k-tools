@@ -14,7 +14,12 @@ from app.core.abstract_script import (
     SettingType,
     ProgressCallback,
 )
-from app.core.constants import VIDEO_CONTAINERS, ScriptCategory, ScriptMetadata
+from app.core.constants import (
+    VIDEO_CONTAINERS,
+    ScriptCategory,
+    ScriptMetadata,
+    is_valid_language_code,
+)
 from app.core.output_resolver import OutputResolver
 from app.core.settings_manager import SettingsManager
 from app.infrastructure.ffmpeg_runner import FFmpegRunner
@@ -131,7 +136,22 @@ class VideoProcessorScript(AbstractScript):
                 default=False,
                 group="Видео:Битрейт",
                 column=0,
-                col_span=2,
+                col_span=1,
+            ),
+            # NVENC: авторасчет параметров битрейта
+            SettingField(
+                key="auto_bitrate",
+                label="Авторасчет битрейта и буфера",
+                setting_type=SettingType.CHECKBOX,
+                default=True,
+                group="Видео:Битрейт",
+                visible_if={
+                    "encoder": ["NVENC (GPU)"],
+                    "nvenc_rc": ["cbr", "vbr", "vbr_hq"],
+                    "lossless": [False],
+                },
+                column=1,
+                col_span=1,
             ),
             # NVENC: режим управления битрейтом
             SettingField(
@@ -166,13 +186,30 @@ class VideoProcessorScript(AbstractScript):
             # NVENC: битрейт для cbr/vbr/vbr_hq
             SettingField(
                 key="v_bitrate",
-                label="Битрейт (кбит/с)",
+                label="Битрейт",
+                comment="Целевой битрейт видеопотока (кбит/с)",
                 setting_type=SettingType.INT,
                 default=4000,
                 group="Видео:Битрейт",
                 visible_if={
                     "encoder": ["NVENC (GPU)"],
                     "nvenc_rc": ["cbr", "vbr", "vbr_hq"],
+                    "lossless": [False],
+                },
+                column=1,
+                col_span=1,
+            ),
+            # NVENC: QP для constqp
+            SettingField(
+                key="v_qp",
+                label="QP/Quality",
+                comment="0-51. Меньше = лучше, 0 - без потерь",
+                setting_type=SettingType.INT,
+                default=0,
+                group="Видео:Битрейт",
+                visible_if={
+                    "encoder": ["NVENC (GPU)"],
+                    "nvenc_rc": ["constqp"],
                     "lossless": [False],
                 },
                 column=1,
@@ -197,7 +234,8 @@ class VideoProcessorScript(AbstractScript):
             # x265: битрейт для ABR
             SettingField(
                 key="cpu_v_bitrate",
-                label="Битрейт (кбит/с)",
+                label="Битрейт",
+                comment="Целевой битрейт видеопотока (кбит/с)",
                 setting_type=SettingType.INT,
                 default=4000,
                 group="Видео:Битрейт",
@@ -209,17 +247,46 @@ class VideoProcessorScript(AbstractScript):
                 column=1,
                 col_span=1,
             ),
-            # NVENC: QP для constqp
             SettingField(
-                key="v_qp",
-                label="QP/Quality",
-                comment="0-51. Меньше = лучше, 0 - без потерь",
+                key="min_bitrate",
+                label="Мин. битрейт",
+                comment="Минимальный битрейт видеопотока (кбит/с)",
                 setting_type=SettingType.INT,
-                default=0,
+                default=4000,
                 group="Видео:Битрейт",
                 visible_if={
                     "encoder": ["NVENC (GPU)"],
-                    "nvenc_rc": ["constqp"],
+                    "nvenc_rc": ["cbr", "vbr", "vbr_hq"],
+                    "lossless": [False],
+                },
+                column=1,
+                col_span=1,
+            ),
+            SettingField(
+                key="max_bitrate",
+                label="Макс. битрейт",
+                comment="Максимальный битрейт видеопотока (кбит/с)",
+                setting_type=SettingType.INT,
+                default=8000,
+                group="Видео:Битрейт",
+                visible_if={
+                    "encoder": ["NVENC (GPU)"],
+                    "nvenc_rc": ["cbr", "vbr", "vbr_hq"],
+                    "lossless": [False],
+                },
+                column=1,
+                col_span=1,
+            ),
+            SettingField(
+                key="bufsize",
+                label="Буфер",
+                comment="Размер буфера видеопотока (кбит)",
+                setting_type=SettingType.INT,
+                default=16000,
+                group="Видео:Битрейт",
+                visible_if={
+                    "encoder": ["NVENC (GPU)"],
+                    "nvenc_rc": ["cbr", "vbr", "vbr_hq"],
                     "lossless": [False],
                 },
                 column=1,
@@ -238,20 +305,13 @@ class VideoProcessorScript(AbstractScript):
                 ),
             ),
             # --- Вкладка Видео: Дополнительно ---
-            SettingField(
-                key="sub_advanced_placeholder",
-                label="Расширенные параметры энкодера",
-                setting_type=SettingType.SUBTITLE,
-                default="",
-                group="Видео:Дополнительно",
-            ),
             # NVENC: Lookahead
             SettingField(
                 key="nv_lookahead",
                 label="Lookahead",
                 setting_type=SettingType.COMBO,
                 default="32",
-                group="Видео:Дополнительно",
+                group="Видео:Расширенные параметры энкодера",
                 options=["Выкл", "8", "16", "24", "32"],
                 visible_if={"encoder": ["NVENC (GPU)"]},
                 column=0,
@@ -263,7 +323,7 @@ class VideoProcessorScript(AbstractScript):
                 label="Spatial AQ",
                 setting_type=SettingType.CHECKBOX,
                 default=True,
-                group="Видео:Дополнительно",
+                group="Видео:Расширенные параметры энкодера",
                 visible_if={"encoder": ["NVENC (GPU)"]},
                 column=1,
                 col_span=1,
@@ -274,7 +334,7 @@ class VideoProcessorScript(AbstractScript):
                 label="Tune",
                 setting_type=SettingType.COMBO,
                 default="Нет",
-                group="Видео:Дополнительно",
+                group="Видео:Расширенные параметры энкодера",
                 options=[
                     "Нет",
                     "grain",
@@ -298,7 +358,7 @@ class VideoProcessorScript(AbstractScript):
                 ),
                 setting_type=SettingType.COMBO,
                 default="2",
-                group="Видео:Дополнительно",
+                group="Видео:Расширенные параметры энкодера",
                 options=["0", "1", "2", "3"],
                 visible_if={"encoder": ["x265 (CPU)"]},
                 column=1,
@@ -310,13 +370,12 @@ class VideoProcessorScript(AbstractScript):
                 label="Lookahead",
                 setting_type=SettingType.COMBO,
                 default="20",
-                group="Видео:Дополнительно",
+                group="Видео:Расширенные параметры энкодера",
                 options=["Выкл", "10", "20", "30", "40"],
                 visible_if={"encoder": ["x265 (CPU)"]},
                 column=0,
                 col_span=2,
             ),
-
             # --- Вкладка: Аудио ---
             SettingField(
                 key="audio_codec",
@@ -349,6 +408,24 @@ class VideoProcessorScript(AbstractScript):
                 visible_if={"audio_codec": ["aac", "ac3", "flac"]},
                 column=0,
                 col_span=2,
+            ),
+            SettingField(
+                key="audio_lang_priority",
+                label="Приоритет языка аудиодорожек",
+                setting_type=SettingType.KEYWORD_LIST,
+                default=[
+                    {"word": "rus", "active": True},
+                    {"word": "jpn", "active": False},
+                    {"word": "eng", "active": False},
+                ],
+                group="Аудио",
+                comment=(
+                    "Если в файле найдено несколько языков "
+                    "из списка, выберется первый по порядку"
+                ),
+                column=0,
+                col_span=2,
+                validator=is_valid_language_code,
             ),
             # --- Вкладка: Субтитры ---
             SettingField(
@@ -570,9 +647,8 @@ class VideoProcessorScript(AbstractScript):
                     self._strip_subtitle_lines(sub_file, strip_words)
             else:
                 sub_file = None
-                results.append(
-                    f"⚠ Не удалось извлечь субтитры из {file_path.name}"
-                )
+                msg = f"⚠ Не удалось извлечь субтитры из {file_path.name}"
+                results.append(msg)
 
         return sub_file, fonts_dir
 
@@ -690,6 +766,66 @@ class VideoProcessorScript(AbstractScript):
         except Exception:
             logger.exception("Ошибка при очистке субтитров")
 
+    def _find_best_audio_stream(
+        self,
+        info: dict[str, Any],
+        settings: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Поиск лучшего аудиопотока по приоритетам языков из настроек.
+
+        Если выбрано несколько языков и оба присутствуют в контейнере,
+        выбирается первый по порядку приоритета в настройках.
+        """
+        streams = info.get("streams", [])
+        audio_streams = [s for s in streams if s.get("codec_type") == "audio"]
+        if not audio_streams:
+            return None
+
+        # Считываем приоритетные языки (активные элементы в нижнем регистре)
+        langs = [
+            lang["word"].lower().strip()
+            for lang in settings.get("audio_lang_priority", [])
+            if lang.get("active")
+        ]
+
+        # 1. Поиск по приоритетным языкам (первое совпадение по приоритету)
+        if langs:
+            for lang in langs:
+                for s in audio_streams:
+                    tags = s.get("tags", {})
+                    stream_lang = tags.get("language", "").lower().strip()
+                    # Точное совпадение или взаимное вхождение
+                    if (
+                        stream_lang == lang
+                        or (len(lang) >= 3 and lang in stream_lang)
+                        or (len(stream_lang) >= 3 and stream_lang in lang)
+                    ):
+                        logger.info(
+                            "Выбран приоритетный аудиопоток index=%d "
+                            "(язык '%s' для приоритета '%s')",
+                            s["index"],
+                            stream_lang,
+                            lang,
+                        )
+                        return s
+
+        # 2. Поиск по флагам по умолчанию (default/forced)
+        for s in audio_streams:
+            disposition = s.get("disposition", {})
+            if disposition.get("default") or disposition.get("forced"):
+                logger.info(
+                    "Выбран аудиопоток по умолчанию index=%d",
+                    s["index"],
+                )
+                return s
+
+        # 3. Резервный выбор (первый аудиопоток)
+        logger.info(
+            "Выбран первый аудиопоток по умолчанию index=%d",
+            audio_streams[0]["index"],
+        )
+        return audio_streams[0]
+
     def _build_ffmpeg_args(
         self,
         info: dict[str, Any],
@@ -710,8 +846,17 @@ class VideoProcessorScript(AbstractScript):
         if sub_file:
             self._append_subtitle_filter_args(args, sub_file, fonts_dir)
 
-        # 4. Маппинг, метаданные и системные флаги
-        self._append_mapping_args(args)
+        # 4. Поиск лучшей аудиодорожки по языкам
+        best_audio = self._find_best_audio_stream(info, settings)
+        if best_audio:
+            rel_audio_idx = self._ffmpeg.get_relative_index(
+                info, best_audio["index"], "audio"
+            )
+        else:
+            rel_audio_idx = 0
+
+        # 5. Маппинг, метаданные и системные флаги
+        self._append_mapping_args(args, rel_audio_idx)
 
         return args
 
@@ -811,12 +956,33 @@ class VideoProcessorScript(AbstractScript):
                 args.extend(["-qp", str(qp)])
             else:
                 v_br_val = settings.get("v_bitrate")
-                v_br = (
-                    int(str(v_br_val)) if str(v_br_val).isdigit() else 4000
-                )
-                min_br = v_br
-                max_br = v_br * 2
-                buf_size = max_br * 2
+                v_br = int(str(v_br_val)) if str(v_br_val).isdigit() else 4000
+
+                # Если включен авторасчет битрейта (по умолчанию True)
+                if settings.get("auto_bitrate", True):
+                    min_br = v_br
+                    max_br = v_br * 2
+                    buf_size = max_br * 2
+                else:
+                    min_br_val = settings.get("min_bitrate")
+                    min_br = (
+                        int(str(min_br_val))
+                        if str(min_br_val).isdigit()
+                        else v_br
+                    )
+                    max_br_val = settings.get("max_bitrate")
+                    max_br = (
+                        int(str(max_br_val))
+                        if str(max_br_val).isdigit()
+                        else v_br * 2
+                    )
+                    buf_size_val = settings.get("bufsize")
+                    buf_size = (
+                        int(str(buf_size_val))
+                        if str(buf_size_val).isdigit()
+                        else max_br * 2
+                    )
+
                 args.extend(
                     [
                         "-b:v",
@@ -867,11 +1033,7 @@ class VideoProcessorScript(AbstractScript):
             else:
                 # Режим ABR (средний битрейт)
                 v_br_val = settings.get("cpu_v_bitrate")
-                v_br = (
-                    int(str(v_br_val))
-                    if str(v_br_val).isdigit()
-                    else 4000
-                )
+                v_br = int(str(v_br_val)) if str(v_br_val).isdigit() else 4000
                 max_br = v_br * 2
                 buf_size = max_br * 2
                 args.extend(
@@ -933,10 +1095,14 @@ class VideoProcessorScript(AbstractScript):
         filter_str = f"subtitles=filename='{sub_path}':fontsdir='{fonts_path}'"
         args.extend(["-vf", filter_str])
 
-    def _append_mapping_args(self, args: list[str]) -> None:
+    def _append_mapping_args(
+        self,
+        args: list[str],
+        rel_audio_idx: int,
+    ) -> None:
         """Добавление маппинга и служебных флагов."""
-        # Маппинг первого видео и первого аудио (если есть)
-        args.extend(["-map", "0:v:0", "-map", "0:a:0?"])
+        # Маппинг первого видео и выбранного аудиопотока
+        args.extend(["-map", "0:v:0", "-map", f"0:a:{rel_audio_idx}?"])
 
         # Совместимость с Apple/QuickTime (HEVC)
         args.extend(["-tag:v", "hvc1"])

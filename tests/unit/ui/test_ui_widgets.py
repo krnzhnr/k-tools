@@ -1,7 +1,9 @@
 import pytest
 from PyQt6.QtWidgets import QApplication
+from qfluentwidgets import LineEdit
 from app.ui.file_list_widget import FileListWidget
 from app.ui.work_panel import ScriptPage
+from app.ui.keyword_manager_widget import KeywordManagerWidget
 from app.core.abstract_script import SettingField, SettingType
 from tests.unit.core.test_core import MockScript
 
@@ -116,5 +118,31 @@ def test_script_page_dynamic_visibility(qtbot):
 
     # Теперь target должен быть виден
     assert not target_row.isHidden()
+
+
+def test_keyword_manager_widget_validator(qtbot):
+    """Проверка интеграции внешнего валидатора в KeywordManagerWidget."""
+    # Валидатор пропускает только слова длиной ровно 3 символа
+    validator = lambda s: len(s) == 3
+    widget = KeywordManagerWidget("Тест", validator=validator)
+    qtbot.addWidget(widget)
+
+    # Изначально список пуст
+    assert len(widget.get_keywords()) == 0
+
+    # Эмулируем добавление поля ввода
+    widget._new_word_edit = LineEdit()
+
+    # Пытаемся добавить корректное слово (длина 3)
+    widget._new_word_edit.setText("rus")
+    widget._add_keyword()
+    assert len(widget.get_keywords()) == 1
+    assert widget.get_keywords()[0]["word"] == "rus"
+
+    # Пытаемся добавить некорректное слово (длина 4)
+    widget._new_word_edit.setText("russ")
+    widget._add_keyword()
+    # Слово не должно быть добавлено
+    assert len(widget.get_keywords()) == 1
 
 

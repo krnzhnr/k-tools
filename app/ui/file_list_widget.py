@@ -111,6 +111,12 @@ class FileItemWidget(QWidget):
                 FluentIcon.CANCEL.icon(color=QColor(color_str))
             )
             self.status_icon.setVisible(True)
+        elif status == "warning":
+            color_str = STATUS_COLORS.get("warning", "#F5A623")
+            self.status_icon.setIcon(
+                FluentIcon.INFO.icon(color=QColor(color_str))
+            )
+            self.status_icon.setVisible(True)
         elif status == "idle":
             pass
 

@@ -1,5 +1,6 @@
 from app.core.script_registry import ScriptRegistry
 from app.core.abstract_script import AbstractScript, SettingField, SettingType
+from app.core.constants import is_valid_language_code
 
 # --- Mock Script for Testing ---
 
@@ -108,3 +109,14 @@ def test_abstract_script_delete_source_error(mocker):
     script._delete_source(mock_path, results)
 
     assert any("Не удалось удалить" in r for r in results)
+
+
+def test_is_valid_language_code_logic():
+    """Проверка корректности работы функции is_valid_language_code."""
+    assert is_valid_language_code("rus") is True
+    assert is_valid_language_code("ru") is True
+    assert is_valid_language_code("ENG") is True
+    assert is_valid_language_code("en") is True
+    assert is_valid_language_code("invalid") is False
+    assert is_valid_language_code("") is False
+    assert is_valid_language_code(None) is False

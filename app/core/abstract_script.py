@@ -33,6 +33,8 @@ class SettingField:
         setting_type: Тип виджета настройки.
         default: Значение по умолчанию.
         options: Варианты выбора для COMBO.
+        validator: Необязательная функция-валидатор для
+            проверки корректности данных.
     """
 
     key: str
@@ -48,6 +50,7 @@ class SettingField:
     requires_warning: bool = False
     warning_title: str = ""
     warning_text: str = ""
+    validator: Callable[[str], bool] | None = None
 
 
 # Тип callback-функции для отчёта о прогрессе.

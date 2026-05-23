@@ -45,3 +45,25 @@ def test_container_converter_skip(mocker):
     mp4 = Path("test.mp4")
     results = script.execute([mp4], {"target_format": "MP4"})
     assert any("ПРОПУСК" in r for r in results)
+
+
+def test_container_converter_compatibility_check(mocker):
+    script = ContainerConverterScript()
+    script._ffmpeg = MagicMock()
+
+    # Имитируем информацию о файле с несовместимым кодеком (GIF)
+    info = {
+        "streams": [
+            {"codec_type": "video", "codec_name": "gif"}
+        ]
+    }
+    script._ffmpeg.get_video_info.return_value = info
+
+    mocker.patch("pathlib.Path.exists", return_value=False)
+
+    results = script.execute(
+        [Path("movie.gif")], {"target_format": "MP4"}
+    )
+    assert any("ПРОПУСК" in r for r in results)
+    assert any("Видео-процессор" in r for r in results)
+    script._ffmpeg.run.assert_not_called()
