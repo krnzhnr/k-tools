@@ -72,8 +72,8 @@ class MainWindow(FluentWindow):
         self._setup_navigation()
 
         logger.info(
-            "Главное окно инициализируется "
-            "с %d скриптами в реестре (force_logs=%s)",
+            "Главное окно инициализируется с %d скриптами в реестре "
+            "(force_logs=%s)",
             len(registry),
             force_logs_tab,
         )
@@ -119,7 +119,7 @@ class MainWindow(FluentWindow):
         sw.setCurrentWidget = _set_current_widget
         sw.setCurrentIndex = _set_current_index
 
-        logger.info("DrillIn-анимация переходов " "установлена")
+        logger.info("DrillIn-анимация переходов установлена")
 
     def _setup_window(self) -> None:
         """Настройка параметров окна."""
@@ -129,7 +129,7 @@ class MainWindow(FluentWindow):
         self.setMinimumSize(self.WINDOW_WIDTH, self.WINDOW_HEIGHT)
         self.resize(self.WINDOW_WIDTH, self.WINDOW_HEIGHT)
         logger.info(
-            "Установлен минимальный размер " "окна: %dx%d",
+            "Установлен минимальный размер окна: %dx%d",
             self.WINDOW_WIDTH,
             self.WINDOW_HEIGHT,
         )
@@ -179,6 +179,53 @@ class MainWindow(FluentWindow):
                 self.WINDOW_HEIGHT,
             )
             logger.info("Layout обновлён при первом показе")
+            self._start_auto_check_updates()
+
+    def _start_auto_check_updates(self) -> None:
+        """Запуск фоновой проверки обновлений при запуске."""
+        if not self._settings_manager.auto_check_updates:
+            return
+
+        from app.core.update_worker import UpdateCheckerWorker
+
+        self._auto_checker = UpdateCheckerWorker(
+            self._settings_manager.include_pre_releases, self
+        )
+        self._auto_checker.checkFinished.connect(self._on_auto_check_finished)
+        self._auto_checker.finished.connect(self._auto_checker.deleteLater)
+        self._auto_checker.start()
+
+    def _on_auto_check_finished(
+        self, available: bool, version: str, changelog: str, download_url: str
+    ) -> None:
+        """Хэндлер завершения фоновой автопроверки обновлений."""
+        if not available:
+            return
+
+        from qfluentwidgets import InfoBar, InfoBarPosition, PushButton
+
+        content_text = (
+            f"Доступна новая версия K-Tools {version}. Хотите обновиться?"
+        )
+
+        def on_info_bar_clicked() -> None:
+            if hasattr(self, "_settings_page"):
+                self.switchTo(self._settings_page)
+
+        bar = InfoBar.info(
+            title="Доступно обновление",
+            content=content_text,
+            orient=Qt.Orientation.Horizontal,
+            isClosable=True,
+            position=InfoBarPosition.TOP,
+            duration=10000,
+            parent=self,
+        )
+        btn = PushButton(self.tr("Настройки"), bar)
+        btn.setFixedWidth(100)
+        btn.clicked.connect(on_info_bar_clicked)
+        btn.clicked.connect(bar.close)
+        bar.hBoxLayout.addWidget(btn)
 
     def _setup_navigation(self) -> None:
         """Настройка навигационной панели со скриптами."""
@@ -303,7 +350,7 @@ class MainWindow(FluentWindow):
         widget = self.stackedWidget.widget(index)
         page_name = widget.objectName() if widget else "Неизвестно"
         logger.info(
-            "Пользователь переключился " "на страницу: %s (индекс: %d)",
+            "Пользователь переключился на страницу: %s (индекс: %d)",
             page_name,
             index,
         )

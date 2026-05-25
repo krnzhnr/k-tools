@@ -173,6 +173,54 @@ class SettingsManager(metaclass=SingletonMeta):
             self._settings.sync()
         logger.info("Настройка 'show_logs_tab' изменена на: %s", value)
 
+    @property
+    def auto_check_updates(self) -> bool:
+        """Проверять ли обновления автоматически при запуске."""
+        with self._lock:
+            return self._settings.value(
+                "Updates/auto_check_updates", True, type=bool
+            )
+
+    @auto_check_updates.setter
+    def auto_check_updates(self, value: bool) -> None:
+        """Установить режим автоматической проверки обновлений."""
+        with self._lock:
+            self._settings.setValue("Updates/auto_check_updates", value)
+            self._settings.sync()
+        logger.info("Настройка 'auto_check_updates' изменена на: %s", value)
+
+    @property
+    def include_pre_releases(self) -> bool:
+        """Включать ли предварительные версии (пре-релизы)."""
+        with self._lock:
+            return self._settings.value(
+                "Updates/include_pre_releases", False, type=bool
+            )
+
+    @include_pre_releases.setter
+    def include_pre_releases(self, value: bool) -> None:
+        """Установить режим включения пре-релизов."""
+        with self._lock:
+            self._settings.setValue("Updates/include_pre_releases", value)
+            self._settings.sync()
+        logger.info("Настройка 'include_pre_releases' изменена на: %s", value)
+
+    @property
+    def last_check_time(self) -> str:
+        """Время последней проверки обновлений."""
+        with self._lock:
+            return self._settings.value(
+                "Updates/last_check_time", "", type=str
+            )
+
+    @last_check_time.setter
+    def last_check_time(self, value: str) -> None:
+        """Установить время последней проверки обновлений."""
+        with self._lock:
+            self._settings.setValue("Updates/last_check_time", value)
+            self._settings.sync()
+        logger.info("Настройка 'last_check_time' изменена на: '%s'", value)
+
     def initialize_all_defaults(self, registry: Any) -> None:
         """Инициализировать отсутствующие настройки значениями по умолчанию.
 
@@ -190,6 +238,9 @@ class SettingsManager(metaclass=SingletonMeta):
             "General/max_parallel_tasks": max(1, (os.cpu_count() or 2) // 2),
             "General/clear_list_on_add": False,
             "General/show_logs_tab": False,
+            "Updates/auto_check_updates": True,
+            "Updates/include_pre_releases": False,
+            "Updates/last_check_time": "",
         }
 
         with self._lock:

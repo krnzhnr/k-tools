@@ -25,9 +25,7 @@ def test_mypy_static_typing() -> None:
     )
 
     # Если mypy нашел ошибки, тест должен упасть и показать их
-    assert (
-        result.returncode == 0
-    ), f"Ошибки Mypy:\n{result.stdout}\n{result.stderr}"
+    assert result.returncode == 0, f"Ошибки Mypy:\n{result.stdout}\n{result.stderr}"
 
 
 def test_flake8_formatting() -> None:
@@ -47,9 +45,7 @@ def test_flake8_formatting() -> None:
         cmd, cwd=root_dir, capture_output=True, text=True, encoding="utf-8"
     )
 
-    assert (
-        result.returncode == 0
-    ), f"Ошибки Flake8:\n{result.stdout}\n{result.stderr}"
+    assert result.returncode == 0, f"Ошибки Flake8:\n{result.stdout}\n{result.stderr}"
 
 
 def test_custom_code_rules() -> None:
@@ -68,6 +64,4 @@ def test_custom_code_rules() -> None:
 
     output = result.stdout.strip()
 
-    assert (
-        "No AST issues found." in output
-    ), f"Нарушения кастомных правил:\n{output}"
+    assert "No AST issues found." in output, f"Нарушения кастомных правил:\n{output}"

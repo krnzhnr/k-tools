@@ -367,6 +367,26 @@ def main() -> None:
 
     atexit.register(TempFileManager().cleanup)
 
+    # Очистка старых скачанных установщиков K-Tools из папки Загрузки
+    try:
+        downloads_dir = Path.home() / "Downloads"
+        if downloads_dir.exists():
+            # Шаблоны для поиска установщиков: KTools_PreRelease_Setup.exe
+            # и KTools_v*_setup.exe
+            patterns = ["KTools_PreRelease_Setup.exe", "KTools_v*_setup.exe"]
+            for pattern in patterns:
+                for installer in downloads_dir.glob(pattern):
+                    try:
+                        installer.unlink()
+                        print(
+                            f"[Cleanup] Удален старый установщик: "
+                            f"{installer.name}"
+                        )
+                    except OSError:
+                        pass
+    except Exception as cleanup_err:
+        print(f"[Cleanup] Ошибка очистки установщиков: {cleanup_err}")
+
     # Загрузка настроек темы
     settings = SettingsManager()
     theme_val = settings.theme

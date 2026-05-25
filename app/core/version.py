@@ -9,7 +9,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 # Эта строка обновляется автоматически скриптом build.py
-VERSION = "1.5.0"
+VERSION = "1.6.0"
 
 _CHANGELOG_VERSION_RE = re.compile(r"^#\s+(\d+\.\d+\.\d+)")
 

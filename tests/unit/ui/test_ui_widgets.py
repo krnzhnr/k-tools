@@ -122,8 +122,9 @@ def test_script_page_dynamic_visibility(qtbot):
 
 def test_keyword_manager_widget_validator(qtbot):
     """Проверка интеграции внешнего валидатора в KeywordManagerWidget."""
-    # Валидатор пропускает только слова длиной ровно 3 символа
-    validator = lambda s: len(s) == 3
+    def validator(s: str) -> bool:
+        return len(s) == 3
+
     widget = KeywordManagerWidget("Тест", validator=validator)
     qtbot.addWidget(widget)
 
