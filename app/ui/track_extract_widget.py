@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Set, Any
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QThreadPool
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QTreeWidgetItem,
@@ -32,6 +32,7 @@ except ImportError:
 
 from app.infrastructure.mkvprobe_runner import MKVProbeRunner, TrackInfo
 from app.ui.file_list_widget import FileListWidget
+from app.ui.probe_worker import ProbeWorker
 from app.core.constants import MEDIA_CONTAINERS
 
 logger = logging.getLogger(__name__)
@@ -606,23 +607,37 @@ class TrackExtractWidget(QWidget):
         self.filesChanged.emit()
 
     def _on_load_tracks_clicked(self) -> None:
-        """Загрузка дорожек из добавленных файлов."""
+        """Загрузка дорожек из добавленных файлов асинхронно."""
         paths = self._file_list.get_file_paths()
         if not paths:
             return
 
         self._tree.clear()
         self._file_tracks.clear()
+        self._load_tracks_btn.setText("Анализ...")
+        self._load_tracks_btn.setEnabled(False)
 
-        for file_path in paths:
-            try:
-                tracks = self._probe.get_tracks(file_path)
-            except Exception:
-                logger.exception("Ошибка анализа файла '%s'", file_path.name)
-                tracks = []
+        worker = ProbeWorker(paths)
+        worker.signals.fileReady.connect(self._on_file_ready)
+        worker.signals.fileError.connect(self._on_file_error)
+        worker.signals.allFinished.connect(self._on_all_finished)
+        QThreadPool.globalInstance().start(worker)
 
-            self._file_tracks[file_path] = tracks
-            self._add_file_node(file_path, tracks)
+    def _on_file_ready(self, file_path: Path, tracks: List[TrackInfo]) -> None:
+        """Обработчик успешного анализа одного файла."""
+        self._file_tracks[file_path] = tracks
+        self._add_file_node(file_path, tracks)
+
+    def _on_file_error(self, file_path: Path, error_msg: str) -> None:
+        """Обработчик ошибки анализа одного файла."""
+        logger.error("Ошибка анализа файла '%s': %s", file_path.name, error_msg)
+        self._file_tracks[file_path] = []
+        self._add_file_node(file_path, [])
+
+    def _on_all_finished(self) -> None:
+        """Завершение асинхронного анализа."""
+        self._load_tracks_btn.setText("Загрузить дорожки")
+        self._load_tracks_btn.setEnabled(True)
 
         self._tree.expandAll()
         self._collect_dynamic_options()

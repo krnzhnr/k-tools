@@ -4,12 +4,13 @@
 Отображает все загруженные файлы как корневые узлы,
 а их дорожки — как дочерние элементы с чекбоксами.
 Использует нативный TreeWidget из qfluentwidgets.
+Анализ дорожек выполняется асинхронно через ProbeWorker.
 """
 
 import logging
 from pathlib import Path
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QThreadPool
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QTreeWidgetItem,
@@ -29,6 +30,7 @@ from app.infrastructure.mkvprobe_runner import (
     MKVProbeRunner,
     TrackInfo,
 )
+from app.ui.probe_worker import ProbeWorker
 
 logger = logging.getLogger(__name__)
 
@@ -105,10 +107,10 @@ class TrackListWidget(CardWidget):
         layout.addWidget(self._btn_widget)
 
     def load_files(self, file_paths: list[Path]) -> None:
-        """Загрузить дорожки для списка файлов.
+        """Загрузить дорожки для списка файлов асинхронно.
 
-        Анализирует каждый файл через mkvmerge -J
-        и строит дерево: файл → дорожки.
+        Запускает фоновый анализ каждого файла через
+        mkvmerge -J без блокировки UI-потока.
 
         Args:
             file_paths: Список путей к MKV-файлам.
@@ -120,33 +122,76 @@ class TrackListWidget(CardWidget):
             self._tree.setVisible(False)
             self._btn_widget.setVisible(False)
             self._hint_label.setText(
-                "Добавьте файлы и нажмите " "«Загрузить дорожки»"
+                "Добавьте файлы и нажмите "
+                "«Загрузить дорожки»"
             )
             self._hint_label.setVisible(True)
             return
 
+        self._hint_label.setText("Анализ дорожек...")
+        self._hint_label.setVisible(True)
+        self._tree.setVisible(False)
+        self._btn_widget.setVisible(False)
+
+        worker = ProbeWorker(file_paths)
+        worker.signals.fileReady.connect(
+            self._on_file_ready
+        )
+        worker.signals.fileError.connect(
+            self._on_file_error
+        )
+        worker.signals.allFinished.connect(
+            self._on_all_finished
+        )
+        QThreadPool.globalInstance().start(worker)
+
+    def _on_file_ready(
+        self,
+        file_path: Path,
+        tracks: list[TrackInfo],
+    ) -> None:
+        """Обработчик готовности данных по одному файлу.
+
+        Args:
+            file_path: Путь к проанализированному файлу.
+            tracks: Список найденных дорожек.
+        """
+        self._file_tracks[file_path] = tracks
+        self._add_file_node(file_path, tracks)
+
+    def _on_file_error(
+        self,
+        file_path: Path,
+        error_msg: str,
+    ) -> None:
+        """Обработчик ошибки анализа одного файла.
+
+        Args:
+            file_path: Путь к файлу с ошибкой.
+            error_msg: Описание ошибки.
+        """
+        logger.error(
+            "Ошибка анализа файла '%s': %s",
+            file_path.name,
+            error_msg,
+        )
+        self._file_tracks[file_path] = []
+        self._add_file_node(file_path, [])
+
+    def _on_all_finished(self) -> None:
+        """Обработчик завершения анализа всех файлов."""
         self._hint_label.setVisible(False)
         self._tree.setVisible(True)
         self._btn_widget.setVisible(True)
-
-        for file_path in file_paths:
-            try:
-                tracks = self._probe.get_tracks(file_path)
-            except Exception:
-                logger.exception(
-                    "Ошибка анализа файла '%s'",
-                    file_path.name,
-                )
-                tracks = []
-
-            self._file_tracks[file_path] = tracks
-            self._add_file_node(file_path, tracks)
-
         self._tree.expandAll()
         logger.info(
-            "Загружено файлов: %d, " "общее количество дорожек: %d",
-            len(file_paths),
-            sum(len(t) for t in self._file_tracks.values()),
+            "Загружено файлов: %d, "
+            "общее количество дорожек: %d",
+            len(self._file_tracks),
+            sum(
+                len(t)
+                for t in self._file_tracks.values()
+            ),
         )
 
     def _add_file_node(self, file_path: Path, tracks: list[TrackInfo]) -> None:

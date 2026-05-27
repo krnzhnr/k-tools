@@ -11,7 +11,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QThreadPool
 from PyQt6.QtWidgets import (
     QTreeWidgetItem,
     QVBoxLayout,
@@ -33,6 +33,7 @@ from app.infrastructure.mkvprobe_runner import (
     TrackInfo,
 )
 from app.ui.file_list_widget import FileListWidget
+from app.ui.probe_worker import ProbeWorker
 from app.core.constants import (
     VIDEO_EXTENSIONS,
     AUDIO_EXTENSIONS,
@@ -192,14 +193,7 @@ class ReplacementCard(CardWidget):
         probe: MKVProbeRunner,
     ) -> None:
         """Обработать файл-контейнер как источник замен."""
-        if f not in self._probe_cache:
-            try:
-                self._probe_cache[f] = probe.get_tracks(f)
-            except Exception:
-                logger.error("Ошибка анализа замены '%s'", f.name)
-                self._probe_cache[f] = []
-
-        src_tracks = self._probe_cache[f]
+        src_tracks = self._probe_cache.get(f, [])
         relevant_tracks = [
             t for t in src_tracks if t.track_type == target_track.track_type
         ]
@@ -438,7 +432,7 @@ class StreamReplaceWidget(QWidget):
         layout.addWidget(self._replacement_card)
 
     def _on_load_tracks(self) -> None:
-        """Обработчик кнопки «Загрузить дорожки»."""
+        """Обработчик кнопки «Загрузить дорожки» асинхронно."""
         if not self._container_list.files:
             logger.warning("Нет контейнера для анализа")
             return
@@ -448,17 +442,35 @@ class StreamReplaceWidget(QWidget):
 
         self._tree.clear()
         self._tracks.clear()
+        
+        self._load_btn.setText("Анализ...")
+        self._load_btn.setEnabled(False)
 
-        try:
-            self._tracks = self._probe.get_tracks(container)
-        except Exception:
-            logger.exception("Ошибка анализа контейнера '%s'", container.name)
-            self._tracks = []
+        worker = ProbeWorker([container])
+        worker.signals.fileReady.connect(self._on_container_ready)
+        worker.signals.fileError.connect(self._on_container_error)
+        worker.signals.allFinished.connect(self._on_container_all_finished)
+        QThreadPool.globalInstance().start(worker)
 
+    def _on_container_ready(self, file_path: Path, tracks: list[TrackInfo]) -> None:
+        """Готовность контейнера."""
+        self._tracks = tracks
+
+    def _on_container_error(self, file_path: Path, error_msg: str) -> None:
+        """Ошибка контейнера."""
+        logger.error("Ошибка анализа контейнера '%s': %s", file_path.name, error_msg)
+        self._tracks = []
+
+    def _on_container_all_finished(self) -> None:
+        """Окончание анализа контейнера."""
+        self._load_btn.setText("Загрузить дорожки")
+        self._load_btn.setEnabled(True)
+        container = self._container_list.files[0]
+        
         if not self._tracks:
             self._handle_no_tracks()
             return
-
+            
         self._handle_tracks_loaded(container)
 
     def _handle_no_tracks(self) -> None:
@@ -507,7 +519,32 @@ class StreamReplaceWidget(QWidget):
             logger.info("Контейнер очищен, " "дерево дорожек сброшено")
 
     def _on_replacements_changed(self) -> None:
-        """Обновить ComboBox при изменении."""
+        """Обновить ComboBox при изменении асинхронно."""
+        files = self._replacement_list.files
+        container_exts = {".mkv", ".mp4", ".mka", ".m4a", ".mov"}
+        
+        to_probe = [
+            f for f in files 
+            if f.suffix.lower() in container_exts 
+            and f not in self._replacement_card._probe_cache
+        ]
+        
+        if to_probe:
+            worker = ProbeWorker(to_probe)
+            worker.signals.fileReady.connect(self._on_replacement_ready)
+            worker.signals.fileError.connect(self._on_replacement_error)
+            worker.signals.allFinished.connect(self._on_replacements_all_finished)
+            QThreadPool.globalInstance().start(worker)
+        else:
+            self._replacement_card.update_replacement_files(files, self._probe)
+
+    def _on_replacement_ready(self, file_path: Path, tracks: list[TrackInfo]) -> None:
+        self._replacement_card._probe_cache[file_path] = tracks
+        
+    def _on_replacement_error(self, file_path: Path, error_msg: str) -> None:
+        self._replacement_card._probe_cache[file_path] = []
+        
+    def _on_replacements_all_finished(self) -> None:
         files = self._replacement_list.files
         self._replacement_card.update_replacement_files(files, self._probe)
 

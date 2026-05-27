@@ -125,8 +125,8 @@ class FileItemWidget(QWidget):
         elif status == "idle":
             pass
 
-        # Принудительная немедленная перерисовка виджета
-        self.repaint()
+        # Запрашиваем перерисовку
+        self.update()
 
     def set_progress(self, value: float):
         """Установить значение прогресса для файла."""
@@ -148,7 +148,7 @@ class FileItemWidget(QWidget):
             self.progress_anim.setEndValue(target_val)
             self.progress_anim.start()
 
-        self.repaint()
+        self.update()
 
 
 class FileListWidget(ListWidget):
@@ -488,8 +488,8 @@ class FileListWidget(ListWidget):
 
         if widget:
             widget.set_status(status)
-            # Принудительно перерисовываем вьюпорт немедленно
-            self.viewport().repaint()
+            # Запрашиваем перерисовку вьюпорта
+            self.viewport().update()
         else:
             # Поиск по имени, если путь не совпал (полезно при пересоздании)
             for path, widget in self._item_map.items():
@@ -509,7 +509,7 @@ class FileListWidget(ListWidget):
 
         if widget:
             widget.set_progress(value)
-            self.viewport().repaint()
+            self.viewport().update()
 
     def paintEvent(self, event) -> None:
         """Отрисовка placeholder-текста при пустом списке.

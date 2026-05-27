@@ -147,7 +147,7 @@ class MainWindow(FluentWindow):
         """Логирование изменения размера окна."""
         super().resizeEvent(event)
         size = event.size()
-        logger.info(
+        logger.debug(
             "Размер окна изменен пользователем: %dx%d",
             size.width(),
             size.height(),
