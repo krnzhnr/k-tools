@@ -373,19 +373,29 @@ def main() -> None:
         if downloads_dir.exists():
             # Шаблоны для поиска установщиков: KTools_PreRelease_Setup.exe
             # и KTools_v*_setup.exe
-            patterns = ["KTools_PreRelease_Setup.exe", "KTools_v*_setup.exe"]
+            patterns = [
+                "KTools_PreRelease_Setup.exe",
+                "KTools_v*_setup.exe",
+            ]
             for pattern in patterns:
                 for installer in downloads_dir.glob(pattern):
                     try:
                         installer.unlink()
-                        print(
-                            f"[Cleanup] Удален старый установщик: "
-                            f"{installer.name}"
+                        logger.info(
+                            "Успешно удален устаревший файл установщика: %s",
+                            installer.name,
                         )
                     except OSError:
-                        pass
-    except Exception as cleanup_err:
-        print(f"[Cleanup] Ошибка очистки установщиков: {cleanup_err}")
+                        logger.exception(
+                            "Не удалось удалить файл установщика %s из-за "
+                            "системного сбоя ввода-вывода",
+                            installer.name,
+                        )
+    except Exception:
+        logger.exception(
+            "Произошла непредвиденная системная ошибка в процессе очистки "
+            "устаревших файлов установки в папке загрузок"
+        )
 
     # Загрузка настроек темы
     settings = SettingsManager()
