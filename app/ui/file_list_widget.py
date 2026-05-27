@@ -48,8 +48,13 @@ class FileItemWidget(QWidget):
         layout.setContentsMargins(8, 4, 8, 4)
         layout.setSpacing(8)
 
+        from qfluentwidgets import isDarkTheme
+
         self.name_label = BodyLabel(self.file_path.name)
-        self.name_label.setStyleSheet("BodyLabel { font-size: 13px; }")
+        text_color = "#FFFFFF" if isDarkTheme() else "#000000"
+        self.name_label.setStyleSheet(
+            f"font-size: 13px; color: {text_color};"
+        )
 
         self.status_icon = IconWidget(FluentIcon.COMPLETED, self)
         self.status_icon.setFixedSize(16, 16)
