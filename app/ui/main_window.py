@@ -211,9 +211,7 @@ class MainWindow(FluentWindow):
 
         from qfluentwidgets import InfoBar, InfoBarPosition, PushButton
 
-        content_text = (
-            f"Доступна новая версия K-Tools {version}. Хотите обновиться?"
-        )
+        content_text = f"Доступна версия {version}."
 
         def on_info_bar_clicked() -> None:
             if hasattr(self, "_settings_page"):
