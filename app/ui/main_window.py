@@ -3,7 +3,7 @@
 
 import logging
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QDateTime
 from PyQt6.QtGui import QIcon, QMouseEvent
 from PyQt6.QtWidgets import QApplication, QWidget
 from qfluentwidgets import (
@@ -199,6 +199,13 @@ class MainWindow(FluentWindow):
         self, available: bool, version: str, changelog: str, download_url: str
     ) -> None:
         """Хэндлер завершения фоновой автопроверки обновлений."""
+        now_str = QDateTime.currentDateTime().toString("dd.MM.yyyy hh:mm:ss")
+        self._settings_manager.last_check_time = now_str
+        logger.info(
+            "Автоматическая проверка завершена и зафиксирована в: %s",
+            now_str,
+        )
+
         if not available:
             return
 

@@ -14,7 +14,6 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QWidget,
     QHBoxLayout,
-    QLabel,
 )
 from qfluentwidgets import (
     ListWidget,
@@ -24,6 +23,7 @@ from qfluentwidgets import (
     IndeterminateProgressRing,
     ProgressRing,
     IconWidget,
+    BodyLabel,
 )
 from app.core.settings_manager import SettingsManager
 from app.core.constants import STATUS_COLORS
@@ -48,8 +48,8 @@ class FileItemWidget(QWidget):
         layout.setContentsMargins(8, 4, 8, 4)
         layout.setSpacing(8)
 
-        self.name_label = QLabel(self.file_path.name)
-        self.name_label.setStyleSheet("font-size: 13px;")
+        self.name_label = BodyLabel(self.file_path.name)
+        self.name_label.setStyleSheet("BodyLabel { font-size: 13px; }")
 
         self.status_icon = IconWidget(FluentIcon.COMPLETED, self)
         self.status_icon.setFixedSize(16, 16)

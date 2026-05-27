@@ -30,6 +30,7 @@ class SettingsManager(metaclass=SingletonMeta):
                 str(settings_path), QSettings.Format.IniFormat
             )
             logger.info("Загружены настройки из: %s", settings_path)
+            self._migrate_old_sections()
         except Exception as init_err:
             logger.error(
                 "Критическая ошибка инициализации QSettings (%s): %s",
@@ -228,6 +229,7 @@ class SettingsManager(metaclass=SingletonMeta):
             registry: Реестр скриптов (ScriptRegistry).
         """
         import os
+        import json
 
         # 1. Общие настройки
         gen_defaults = {
@@ -253,9 +255,18 @@ class SettingsManager(metaclass=SingletonMeta):
             for script in registry.scripts:
                 group = self._get_safe_script_name(script.name)
                 for field in script.settings_schema:
+                    # Исключаем статические заголовки/заглушки из файла
+                    from app.core.abstract_script import SettingType
+
+                    if field.setting_type == SettingType.SUBTITLE:
+                        continue
+
                     full_key = f"{group}/{field.key}"
                     if not self._settings.contains(full_key):
-                        self._settings.setValue(full_key, field.default)
+                        val = field.default
+                        if isinstance(val, (list, dict)):
+                            val = json.dumps(val, ensure_ascii=False)
+                        self._settings.setValue(full_key, val)
 
             self._settings.sync()
         logger.info(
@@ -269,12 +280,98 @@ class SettingsManager(metaclass=SingletonMeta):
         Заменяет слэши и другие спецсимволы, которые QSettings
         может интерпретировать как разделители подгрупп в INI.
         """
-        # Заменяем / и \ на нижнее подчеркивание
-        safe_name = script_name.replace("/", "_").replace("\\", "_")
+        # Словарь перевода русских названий в читаемые ASCII-имена
+        translation_map = {
+            "ASS/SRT → VTT": "ASS_SRT_to_VTT",
+            "Транскодирование аудио": "Audio_Transcoding",
+            "Даунмикс в Stereo": "Audio_Downmix_to_Stereo",
+            "Изменение скорости аудио": "Audio_Speed_Change",
+            "Декомпозиция каналов": "Channel_Decomposition",
+            "Ремуксинг": "Remuxing",
+            "Очистка метаданных": "Metadata_Cleanup",
+            "Муксинг": "Muxing",
+            "Управление потоками": "Stream_Management",
+            "Замена потоков": "Stream_Replacement",
+            "Демуксинг": "Demuxing",
+            "Видео-процессор": "Video_Processor",
+        }
+
+        # Получаем безопасное английское имя
+        safe_name = translation_map.get(script_name, script_name)
+        safe_name = (
+            safe_name.replace("/", "_")
+            .replace("\\", "_")
+            .replace(" ", "_")
+        )
         return f"Script_{safe_name}"
 
+    def _migrate_old_sections(self) -> None:
+        """Перенести настройки из нечитаемых секций в новые ASCII."""
+        old_to_new = {
+            "Script_ASS/SRT → VTT": "Script_ASS_SRT_to_VTT",
+            "Script_Транскодирование аудио": "Script_Audio_Transcoding",
+            "Script_Даунмикс в Stereo": "Script_Audio_Downmix_to_Stereo",
+            "Script_Изменение скорости аудио": "Script_Audio_Speed_Change",
+            "Script_Декомпозиция каналов": "Script_Channel_Decomposition",
+            "Script_Ремуксинг": "Script_Remuxing",
+            "Script_Очистка метаданных": "Script_Metadata_Cleanup",
+            "Script_Муксинг": "Script_Muxing",
+            "Script_Управление потоками": "Script_Stream_Management",
+            "Script_Замена потоков": "Script_Stream_Replacement",
+            "Script_Демуксинг": "Script_Demuxing",
+            "Script_Видео-процессор": "Script_Video_Processor",
+        }
+
+        with self._lock:
+            all_keys = self._settings.allKeys()
+
+            # 1. Сначала очищаем поврежденные ключи, мусор и плейсхолдеры
+            for k in list(all_keys):
+                if (
+                    "SRT%20%U" in k
+                    or "%U04" in k
+                    or "\\" in k
+                    or k.startswith("Script_ASS/")
+                    or "sub_filters_placeholder" in k
+                ):
+                    self._settings.remove(k)
+
+            # Перечитываем ключи после первичной очистки
+            all_keys = self._settings.allKeys()
+
+            # 2. Выполняем плоскую миграцию по абсолютным путям
+            for old_group, new_group in old_to_new.items():
+                prefix = f"{old_group}/"
+                matching_keys = [
+                    k for k in all_keys if k.startswith(prefix)
+                ]
+
+                if matching_keys:
+                    logger.info(
+                        "Миграция настроек из '%s' в '%s'...",
+                        old_group,
+                        new_group,
+                    )
+                    for full_key in matching_keys:
+                        rel_key = full_key[len(prefix):]
+                        val = self._settings.value(full_key)
+
+                        # Записываем в новую группу
+                        self._settings.setValue(
+                            f"{new_group}/{rel_key}", val
+                        )
+
+                        # Удаляем старый ключ
+                        self._settings.remove(full_key)
+
+            self._settings.sync()
+
     def get_script_setting(
-        self, script_name: str, key: str, default: Any, type_hint: Any = None
+        self,
+        script_name: str,
+        key: str,
+        default: Any,
+        type_hint: Any = None,
     ) -> Any:
         """Получить настройку для конкретного скрипта.
 
@@ -284,13 +381,31 @@ class SettingsManager(metaclass=SingletonMeta):
             default: Значение по умолчанию.
             type_hint: Ожидаемый тип данных (int, bool, str и т.д.).
         """
+        import json
+
         group = self._get_safe_script_name(script_name)
         with self._lock:
-            if type_hint is not None:
-                return self._settings.value(
-                    f"{group}/{key}", default, type=type_hint
-                )
-            return self._settings.value(f"{group}/{key}", default)
+            val = self._settings.value(f"{group}/{key}", None)
+            if val is not None:
+                # Проверяем, является ли сохраненное значение JSON-строкой
+                if (
+                    isinstance(val, str)
+                    and (val.startswith("[") or val.startswith("{"))
+                ):
+                    try:
+                        return json.loads(val)
+                    except Exception:
+                        pass
+
+                if type_hint is not None:
+                    try:
+                        if type_hint is bool:
+                            return str(val).lower() in ("true", "1")
+                        return type_hint(val)
+                    except Exception:
+                        pass
+                return val
+            return default
 
     def set_script_setting(
         self, script_name: str, key: str, value: Any
@@ -302,9 +417,16 @@ class SettingsManager(metaclass=SingletonMeta):
             key: Ключ настройки.
             value: Значение для сохранения.
         """
+        import json
+
         group = self._get_safe_script_name(script_name)
         with self._lock:
-            self._settings.setValue(f"{group}/{key}", value)
+            # Сериализуем сложные структуры в JSON для сохранения читаемости
+            if isinstance(value, (list, dict)):
+                serialized_val = json.dumps(value, ensure_ascii=False)
+                self._settings.setValue(f"{group}/{key}", serialized_val)
+            else:
+                self._settings.setValue(f"{group}/{key}", value)
             self._settings.sync()
 
     def sync(self) -> None:

@@ -71,8 +71,6 @@ class SettingsPage(ScrollArea):
         self._layout.addWidget(self._updates_group)
         self._layout.addWidget(self._maintenance_group)
 
-        self._add_version_label()
-
     def _init_general_group(self) -> None:
         """Инициализация группы общих настроек."""
         self._general_group = SettingCardGroup(
@@ -412,7 +410,11 @@ class SettingsPage(ScrollArea):
             self.tr("Обновления"), self._scroll_widget
         )
 
-        # 1. Автоматическая проверка
+        # 1. Текущая версия приложения
+        self._version_card = self._create_version_card()
+        self._updates_group.addSettingCard(self._version_card)
+
+        # 2. Автоматическая проверка
         self._auto_updates_card = CardWidget(self._updates_group)
         self._auto_updates_card.setMinimumHeight(70)
         auto_layout = QHBoxLayout(self._auto_updates_card)
@@ -451,7 +453,7 @@ class SettingsPage(ScrollArea):
         auto_layout.addWidget(self._auto_updates_switch)
         self._updates_group.addSettingCard(self._auto_updates_card)
 
-        # 2. Включать пре-релизы
+        # 3. Включать пре-релизы
         self._pre_releases_card = CardWidget(self._updates_group)
         self._pre_releases_card.setMinimumHeight(70)
         pre_layout = QHBoxLayout(self._pre_releases_card)
@@ -490,7 +492,7 @@ class SettingsPage(ScrollArea):
         pre_layout.addWidget(self._pre_releases_switch)
         self._updates_group.addSettingCard(self._pre_releases_card)
 
-        # 3. Ручная проверка
+        # 4. Ручная проверка
         self._check_now_card = CardWidget(self._updates_group)
         self._check_now_card.setMinimumHeight(70)
         check_layout = QHBoxLayout(self._check_now_card)
@@ -599,6 +601,17 @@ class SettingsPage(ScrollArea):
         w.yesButton.setText(self.tr("ОК"))
         w.cancelButton.hide()
         w.exec()
+
+    def showEvent(self, event) -> None:
+        """Обновление динамических данных при отображении страницы."""
+        super().showEvent(event)
+        last_t = self._settings_manager.last_check_time
+        last_check_str = (
+            f"Последняя проверка: {last_t}"
+            if last_t
+            else "Проверка ещё не проводилась"
+        )
+        self._last_check_label.setText(self.tr(last_check_str))
 
     def timerEvent(self, event: Any) -> None:
         """Закрытие подсказок по таймеру."""
@@ -738,26 +751,46 @@ class SettingsPage(ScrollArea):
         self._downloader.finished.connect(self._downloader.deleteLater)
         self._downloader.start()
 
-    def _add_version_label(self) -> None:
-        """Добавление лейбла с версией приложения."""
-        self._version_layout = QHBoxLayout()
-        self._version_layout.setContentsMargins(0, 20, 0, 0)
-        self._version_layout.addStretch(1)
+    def _create_version_card(self) -> CardWidget:
+        """Создать карточку с информацией о текущей версии приложения."""
+        card = CardWidget(self._updates_group)
+        card.setMinimumHeight(70)
+        card.setCursor(Qt.CursorShape.ArrowCursor)
+        layout = QHBoxLayout(card)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(16)
 
-        v_text = get_app_version()
-        label_text = (
-            f"K-Tools {v_text}"
-            if v_text != "Dev Mode"
-            else f"K-Tools ({v_text})"
+        # Добавляем информационную иконку
+        icon = IconWidget(FluentIcon.INFO, card)
+        icon.setFixedSize(16, 16)
+        layout.addWidget(icon)
+
+        # Текстовый блок описания
+        text_layout = QVBoxLayout()
+        text_layout.setSpacing(2)
+        title = BodyLabel(self.tr("Версия приложения"), card)
+        desc = CaptionLabel(
+            self.tr("Текущая установленная версия K-Tools"), card
         )
-        self._version_label = CaptionLabel(label_text, self._scroll_widget)
-        self._version_label.setStyleSheet("color: rgba(255, 255, 255, 0.4)")
-        self._version_layout.addWidget(self._version_label)
-        self._version_layout.addStretch(1)
+        desc.setStyleSheet("color: rgba(255, 255, 255, 0.6)")
+        text_layout.addWidget(title)
+        text_layout.addWidget(desc)
+        layout.addLayout(text_layout)
+        layout.addStretch(1)
 
-        self._version_container = QWidget(self._scroll_widget)
-        self._version_container.setLayout(self._version_layout)
-        self._layout.addWidget(self._version_container)
+        # Номер версии в правой части
+        v_text = get_app_version()
+        self._version_val_label = BodyLabel(v_text, card)
+        self._version_val_label.setStyleSheet(
+            "BodyLabel { color: rgba(255, 255, 255, 0.6); "
+            "font-weight: bold; }"
+        )
+        layout.addWidget(self._version_val_label)
+        logger.info(
+            "Создана карточка версии приложения с текущим значением: %s",
+            v_text,
+        )
+        return card
 
     def _on_overwrite_changed(self, is_checked: bool) -> None:
         """Обработка изменения состояния чекбокса перезаписи."""
