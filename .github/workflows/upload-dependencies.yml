@@ -30,8 +30,8 @@ jobs:
             $srcPath = Join-Path "bin" $srcDir
             if (Test-Path $srcPath) {
                 Write-Host "Архивация папки $srcPath в temp_archives/$archiveName"
-                # Архивируем родительскую папку целиком, чтобы сохранить структуру внутри zip
-                Compress-Archive -Path $srcPath -DestinationPath "temp_archives/$archiveName" -Force
+                # Архивируем содержимое папки, чтобы файлы были в корне zip
+                Compress-Archive -Path "$srcPath\*" -DestinationPath "temp_archives/$archiveName" -Force
             } else {
                 Write-Host "Предупреждение: Папка $srcPath не найдена"
             }
