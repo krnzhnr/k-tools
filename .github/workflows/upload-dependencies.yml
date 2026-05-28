@@ -2,6 +2,8 @@ name: Upload Dependencies to GitHub Release
 
 on:
   push:
+    branches:
+      - main
     paths:
       - 'bin/**'
   workflow_dispatch:
