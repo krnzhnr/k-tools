@@ -77,7 +77,7 @@ class ReplacementCard(CardWidget):
         self._layout.addWidget(title)
 
         self._hint = CaptionLabel(
-            "Загрузите дорожки контейнера, " "чтобы назначить замены",
+            "Загрузите дорожки контейнера, чтобы назначить замены",
             self,
         )
         self._hint.setStyleSheet("color: rgba(255, 255, 255, 0.5);")
@@ -97,7 +97,7 @@ class ReplacementCard(CardWidget):
         # Хранение: track_id → TrackInfo
         self._tracks: dict[int, TrackInfo] = {}
 
-        logger.info("Карточка назначений замен " "инициализирована")
+        logger.info("Карточка назначений замен инициализирована")
 
     def set_tracks(self, tracks: list[TrackInfo]) -> None:
         """Установить дорожки контейнера.
@@ -181,9 +181,8 @@ class ReplacementCard(CardWidget):
         if f.suffix.lower() in container_exts:
             self._process_replacement_container(combo, f, target_track, probe)
         else:
-            combo.addItem(
-                f.name, userData=json.dumps({"path": str(f), "src_id": 0})
-            )
+            data = json.dumps({"path": str(f), "src_id": 0})
+            combo.addItem(f.name, userData=data)
 
     def _process_replacement_container(
         self,
@@ -207,16 +206,16 @@ class ReplacementCard(CardWidget):
                     label_parts.append(f", {st.name}")
                 label_parts.append(")")
 
+                data = json.dumps(
+                    {"path": str(f), "src_id": st.track_id}
+                )
                 combo.addItem(
                     "".join(label_parts),
-                    userData=json.dumps(
-                        {"path": str(f), "src_id": st.track_id}
-                    ),
+                    userData=data,
                 )
         else:
-            combo.addItem(
-                f.name, userData=json.dumps({"path": str(f), "src_id": 0})
-            )
+            data = json.dumps({"path": str(f), "src_id": 0})
+            combo.addItem(f.name, userData=data)
 
     def get_replacements(
         self,
@@ -356,7 +355,7 @@ class StreamReplaceWidget(QWidget):
         self._probe = MKVProbeRunner()
         self._tracks: list[TrackInfo] = []
         self._init_ui()
-        logger.info("Виджет подмены потоков " "инициализирован")
+        logger.info("Виджет подмены потоков инициализирован")
 
     def _init_ui(self) -> None:
         """Настройка пользовательского интерфейса."""
@@ -373,9 +372,10 @@ class StreamReplaceWidget(QWidget):
 
     def _init_container_section(self, layout: QVBoxLayout) -> None:
         """Инициализировать секцию выбора исходного контейнера."""
-        layout.addWidget(
-            StrongBodyLabel("Исходный файл (MKV / MP4 / MOV)", self)
+        label = StrongBodyLabel(
+            "Исходный файл (MKV / MP4 / MOV)", self
         )
+        layout.addWidget(label)
         self._container_list = FileListWidget(
             allowed_extensions=list(VIDEO_CONTAINERS),
             context_name="Подмена потоков (исходник)",
@@ -442,7 +442,7 @@ class StreamReplaceWidget(QWidget):
 
         self._tree.clear()
         self._tracks.clear()
-        
+
         self._load_btn.setText("Анализ...")
         self._load_btn.setEnabled(False)
 
@@ -450,15 +450,23 @@ class StreamReplaceWidget(QWidget):
         worker.signals.fileReady.connect(self._on_container_ready)
         worker.signals.fileError.connect(self._on_container_error)
         worker.signals.allFinished.connect(self._on_container_all_finished)
-        QThreadPool.globalInstance().start(worker)
+        pool = QThreadPool.globalInstance()
+        assert pool is not None
+        pool.start(worker)
 
-    def _on_container_ready(self, file_path: Path, tracks: list[TrackInfo]) -> None:
+    def _on_container_ready(
+        self, file_path: Path, tracks: list[TrackInfo]
+    ) -> None:
         """Готовность контейнера."""
         self._tracks = tracks
 
     def _on_container_error(self, file_path: Path, error_msg: str) -> None:
         """Ошибка контейнера."""
-        logger.error("Ошибка анализа контейнера '%s': %s", file_path.name, error_msg)
+        logger.error(
+            "Ошибка анализа контейнера '%s': %s",
+            file_path.name,
+            error_msg,
+        )
         self._tracks = []
 
     def _on_container_all_finished(self) -> None:
@@ -466,11 +474,11 @@ class StreamReplaceWidget(QWidget):
         self._load_btn.setText("Загрузить дорожки")
         self._load_btn.setEnabled(True)
         container = self._container_list.files[0]
-        
+
         if not self._tracks:
             self._handle_no_tracks()
             return
-            
+
         self._handle_tracks_loaded(container)
 
     def _handle_no_tracks(self) -> None:
@@ -511,39 +519,46 @@ class StreamReplaceWidget(QWidget):
             self._tree.clear()
             self._tracks.clear()
             self._track_hint.setText(
-                "Добавьте файл и нажмите " "«Загрузить дорожки»"
+                "Добавьте файл и нажмите «Загрузить дорожки»"
             )
             self._track_hint.setVisible(True)
             self._tree.setVisible(False)
             self._replacement_card.clear()
-            logger.info("Контейнер очищен, " "дерево дорожек сброшено")
+            logger.info("Контейнер очищен, дерево дорожек сброшено")
 
     def _on_replacements_changed(self) -> None:
         """Обновить ComboBox при изменении асинхронно."""
         files = self._replacement_list.files
         container_exts = {".mkv", ".mp4", ".mka", ".m4a", ".mov"}
-        
+
         to_probe = [
-            f for f in files 
-            if f.suffix.lower() in container_exts 
+            f
+            for f in files
+            if f.suffix.lower() in container_exts
             and f not in self._replacement_card._probe_cache
         ]
-        
+
         if to_probe:
             worker = ProbeWorker(to_probe)
             worker.signals.fileReady.connect(self._on_replacement_ready)
             worker.signals.fileError.connect(self._on_replacement_error)
-            worker.signals.allFinished.connect(self._on_replacements_all_finished)
-            QThreadPool.globalInstance().start(worker)
+            worker.signals.allFinished.connect(
+                self._on_replacements_all_finished
+            )
+            pool = QThreadPool.globalInstance()
+            assert pool is not None
+            pool.start(worker)
         else:
             self._replacement_card.update_replacement_files(files, self._probe)
 
-    def _on_replacement_ready(self, file_path: Path, tracks: list[TrackInfo]) -> None:
+    def _on_replacement_ready(
+        self, file_path: Path, tracks: list[TrackInfo]
+    ) -> None:
         self._replacement_card._probe_cache[file_path] = tracks
-        
+
     def _on_replacement_error(self, file_path: Path, error_msg: str) -> None:
         self._replacement_card._probe_cache[file_path] = []
-        
+
     def _on_replacements_all_finished(self) -> None:
         files = self._replacement_list.files
         self._replacement_card.update_replacement_files(files, self._probe)

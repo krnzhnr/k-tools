@@ -69,6 +69,11 @@ class VideoProcessorScript(AbstractScript):
         return list(VIDEO_CONTAINERS)
 
     @property
+    def required_dependencies(self) -> list[str]:
+        """Зависимости: FFmpeg."""
+        return ["ffmpeg"]
+
+    @property
     def settings_schema(self) -> list[SettingField]:
         """Схема настроек скрипта с разделением по группам."""
         default_encoder = (

@@ -179,6 +179,10 @@ class TrackExtractWidget(QWidget):
         tree_layout.setContentsMargins(16, 16, 16, 16)
 
         self._tree = TreeWidget(self._tree_card)
+
+        # Оптимизация шага прокрутки для повышения отзывчивости интерфейса
+        self._tree.verticalScrollBar().setSingleStep(20)
+
         self._tree.setHeaderHidden(True)
         self._tree.setBorderVisible(False)
         self._tree.itemChanged.connect(self._on_tree_item_changed)
@@ -621,7 +625,9 @@ class TrackExtractWidget(QWidget):
         worker.signals.fileReady.connect(self._on_file_ready)
         worker.signals.fileError.connect(self._on_file_error)
         worker.signals.allFinished.connect(self._on_all_finished)
-        QThreadPool.globalInstance().start(worker)
+        pool = QThreadPool.globalInstance()
+        if pool is not None:
+            pool.start(worker)
 
     def _on_file_ready(self, file_path: Path, tracks: List[TrackInfo]) -> None:
         """Обработчик успешного анализа одного файла."""
@@ -630,7 +636,9 @@ class TrackExtractWidget(QWidget):
 
     def _on_file_error(self, file_path: Path, error_msg: str) -> None:
         """Обработчик ошибки анализа одного файла."""
-        logger.error("Ошибка анализа файла '%s': %s", file_path.name, error_msg)
+        logger.error(
+            "Ошибка анализа файла '%s': %s", file_path.name, error_msg
+        )
         self._file_tracks[file_path] = []
         self._add_file_node(file_path, [])
 

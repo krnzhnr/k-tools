@@ -73,6 +73,11 @@ class StreamReplacerScript(AbstractScript):
         return [".mkv", ".mp4"]
 
     @property
+    def required_dependencies(self) -> list[str]:
+        """Зависимости: FFmpeg и MKVToolNix."""
+        return ["ffmpeg", "mkvtoolnix"]
+
+    @property
     def settings_schema(self) -> list[SettingField]:
         """Схема настроек скрипта."""
         from app.core.abstract_script import SettingField

@@ -79,6 +79,10 @@ class TrackListWidget(CardWidget):
 
         # Нативное дерево qfluentwidgets
         self._tree = TreeWidget(self)
+
+        # Оптимизация шага прокрутки для повышения отзывчивости интерфейса
+        self._tree.verticalScrollBar().setSingleStep(20)
+
         self._tree.setHeaderHidden(True)
         self._tree.setBorderVisible(False)
         self._tree.setVisible(False)
@@ -143,7 +147,9 @@ class TrackListWidget(CardWidget):
         worker.signals.allFinished.connect(
             self._on_all_finished
         )
-        QThreadPool.globalInstance().start(worker)
+        pool = QThreadPool.globalInstance()
+        if pool is not None:
+            pool.start(worker)
 
     def _on_file_ready(
         self,

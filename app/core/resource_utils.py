@@ -19,8 +19,13 @@ def get_resource_path(relative_path: str) -> str:
     Returns:
         Абсолютный путь к файлу (в виде строки для совместимости с API).
     """
-    # 1. Проверяем режим PyInstaller
-    base_path = Path(getattr(sys, "_MEIPASS", os.path.abspath(".")))
+    # 1. Проверяем режим упаковки (PyInstaller или Nuitka)
+    if hasattr(sys, "_MEIPASS"):
+        base_path = Path(sys._MEIPASS)  # type: ignore
+    elif getattr(sys, "frozen", False):
+        base_path = Path(sys.executable).parent.resolve()
+    else:
+        base_path = Path(os.path.abspath("."))
     rel_p = Path(relative_path)
 
     # 2. Формируем прямой путь (для сборки, где всё в куче)

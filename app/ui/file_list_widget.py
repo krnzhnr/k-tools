@@ -179,6 +179,10 @@ class FileListWidget(ListWidget):
             parent: Родительский виджет.
         """
         super().__init__(parent)
+
+        # Оптимизация шага прокрутки для повышения отзывчивости интерфейса
+        self.verticalScrollBar().setSingleStep(20)
+
         self._allowed_extensions: list[str] = allowed_extensions or []
         self._context_name = context_name
         self._file_paths: list[Path] = []

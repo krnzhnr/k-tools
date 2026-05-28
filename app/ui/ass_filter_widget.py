@@ -988,6 +988,9 @@ class AssFilterWidget(QWidget):
         # Возвращаем TreeView, но "убиваем" лагающий сглаживатель скролла
         self._preview_view = TreeView(self._preview_panel)
 
+        # Оптимизация шага прокрутки для повышения отзывчивости интерфейса
+        self._preview_view.verticalScrollBar().setSingleStep(30)
+
         # моментальную прокрутку колесиком мыши, игнорируя сломанную анимацию
         self._preview_view.wheelEvent = lambda e: QTreeView.wheelEvent(
             self._preview_view, e

@@ -70,6 +70,11 @@ class StreamManagerScript(AbstractScript):
         return list(MEDIA_CONTAINERS)
 
     @property
+    def required_dependencies(self) -> list[str]:
+        """Зависимости: FFmpeg и MKVToolNix."""
+        return ["ffmpeg", "mkvtoolnix"]
+
+    @property
     def settings_schema(self) -> list[SettingField]:
         """Схема настроек скрипта."""
         return [

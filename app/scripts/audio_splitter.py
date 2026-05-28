@@ -70,6 +70,11 @@ class AudioSplitterScript(AbstractScript):
         return list(AUDIO_EXTENSIONS | VIDEO_CONTAINERS)
 
     @property
+    def required_dependencies(self) -> list[str]:
+        """Зависимости: eac3to и FFmpeg."""
+        return ["eac3to", "ffmpeg"]
+
+    @property
     def settings_schema(self) -> list[SettingField]:
         """Схема настроек скрипта."""
         return [

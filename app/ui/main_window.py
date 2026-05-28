@@ -3,7 +3,7 @@
 
 import logging
 
-from PyQt6.QtCore import Qt, QDateTime
+from PyQt6.QtCore import Qt, QDateTime, QObject, QEvent
 from PyQt6.QtGui import QIcon, QMouseEvent
 from PyQt6.QtWidgets import QApplication, QWidget
 from qfluentwidgets import (
@@ -23,9 +23,51 @@ from app.ui.work_panel import ScriptPage
 from app.ui.settings_page import SettingsPage
 from app.ui.home_page import HomePage
 from app.ui.log_page import LogPage
+from app.ui.dependency_setup_page import DependencySetupPage
+from app.core.dependency_manager import DependencyManager
 from app.core.settings_manager import SettingsManager
 
 logger = logging.getLogger(__name__)
+
+# Безопасный глобальный патч класса Flyout из библиотеки QFluentWidgets.
+# В Nuitka-сборке анимация fadeOut на windowOpacity у Flyout вызывает Segfault
+# при одновременной смене страниц stackedWidget.
+# Мы заменяем проигрывание анимации на мгновенное скрытие и закрытие.
+try:
+    from qfluentwidgets.components.widgets.flyout import Flyout
+    from PyQt6.QtGui import QCloseEvent
+
+    def _safe_fade_out(self) -> None:
+        """Безопасное скрытие всплывающего меню без анимации.
+
+        Использует отложенный вызов для корректного завершения событий мыши
+        в событийном цикле Qt перед скрытием виджета.
+        """
+        from PyQt6.QtCore import QTimer
+
+        # Скрываем и закрываем меню с безопасной задержкой в 50 мс.
+        # Это дает обработчикам событий мыши в Qt полностью завершиться.
+        QTimer.singleShot(50, lambda: (self.hide(), self.close()))
+
+    def _safe_close_event(self, e: QCloseEvent) -> None:
+        """Безопасная обработка закрытия всплывающего меню.
+
+        Исключает вызов deleteLater(), предотвращая асинхронное
+        уничтожение C++ объекта во время смены страниц интерфейса,
+        что полностью защищает приложение от Segfault в Nuitka.
+        """
+        e.accept()
+        self.closed.emit()
+
+    Flyout.fadeOut = _safe_fade_out
+    Flyout.closeEvent = _safe_close_event
+    logger.info(
+        "Глобальный патч Flyout (fadeOut и closeEvent) успешно применен."
+    )
+except Exception:
+    logger.exception(
+        "Не удалось применить глобальный патч Flyout."
+    )
 
 
 class MainWindow(FluentWindow):
@@ -58,7 +100,7 @@ class MainWindow(FluentWindow):
         self._settings_manager = SettingsManager()
         self._log_page: LogPage | None = None
 
-        # DrillIn-анимация переходов
+        # Включаем DrillIn-анимацию переходов
         self._replace_stacked_view()
 
         self._setup_window()
@@ -69,6 +111,12 @@ class MainWindow(FluentWindow):
         )
         self._home_page.scriptRequested.connect(self._on_script_requested)
 
+        # Инициализация страницы управления зависимостями
+        self._dependency_page = DependencySetupPage(self)
+        self._dependency_page.dependenciesChanged.connect(
+            self._on_dependencies_changed
+        )
+
         self._setup_navigation()
 
         logger.info(
@@ -77,6 +125,10 @@ class MainWindow(FluentWindow):
             len(registry),
             force_logs_tab,
         )
+
+        app_inst = QApplication.instance()
+        if app_inst is not None:
+            app_inst.installEventFilter(self)
 
     def _replace_stacked_view(self) -> None:
         """Замена PopUp-анимации на DrillIn."""
@@ -108,7 +160,18 @@ class MainWindow(FluentWindow):
                 bar = widget.verticalScrollBar()
                 if bar is not None:
                     bar.setValue(0)
-            sw.view.setCurrentWidget(widget, duration=duration)
+
+            # Отложенный вызов переключения для избежания Segfault в Nuitka.
+            # Позволяет Popup-меню qfluentwidgets корректно закрыться и
+            # удалиться ДО того, как DrillIn-анимация начнет менять
+            # структуру виджетов.
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(
+                10,
+                lambda: sw.view.setCurrentWidget(
+                    widget, duration=duration
+                ),
+            )
 
         def _set_current_index(
             index: int,
@@ -154,23 +217,81 @@ class MainWindow(FluentWindow):
         )
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
-        """Обработка нажатий кнопок мыши для навигации.
+        """Обработка нажатия кнопок мыши для навигации.
 
         Args:
             event: Событие мыши.
         """
         if event.button() == Qt.MouseButton.XButton1:
             if self.navigationInterface.panel.returnButton.isEnabled():
-                logger.info("Навигация назад по кнопке мыши")
+                logger.info(
+                    "Нажата кнопка мыши XButton1: "
+                    "запуск перехода назад."
+                )
                 self.navigationInterface.panel.returnButton.click()
         elif event.button() == Qt.MouseButton.XButton2:
-            # Навигация вперед (если будет реализована в будущем)
-            logger.debug("Нажата кнопка навигации вперед")
+            logger.debug("Нажата кнопка навигации вперед.")
 
         super().mousePressEvent(event)
 
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        """Обработка отпускания кнопок мыши для навигации.
+
+        Args:
+            event: Событие мыши.
+        """
+        if event.button() == Qt.MouseButton.XButton1:
+            if self.navigationInterface.panel.returnButton.isEnabled():
+                logger.info(
+                    "Отпущена кнопка мыши XButton1: "
+                    "запуск перехода назад."
+                )
+                self.navigationInterface.panel.returnButton.click()
+        elif event.button() == Qt.MouseButton.XButton2:
+            logger.debug("Отпущена кнопка навигации вперед.")
+
+        super().mouseReleaseEvent(event)
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        """Глобальный фильтр событий для навигации по кнопкам мыши.
+
+        Перехватывает нажатия и отпускания боковых кнопок мыши
+        (XButton1/XButton2) во всем приложении до того, как они будут
+        поглощены интерактивными виджетами (такими как таблицы
+        муксинга или списки файлов).
+        """
+        if (
+            event.type() in (
+                QEvent.Type.MouseButtonPress,
+                QEvent.Type.MouseButtonRelease,
+            )
+            and isinstance(event, QMouseEvent)
+        ):
+            if event.button() == Qt.MouseButton.XButton1:
+                if self.navigationInterface.panel.returnButton.isEnabled():
+                    logger.info(
+                        "Перехвачено глобальное событие навигации "
+                        "назад по кнопке мыши (тип: %s).",
+                        event.type(),
+                    )
+                    self.navigationInterface.panel.returnButton.click()
+                    return True
+            elif event.button() == Qt.MouseButton.XButton2:
+                logger.debug(
+                    "Перехвачено глобальное событие навигации "
+                    "вперед по кнопке мыши (тип: %s).",
+                    event.type(),
+                )
+                return True
+
+        return super().eventFilter(watched, event)
+
     def showEvent(self, event) -> None:
-        """Подгонка layout при первом показе окна."""
+        """Подгонка layout при первом показе окна.
+
+        Args:
+            event: Объект события.
+        """
         super().showEvent(event)
         if not self._shown:
             self._shown = True
@@ -180,6 +301,55 @@ class MainWindow(FluentWindow):
             )
             logger.info("Layout обновлён при первом показе")
             self._start_auto_check_updates()
+
+            # Автоматически перенаправляем на зависимости при первом старте,
+            # если чего-то не хватает
+            if DependencyManager().has_any_missing():
+                logger.info(
+                    "Обнаружены недостающие зависимости при запуске. "
+                    "Переключение на страницу установки зависимостей."
+                )
+                self.switchTo(self._dependency_page)
+
+    def _on_dependencies_changed(self) -> None:
+        """Обработчик изменения состояния внешних зависимостей.
+
+        Обновляет доступность карточек на главной странице,
+        навигационных пунктов в меню и баннеров в открытых страницах скриптов.
+        """
+        logger.info(
+            "Статус зависимостей изменился. Обновление интерфейса..."
+        )
+        self._home_page.refresh_availability()
+        self._update_navigation_availability()
+
+        current_widget = self.stackedWidget.currentWidget()
+        if hasattr(current_widget, "check_dependencies"):
+            current_widget.check_dependencies()
+
+    def _update_navigation_availability(self) -> None:
+        """Обновить доступность навигационных пунктов скриптов."""
+        dep_mgr = DependencyManager()
+
+        for page in self._script_pages.values():
+            script = page.script
+            is_available = dep_mgr.is_script_available(
+                script.required_dependencies
+            )
+
+            route_key = page.objectName()
+            panel = self.navigationInterface.panel
+
+            if route_key in panel.items:
+                nav_item = panel.items[route_key]
+                if nav_item.widget:
+                    nav_item.widget.setEnabled(is_available)
+                    if not is_available:
+                        nav_item.widget.setStyleSheet(
+                            "color: rgba(255, 255, 255, 0.3);"
+                        )
+                    else:
+                        nav_item.widget.setStyleSheet("")
 
     def _start_auto_check_updates(self) -> None:
         """Запуск фоновой проверки обновлений при запуске."""
@@ -209,13 +379,21 @@ class MainWindow(FluentWindow):
         if not available:
             return
 
+        # Переключаем кнопку в настройках в режим скачивания
+        if hasattr(self, "_settings_page"):
+            self._settings_page.set_update_available(
+                version, download_url
+            )
+
         from qfluentwidgets import InfoBar, InfoBarPosition, PushButton
 
         content_text = f"Доступна версия {version}."
 
         def on_info_bar_clicked() -> None:
+            """Переход в настройки с прокруткой к кнопке скачивания."""
             if hasattr(self, "_settings_page"):
                 self.switchTo(self._settings_page)
+                self._settings_page.scroll_to_download_with_tip()
 
         bar = InfoBar.info(
             title="Доступно обновление",
@@ -226,7 +404,7 @@ class MainWindow(FluentWindow):
             duration=10000,
             parent=self,
         )
-        btn = PushButton(self.tr("Настройки"), bar)
+        btn = PushButton(self.tr("Скачать"), bar)
         btn.setFixedWidth(100)
         btn.clicked.connect(on_info_bar_clicked)
         btn.clicked.connect(bar.close)
@@ -236,6 +414,12 @@ class MainWindow(FluentWindow):
         """Настройка навигационной панели со скриптами."""
         self.addSubInterface(
             interface=self._home_page, icon=FluentIcon.HOME, text="Главная"
+        )
+
+        self.addSubInterface(
+            interface=self._dependency_page,
+            icon=FluentIcon.DOWNLOAD,
+            text="Зависимости",
         )
 
         categories = self._group_scripts()
@@ -293,6 +477,8 @@ class MainWindow(FluentWindow):
         )
         self.navigationInterface.setExpandWidth(max_width + 120)
 
+        self._update_navigation_availability()
+
         logger.info(
             "Навигационная панель успешно настроена. Всего скриптов: %d",
             len(self._script_pages),
@@ -303,9 +489,15 @@ class MainWindow(FluentWindow):
         # строим интерфейсы остальных вкладок по очереди с шагом 150мс.
         from PyQt6.QtCore import QTimer
 
+        # Хранение сильных ссылок на таймеры для Nuitka
+        self._preload_timers = []
         delay = 500
         for page in self._script_pages.values():
-            QTimer.singleShot(delay, page.preload_ui)
+            t = QTimer(self)
+            t.setSingleShot(True)
+            t.timeout.connect(page.preload_ui)
+            t.start(delay)
+            self._preload_timers.append(t)
             delay += 150
 
     def _group_scripts(self) -> dict[str, list[AbstractScript]]:
@@ -351,7 +543,19 @@ class MainWindow(FluentWindow):
             )
 
     def _on_current_page_changed(self, index: int) -> None:
-        """Логирование переключения страниц."""
+        """Логирование переключения страниц и сброс состояний навигации."""
+        # Мгновенно сбрасываем залипшие эффекты наведения (hover)
+        # на навигационной панели для предотвращения визуальных багов
+        if hasattr(self, "navigationInterface") and self.navigationInterface:
+            for widget in self.navigationInterface.findChildren(QWidget):
+                if hasattr(widget, "isEnter"):
+                    widget.isEnter = False
+                if hasattr(widget, "isPressed"):
+                    widget.isPressed = False
+                if hasattr(widget, "isAboutSelected"):
+                    widget.isAboutSelected = False
+                widget.update()
+
         widget = self.stackedWidget.widget(index)
         page_name = widget.objectName() if widget else "Неизвестно"
         logger.info(
@@ -370,6 +574,43 @@ class MainWindow(FluentWindow):
                 "Переход на страницу скрипта '%s' из Home", script_name
             )
             self.switchTo(page)
+
+    def switchTo(self, interface: QWidget) -> None:
+        """Переключить на страницу с безопасной задержкой.
+
+        Позволяет всплывающим меню компактного режима полностью завершить
+        анимации скрытия и удалиться из памяти до начала рендеринга
+        нового интерфейса страницы, предотвращая критические ошибки
+        доступа к памяти (Segfault) в скомпилированной Nuitka-версии.
+
+        Args:
+            interface: Виджет страницы, на которую выполняется переход.
+        """
+        from PyQt6.QtCore import QTimer
+
+        # Мгновенно сбрасываем залипшие эффекты наведения (hover)
+        # на навигационной панели для предотвращения визуальных багов
+        if hasattr(self, "navigationInterface") and self.navigationInterface:
+            for widget in self.navigationInterface.findChildren(QWidget):
+                if hasattr(widget, "isEnter"):
+                    widget.isEnter = False
+                if hasattr(widget, "isPressed"):
+                    widget.isPressed = False
+                if hasattr(widget, "isAboutSelected"):
+                    widget.isAboutSelected = False
+                widget.update()
+
+        logger.info(
+            "Зарегистрирован запрос на переключение интерфейса: %s. "
+            "Запуск отложенного выполнения через 80 мс для защиты "
+            "памяти от Segfault в Nuitka.",
+            interface.objectName() if interface else "Неизвестно",
+        )
+
+        # Получаем и сохраняем связанный метод родительского класса
+        # во избежание потери контекста super() внутри lambda-замыкания
+        parent_switch = super().switchTo
+        QTimer.singleShot(80, lambda: parent_switch(interface))
 
     @staticmethod
     def _resolve_icon(icon_name: str) -> FluentIcon:

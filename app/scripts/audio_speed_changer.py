@@ -57,6 +57,11 @@ class AudioSpeedChangerScript(AbstractScript):
         return list(AUDIO_EXTENSIONS)
 
     @property
+    def required_dependencies(self) -> list[str]:
+        """Зависимости: eac3to."""
+        return ["eac3to"]
+
+    @property
     def settings_schema(self) -> list[SettingField]:
         return [
             SettingField(

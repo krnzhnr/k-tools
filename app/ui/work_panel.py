@@ -356,11 +356,21 @@ class ScriptPage(QWidget):
         self._finished_indices: set[int] = set()
 
         self._is_initialized = False
+        self._dep_banner = None
 
         logger.info(
             "Страница скрипта '%s' создана (без UI)",
             script.name,
         )
+
+    @property
+    def script(self) -> AbstractScript:
+        """Получить объект скрипта, привязанного к странице.
+
+        Returns:
+            Объект AbstractScript.
+        """
+        return self._script
 
     def preload_ui(self) -> None:
         """Предзагрузка интерфейса в фоновом режиме через очередь событий."""
@@ -371,10 +381,83 @@ class ScriptPage(QWidget):
             self._is_initialized = True
 
     def showEvent(self, event: Any) -> None:
-        """Событие отображения страницы."""
+        """Событие отображения страницы.
+
+        Args:
+            event: Объект события.
+        """
         super().showEvent(event)
         self.preload_ui()
         self._update_path_placeholder()
+        self.check_dependencies()
+
+    def check_dependencies(self) -> bool:
+        """Проверить наличие внешних зависимостей для скрипта.
+
+        Если зависимости отсутствуют, показывает баннер с предупреждением
+        и блокирует кнопку выполнения.
+
+        Returns:
+            True, если все зависимости установлены.
+        """
+        from app.core.dependency_manager import DependencyManager
+        dep_mgr = DependencyManager()
+
+        is_avail = dep_mgr.is_script_available(
+            self._script.required_dependencies
+        )
+
+        if not hasattr(self, "_execute_btn"):
+            return is_avail
+
+        self._execute_btn.setEnabled(is_avail)
+
+        # Если баннер уже есть, удалим его
+        if hasattr(self, "_dep_banner") and self._dep_banner:
+            try:
+                self._dep_banner.close()
+            except Exception:
+                pass
+            self._dep_banner = None
+
+        if not is_avail:
+            missing = dep_mgr.get_missing_deps(
+                self._script.required_dependencies
+            )
+            missing_names = ", ".join(d.display_name for d in missing)
+
+            # Показываем InfoBar прямо над формой
+            from qfluentwidgets import InfoBarPosition, PushButton
+
+            self._dep_banner = InfoBar.warning(
+                title="Недостающие зависимости",
+                content=(
+                    f"Необходимы зависимости: {missing_names}. "
+                ),
+                orient=Qt.Orientation.Horizontal,
+                isClosable=False,
+                position=InfoBarPosition.TOP,
+                duration=-1,
+                parent=self,
+            )
+
+            # Добавим кнопку быстрого перехода на страницу зависимостей
+            def on_go_clicked() -> None:
+                """Переключиться на экран зависимостей в MainWindow."""
+                main_win = self.window()
+                if main_win is not None:
+                    switch_to = getattr(main_win, "switchTo", None)
+                    dep_page = getattr(main_win, "_dependency_page", None)
+                    if switch_to is not None and dep_page is not None:
+                        switch_to(dep_page)
+
+            if self._dep_banner is not None:
+                go_btn = PushButton("Установить", self._dep_banner)
+                go_btn.setFixedWidth(100)
+                go_btn.clicked.connect(on_go_clicked)
+                self._dep_banner.hBoxLayout.addWidget(go_btn)
+
+        return is_avail
 
     def _init_ui(self) -> None:
         """Инициализация пользовательского интерфейса."""
@@ -385,6 +468,10 @@ class ScriptPage(QWidget):
         # Создаем SmoothScrollArea для предотвращения принудительного
         # раздувания размеров родительского окна при пересчете геометрии
         self.scroll_area = SmoothScrollArea(self)
+
+        # Оптимизация шага прокрутки для повышения отзывчивости интерфейса
+        self.scroll_area.verticalScrollBar().setSingleStep(30)
+
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff

@@ -15,6 +15,17 @@ import re
 import importlib.util
 from pathlib import Path
 
+# Принудительная установка UTF-8 для консоли и процессов
+os.environ["PYTHONIOENCODING"] = "utf-8"
+
+# Попытка реконфигурации стандартных потоков для поддержки UTF-8 (Python 3.7+)
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        getattr(sys.stdout, "reconfigure")(encoding="utf-8", errors="replace")
+        getattr(sys.stderr, "reconfigure")(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 # === Настройки ===
 BASE_DIR = Path(__name__).parent.resolve()
 VENV_DIR = BASE_DIR / "venv"
@@ -280,8 +291,8 @@ Name: "desktopicon"; Description: "{{cm:CreateDesktopIcon}}"; \\
 GroupDescription: "{{cm:AdditionalIcons}}"; Flags: unchecked
 
 [Files]
-; Основная папка сборки (onedir) + bin/
-Source: "{cwd}\\dist\\{exe_name}\\*"; DestDir: "{{app}}"; \\
+; Основная папка сборки (Nuitka) + bin/
+Source: "{cwd}\\dist\\{exe_name}.dist\\*"; DestDir: "{{app}}"; \\
 Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
@@ -303,8 +314,12 @@ Flags: nowait postinstall skipifsilent
     print(f"[✓] Создан скрипт инсталлятора: {iss_path}")
 
 
-def build() -> None:
-    """Основная процедура сборки приложения."""
+def build(include_bin: bool = False) -> None:
+    """Основная процедура сборки приложения.
+
+    Args:
+        include_bin: Копировать ли папку bin/ в каталог сборки.
+    """
     print("[*] Определение версии сборки...")
     version_str = prompt_version_update()
 
@@ -325,69 +340,85 @@ def build() -> None:
     except ImportError as e:
         print(f"[!] Ошибка импорта: {e}")
 
+    # Определение абсолютного пути к ресурсам qfluentwidgets для Nuitka
+    qfw_data_dir = BASE_DIR / "venv" / "Lib" / "site-packages" / "qfluentwidgets"
+    if not qfw_data_dir.exists():
+        qfw_data_dir = BASE_DIR / "venv" / "lib" / "site-packages" / "qfluentwidgets"
+
     cmd = [
         str(python_bin),
         "-m",
-        "PyInstaller",
-        "--noconfirm",
-        "--clean",
-        "--onedir",
-        "--noconsole",
-        f"--name={EXE_BASE_NAME}",
-        "--version-file=file_version_info.txt",
-        "--paths=.",
-        "--hidden-import=PyQt6",
-        "--hidden-import=qfluentwidgets",
-        "--hidden-import=app.core.abstract_script",
-        "--hidden-import=app.core.path_utils",
-        "--hidden-import=app.core.resource_utils",
-        "--hidden-import=app.core.script_registry",
-        "--hidden-import=app.infrastructure.eac3to_runner",
-        "--hidden-import=app.infrastructure.ffmpeg_runner",
-        "--hidden-import=app.infrastructure.mkvmerge_runner",
-        "--hidden-import=app.scripts.audio_converter",
-        "--hidden-import=app.scripts.audio_speed_changer",
-        "--hidden-import=app.scripts.container_converter",
-        "--hidden-import=app.scripts.metadata_cleaner",
-        "--hidden-import=app.scripts.muxer",
-        "--hidden-import=app.ui.main_window",
-        "--hidden-import=app.ui.work_panel",
-        "--hidden-import=app.ui.file_list_widget",
-        "--hidden-import=app.ui.muxing_table_widget",
-        "--hidden-import=deew",
-        "--collect-all=qfluentwidgets",
+        "nuitka",
+        "--standalone",
+        "--output-dir=dist",
+        "--mingw64",
+        "--assume-yes-for-downloads",
+        "--plugin-enable=pyqt6",
+        "--include-package=app",
+        "--include-module=deew",
+        "--windows-console-mode=disable",
+        f"--output-filename={EXE_BASE_NAME}.exe",
         str(SCRIPT),
     ]
 
     if ICON.exists():
         abs_icon = ICON.resolve()
-        cmd.insert(-1, f"--icon={abs_icon}")
-        cmd.insert(-1, f"--add-data={abs_icon};.")
+        cmd.append(f"--windows-icon-from-ico={abs_icon}")
 
-    print("[*] Запуск PyInstaller...")
+    print("[*] Запуск Nuitka (это может занять 5-15 минут)...")
     print(f"Команда: {' '.join(cmd)}")
     subprocess.check_call(cmd)
 
+    # Nuitka создает папку с суффиксом .dist
+    dist_folder = BASE_DIR / "dist" / f"{SCRIPT.stem}.dist"
+    # Переименовываем папку для InnoSetup, если необходимо 
+    # (оставим как есть, но InnoSetup теперь ссылается на {EXE_BASE_NAME}.dist)
+    if dist_folder.exists() and dist_folder.name != f"{EXE_BASE_NAME}.dist":
+        target_dist = BASE_DIR / "dist" / f"{EXE_BASE_NAME}.dist"
+        if target_dist.exists():
+            shutil.rmtree(target_dist)
+        dist_folder.rename(target_dist)
+
     # Копирование иконки для ярлыков Inno Setup
-    dst_icon = BASE_DIR / "dist" / EXE_BASE_NAME / "app_icon.ico"
+    dst_icon = BASE_DIR / "dist" / f"{EXE_BASE_NAME}.dist" / "app_icon.ico"
     if ICON.exists():
         shutil.copy2(ICON, dst_icon)
         print(f"[✓] Иконка скопирована для ярлыков: {dst_icon}")
 
-    # Копирование папки bin/ со всеми зависимостями
-    copy_bin_directory(EXE_BASE_NAME)
+    # Копирование папки bin/ со всеми зависимостями (если передан флаг)
+    if include_bin:
+        copy_bin_directory(f"{EXE_BASE_NAME}.dist")
+    else:
+        print(
+            "[*] Флаг --include-bin отсутствует. "
+            "Зависимости bin/ не будут скопированы."
+        )
+
+    # Ручное копирование папки ресурсов qfluentwidgets для гарантированного
+    # наличия стилей (QSS) и шрифтов в каталоге сборки.
+    dst_qfw = BASE_DIR / "dist" / f"{EXE_BASE_NAME}.dist" / "qfluentwidgets"
+    if dst_qfw.exists():
+        shutil.rmtree(dst_qfw)
+
+    print(f"[*] Копирование ресурсов qfluentwidgets → {dst_qfw}")
+    try:
+        shutil.copytree(qfw_data_dir, dst_qfw)
+        print("[✓] Папка qfluentwidgets успешно скопирована.")
+    except Exception as e:
+        print(f"[!] Ошибка при копировании ресурсов qfluentwidgets: {e}")
 
     # Генерация ISS скрипта
     create_inno_setup_script(EXE_BASE_NAME, version_str)
 
-    print(f"[✓] Сборка готова: dist/{EXE_BASE_NAME}")
+    print(f"[✓] Сборка готова: dist/{EXE_BASE_NAME}.dist")
 
 
 if __name__ == "__main__":
     is_ci = os.environ.get("CI_VERSION") is not None
+    inc_bin = "--include-bin" in sys.argv
     try:
         clean()
-        build()
+        build(include_bin=inc_bin)
         if not is_ci:
             print("\n[*] Окно закроется через 10 секунд...")
             time.sleep(10)

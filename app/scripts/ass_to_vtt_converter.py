@@ -61,6 +61,11 @@ class AssToVttScript(AbstractScript):
         return [".ass", ".ssa", ".srt"]
 
     @property
+    def required_dependencies(self) -> list[str]:
+        """Зависимости: FFmpeg."""
+        return ["ffmpeg"]
+
+    @property
     def use_custom_widget(self) -> bool:
         """Использовать кастомный виджет с фильтрацией актёров."""
         return True

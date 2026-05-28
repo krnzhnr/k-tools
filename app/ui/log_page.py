@@ -107,6 +107,12 @@ class LogPage(QWidget):
         card_layout.setContentsMargins(2, 2, 2, 2)
 
         self._log_view = QPlainTextEdit(self._card)
+
+        # Оптимизация шага прокрутки для повышения отзывчивости интерфейса
+        bar = self._log_view.verticalScrollBar()
+        if bar is not None:
+            bar.setSingleStep(30)
+
         self._log_view.setReadOnly(True)
         self._log_view.setUndoRedoEnabled(False)
         self._log_view.setMaximumBlockCount(self._max_lines)

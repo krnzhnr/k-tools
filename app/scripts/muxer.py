@@ -64,6 +64,11 @@ class MuxerScript(AbstractScript):
         )
 
     @property
+    def required_dependencies(self) -> list[str]:
+        """Зависимости: MKVToolNix."""
+        return ["mkvtoolnix"]
+
+    @property
     def use_custom_widget(self) -> bool:
         """Использовать таблицу муксинга."""
         return True

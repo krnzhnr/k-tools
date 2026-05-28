@@ -20,6 +20,9 @@ from qfluentwidgets import (
     ComboBox,
     SpinBox,
     StateToolTip,
+    TeachingTip,
+    TeachingTipTailPosition,
+    TeachingTipView,
 )
 
 import os
@@ -43,9 +46,15 @@ class SettingsPage(ScrollArea):
     def __init__(self, parent=None) -> None:
         """Инициализация страницы настроек."""
         super().__init__(parent=parent)
+
+        # Оптимизация шага прокрутки для повышения отзывчивости интерфейса
+        self.verticalScrollBar().setSingleStep(30)
+
         self._settings_manager = SettingsManager()
         self._tip: Any = None
         self._download_tip: Any = None
+        self._pending_update: tuple[str, str] | None = None
+        self._teaching_tip: Any = None
 
         self._init_ui()
         logger.info("Страница настроек инициализирована")
@@ -530,6 +539,11 @@ class SettingsPage(ScrollArea):
         check_layout.addWidget(self._check_now_btn)
         self._updates_group.addSettingCard(self._check_now_card)
 
+        # Проверяем, нет ли уже данных об обновлении с автопроверки
+        if self._pending_update is not None:
+            version, url = self._pending_update
+            self._apply_download_mode(version, url)
+
     def _on_auto_updates_changed(self, is_checked: bool) -> None:
         """Обработка изменения автопроверки."""
         self._settings_manager.auto_check_updates = is_checked
@@ -601,6 +615,105 @@ class SettingsPage(ScrollArea):
         w.yesButton.setText(self.tr("ОК"))
         w.cancelButton.hide()
         w.exec()
+
+    def set_update_available(
+        self, version: str, download_url: str
+    ) -> None:
+        """Переключение кнопки проверки в режим скачивания.
+
+        Вызывается из MainWindow при обнаружении новой версии
+        через автопроверку при запуске приложения.
+
+        Args:
+            version: Номер доступной версии.
+            download_url: Прямая ссылка на скачивание.
+        """
+        self._pending_update = (version, download_url)
+        # Если кнопка уже создана — применяем режим скачивания
+        if hasattr(self, "_check_now_btn"):
+            self._apply_download_mode(version, download_url)
+        logger.info(
+            "Страница настроек переведена в режим скачивания "
+            "обновления v%s",
+            version,
+        )
+
+    def _apply_download_mode(
+        self, version: str, download_url: str
+    ) -> None:
+        """Применение визуального режима кнопки скачивания.
+
+        Args:
+            version: Номер доступной версии.
+            download_url: Прямая ссылка на скачивание.
+        """
+        self._check_now_btn.setText(
+            self.tr(f"Скачать {version}")
+        )
+        self._check_now_btn.setIcon(FluentIcon.DOWNLOAD)
+        # Отключаем старый обработчик и подключаем скачивание
+        try:
+            self._check_now_btn.clicked.disconnect()
+        except TypeError:
+            logger.debug(
+                "Обработчик клика кнопки проверки уже отключён"
+            )
+        self._check_now_btn.clicked.connect(
+            lambda: self._download_update(download_url)
+        )
+        self._check_now_btn.setEnabled(True)
+
+    def scroll_to_download_with_tip(self) -> None:
+        """Прокрутка к кнопке скачивания с показом TeachingTip.
+
+        Используется при навигации из InfoBar главного экрана
+        для привлечения внимания пользователя к кнопке скачивания.
+        """
+        from PyQt6.QtCore import QTimer
+
+        def _do_scroll_and_tip() -> None:
+            """Отложенная прокрутка и показ подсказки."""
+            # Прокручиваем ScrollArea к карточке с кнопкой
+            self.ensureWidgetVisible(
+                self._check_now_card, 0, 50
+            )
+
+            # Показываем TeachingTip с задержкой для
+            # завершения анимации скролла
+            QTimer.singleShot(300, self._show_download_tip)
+
+        # Даём странице время отрисоваться после переключения
+        QTimer.singleShot(200, _do_scroll_and_tip)
+
+    def _show_download_tip(self) -> None:
+        """Отображение TeachingTip над кнопкой скачивания."""
+        # Закрываем предыдущий TeachingTip, если открыт
+        if self._teaching_tip is not None:
+            try:
+                self._teaching_tip.close()
+            except RuntimeError:
+                logger.debug(
+                    "Предыдущий TeachingTip уже уничтожен"
+                )
+            self._teaching_tip = None
+
+        view = TeachingTipView(
+            icon=FluentIcon.DOWNLOAD,
+            title="Обновление готово к скачиванию",
+            content="Нажмите кнопку, чтобы скачать и установить",
+            isClosable=True,
+            tailPosition=TeachingTipTailPosition.BOTTOM,
+        )
+        self._teaching_tip = TeachingTip.make(
+            view=view,
+            target=self._check_now_btn,
+            duration=5000,
+            tailPosition=TeachingTipTailPosition.BOTTOM,
+            parent=self,
+        )
+        logger.info(
+            "TeachingTip отображён над кнопкой скачивания обновления"
+        )
 
     def showEvent(self, event) -> None:
         """Обновление динамических данных при отображении страницы."""

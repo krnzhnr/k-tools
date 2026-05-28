@@ -110,6 +110,11 @@ class AudioConverterScript(AbstractScript):
         return True
 
     @property
+    def required_dependencies(self) -> list[str]:
+        """Зависимости: FFmpeg и QAAC."""
+        return ["ffmpeg"]
+
+    @property
     def settings_schema(self) -> list[SettingField]:
         """Схема настроек скрипта."""
         fields = [

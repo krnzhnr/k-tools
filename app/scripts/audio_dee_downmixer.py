@@ -68,6 +68,11 @@ class AudioDeeDownmixerScript(AbstractScript):
         return list(AUDIO_EXTENSIONS | VIDEO_CONTAINERS)
 
     @property
+    def required_dependencies(self) -> list[str]:
+        """Зависимости: FFmpeg и Dolby Encoding Engine."""
+        return ["ffmpeg", "dee"]
+
+    @property
     def settings_schema(self) -> list[SettingField]:
         return [
             SettingField(

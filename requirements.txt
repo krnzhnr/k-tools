@@ -1,4 +1,4 @@
-﻿altgraph==0.17.5
+altgraph==0.17.5
 autoflake==2.3.3
 autopep8==2.3.2
 black==26.1.0
@@ -50,3 +50,5 @@ typing_extensions==4.15.0
 Unidecode==1.4.0
 urllib3==2.6.3
 xmltodict==0.13.0
+nuitka>=2.4.0
+ordered-set

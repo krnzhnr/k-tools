@@ -105,6 +105,10 @@ class MuxingTableWidget(QTableWidget):
     def __init__(self, parent=None):
         """Инициализация таблицы."""
         super().__init__(parent)
+
+        # Оптимизация шага прокрутки для повышения отзывчивости интерфейса
+        self.verticalScrollBar().setSingleStep(20)
+
         self.setColumnCount(3)
         self.setHorizontalHeaderLabels(["Видео", "Аудио", "Субтитры"])
 

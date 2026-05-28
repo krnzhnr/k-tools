@@ -8,13 +8,11 @@
 
 import logging
 from pathlib import Path
-from typing import Any
 
 from PyQt6.QtCore import QRunnable, QObject, pyqtSignal
 
 from app.infrastructure.mkvprobe_runner import (
     MKVProbeRunner,
-    TrackInfo,
 )
 
 logger = logging.getLogger(__name__)

@@ -125,6 +125,17 @@ class AbstractScript(ABC):
         return False
 
     @property
+    def required_dependencies(self) -> list[str]:
+        """Список ключей внешних зависимостей скрипта.
+
+        Ключи соответствуют идентификаторам из
+        DependencyManifest (например, 'ffmpeg', 'dee').
+        По умолчанию — пустой список. Переопредели
+        в подклассе для указания зависимостей.
+        """
+        return []
+
+    @property
     def is_cancelled(self) -> bool:
         """Проверить, был ли скрипт отменен."""
         return getattr(self, "_is_cancelled", False)

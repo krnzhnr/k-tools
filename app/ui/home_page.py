@@ -5,6 +5,7 @@ import logging
 from typing import List, Callable
 
 from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QFrame
 from qfluentwidgets import (
     FlowLayout,
@@ -16,10 +17,13 @@ from qfluentwidgets import (
     SmoothScrollArea,
     FluentIcon,
     SubtitleLabel,
+    InfoBar,
+    InfoBarPosition,
 )
 
 from app.core.abstract_script import AbstractScript
 from app.core.constants import CATEGORY_CONFIG
+from app.core.dependency_manager import DependencyManager
 
 logger = logging.getLogger(__name__)
 
@@ -38,11 +42,19 @@ class ScriptCard(CardWidget):
         resolve_icon: Callable[[str], FluentIcon],
         parent: QWidget | None = None,
     ) -> None:
-        """Инициализация карточки."""
+        """Инициализация карточки.
+
+        Args:
+            script: Объект скрипта.
+            resolve_icon: Функция разрешения иконки.
+            parent: Родительский виджет.
+        """
         super().__init__(parent)
         self._script = script
+        self._dep_mgr = DependencyManager()
+        self._is_available = True
+
         self.setFixedSize(330, 100)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(16, 12, 16, 12)
@@ -52,10 +64,40 @@ class ScriptCard(CardWidget):
         self._init_text_section(layout)
         layout.addStretch(1)
 
+        self.update_availability()
+
+    def update_availability(self) -> None:
+        """Обновить визуальное состояние доступности скрипта."""
+        self._is_available = self._dep_mgr.is_script_available(
+            self._script.required_dependencies
+        )
+        if self._is_available:
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.setStyleSheet("")
+            self.title_label.setStyleSheet("")
+            self.desc_label.setStyleSheet("color: #AAAAAA;")
+            self.icon_widget.setEnabled(True)
+        else:
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+            self.setStyleSheet(
+                "background: rgba(255, 255, 255, 0.03);"
+                "border: 1px solid rgba(255, 255, 255, 0.05);"
+            )
+            self.title_label.setStyleSheet("color: #777777;")
+            self.desc_label.setStyleSheet("color: #555555;")
+            self.icon_widget.setEnabled(False)
+
     def _init_icon_section(
-        self, layout: QHBoxLayout, resolve_icon: Callable[[str], FluentIcon]
+        self,
+        layout: QHBoxLayout,
+        resolve_icon: Callable[[str], FluentIcon],
     ) -> None:
-        """Инициализация секции иконки."""
+        """Инициализация секции иконки.
+
+        Args:
+            layout: Родительский макет.
+            resolve_icon: Функция разрешения иконки.
+        """
         cat = self._script.category.strip()
         config = CATEGORY_CONFIG.get(cat, {})
         bg_color, icon_color = config.get(
@@ -72,8 +114,6 @@ class ScriptCard(CardWidget):
 
         icon = resolve_icon(self._script.icon_name)
         if hasattr(icon, "icon"):
-            from PyQt6.QtGui import QColor
-
             icon = icon.icon(color=QColor(icon_color))
 
         self.icon_widget = IconWidget(icon, icon_wrapper)
@@ -82,7 +122,11 @@ class ScriptCard(CardWidget):
         layout.addWidget(icon_wrapper)
 
     def _init_text_section(self, layout: QHBoxLayout) -> None:
-        """Инициализация текстовой секции."""
+        """Инициализация текстовой секции.
+
+        Args:
+            layout: Родительский макет.
+        """
         text_layout = QVBoxLayout()
         text_layout.setContentsMargins(0, 4, 0, 0)
         text_layout.setSpacing(2)
@@ -97,11 +141,38 @@ class ScriptCard(CardWidget):
         layout.addLayout(text_layout)
 
     def mouseReleaseEvent(self, event) -> None:
-        """Событие клика по карточке."""
+        """Событие клика по карточке.
+
+        Args:
+            event: Событие мыши.
+        """
         super().mouseReleaseEvent(event)
         if event.button() == Qt.MouseButton.LeftButton:
-            logger.info("Клик по карточке скрипта: %s", self._script.name)
-            self.scriptClicked.emit(self._script.name)
+            if self._is_available:
+                logger.info("Клик по карточке скрипта: %s", self._script.name)
+                self.scriptClicked.emit(self._script.name)
+            else:
+                logger.info(
+                    "Клик по недоступному скрипту: %s. "
+                    "Необходимы зависимости: %s",
+                    self._script.name,
+                    self._script.required_dependencies,
+                )
+                missing = self._dep_mgr.get_missing_deps(
+                    self._script.required_dependencies
+                )
+                missing_names = ", ".join(d.display_name for d in missing)
+                InfoBar.warning(
+                    title="Компонент недоступен",
+                    content=(
+                        f"Необходимы зависимости: {missing_names}. "
+                    ),
+                    orient=Qt.Orientation.Horizontal,
+                    isClosable=True,
+                    position=InfoBarPosition.TOP,
+                    duration=5000,
+                    parent=self.window(),
+                )
 
 
 class HomePage(QWidget):
@@ -138,6 +209,8 @@ class HomePage(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
 
         self.scroll_area = SmoothScrollArea(self)
+        self.scroll_area.verticalScrollBar().setSingleStep(30)
+
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setStyleSheet(
             "background: transparent; border: none;"
@@ -222,3 +295,17 @@ class HomePage(QWidget):
 
         section_layout.addLayout(flow_layout)
         self.container_layout.addLayout(section_layout)
+
+    def refresh_availability(self) -> None:
+        """Обновить доступность всех карточек скриптов."""
+        for card in self.findChildren(ScriptCard):
+            card.update_availability()
+
+    def showEvent(self, event) -> None:
+        """Событие отображения страницы.
+
+        Args:
+            event: Объект события.
+        """
+        super().showEvent(event)
+        self.refresh_availability()

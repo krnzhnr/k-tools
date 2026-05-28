@@ -1,0 +1,55 @@
+name: Upload Dependencies to GitHub Release
+
+on:
+  push:
+    paths:
+      - 'bin/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  upload-deps:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+      with:
+        lfs: true
+
+    - name: Create Zip Archives
+      shell: pwsh
+      run: |
+        # Создаем папку для архивов
+        New-Item -ItemType Directory -Force -Path temp_archives
+        
+        # Функция для архивации папки в zip
+        function Archive-Folder([string]$srcDir, [string]$archiveName) {
+            $srcPath = Join-Path "bin" $srcDir
+            if (Test-Path $srcPath) {
+                Write-Host "Архивация папки $srcPath в temp_archives/$archiveName"
+                # Архивируем родительскую папку целиком, чтобы сохранить структуру внутри zip
+                Compress-Archive -Path $srcPath -DestinationPath "temp_archives/$archiveName" -Force
+            } else {
+                Write-Host "Предупреждение: Папка $srcPath не найдена"
+            }
+        }
+
+        Archive-Folder "ffmpeg" "ffmpeg.zip"
+        Archive-Folder "mkvtoolnix" "mkvtoolnix.zip"
+        Archive-Folder "eac3to" "eac3to.zip"
+        Archive-Folder "DEE" "dee.zip"
+
+    - name: Create or Update Release deps-v1
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: deps-v1
+        name: "K-Tools External Dependencies"
+        body: "Автоматически упакованные и загруженные бинарные зависимости из Git LFS."
+        prerelease: false
+        make_latest: false
+        files: temp_archives/*.zip
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
