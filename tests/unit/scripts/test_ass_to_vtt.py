@@ -17,6 +17,68 @@ def parser():
     return AssParser()
 
 
+@pytest.fixture(autouse=True)
+def mock_ffmpeg_runner(mocker) -> None:
+    """Фикстура-заглушка для FFmpegRunner в тестах.
+
+    Имитирует выполнение конвертации ASS в VTT, парся временный
+    ASS-файл и генерируя соответствующий VTT-файл, чтобы исключить
+    зависимость от реального запуска бинарника FFmpeg на диске.
+    """
+    from pathlib import Path
+    from app.infrastructure.ffmpeg_runner import FFmpegRunner
+
+    def to_vtt_time(ass_time: str) -> str:
+        """Вспомогательный перевод таймкода ASS в VTT."""
+        parts = ass_time.split(":")
+        if len(parts) != 3:
+            return "00:00.000"
+        try:
+            h = int(parts[0])
+            m = int(parts[1])
+            s_parts = parts[2].split(".")
+            s = int(s_parts[0])
+            cs = int(s_parts[1]) if len(s_parts) > 1 else 0
+            ms = cs * 10
+            if h == 0:
+                return f"{m:02d}:{s:02d}.{ms:03d}"
+            return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
+        except Exception:
+            return "00:00.000"
+
+    def mock_run(
+        input_path: Path | str,
+        output_path: Path | str,
+        *args,
+        **kwargs,
+    ) -> bool:
+        """Имитация запуска FFmpeg."""
+        vtt_content = ["WEBVTT", ""]
+        with open(input_path, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("Dialogue:"):
+                    parts = line.split(",", 9)
+                    if len(parts) < 10:
+                        continue
+                    start_t = to_vtt_time(parts[1].strip())
+                    end_t = to_vtt_time(parts[2].strip())
+                    text = parts[9].strip()
+                    text = (
+                        text.replace("\\N", "\n")
+                        .replace("\\n", "\n")
+                    )
+                    vtt_content.append(f"{start_t} --> {end_t}")
+                    vtt_content.append(text)
+                    vtt_content.append("")
+
+        out_p = Path(output_path)
+        out_p.parent.mkdir(parents=True, exist_ok=True)
+        out_p.write_text("\n".join(vtt_content), encoding="utf-8")
+        return True
+
+    mocker.patch.object(FFmpegRunner, "run", side_effect=mock_run)
+
+
 @pytest.fixture
 def sample_ass_content():
     """Минимальный валидный ASS-файл."""
