@@ -53,7 +53,7 @@ DEPENDENCY_REGISTRY: tuple[DependencyInfo, ...] = (
     DependencyInfo(
         key="ffmpeg",
         display_name="FFmpeg + QAAC",
-        description="Декодирование аудио и видео.",
+        description="Кодирование аудио/видео",
         icon_name="VIDEO",
         subfolder="ffmpeg",
         size_mb=471.0,
@@ -64,7 +64,7 @@ DEPENDENCY_REGISTRY: tuple[DependencyInfo, ...] = (
     DependencyInfo(
         key="mkvtoolnix",
         display_name="MKVToolNix",
-        description="Слияние и парсинг MKV.",
+        description="Слияние и парсинг MKV",
         icon_name="SHARE",
         subfolder="mkvtoolnix",
         size_mb=21.0,
@@ -75,7 +75,7 @@ DEPENDENCY_REGISTRY: tuple[DependencyInfo, ...] = (
     DependencyInfo(
         key="eac3to",
         display_name="eac3to",
-        description="Изменение скорости аудио.",
+        description="Изменение скорости аудио",
         icon_name="MUSIC",
         subfolder="eac3to",
         size_mb=11.0,
@@ -86,7 +86,7 @@ DEPENDENCY_REGISTRY: tuple[DependencyInfo, ...] = (
     DependencyInfo(
         key="dee",
         display_name="Dolby Encoding Engine",
-        description="Даунмикс многоканального аудио.",
+        description="Даунмикс аудио",
         icon_name="HEADPHONE",
         subfolder="DEE",
         size_mb=186.0,

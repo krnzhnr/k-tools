@@ -340,10 +340,20 @@ def build(include_bin: bool = False) -> None:
     except ImportError as e:
         print(f"[!] Ошибка импорта: {e}")
 
-    # Определение абсолютного пути к ресурсам qfluentwidgets для Nuitka
-    qfw_data_dir = BASE_DIR / "venv" / "Lib" / "site-packages" / "qfluentwidgets"
-    if not qfw_data_dir.exists():
-        qfw_data_dir = BASE_DIR / "venv" / "lib" / "site-packages" / "qfluentwidgets"
+    # Динамически находим путь к ресурсам qfluentwidgets
+    qfw_spec = importlib.util.find_spec("qfluentwidgets")
+    if qfw_spec and qfw_spec.origin:
+        qfw_data_dir = Path(qfw_spec.origin).parent
+        print(f"[✓] Путь к qfluentwidgets определен: {qfw_data_dir}")
+    else:
+        # Резервный вариант, если пакет не установлен
+        qfw_data_dir = (
+            BASE_DIR / "venv" / "Lib" / "site-packages" / "qfluentwidgets"
+        )
+        if not qfw_data_dir.exists():
+            qfw_data_dir = (
+                BASE_DIR / "venv" / "lib" / "site-packages" / "qfluentwidgets"
+            )
 
     cmd = [
         str(python_bin),

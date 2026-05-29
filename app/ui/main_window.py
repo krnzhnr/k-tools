@@ -222,15 +222,14 @@ class MainWindow(FluentWindow):
         Args:
             event: Событие мыши.
         """
-        if event.button() == Qt.MouseButton.XButton1:
-            if self.navigationInterface.panel.returnButton.isEnabled():
-                logger.info(
-                    "Нажата кнопка мыши XButton1: "
-                    "запуск перехода назад."
-                )
-                self.navigationInterface.panel.returnButton.click()
-        elif event.button() == Qt.MouseButton.XButton2:
-            logger.debug("Нажата кнопка навигации вперед.")
+        if event.button() in (
+            Qt.MouseButton.XButton1,
+            Qt.MouseButton.XButton2,
+        ):
+            logger.debug(
+                "Нажата кнопка навигации мыши: %s",
+                event.button(),
+            )
 
         super().mousePressEvent(event)
 
@@ -268,20 +267,21 @@ class MainWindow(FluentWindow):
             and isinstance(event, QMouseEvent)
         ):
             if event.button() == Qt.MouseButton.XButton1:
-                if self.navigationInterface.panel.returnButton.isEnabled():
-                    logger.info(
-                        "Перехвачено глобальное событие навигации "
-                        "назад по кнопке мыши (тип: %s).",
-                        event.type(),
-                    )
-                    self.navigationInterface.panel.returnButton.click()
-                    return True
+                # Переход назад происходит строго при отпускании кнопки
+                if event.type() == QEvent.Type.MouseButtonRelease:
+                    if self.navigationInterface.panel.returnButton.isEnabled():
+                        logger.info(
+                            "Перехвачен глобальный переход назад "
+                            "по кнопке мыши XButton1."
+                        )
+                        self.navigationInterface.panel.returnButton.click()
+                return True
             elif event.button() == Qt.MouseButton.XButton2:
-                logger.debug(
-                    "Перехвачено глобальное событие навигации "
-                    "вперед по кнопке мыши (тип: %s).",
-                    event.type(),
-                )
+                if event.type() == QEvent.Type.MouseButtonRelease:
+                    logger.debug(
+                        "Перехвачено глобальное событие навигации "
+                        "вперед по кнопке мыши XButton2."
+                    )
                 return True
 
         return super().eventFilter(watched, event)
