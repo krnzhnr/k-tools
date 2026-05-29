@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """Скрипт сборки K-Tools.
 
-Выполняет сборку приложения через PyInstaller (onedir),
+Выполняет компиляцию приложения через Nuitka (standalone),
 копирует внешние зависимости из bin/ и генерирует
-крипт Inno Setup (.iss) для создания инсталлятора.
+скрипт Inno Setup (.iss) для создания инсталлятора.
 """
 
 import os
@@ -149,80 +149,6 @@ def clean() -> None:
         file.unlink()
 
 
-def create_version_file(version_str: str) -> None:
-    """Создать файл версии Windows."""
-    # Пытаемся извлечь номер RC (например, 1 из -rc1)
-    rc_match = re.search(r"-rc(\d+)", version_str)
-    rc_num = int(rc_match.group(1)) if rc_match else 0
-
-    # Извлекаем основные цифры версии (напр. 1.5.2 из 1.5.2-rc1)
-    numeric_match = re.match(r"^([\d\.]+)", version_str)
-    if numeric_match:
-        # Берем только первые три части версии
-        parts = numeric_match.group(1).split(".")
-        v_parts = [int(p) for p in parts][:3]
-    else:
-        v_parts = [1, 0, 0]
-
-    # Дополняем до 3 элементов, если их меньше (напр. 1.5 -> 1.5.0)
-    while len(v_parts) < 3:
-        v_parts.append(0)
-
-    # Технический кортеж всегда должен иметь 4 числа для Windows
-    v_tuple = (v_parts[0], v_parts[1], v_parts[2], rc_num)
-
-    version_info = f"""# UTF-8
-VSVersionInfo(
-  ffi=FixedFileInfo(
-    filevers={v_tuple},
-    prodvers={v_tuple},
-    mask=0x3f,
-    flags=0x0,
-    OS=0x40004,
-    fileType=0x1,
-    subtype=0x0,
-    date=(0, 0)
-  ),
-  kids=[
-    StringFileInfo(
-      [
-        StringTable(
-          u'040904B0',
-          [StringStruct(u'CompanyName', u''),
-           StringStruct(
-               u'FileDescription',
-               u'K-Tools'
-           ),
-           StringStruct(
-               u'FileVersion',
-               u'{version_str}'
-           ),
-           StringStruct(
-               u'InternalName', u'{EXE_BASE_NAME}'
-           ),
-           StringStruct(u'LegalCopyright', u''),
-           StringStruct(
-               u'OriginalFilename',
-               u'{EXE_BASE_NAME}.exe'
-           ),
-           StringStruct(
-               u'ProductName', u'{EXE_BASE_NAME}'
-           ),
-           StringStruct(
-               u'ProductVersion',
-               u'{version_str}'
-           )])
-      ]),
-    VarFileInfo(
-        [VarStruct(u'Translation', [1033, 1200])]
-    )
-  ]
-)"""
-    (BASE_DIR / "file_version_info.txt").write_text(
-        version_info, encoding="utf-8"
-    )
-
-
 def copy_bin_directory(exe_name: str) -> None:
     """Перенос внешних утилит (eac3to, ffmpeg и др.) в каталог сборки."""
     src_bin = BASE_DIR / "bin"
@@ -326,8 +252,6 @@ def build(include_bin: bool = False) -> None:
     # Синхронизируем версию в коде перед сборкой
     update_app_version_py(version_str)
 
-    create_version_file(version_str)
-
     python_bin = ensure_venv()
 
     print("[*] Проверка импорта ядра...")
@@ -381,7 +305,7 @@ def build(include_bin: bool = False) -> None:
 
     # Nuitka создает папку с суффиксом .dist
     dist_folder = BASE_DIR / "dist" / f"{SCRIPT.stem}.dist"
-    # Переименовываем папку для InnoSetup, если необходимо 
+    # Переименовываем папку для InnoSetup, если необходимо
     # (оставим как есть, но InnoSetup теперь ссылается на {EXE_BASE_NAME}.dist)
     if dist_folder.exists() and dist_folder.name != f"{EXE_BASE_NAME}.dist":
         target_dist = BASE_DIR / "dist" / f"{EXE_BASE_NAME}.dist"

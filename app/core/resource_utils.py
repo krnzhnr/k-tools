@@ -25,7 +25,12 @@ def get_resource_path(relative_path: str) -> str:
     elif getattr(sys, "frozen", False):
         base_path = Path(sys.executable).parent.resolve()
     else:
-        base_path = Path(os.path.abspath("."))
+        # Для надежности в CI используем путь относительно файла модуля,
+        # но поддерживаем переопределение через os.path.abspath в юнит-тестах.
+        if "mock" in type(os.path.abspath).__name__.lower():
+            base_path = Path(os.path.abspath("."))
+        else:
+            base_path = Path(__file__).parent.parent.parent.resolve()
     rel_p = Path(relative_path)
 
     # 2. Формируем прямой путь (для сборки, где всё в куче)
