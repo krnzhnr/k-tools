@@ -31,7 +31,7 @@ class DependencyInfo:
         icon_name: Имя иконки из FluentIcon для карточки.
         subfolder: Подпапка внутри bin/ для распаковки.
         size_mb: Приблизительный размер после распаковки (МБ).
-        archive_name: Имя zip-архива в GitHub Releases.
+        archive_name: Имя tar.xz-архива в GitHub Releases.
         verify_binary: Файл для проверки наличия.
         required: True, если зависимость рекомендуемая.
     """
@@ -57,7 +57,7 @@ DEPENDENCY_REGISTRY: tuple[DependencyInfo, ...] = (
         icon_name="VIDEO",
         subfolder="ffmpeg",
         size_mb=471.0,
-        archive_name="ffmpeg.zip",
+        archive_name="ffmpeg.tar.xz",
         verify_binary="kt-ffmpeg.exe",
         required=True,
     ),
@@ -68,7 +68,7 @@ DEPENDENCY_REGISTRY: tuple[DependencyInfo, ...] = (
         icon_name="SHARE",
         subfolder="mkvtoolnix",
         size_mb=21.0,
-        archive_name="mkvtoolnix.zip",
+        archive_name="mkvtoolnix.tar.xz",
         verify_binary="mkvmerge.exe",
         required=True,
     ),
@@ -79,7 +79,7 @@ DEPENDENCY_REGISTRY: tuple[DependencyInfo, ...] = (
         icon_name="MUSIC",
         subfolder="eac3to",
         size_mb=11.0,
-        archive_name="eac3to.zip",
+        archive_name="eac3to.tar.xz",
         verify_binary="eac3to.exe",
         required=False,
     ),
@@ -90,7 +90,7 @@ DEPENDENCY_REGISTRY: tuple[DependencyInfo, ...] = (
         icon_name="HEADPHONE",
         subfolder="DEE",
         size_mb=186.0,
-        archive_name="dee.zip",
+        archive_name="dee.tar.xz",
         verify_binary="dee.exe",
         required=False,
     ),
@@ -109,6 +109,6 @@ def get_download_url(dep: DependencyInfo) -> str:
         dep: Описание зависимости.
 
     Returns:
-        Полный URL для скачивания zip-архива.
+        Полный URL для скачивания tar.xz-архива.
     """
     return f"{DEPS_BASE_URL}/{dep.archive_name}"

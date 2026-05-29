@@ -128,7 +128,7 @@ class ContainerConverterScript(AbstractScript):
             msg = (
                 f"⚠ ПРОПУСК (требуется перекодирование): {file_path.name}. "
                 f"{reason} Для перекодирования используйте "
-                f"инструмент «Видео-процессор»."
+                f"инструмент «{ScriptMetadata.VIDEO_PROCESSOR_NAME}»."
             )
             logger.warning("[%s] %s", self.name, msg)
             return [msg]

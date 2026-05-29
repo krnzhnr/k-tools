@@ -7,7 +7,9 @@ import re
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QDragMoveEvent
+from PyQt6.QtGui import (
+    QDragEnterEvent, QDropEvent, QDragMoveEvent, QColor
+)
 from PyQt6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
@@ -79,7 +81,11 @@ class ElideMiddleDelegate(QStyledItemDelegate):
             if option.state & QStyle.StateFlag.State_Selected:
                 color = option.palette.highlightedText().color()
             else:
-                color = option.palette.text().color()
+                from qfluentwidgets import isDarkTheme
+                if isDarkTheme():
+                    color = QColor(255, 255, 255)
+                else:
+                    color = option.palette.text().color()
 
             painter.setPen(color)
 
@@ -137,25 +143,58 @@ class MuxingTableWidget(QTableWidget):
         # self._stems: dict[str, int] = {}
         # Удаляем, т.к. при сортировке индексы "плывут"
 
-        # Стилизация (опционально, если не хватает Fluent Style)
-        self.setStyleSheet("""
-            QTableWidget {
-                border: 1px solid rgba(0, 0, 0, 0.1);
+        # Применение стилей с поддержкой темной/светлой тем
+        self._apply_theme_styles()
+
+        self._setup_context_menu()
+
+    def _apply_theme_styles(self) -> None:
+        """Применить стили с учетом текущей темы (светлая/темная)."""
+        from qfluentwidgets import isDarkTheme
+
+        is_dark = isDarkTheme()
+
+        if is_dark:
+            border_color = "rgba(255, 255, 255, 0.15)"
+            text_color = "#FFFFFF"
+            grid_color = "rgba(255, 255, 255, 0.12)"
+            selection_bg = "rgba(255, 255, 255, 0.08)"
+        else:
+            border_color = "rgba(0, 0, 0, 0.1)"
+            text_color = "#000000"
+            grid_color = "rgba(0, 0, 0, 0.06)"
+            selection_bg = "rgba(0, 0, 0, 0.04)"
+
+        self.setStyleSheet(f"""
+            QTableWidget {{
+                border: 1px solid {border_color};
                 border-radius: 5px;
                 background-color: transparent;
-            }
-            QHeaderView::section {
+                color: {text_color};
+                gridline-color: {grid_color};
+            }}
+            QTableWidget::item {{
+                color: {text_color};
                 background-color: transparent;
+                border-bottom: 1px solid {grid_color};
                 padding: 4px;
+            }}
+            QTableWidget::item:selected {{
+                background-color: {selection_bg};
+                color: {text_color};
+            }}
+            QHeaderView::section {{
+                background-color: transparent;
+                color: {text_color};
+                padding: 6px;
                 border: none;
+                border-bottom: 1px solid {border_color};
                 font-weight: bold;
-            }
+            }}
         """)
 
         # Включаем сортировку
         self.setSortingEnabled(True)
-
-        self._setup_context_menu()
 
     def _setup_context_menu(self) -> None:
         """Настройка контекстного меню."""

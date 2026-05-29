@@ -65,5 +65,5 @@ def test_container_converter_compatibility_check(mocker):
         [Path("movie.gif")], {"target_format": "MP4"}
     )
     assert any("ПРОПУСК" in r for r in results)
-    assert any("Видео-процессор" in r for r in results)
+    assert any("Кодирование видео" in r for r in results)
     script._ffmpeg.run.assert_not_called()

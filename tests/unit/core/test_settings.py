@@ -43,6 +43,9 @@ def test_settings_page_init(qtbot):
     assert page._switch_btn is not None
     assert page._clear_list_card is not None
     assert page._clear_list_switch is not None
+    assert page._logging_group is not None
+    assert page._logs_card is not None
+    assert page._log_dir_card is not None
 
     # Проверка начального значения из менеджера
     assert (
@@ -63,3 +66,20 @@ def test_settings_page_toggle(qtbot):
     page._switch_btn.setChecked(not initial)
 
     assert SettingsManager().overwrite_existing == (not initial)
+
+
+def test_logging_settings() -> None:
+    """Тестирование сохранения и чтения параметров логирования."""
+    s = SettingsManager()
+
+    s.show_logs_tab = True
+    assert s.show_logs_tab is True
+
+    s.show_logs_tab = False
+    assert s.show_logs_tab is False
+
+    s.log_dir = "C:/temp/test_logs"
+    assert s.log_dir == "C:/temp/test_logs"
+
+    s.log_dir = ""
+    assert s.log_dir == ""

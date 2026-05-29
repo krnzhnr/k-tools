@@ -6,9 +6,9 @@
 """
 
 import logging
-import urllib.request
+import tarfile
 import urllib.error
-import zipfile
+import urllib.request
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -313,7 +313,7 @@ class DependencyDownloadWorker(QThread):
 
             # Скачивание во временный файл
             tmp_file = tempfile.NamedTemporaryFile(
-                suffix=".zip",
+                suffix=".tar.xz",
                 delete=False,
                 dir=str(self._bin_dir),
             )
@@ -483,16 +483,16 @@ class DependencyDownloadWorker(QThread):
                         last_speed_update = now
 
     def _extract_archive(self, archive_path: Path) -> None:
-        """Распаковать zip-архив в директорию bin/.
+        """Распаковать tar.xz-архив в директорию bin/.
 
         Args:
-            archive_path: Путь к zip-архиву.
+            archive_path: Путь к tar.xz-архиву на локальном диске.
         """
         dest = self._bin_dir / self._dep.subfolder
         dest.mkdir(parents=True, exist_ok=True)
 
-        with zipfile.ZipFile(archive_path, "r") as zf:
-            zf.extractall(dest)
+        with tarfile.open(archive_path, "r:xz") as tf:
+            tf.extractall(dest)
 
         logger.info(
             "Архив распакован в: %s", dest

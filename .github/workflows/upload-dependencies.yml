@@ -21,28 +21,29 @@ jobs:
       with:
         lfs: true
 
-    - name: Create Zip Archives
+    - name: Create Tar.XZ Archives
       shell: pwsh
       run: |
         # Создаем папку для архивов
         New-Item -ItemType Directory -Force -Path temp_archives
         
-        # Функция для архивации папки в zip
+        # Функция для архивации папки в tar.xz (сжатие LZMA2)
         function Archive-Folder([string]$srcDir, [string]$archiveName) {
             $srcPath = Join-Path "bin" $srcDir
             if (Test-Path $srcPath) {
                 Write-Host "Архивация папки $srcPath в temp_archives/$archiveName"
-                # Архивируем содержимое папки, чтобы файлы были в корне zip
-                Compress-Archive -Path "$srcPath\*" -DestinationPath "temp_archives/$archiveName" -Force
+                # Используем tar для создания tar.xz архива с переходом в исходную директорию
+                # чтобы файлы располагались в корне архива
+                tar -cJf "temp_archives/$archiveName" -C $srcPath .
             } else {
                 Write-Host "Предупреждение: Папка $srcPath не найдена"
             }
         }
 
-        Archive-Folder "ffmpeg" "ffmpeg.zip"
-        Archive-Folder "mkvtoolnix" "mkvtoolnix.zip"
-        Archive-Folder "eac3to" "eac3to.zip"
-        Archive-Folder "DEE" "dee.zip"
+        Archive-Folder "ffmpeg" "ffmpeg.tar.xz"
+        Archive-Folder "mkvtoolnix" "mkvtoolnix.tar.xz"
+        Archive-Folder "eac3to" "eac3to.tar.xz"
+        Archive-Folder "DEE" "dee.tar.xz"
 
     - name: Create or Update Release deps-v1
       uses: softprops/action-gh-release@v2
@@ -52,6 +53,6 @@ jobs:
         body: "Автоматически упакованные и загруженные бинарные зависимости из Git LFS."
         prerelease: false
         make_latest: false
-        files: temp_archives/*.zip
+        files: temp_archives/*.tar.xz
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

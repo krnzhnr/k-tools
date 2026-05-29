@@ -71,12 +71,14 @@ class SettingsPage(ScrollArea):
         self.setWidget(self._scroll_widget)
 
         self._init_general_group()
+        self._init_logging_group()
         self._init_updates_group()
         self._init_maintenance_group()
 
         self._layout.setContentsMargins(36, 10, 36, 30)
         self._layout.setSpacing(20)
         self._layout.addWidget(self._general_group)
+        self._layout.addWidget(self._logging_group)
         self._layout.addWidget(self._updates_group)
         self._layout.addWidget(self._maintenance_group)
 
@@ -97,8 +99,6 @@ class SettingsPage(ScrollArea):
         self._general_group.addSettingCard(self._parallel_card)
         self._clear_list_card = self._create_clear_list_card()
         self._general_group.addSettingCard(self._clear_list_card)
-        self._logs_card = self._create_logs_card()
-        self._general_group.addSettingCard(self._logs_card)
 
     def _init_maintenance_group(self) -> None:
         """Инициализация группы обслуживания."""
@@ -238,7 +238,7 @@ class SettingsPage(ScrollArea):
         title = BodyLabel(self.tr("Тема приложения"), card)
         desc = CaptionLabel(
             self.tr(
-                "Выберите цветовое оформление (может потребоваться "
+                "Выберите цветовое оформление (требуется "
                 "перезапуск)"
             ),
             card,
@@ -343,7 +343,7 @@ class SettingsPage(ScrollArea):
 
     def _create_logs_card(self) -> CardWidget:
         """Карточка настройки отображения вкладок логов."""
-        card = CardWidget(self._general_group)
+        card = CardWidget(self._logging_group)
         card.setMinimumHeight(70)
         layout = QHBoxLayout(card)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -380,6 +380,86 @@ class SettingsPage(ScrollArea):
         )
         layout.addWidget(self._show_logs_switch)
         return card
+
+    def _init_logging_group(self) -> None:
+        """Инициализация группы настроек логирования."""
+        self._logging_group = SettingCardGroup(
+            self.tr("Логирование"), self._scroll_widget
+        )
+        self._logs_card = self._create_logs_card()
+        self._logging_group.addSettingCard(self._logs_card)
+        self._log_dir_card = self._create_log_dir_card()
+        self._logging_group.addSettingCard(self._log_dir_card)
+
+    def _create_log_dir_card(self) -> CardWidget:
+        """Карточка выбора пути для сохранения логов."""
+        card = CardWidget(self._logging_group)
+        card.setMinimumHeight(70)
+        layout = QHBoxLayout(card)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(16)
+
+        icon = IconWidget(FluentIcon.FOLDER, card)
+        icon.setFixedSize(16, 16)
+        layout.addWidget(icon)
+
+        text_layout = QVBoxLayout()
+        text_layout.setSpacing(2)
+        title = BodyLabel(self.tr("Папка для сохранения логов"), card)
+
+        current_dir = self._settings_manager.log_dir
+        if not current_dir:
+            from app.core.path_utils import get_log_dir
+            current_dir = str(get_log_dir().resolve())
+
+        desc = CaptionLabel(self.tr("Путь: ") + current_dir, card)
+        desc.setStyleSheet("color: rgba(255, 255, 255, 0.6)")
+        text_layout.addWidget(title)
+        text_layout.addWidget(desc)
+        layout.addLayout(text_layout)
+        layout.addStretch(1)
+
+        self._log_dir_btn = PushButton(self.tr("Обзор"), card)
+        self._log_dir_btn.clicked.connect(self._on_log_dir_browse)
+        layout.addWidget(self._log_dir_btn)
+
+        self._log_dir_desc_label = desc
+        return card
+
+    def _on_log_dir_browse(self) -> None:
+        """Обработка выбора папки для сохранения логов."""
+        from PyQt6.QtWidgets import QFileDialog
+        from app.core.path_utils import get_log_dir
+        from pathlib import Path
+
+        current_dir = self._settings_manager.log_dir
+        if not current_dir:
+            current_dir = str(get_log_dir().resolve())
+
+        selected_dir = QFileDialog.getExistingDirectory(
+            self,
+            self.tr("Выберите папку для логов"),
+            current_dir
+        )
+
+        if selected_dir:
+            resolved_path = str(Path(selected_dir).resolve())
+            self._settings_manager.log_dir = resolved_path
+            self._log_dir_desc_label.setText(
+                self.tr("Путь: ") + resolved_path
+            )
+            logger.info(
+                "Пользователь изменил папку логов на: %s",
+                resolved_path,
+            )
+
+            self._show_restart_dialog(
+                self.tr("Смена папки логов"),
+                self.tr(
+                    "Для применения нового пути сохранения логов необходимо "
+                    "перезапустить приложение. Перезагрузить сейчас?"
+                ),
+            )
 
     def _create_reset_card(self) -> CardWidget:
         """Карточка сброса настроек."""
@@ -1006,6 +1086,12 @@ class SettingsPage(ScrollArea):
             )
             self._show_logs_switch.setChecked(
                 self._settings_manager.show_logs_tab
+            )
+
+            from app.core.path_utils import get_log_dir
+            default_path = str(get_log_dir().resolve())
+            self._log_dir_desc_label.setText(
+                self.tr("Путь: ") + default_path
             )
 
             # Сброс комбобокса темы

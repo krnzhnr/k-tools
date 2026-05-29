@@ -98,7 +98,7 @@ class AssToVttScript(AbstractScript):
                 key="strip_caps",
                 label="Удалять текст в верхнем регистре (КАПС)",
                 comment="Автоматическое вырезание надписей, "
-                'сделанных капсом ("SIGN\\NDialogue" -> "Dialogue")',
+                'сделанных капсом ("НАДПИСЬ\\NРеплика" -> "Реплика")',
                 setting_type=SettingType.CHECKBOX,
                 default=False,
             ),

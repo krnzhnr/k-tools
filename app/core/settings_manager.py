@@ -163,16 +163,38 @@ class SettingsManager(metaclass=SingletonMeta):
         """Показывать ли вкладку логов."""
         with self._lock:
             return self._settings.value(
-                "General/show_logs_tab", False, type=bool
+                "Logging/show_logs_tab", False, type=bool
             )
 
     @show_logs_tab.setter
     def show_logs_tab(self, value: bool) -> None:
         """Установить отображение вкладки логов."""
         with self._lock:
-            self._settings.setValue("General/show_logs_tab", value)
+            self._settings.setValue("Logging/show_logs_tab", value)
             self._settings.sync()
-        logger.info("Настройка 'show_logs_tab' изменена на: %s", value)
+        logger.info(
+            "Настройка 'Logging/show_logs_tab' изменена на: %s",
+            value,
+        )
+
+    @property
+    def log_dir(self) -> str:
+        """Пользовательский путь к папке логов."""
+        with self._lock:
+            return self._settings.value(
+                "Logging/log_dir", "", type=str
+            )
+
+    @log_dir.setter
+    def log_dir(self, value: str) -> None:
+        """Установить пользовательский путь к папке логов."""
+        with self._lock:
+            self._settings.setValue("Logging/log_dir", value)
+            self._settings.sync()
+        logger.info(
+            "Настройка 'Logging/log_dir' изменена на: %s",
+            value,
+        )
 
     @property
     def auto_check_updates(self) -> bool:
@@ -239,7 +261,8 @@ class SettingsManager(metaclass=SingletonMeta):
             "General/use_auto_subfolder": False,
             "General/max_parallel_tasks": max(1, (os.cpu_count() or 2) // 2),
             "General/clear_list_on_add": False,
-            "General/show_logs_tab": False,
+            "Logging/show_logs_tab": False,
+            "Logging/log_dir": "",
             "Updates/auto_check_updates": True,
             "Updates/include_pre_releases": False,
             "Updates/last_check_time": "",
@@ -283,17 +306,17 @@ class SettingsManager(metaclass=SingletonMeta):
         # Словарь перевода русских названий в читаемые ASCII-имена
         translation_map = {
             "ASS/SRT → VTT": "ASS_SRT_to_VTT",
-            "Транскодирование аудио": "Audio_Transcoding",
+            "Кодирование аудио": "Audio_Transcoding",
             "Даунмикс в Stereo": "Audio_Downmix_to_Stereo",
             "Изменение скорости аудио": "Audio_Speed_Change",
-            "Декомпозиция каналов": "Channel_Decomposition",
-            "Ремуксинг": "Remuxing",
+            "Разделение каналов": "Channel_Decomposition",
+            "Конвертация контейнера": "Remuxing",
             "Очистка метаданных": "Metadata_Cleanup",
-            "Муксинг": "Muxing",
+            "Сборка MKV": "Muxing",
             "Управление потоками": "Stream_Management",
             "Замена потоков": "Stream_Replacement",
-            "Демуксинг": "Demuxing",
-            "Видео-процессор": "Video_Processor",
+            "Разборка контейнера": "Demuxing",
+            "Кодирование видео": "Video_Processor",
         }
 
         # Получаем безопасное английское имя
@@ -307,19 +330,30 @@ class SettingsManager(metaclass=SingletonMeta):
 
     def _migrate_old_sections(self) -> None:
         """Перенести настройки из нечитаемых секций в новые ASCII."""
+        with self._lock:
+            # Миграция старой настройки вкладки логов из General в Logging
+            if self._settings.contains("General/show_logs_tab"):
+                old_val = self._settings.value("General/show_logs_tab")
+                self._settings.setValue("Logging/show_logs_tab", old_val)
+                self._settings.remove("General/show_logs_tab")
+                logger.info(
+                    "Успешно мигрировано значение 'General/show_logs_tab' "
+                    "в 'Logging/show_logs_tab'"
+                )
+
         old_to_new = {
             "Script_ASS/SRT → VTT": "Script_ASS_SRT_to_VTT",
-            "Script_Транскодирование аудио": "Script_Audio_Transcoding",
+            "Script_Кодирование аудио": "Script_Audio_Transcoding",
             "Script_Даунмикс в Stereo": "Script_Audio_Downmix_to_Stereo",
             "Script_Изменение скорости аудио": "Script_Audio_Speed_Change",
-            "Script_Декомпозиция каналов": "Script_Channel_Decomposition",
-            "Script_Ремуксинг": "Script_Remuxing",
+            "Script_Разделение каналов": "Script_Channel_Decomposition",
+            "Script_Конвертация контейнера": "Script_Remuxing",
             "Script_Очистка метаданных": "Script_Metadata_Cleanup",
-            "Script_Муксинг": "Script_Muxing",
+            "Script_Сборка MKV": "Script_Muxing",
             "Script_Управление потоками": "Script_Stream_Management",
             "Script_Замена потоков": "Script_Stream_Replacement",
-            "Script_Демуксинг": "Script_Demuxing",
-            "Script_Видео-процессор": "Script_Video_Processor",
+            "Script_Разборка контейнера": "Script_Demuxing",
+            "Script_Кодирование видео": "Script_Video_Processor",
         }
 
         with self._lock:

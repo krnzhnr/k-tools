@@ -6,7 +6,7 @@ from app.scripts.audio_splitter import AudioSplitterScript
 def test_audio_splitter_metadata():
     """Тест метаданных скрипта."""
     script = AudioSplitterScript()
-    assert "Декомпозиция каналов" == script.name
+    assert "Разделение каналов" == script.name
     assert ".wav" in script.file_extensions
     assert ".mkv" in script.file_extensions
     assert script.icon_name == "SHARE"

@@ -153,6 +153,22 @@ def _setup_logging(manual_dir: Path | None = None) -> bool:
         log_dir = manual_dir
     else:
         log_dir = get_log_dir()
+        try:
+            from app.core.path_utils import get_app_data_dir
+            settings_path = get_app_data_dir() / "settings.ini"
+            if settings_path.exists():
+                import configparser
+                config = configparser.ConfigParser()
+                config.read(settings_path, encoding="utf-8")
+                if "Logging" in config and "log_dir" in config["Logging"]:
+                    path_str = config["Logging"]["log_dir"].strip()
+                    if path_str:
+                        log_dir = Path(path_str)
+        except Exception as e:
+            print(
+                "[Logging] Ошибка чтения кастомного пути из settings.ini: "
+                f"{e}"
+            )
 
     _cleanup_old_logs(log_dir)
 
@@ -323,7 +339,17 @@ def main() -> None:
                 None, "Выберите папку для логов"
             )
             if selected_dir:
-                _setup_logging(Path(selected_dir))
+                resolved_path = Path(selected_dir).resolve()
+                try:
+                    from app.core.settings_manager import SettingsManager
+                    settings = SettingsManager()
+                    settings.log_dir = str(resolved_path)
+                except Exception as save_err:
+                    print(
+                        "[Logging] Не удалось сохранить выбранный путь: "
+                        f"{save_err}"
+                    )
+                _setup_logging(resolved_path)
 
     logger.info("Запуск K-Tools")
 

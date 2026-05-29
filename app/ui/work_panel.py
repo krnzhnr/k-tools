@@ -51,6 +51,7 @@ from app.core.abstract_script import (
     SettingField,
     SettingType,
 )
+from app.core.constants import ScriptMetadata
 from app.core.settings_manager import SettingsManager
 from app.ui.file_list_widget import FileListWidget
 from app.ui.muxing_table_widget import MuxingTableWidget
@@ -953,7 +954,7 @@ class ScriptPage(QWidget):
 
             # --- Логика для VideoProcessor: Lossless зависимости ---
             if (
-                self._script.name == "Видео-процессор"
+                self._script.name == ScriptMetadata.VIDEO_PROCESSOR_NAME
                 and field.key == "lossless"
             ):
                 # Принудительно обновляем видимость
@@ -1098,7 +1099,7 @@ class ScriptPage(QWidget):
                 row.setVisible(is_visible)
 
         # Дополнительная логика блокировки (enabled/disabled)
-        if self._script.name == "Видео-процессор":
+        if self._script.name == ScriptMetadata.VIDEO_PROCESSOR_NAME:
             is_lossless = bool(current_settings.get("lossless", False))
             relevant_keys = ["nvenc_rc", "v_qp", "nvenc_preset", "audio_codec"]
             for key in relevant_keys:
@@ -1150,23 +1151,19 @@ class ScriptPage(QWidget):
         files_label = StrongBodyLabel("Файлы", self)
         layout.addWidget(files_label)
 
-        script_name = str(self._script.name)
-        if self._script.use_custom_widget and (
-            "Подмена" in script_name or "Замена" in script_name
-        ):
-            self._create_stream_replace_widget(layout)
-        elif self._script.use_custom_widget and (
-            "Муксер" in script_name or "Муксинг" in script_name
-        ):
-            self._create_muxing_widget(layout)
-        elif self._script.use_custom_widget and (
-            "Массовое извлечение" in script_name or "Демуксинг" in script_name
-        ):
-            self._create_track_extract_widget(layout)
-        elif self._script.use_custom_widget and "поток" in script_name.lower():
-            self._create_stream_manager_widget(layout)
-        elif self._script.use_custom_widget and "VTT" in script_name:
-            self._create_ass_filter_widget(layout)
+        if self._script.use_custom_widget:
+            if self._script.name == ScriptMetadata.STREAM_REPL_NAME:
+                self._create_stream_replace_widget(layout)
+            elif self._script.name == ScriptMetadata.MUXER_NAME:
+                self._create_muxing_widget(layout)
+            elif self._script.name == ScriptMetadata.TRACK_EXTR_NAME:
+                self._create_track_extract_widget(layout)
+            elif self._script.name == ScriptMetadata.STREAM_MGR_NAME:
+                self._create_stream_manager_widget(layout)
+            elif self._script.name == ScriptMetadata.ASS_TO_VTT_NAME:
+                self._create_ass_filter_widget(layout)
+            else:
+                self._create_generic_file_list(layout)
         else:
             self._create_generic_file_list(layout)
 
