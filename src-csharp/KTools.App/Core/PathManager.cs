@@ -27,8 +27,18 @@ public static class PathManager
     }
 
     /// <summary>
+    /// Возвращает абсолютный путь к директории bin для утилит.
+    /// Обеспечивает полную изоляцию C#-версии приложения, размещая все загружаемые бинарники
+    /// строго в локальном каталоге установки приложения (рядом с исполняемыми файлами).
+    /// </summary>
+    /// <returns>Абсолютный путь к локальной папке bin утилит.</returns>
+    public static string GetBinDirectory()
+    {
+        return Path.Combine(BaseDir, "bin");
+    }
+
+    /// <summary>
     /// Найти путь к исполняемому файлу утилиты (ffmpeg, mkvmerge, eac3to и др.).
-    /// Ищет как в локальной директории сборки, так и в корневом репозитории при разработке.
     /// </summary>
     /// <param name="binaryName">Имя бинарного файла утилиты.</param>
     /// <returns>Полный абсолютный путь к файлу утилиты на диске.</returns>
@@ -49,38 +59,23 @@ public static class PathManager
 
         // Определение подпапки в зависимости от типа утилиты
         string subfolder = GetSubfolderName(targetName);
+        string binDir = GetBinDirectory();
 
-        // 1. Поиск в каталоге сборки (релизный режим)
-        string localPath = Path.Combine(BaseDir, "bin", targetName);
-        if (File.Exists(localPath))
+        // 1. Поиск непосредственно в папке bin
+        string pathInBin = Path.Combine(binDir, targetName);
+        if (File.Exists(pathInBin))
         {
-            return localPath;
+            return pathInBin;
         }
 
-        // 2. Поиск в подпапках каталога сборки (релизный режим)
-        string subfolderLocalPath = Path.Combine(BaseDir, "bin", subfolder, targetName);
-        if (File.Exists(subfolderLocalPath))
+        // 2. Поиск в соответствующей подпапке (например, bin/ffmpeg/kt-ffmpeg.exe)
+        string pathInSubfolder = Path.Combine(binDir, subfolder, targetName);
+        if (File.Exists(pathInSubfolder))
         {
-            return subfolderLocalPath;
+            return pathInSubfolder;
         }
 
-        // 3. Поиск в режиме разработки (поднимаемся до корня репозитория)
-        // Структура: src-csharp/KTools.App/bin/Debug/net8.0-windows10... -> поднимаемся на 5 уровней вверх
-        string devRepoRoot = Path.GetFullPath(Path.Combine(BaseDir, @"..\..\..\..\.."));
-        
-        string devPath = Path.Combine(devRepoRoot, "bin", subfolder, targetName);
-        if (File.Exists(devPath))
-        {
-            return devPath;
-        }
-
-        string devPathRoot = Path.Combine(devRepoRoot, "bin", targetName);
-        if (File.Exists(devPathRoot))
-        {
-            return devPathRoot;
-        }
-
-        // 4. Резервный возврат (поиск в системном PATH операционной системы)
+        // 3. Резервный возврат имени файла (поиск в системном PATH операционной системы)
         return targetName;
     }
 

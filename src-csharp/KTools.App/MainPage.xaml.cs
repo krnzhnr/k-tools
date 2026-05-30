@@ -70,12 +70,42 @@ public sealed partial class MainPage : Page
     }
 
     /// <summary>
-    /// Обработчик загрузки NavigationView. Устанавливает начальный выбранный пункт.
+    /// Обработчик загрузки NavigationView. Проверяет наличие обязательных зависимостей.
+    /// Если обязательные компоненты не обнаружены, принудительно перенаправляет на страницу настройки.
     /// </summary>
     private void NavView_Loaded(object sender, RoutedEventArgs e)
     {
-        // Установка фокуса на пункт «Главная» при первом запуске (это вызовет SelectionChanged)
+        // Выполняем верификацию наличия обязательного бинарного окружения на диске
+        bool hasRequired = DependencyManager.Instance.AreRequiredDependenciesInstalled();
+        
+        if (!hasRequired)
+        {
+            // Перенаправляем пользователя на экран установки внешних бинарников
+            NavView.SelectedItem = NavItemDependencies;
+        }
+        else
+        {
+            // Переходим на домашний экран со списком доступных скриптов
+            NavView.SelectedItem = NavItemHome;
+        }
+    }
+
+    /// <summary>
+    /// Осуществляет внешний принудительный переход на главную страницу приложения.
+    /// Вызывается из дочерних страниц после успешного завершения необходимых процедур (например, установки).
+    /// </summary>
+    public void NavigateToHomeExternally()
+    {
+        // Установка свойства SelectedItem автоматически инициирует событие SelectionChanged и роутинг
         NavView.SelectedItem = NavItemHome;
+    }
+
+    /// <summary>
+    /// Осуществляет внешний переход на страницу настройки бинарных зависимостей.
+    /// </summary>
+    public void NavigateToDependenciesExternally()
+    {
+        NavView.SelectedItem = NavItemDependencies;
     }
 
     /// <summary>
@@ -85,6 +115,16 @@ public sealed partial class MainPage : Page
     /// </summary>
     private void NavView_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
     {
+        if (args.IsSettingsSelected)
+        {
+            // Переход на страницу общих настроек
+            HeaderTitle.Text = "Настройки";
+            HeaderSubtitle.Text = "Общие параметры и конфигурация приложения";
+            HeaderSubtitle.Visibility = Visibility.Visible;
+            ContentFrame.Navigate(typeof(SettingsPage));
+            return;
+        }
+
         if (args.SelectedItemContainer is NavigationViewItem selectedItem)
         {
             string tag = selectedItem.Tag?.ToString() ?? string.Empty;
@@ -108,20 +148,63 @@ public sealed partial class MainPage : Page
                     HeaderSubtitle.Text = script.Description;
                     HeaderSubtitle.Visibility = Visibility.Visible;
 
-                    // Здесь в будущем будет навигация на страницу конкретного скрипта
-                    // ContentFrame.Navigate(typeof(ScriptDetailPage), script);
-                    ContentFrame.Content = null;
+                    // Находим реальный объект скрипта в реестре и осуществляем переход
+                    var realScript = ScriptRegistry.Instance.GetScriptByName(script.Name);
+                    if (realScript != null)
+                    {
+                        ContentFrame.Navigate(typeof(WorkPanel), realScript);
+                    }
                 }
             }
             else if (tag == "logs")
             {
                 // Обработка клика на Логи
                 HeaderTitle.Text = "Логи";
-                HeaderSubtitle.Visibility = Visibility.Collapsed;
+                HeaderSubtitle.Text = "Просмотр журналов выполнения и системных сообщений в реальном времени";
+                HeaderSubtitle.Visibility = Visibility.Visible;
                 ContentFrame.Content = null;
+            }
+            else if (tag == "dependencies")
+            {
+                // Переход на страницу управления внешними бинарными зависимостями
+                HeaderTitle.Text = "Компоненты";
+                HeaderSubtitle.Text = "Установка, обновление и удаление внешних бинарных утилит (FFmpeg, MKVToolNix, eac3to, DEE)";
+                HeaderSubtitle.Visibility = Visibility.Visible;
+                ContentFrame.Navigate(typeof(DependencySetupPage));
             }
             // Категории без Tag игнорируются (просто открывают/закрывают меню)
         }
+    }
+
+    /// <summary>
+    /// Осуществляет переход к скрипту по его названию, синхронизируя боковое меню навигации.
+    /// </summary>
+    public void NavigateToScript(string scriptName)
+    {
+        var pair = _scriptsByTag.FirstOrDefault(p => p.Value.Name.Equals(scriptName, StringComparison.OrdinalIgnoreCase));
+        if (pair.Key != null)
+        {
+            var item = FindNavItemByTag(NavView.MenuItems, pair.Key);
+            if (item != null)
+            {
+                NavView.SelectedItem = item;
+            }
+        }
+    }
+
+    private NavigationViewItem? FindNavItemByTag(IList<object> items, string tag)
+    {
+        foreach (var obj in items)
+        {
+            if (obj is NavigationViewItem item)
+            {
+                if (item.Tag?.ToString() == tag) return item;
+
+                var subItem = FindNavItemByTag(item.MenuItems, tag);
+                if (subItem != null) return subItem;
+            }
+        }
+        return null;
     }
 }
 

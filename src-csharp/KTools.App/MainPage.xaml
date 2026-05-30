@@ -9,6 +9,7 @@
     mc:Ignorable="d">
 
     <Grid>
+        <!-- Главное меню навигации приложения -->
         <NavigationView x:Name="NavView"
                          PaneDisplayMode="Left"
                          IsPaneOpen="False"
@@ -16,11 +17,13 @@
                          AlwaysShowHeader="False"
                          Loaded="NavView_Loaded"
                          SelectionChanged="NavView_SelectionChanged">
+            
             <NavigationView.MenuItems>
+                <!-- Главная страница -->
                 <NavigationViewItem Content="Главная" Icon="Home" x:Name="NavItemHome" Tag="home" />
                 <NavigationViewItemHeader Content="Скрипты обработки" />
 
-                <!-- Видео (раскрывающийся) -->
+                <!-- Группа: Видео -->
                 <NavigationViewItem Content="Видео" Icon="Video" x:Name="NavItemVideo">
                     <NavigationViewItem.MenuItems>
                         <NavigationViewItem Content="Кодирование видео" Tag="script:video_encoding" />
@@ -29,7 +32,7 @@
                     </NavigationViewItem.MenuItems>
                 </NavigationViewItem>
 
-                <!-- Аудио (раскрывающийся) -->
+                <!-- Группа: Аудио -->
                 <NavigationViewItem Content="Аудио" Icon="Audio" x:Name="NavItemAudio">
                     <NavigationViewItem.MenuItems>
                         <NavigationViewItem Content="Кодирование аудио" Tag="script:audio_encoding" />
@@ -39,7 +42,7 @@
                     </NavigationViewItem.MenuItems>
                 </NavigationViewItem>
 
-                <!-- Контейнеры (раскрывающийся) -->
+                <!-- Группа: Контейнеры -->
                 <NavigationViewItem Content="Контейнеры" Icon="Share" x:Name="NavItemContainers">
                     <NavigationViewItem.MenuItems>
                         <NavigationViewItem Content="Сборка MKV" Tag="script:mkv_assembly" />
@@ -49,7 +52,7 @@
                     </NavigationViewItem.MenuItems>
                 </NavigationViewItem>
 
-                <!-- Субтитры (раскрывающийся) -->
+                <!-- Группа: Субтитры -->
                 <NavigationViewItem Content="Субтитры" Icon="Font" x:Name="NavItemSubtitles">
                     <NavigationViewItem.MenuItems>
                         <NavigationViewItem Content="ASS/SRT → VTT" Tag="script:subtitles_convert" />
@@ -57,10 +60,13 @@
                 </NavigationViewItem>
             </NavigationView.MenuItems>
 
+            <!-- Фиксированные пункты меню внизу -->
             <NavigationView.FooterMenuItems>
                 <NavigationViewItem Content="Логи" Icon="Document" x:Name="NavItemLogs" Tag="logs" />
+                <NavigationViewItem Content="Компоненты" Icon="Setting" x:Name="NavItemDependencies" Tag="dependencies" />
             </NavigationView.FooterMenuItems>
 
+            <!-- Основной контент страницы -->
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
@@ -84,6 +90,7 @@
                                HorizontalAlignment="Left" />
                 </StackPanel>
 
+                <!-- Область отображения дочерних страниц -->
                 <Frame x:Name="ContentFrame" Grid.Row="1" Margin="0" />
             </Grid>
         </NavigationView>

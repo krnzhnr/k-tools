@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="KTools_App.UI.Pages.SettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:community="using:CommunityToolkit.WinUI.Controls"
+    mc:Ignorable="d">
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Padding="36,12,36,36" Spacing="20" HorizontalAlignment="Stretch">
+
+            <!-- Раздел: Общие параметры -->
+            <StackPanel Spacing="8">
+                <TextBlock Text="Общие параметры" 
+                           FontSize="16" 
+                           FontWeight="Bold" 
+                           Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+                           Margin="0,0,0,8" />
+
+                <!-- Флажок перезаписи файлов -->
+                <community:SettingsCard Header="Перезаписывать существующие файлы"
+                                        Description="Автоматически перезаписывать файлы с одинаковыми именами без запроса подтверждения"
+                                        Padding="16,12,16,12">
+                    <ToggleSwitch x:Name="OverwriteToggle" 
+                                  OnContent="Вкл" 
+                                  OffContent="Выкл"
+                                  Toggled="OverwriteToggle_Toggled" />
+                </community:SettingsCard>
+
+                <!-- Название подпапки экспорта -->
+                <community:SettingsCard Header="Имя папки результатов"
+                                        Description="Имя подпапки, создаваемой по умолчанию в директории сохранения результатов"
+                                        Padding="16,12,16,12">
+                    <TextBox x:Name="SubfolderTextBox" 
+                             Width="200" 
+                             LostFocus="SubfolderTextBox_LostFocus" />
+                </community:SettingsCard>
+
+                <!-- Автоматическое создание подпапки -->
+                <community:SettingsCard Header="Создавать подпапку автоматически"
+                                        Description="Всегда создавать подпапку результатов в каталоге исходных файлов"
+                                        Padding="16,12,16,12">
+                    <ToggleSwitch x:Name="AutoSubfolderToggle" 
+                                  OnContent="Вкл" 
+                                  OffContent="Выкл"
+                                  Toggled="AutoSubfolderToggle_Toggled" />
+                </community:SettingsCard>
+            </StackPanel>
+
+            <!-- Раздел: Персонализация -->
+            <StackPanel Spacing="8">
+                <TextBlock Text="Персонализация" 
+                           FontSize="16" 
+                           FontWeight="Bold" 
+                           Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+                           Margin="0,8,0,8" />
+
+                <!-- Выбор цветовой темы -->
+                <community:SettingsCard Header="Тема оформления"
+                                        Description="Выберите визуальную тему интерфейса приложения (требуется перезапуск)"
+                                        Padding="16,12,16,12">
+                    <ComboBox x:Name="ThemeComboBox" 
+                              Width="160"
+                              SelectionChanged="ThemeComboBox_SelectionChanged">
+                        <ComboBoxItem Content="Темная" Tag="Dark" />
+                        <ComboBoxItem Content="Светлая" Tag="Light" />
+                    </ComboBox>
+                </community:SettingsCard>
+            </StackPanel>
+
+            <!-- Раздел: Сброс и обслуживание -->
+            <StackPanel Spacing="8">
+                <TextBlock Text="Обслуживание" 
+                           FontSize="16" 
+                           FontWeight="Bold" 
+                           Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+                           Margin="0,8,0,8" />
+
+                <!-- Кнопка сброса настроек -->
+                <community:SettingsCard Header="Сбросить все параметры"
+                                        Description="Удалить файл конфигурации и вернуть все настройки приложения по умолчанию"
+                                        Padding="16,12,16,12">
+                    <Button Content="Сбросить настройки" 
+                            Style="{StaticResource DefaultButtonStyle}"
+                            Click="ResetSettings_Click" />
+                </community:SettingsCard>
+            </StackPanel>
+
+            <!-- Блок о программе -->
+            <Border BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    CornerRadius="8"
+                    Padding="16"
+                    Margin="0,20,0,0">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    
+                    <SymbolIcon Symbol="Setting" 
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}" 
+                                Width="40" 
+                                Height="40" 
+                                Margin="0,0,16,0" />
+                    
+                    <StackPanel Grid.Column="1" Spacing="4" VerticalAlignment="Center">
+                        <TextBlock Text="K-Tools C# Edition" 
+                                   FontWeight="SemiBold" 
+                                   FontSize="14" />
+                        <TextBlock Text="Версия 1.7.0.0 (WinAppSDK / WinUI 3)" 
+                                   FontSize="11" 
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <TextBlock Text="Локальная изолированная сборка с открытым исходным кодом." 
+                                   FontSize="11" 
+                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</Page>

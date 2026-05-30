@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<UserControl
+    x:Class="KTools_App.UI.Controls.ScriptSettingsControl"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:community="using:CommunityToolkit.WinUI.Controls"
+    mc:Ignorable="d"
+    d:DesignHeight="300"
+    d:DesignWidth="400">
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,0,8,0">
+        <StackPanel x:Name="SettingsContainer" 
+                    Spacing="16" 
+                    Padding="4,4,12,24" 
+                    HorizontalAlignment="Stretch">
+            <!-- Динамические группы настроек будут вставляться сюда программно -->
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

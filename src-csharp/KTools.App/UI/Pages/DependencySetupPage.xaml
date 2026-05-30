@@ -1,0 +1,190 @@
+<Page
+    x:Class="KTools_App.UI.Pages.DependencySetupPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:core="using:KTools_App.Core"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:local="using:KTools_App.UI.Pages"
+    mc:Ignorable="d">
+
+    <Page.Resources>
+        <!-- Шаблон вертикальной карточки зависимости -->
+        <DataTemplate x:Key="DependencyCardTemplate" x:DataType="local:DependencyVM">
+            <Border Width="220" 
+                    Height="190" 
+                    CornerRadius="8" 
+                    BorderThickness="1"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    Padding="12"
+                    Margin="0,0,16,16"
+                    PointerEntered="Card_PointerEntered"
+                    PointerExited="Card_PointerExited">
+                <Grid RowDefinitions="Auto, *, Auto, Auto">
+                    
+                    <!-- Секция 1: Иконка и имя -->
+                    <StackPanel Grid.Row="0" Spacing="6" Margin="0,0,0,6">
+                        <Grid ColumnDefinitions="Auto, *">
+                            <Border Grid.Column="0" 
+                                    Width="36" 
+                                    Height="36" 
+                                    CornerRadius="8" 
+                                    Background="{x:Bind Info.CategoryBgColor}"
+                                    VerticalAlignment="Center">
+                                <SymbolIcon Symbol="{x:Bind Info.IconSymbol}" 
+                                             Foreground="{x:Bind Info.CategoryFgColor}"
+                                             Width="20"
+                                             Height="20" />
+                            </Border>
+                            <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="8,0,0,0">
+                                <TextBlock Text="{x:Bind Info.DisplayName}" 
+                                           FontFamily="Segoe UI" 
+                                           FontSize="13" 
+                                           FontWeight="SemiBold"
+                                           TextWrapping="Wrap"
+                                           MaxLines="2"
+                                           Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+                            </StackPanel>
+                        </Grid>
+                    </StackPanel>
+
+                    <!-- Секция 2: Описание и размер -->
+                    <StackPanel Grid.Row="1" Spacing="2" Margin="0,0,0,4">
+                        <TextBlock Text="{x:Bind Info.Description}" 
+                                   FontFamily="Segoe UI" 
+                                   FontSize="10.5" 
+                                   TextWrapping="Wrap"
+                                   MaxLines="2"
+                                   TextTrimming="CharacterEllipsis"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        
+                        <TextBlock Text="{x:Bind SizeText}" 
+                                   FontFamily="Segoe UI" 
+                                   FontSize="10.5" 
+                                   FontWeight="SemiBold"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </StackPanel>
+
+                    <!-- Секция 3: Индикация статуса и прогресс-бар -->
+                    <StackPanel Grid.Row="2" Spacing="2" Margin="0,2,0,6" Height="34" VerticalAlignment="Bottom">
+                        <!-- Текст статуса -->
+                        <TextBlock Text="{x:Bind StatusText, Mode=OneWay}" 
+                                   FontFamily="Segoe UI" 
+                                   FontSize="11" 
+                                   FontWeight="SemiBold"
+                                   Foreground="{x:Bind StatusColor, Mode=OneWay}" />
+
+                        <!-- Прогресс-бар скачивания (виден только при Downloading/Extracting) -->
+                        <ProgressBar Value="{x:Bind Progress, Mode=OneWay}" 
+                                     Minimum="0" 
+                                     Maximum="100" 
+                                     IsIndeterminate="{x:Bind IsExtracting, Mode=OneWay}"
+                                     Visibility="{x:Bind ProgressVisibility, Mode=OneWay}"
+                                     Height="4" 
+                                     CornerRadius="2" />
+
+                        <!-- Скорость скачивания / Ошибка -->
+                        <TextBlock Text="{x:Bind SubStatusText, Mode=OneWay}" 
+                                   FontFamily="Segoe UI" 
+                                   FontSize="9.5" 
+                                   TextTrimming="CharacterEllipsis"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                   Visibility="{x:Bind SubStatusVisibility, Mode=OneWay}" />
+                    </StackPanel>
+
+                    <!-- Секция 4: Кнопки управления -->
+                    <StackPanel Grid.Row="3" VerticalAlignment="Bottom">
+                        <!-- Кнопка Установить (видна при NotInstalled/Error) -->
+                        <Button Content="Установить" 
+                                Style="{StaticResource AccentButtonStyle}"
+                                HorizontalAlignment="Stretch"
+                                Visibility="{x:Bind InstallButtonVisibility, Mode=OneWay}"
+                                Click="InstallButton_Click" />
+
+                        <!-- Кнопка Отмена (видна при Downloading/Extracting) -->
+                        <Button Content="Отмена" 
+                                HorizontalAlignment="Stretch"
+                                Visibility="{x:Bind CancelButtonVisibility, Mode=OneWay}"
+                                Click="CancelButton_Click" />
+
+                        <!-- Кнопка Удалить (видна при Installed) -->
+                        <Button Content="Удалить" 
+                                HorizontalAlignment="Stretch"
+                                Visibility="{x:Bind DeleteButtonVisibility, Mode=OneWay}"
+                                Click="DeleteButton_Click" />
+                    </StackPanel>
+                    
+                </Grid>
+            </Border>
+        </DataTemplate>
+    </Page.Resources>
+ 
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Padding="36,16,24,36" Spacing="24">
+            
+            <!-- Панель быстрых действий сверху -->
+            <StackPanel Orientation="Horizontal" Spacing="12" Margin="0,0,0,8">
+                <Button x:Name="InstallAllButton" 
+                        Style="{StaticResource AccentButtonStyle}"
+                        Click="InstallAllButton_Click">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <SymbolIcon Symbol="Download" />
+                        <TextBlock Text="Установить все отсутствующие" />
+                    </StackPanel>
+                </Button>
+                <Button x:Name="RefreshButton" 
+                        Click="RefreshButton_Click">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <SymbolIcon x:Name="RefreshIcon" Symbol="Refresh" />
+                        <TextBlock x:Name="RefreshText" Text="Проверить заново" />
+                    </StackPanel>
+                </Button>
+                <Button x:Name="OpenFolderButton" 
+                        Click="OpenFolderButton_Click">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <SymbolIcon Symbol="Folder" />
+                        <TextBlock Text="Открыть папку" />
+                    </StackPanel>
+                </Button>
+            </StackPanel>
+
+            <!-- Группа: Обязательные компоненты -->
+            <StackPanel Spacing="12">
+                <TextBlock Text="Обязательные компоненты" 
+                            FontFamily="Segoe UI" 
+                            FontSize="16" 
+                            FontWeight="Bold"
+                            Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+                
+                <ItemsControl x:Name="RequiredItemsControl"
+                              ItemTemplate="{StaticResource DependencyCardTemplate}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <ItemsWrapGrid Orientation="Horizontal" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                </ItemsControl>
+            </StackPanel>
+
+            <!-- Группа: Необязательные компоненты -->
+            <StackPanel Spacing="12" Margin="0,8,0,0">
+                <TextBlock Text="Дополнительные компоненты" 
+                            FontFamily="Segoe UI" 
+                            FontSize="16" 
+                            FontWeight="Bold"
+                            Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+                
+                <ItemsControl x:Name="OptionalItemsControl"
+                              ItemTemplate="{StaticResource DependencyCardTemplate}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <ItemsWrapGrid Orientation="Horizontal" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                </ItemsControl>
+            </StackPanel>
+
+        </StackPanel>
+    </ScrollViewer>
+</Page>

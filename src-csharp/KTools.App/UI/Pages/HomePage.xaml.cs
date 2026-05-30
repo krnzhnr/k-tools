@@ -87,8 +87,17 @@ public sealed partial class HomePage : Page
     {
         if (sender is Border border && border.Tag is ScriptInfo script)
         {
-            // Здесь в будущем будет реализован переход на страницу скрипта:
-            // Frame.Navigate(typeof(ScriptPage), script.Name);
+            // Находим родительский MainPage для выполнения синхронизированного перехода
+            DependencyObject? parent = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetParent(this);
+            while (parent != null && parent is not MainPage)
+            {
+                parent = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetParent(parent);
+            }
+
+            if (parent is MainPage mainPage)
+            {
+                mainPage.NavigateToScript(script.Name);
+            }
         }
     }
 }
