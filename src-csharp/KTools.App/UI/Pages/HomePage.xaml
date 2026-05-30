@@ -1,0 +1,138 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="KTools_App.UI.Pages.HomePage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:core="using:KTools_App.Core"
+    xmlns:community="using:CommunityToolkit.WinUI.Controls"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <Page.Resources>
+        <!-- Шаблон карточки скрипта -->
+        <DataTemplate x:Key="ScriptCardTemplate" x:DataType="core:ScriptInfo">
+            <Border Width="325" 
+                    Height="100" 
+                    Padding="16,12,16,12"
+                    Margin="0,0,12,12"
+                    CornerRadius="8"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    Tag="{x:Bind}"
+                    PointerEntered="Card_PointerEntered"
+                    PointerExited="Card_PointerExited"
+                    Tapped="Card_Tapped">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <!-- Секция Иконки -->
+                    <Border Grid.Column="0"
+                            Width="40" 
+                            Height="40" 
+                            CornerRadius="8" 
+                            Background="{x:Bind CategoryBgColor}"
+                            VerticalAlignment="Center"
+                            Margin="0,0,12,0">
+                        <SymbolIcon Symbol="{x:Bind IconSymbol}" 
+                                    Foreground="{x:Bind CategoryFgColor}"
+                                    Width="24"
+                                    Height="24" />
+                    </Border>
+
+                    <!-- Текстовая Секция -->
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
+                        <TextBlock Text="{x:Bind Name}" 
+                                   FontFamily="Segoe UI" 
+                                   FontSize="14" 
+                                   FontWeight="SemiBold"
+                                   Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+                        <TextBlock Text="{x:Bind Description}" 
+                                   FontFamily="Segoe UI" 
+                                   FontSize="11" 
+                                   TextWrapping="Wrap"
+                                   MaxLines="3"
+                                   TextTrimming="CharacterEllipsis"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+        </DataTemplate>
+    </Page.Resources>
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Padding="36,12,24,36" Spacing="32">
+
+            <!-- Группа: Видео -->
+            <StackPanel Spacing="12">
+                <TextBlock Text="Видео" 
+                           FontFamily="Segoe UI" 
+                           FontSize="16" 
+                           FontWeight="Bold"
+                           Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+                <ItemsControl x:Name="VideoGridView"
+                              ItemTemplate="{StaticResource ScriptCardTemplate}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <ItemsWrapGrid Orientation="Horizontal" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                </ItemsControl>
+            </StackPanel>
+
+            <!-- Группа: Аудио -->
+            <StackPanel Spacing="12">
+                <TextBlock Text="Аудио" 
+                           FontFamily="Segoe UI" 
+                           FontSize="16" 
+                           FontWeight="Bold"
+                           Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+                <ItemsControl x:Name="AudioGridView"
+                              ItemTemplate="{StaticResource ScriptCardTemplate}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <ItemsWrapGrid Orientation="Horizontal" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                </ItemsControl>
+            </StackPanel>
+
+            <!-- Группа: Контейнеры -->
+            <StackPanel Spacing="12">
+                <TextBlock Text="Контейнеры" 
+                           FontFamily="Segoe UI" 
+                           FontSize="16" 
+                           FontWeight="Bold"
+                           Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+                <ItemsControl x:Name="ContainersGridView"
+                              ItemTemplate="{StaticResource ScriptCardTemplate}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <ItemsWrapGrid Orientation="Horizontal" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                </ItemsControl>
+            </StackPanel>
+
+            <!-- Группа: Субтитры -->
+            <StackPanel Spacing="12">
+                <TextBlock Text="Субтитры" 
+                           FontFamily="Segoe UI" 
+                           FontSize="16" 
+                           FontWeight="Bold"
+                           Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+                <ItemsControl x:Name="SubtitlesGridView"
+                              ItemTemplate="{StaticResource ScriptCardTemplate}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <ItemsWrapGrid Orientation="Horizontal" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                </ItemsControl>
+            </StackPanel>
+        </StackPanel>
+    </ScrollViewer>
+</Page>

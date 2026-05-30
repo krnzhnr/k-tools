@@ -189,3 +189,10 @@ file_version_info.txt
 /.antigravity
 CLAUDE.md
 .claudeignore
+
+# C# / Visual Studio Build Artifacts
+src-csharp/**/bin/
+src-csharp/**/obj/
+src-csharp/.vs/
+src-csharp/**/*.user
+

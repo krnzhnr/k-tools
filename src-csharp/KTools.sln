@@ -1,0 +1,23 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 18
+VisualStudioVersion = 18.6.11822.322 stable
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "KTools.App", "KTools.App\KTools.App.csproj", "{8BB7FEA6-25B0-4914-A44A-A3686E56E380}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{8BB7FEA6-25B0-4914-A44A-A3686E56E380}.Debug|Any CPU.ActiveCfg = Debug|x86
+		{8BB7FEA6-25B0-4914-A44A-A3686E56E380}.Debug|Any CPU.Build.0 = Debug|x86
+		{8BB7FEA6-25B0-4914-A44A-A3686E56E380}.Debug|Any CPU.Deploy.0 = Debug|x86
+		{8BB7FEA6-25B0-4914-A44A-A3686E56E380}.Release|Any CPU.ActiveCfg = Release|x86
+		{8BB7FEA6-25B0-4914-A44A-A3686E56E380}.Release|Any CPU.Build.0 = Release|x86
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal
