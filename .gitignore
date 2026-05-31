@@ -189,3 +189,15 @@ file_version_info.txt
 /.antigravity
 CLAUDE.md
 .claudeignore
+
+# Visual Studio / C# / .NET
+.vs/
+[Bb]in/
+[Oo]bj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.xbf
+
+*.pubxml
