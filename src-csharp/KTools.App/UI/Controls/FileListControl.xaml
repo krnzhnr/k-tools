@@ -121,11 +121,21 @@
                                 x:Name="DeleteButton"
                                 Background="Transparent"
                                 BorderThickness="0"
-                                Padding="4"
+                                Padding="0"
+                                Width="32"
+                                Height="32"
+                                MinWidth="0"
+                                MinHeight="0"
+                                HorizontalAlignment="Center"
                                 VerticalAlignment="Center"
+                                HorizontalContentAlignment="Center"
+                                VerticalContentAlignment="Center"
                                 Click="DeleteButton_Click"
                                 ToolTipService.ToolTip="Удалить из списка">
-                            <SymbolIcon Symbol="Cancel" Width="16" Height="16" />
+                            <FontIcon FontSize="12" Glyph="&#xE711;"
+                                HorizontalAlignment="Center"
+                                VerticalAlignment="Center"
+FontFamily="{ThemeResource SymbolThemeFontFamily}" />
                         </Button>
                     </Grid>
                 </DataTemplate>
