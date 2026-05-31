@@ -1,6 +1,7 @@
 // -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using KTools_App.Core;
@@ -12,11 +13,11 @@ namespace KTools_App.Scripts;
 
 public class VideoEncodingStub : AbstractScript
 {
-    public override string Name => "Кодирование видео";
-    public override string Description => "Кодирование видео: изменение формата, вшивание субтитров, фильтрация тегов и настройка звука";
-    public override string Category => "Видео";
+    public override string Name => AppConstants.ScriptMetadata.VideoProcessorName;
+    public override string Description => AppConstants.ScriptMetadata.VideoProcessorDesc;
+    public override string Category => AppConstants.ScriptCategory.Video;
     public override string IconName => "video";
-    public override string[] FileExtensions => new[] { ".mp4", ".mkv", ".avi", ".ts" };
+    public override string[] FileExtensions => AppConstants.VideoContainers.ToArray();
     public override string[] RequiredDependencies => new[] { "ffmpeg" };
 
     public override List<SettingField> SettingsSchema => new()
@@ -49,11 +50,11 @@ public class VideoEncodingStub : AbstractScript
 
 public class ContainerConversionStub : AbstractScript
 {
-    public override string Name => "Конвертация контейнера";
-    public override string Description => "Перемещение видео/аудио потоков в другой контейнер без перекодирования";
-    public override string Category => "Видео";
+    public override string Name => AppConstants.ScriptMetadata.ContainerConvName;
+    public override string Description => AppConstants.ScriptMetadata.ContainerConvDesc;
+    public override string Category => AppConstants.ScriptCategory.Video;
     public override string IconName => "forward";
-    public override string[] FileExtensions => new[] { ".mp4", ".mkv", ".avi", ".ts", ".m2ts" };
+    public override string[] FileExtensions => AppConstants.VideoContainers.ToArray();
     public override string[] RequiredDependencies => new[] { "ffmpeg" };
 
     public override List<SettingField> SettingsSchema => new()
@@ -84,11 +85,11 @@ public class ContainerConversionStub : AbstractScript
 
 public class AudioEncodingStub : AbstractScript
 {
-    public override string Name => "Кодирование аудио";
-    public override string Description => "Перекодирование аудио в QAAC, AAC, FLAC, WAV, E-AC3, AC3 и др. с настройкой качества";
-    public override string Category => "Аудио";
+    public override string Name => AppConstants.ScriptMetadata.AudioConverterName;
+    public override string Description => AppConstants.ScriptMetadata.AudioConverterDesc;
+    public override string Category => AppConstants.ScriptCategory.Audio;
     public override string IconName => "music";
-    public override string[] FileExtensions => new[] { ".wav", ".flac", ".m4a", ".aac", ".ac3", ".dts", ".mkv", ".mp4" };
+    public override string[] FileExtensions => AppConstants.AudioContainers.Concat(AppConstants.AudioStreams).Concat(AppConstants.VideoContainers).ToArray();
     public override string[] RequiredDependencies => new[] { "ffmpeg" };
 
     public override List<SettingField> SettingsSchema => new()
@@ -121,11 +122,11 @@ public class AudioEncodingStub : AbstractScript
 
 public class AudioDownmixStub : AbstractScript
 {
-    public override string Name => "Даунмикс в Stereo";
-    public override string Description => "Даунмикс 5.1/7.1 в Stereo 2.0 (DDP/DD) через Dolby Encoding Engine";
-    public override string Category => "Аудио";
+    public override string Name => AppConstants.ScriptMetadata.AudioDownmixName;
+    public override string Description => AppConstants.ScriptMetadata.AudioDownmixDesc;
+    public override string Category => AppConstants.ScriptCategory.Audio;
     public override string IconName => "volume2";
-    public override string[] FileExtensions => new[] { ".wav", ".flac", ".dts", ".ac3", ".mkv" };
+    public override string[] FileExtensions => AppConstants.AudioContainers.Concat(AppConstants.AudioStreams).Concat(AppConstants.VideoContainers).ToArray();
     public override string[] RequiredDependencies => new[] { "dee", "ffmpeg" };
 
     public override async Task<List<string>> ExecuteSingleAsync(
@@ -149,11 +150,11 @@ public class AudioDownmixStub : AbstractScript
 
 public class AudioSpeedStub : AbstractScript
 {
-    public override string Name => "Изменение скорости аудио";
-    public override string Description => "Изменение скорости/тона аудио (PAL ↔ NTSC) с помощью eac3to.";
-    public override string Category => "Аудио";
+    public override string Name => AppConstants.ScriptMetadata.AudioSpeedName;
+    public override string Description => AppConstants.ScriptMetadata.AudioSpeedDesc;
+    public override string Category => AppConstants.ScriptCategory.Audio;
     public override string IconName => "sync";
-    public override string[] FileExtensions => new[] { ".ac3", ".dts", ".wav", ".thd" };
+    public override string[] FileExtensions => AppConstants.AudioContainers.Concat(AppConstants.AudioStreams).Concat(AppConstants.VideoContainers).ToArray();
     public override string[] RequiredDependencies => new[] { "eac3to" };
 
     public override List<SettingField> SettingsSchema => new()
@@ -183,11 +184,11 @@ public class AudioSpeedStub : AbstractScript
 
 public class AudioChannelsStub : AbstractScript
 {
-    public override string Name => "Разделение каналов";
-    public override string Description => "Разделение многоканального аудио на моно-WAV файлы с опциональной склейкой в стереопары";
-    public override string Category => "Аудио";
+    public override string Name => AppConstants.ScriptMetadata.AudioSplitName;
+    public override string Description => AppConstants.ScriptMetadata.AudioSplitDesc;
+    public override string Category => AppConstants.ScriptCategory.Audio;
     public override string IconName => "map";
-    public override string[] FileExtensions => new[] { ".wav", ".flac", ".dts", ".ac3" };
+    public override string[] FileExtensions => AppConstants.AudioContainers.Concat(AppConstants.AudioStreams).Concat(AppConstants.VideoContainers).ToArray();
     public override string[] RequiredDependencies => new[] { "ffmpeg" };
 
     public override async Task<List<string>> ExecuteSingleAsync(
@@ -211,11 +212,11 @@ public class AudioChannelsStub : AbstractScript
 
 public class MkvAssemblyStub : AbstractScript
 {
-    public override string Name => "Сборка MKV";
-    public override string Description => "Сборка контейнера MKV из отдельных потоков видео, аудио и субтитров с сопоставлением по имени";
-    public override string Category => "Контейнеры";
+    public override string Name => AppConstants.ScriptMetadata.MuxerName;
+    public override string Description => AppConstants.ScriptMetadata.MuxerDesc;
+    public override string Category => AppConstants.ScriptCategory.Containers;
     public override string IconName => "add";
-    public override string[] FileExtensions => new[] { ".mkv", ".mp4" };
+    public override string[] FileExtensions => AppConstants.VideoContainers.ToArray();
     public override string[] RequiredDependencies => new[] { "mkvtoolnix" };
 
     public override async Task<List<string>> ExecuteSingleAsync(
@@ -239,11 +240,11 @@ public class MkvAssemblyStub : AbstractScript
 
 public class StreamManagementStub : AbstractScript
 {
-    public override string Name => "Управление потоками";
-    public override string Description => "Удаление или сохранение выбранных дорожек (видео, аудио, субтитры) в MKV и MP4 файлах.";
-    public override string Category => "Контейнеры";
+    public override string Name => AppConstants.ScriptMetadata.StreamMgrName;
+    public override string Description => AppConstants.ScriptMetadata.StreamMgrDesc;
+    public override string Category => AppConstants.ScriptCategory.Containers;
     public override string IconName => "list";
-    public override string[] FileExtensions => new[] { ".mkv", ".mp4" };
+    public override string[] FileExtensions => AppConstants.VideoContainers.ToArray();
     public override string[] RequiredDependencies => new[] { "mkvtoolnix" };
 
     public override async Task<List<string>> ExecuteSingleAsync(
@@ -267,11 +268,11 @@ public class StreamManagementStub : AbstractScript
 
 public class StreamReplacementStub : AbstractScript
 {
-    public override string Name => "Замена потоков";
-    public override string Description => "Заменяет дорожки в MKV/MP4 на внешние файлы (видео, аудио, субтитры).";
-    public override string Category => "Контейнеры";
+    public override string Name => AppConstants.ScriptMetadata.StreamReplName;
+    public override string Description => AppConstants.ScriptMetadata.StreamReplDesc;
+    public override string Category => AppConstants.ScriptCategory.Containers;
     public override string IconName => "switch";
-    public override string[] FileExtensions => new[] { ".mkv", ".mp4" };
+    public override string[] FileExtensions => AppConstants.VideoContainers.ToArray();
     public override string[] RequiredDependencies => new[] { "mkvtoolnix" };
 
     public override async Task<List<string>> ExecuteSingleAsync(
@@ -295,11 +296,11 @@ public class StreamReplacementStub : AbstractScript
 
 public class ContainerDemuxStub : AbstractScript
 {
-    public override string Name => "Разборка контейнера";
-    public override string Description => "Массовое извлечение потоков из контейнера с авто-именованием.";
-    public override string Category => "Контейнеры";
+    public override string Name => AppConstants.ScriptMetadata.TrackExtrName;
+    public override string Description => AppConstants.ScriptMetadata.TrackExtrDesc;
+    public override string Category => AppConstants.ScriptCategory.Containers;
     public override string IconName => "download";
-    public override string[] FileExtensions => new[] { ".mkv", ".mp4" };
+    public override string[] FileExtensions => AppConstants.VideoContainers.ToArray();
     public override string[] RequiredDependencies => new[] { "mkvtoolnix", "ffmpeg" };
 
     public override async Task<List<string>> ExecuteSingleAsync(
@@ -323,11 +324,11 @@ public class ContainerDemuxStub : AbstractScript
 
 public class SubtitlesConvertStub : AbstractScript
 {
-    public override string Name => "ASS/SRT → VTT";
-    public override string Description => "Конвертация субтитров ASS/SSA/SRT в WebVTT с фильтрацией по актёрам и очисткой тегов.";
-    public override string Category => "Субтитры";
+    public override string Name => AppConstants.ScriptMetadata.AssToVttName;
+    public override string Description => AppConstants.ScriptMetadata.AssToVttDesc;
+    public override string Category => AppConstants.ScriptCategory.Subtitles;
     public override string IconName => "font";
-    public override string[] FileExtensions => new[] { ".ass", ".ssa", ".srt" };
+    public override string[] FileExtensions => AppConstants.SubtitleExtensions.ToArray();
 
     public override List<SettingField> SettingsSchema => new()
     {

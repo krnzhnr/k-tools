@@ -222,6 +222,7 @@ public class DependencyManager
         var dep = _registry.FirstOrDefault(d => d.Key.Equals(key, StringComparison.OrdinalIgnoreCase));
         if (dep == null)
         {
+            LogService.Instance.Error($"Запрос на установку неизвестной зависимости '{key}'", "DependencyManager");
             InstallFinished?.Invoke(key, false, "Зависимость не найдена в реестре манифеста.");
             return;
         }
@@ -236,6 +237,7 @@ public class DependencyManager
             _activeDownloads[key] = cts;
         }
 
+        LogService.Instance.Info($"Запущена процедура установки зависимости '{dep.DisplayName}' ({dep.Key})", "DependencyManager");
         SetStatus(key, DependencyStatus.Downloading);
         string tempArchivePath = Path.Combine(Path.GetTempPath(), dep.ArchiveName);
 
@@ -243,6 +245,7 @@ public class DependencyManager
         {
             // 1. Асинхронное скачивание архива
             string downloadUrl = $"{DepsBaseUrl}/{dep.ArchiveName}";
+            LogService.Instance.Info($"Начало скачивания архива: {downloadUrl} в {tempArchivePath}", "DependencyManager");
             using (var response = await _httpClient.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead))
             {
                 response.EnsureSuccessStatusCode();
@@ -291,6 +294,8 @@ public class DependencyManager
                 }
             }
 
+            LogService.Instance.Info($"Архив '{dep.ArchiveName}' успешно скачан на диск", "DependencyManager");
+
             // 2. Распаковка архива через системную утилиту tar.exe
             SetStatus(key, DependencyStatus.Extracting);
             string destinationFolder = Path.Combine(_binDir, dep.Subfolder);
@@ -298,30 +303,37 @@ public class DependencyManager
             // Гарантируем наличие целевых папок
             Directory.CreateDirectory(destinationFolder);
 
+            LogService.Instance.Info($"Начало распаковки архива в папку '{destinationFolder}'", "DependencyManager");
             var cancellationToken = _activeDownloads[key].Token;
             await ExtractArchiveAsync(tempArchivePath, destinationFolder, cancellationToken);
+            LogService.Instance.Info($"Распаковка архива '{dep.ArchiveName}' успешно завершена", "DependencyManager");
 
             // 3. Верификация установки
             RefreshAllStatuses();
             if (IsInstalled(key))
             {
                 SetStatus(key, DependencyStatus.Installed);
+                LogService.Instance.Info($"Зависимость '{dep.DisplayName}' успешно установлена и верифицирована", "DependencyManager");
                 InstallFinished?.Invoke(key, true, string.Empty);
             }
             else
             {
                 SetStatus(key, DependencyStatus.Error);
-                InstallFinished?.Invoke(key, false, $"Файл-маркер '{dep.VerifyBinary}' отсутствует на диске после распаковки.");
+                string err = $"Файл-маркер '{dep.VerifyBinary}' отсутствует на диске после распаковки.";
+                LogService.Instance.Error($"Ошибка верификации '{dep.DisplayName}': {err}", "DependencyManager");
+                InstallFinished?.Invoke(key, false, err);
             }
         }
         catch (OperationCanceledException)
         {
             SetStatus(key, DependencyStatus.NotInstalled);
+            LogService.Instance.Warn($"Установка зависимости '{dep.DisplayName}' отменена пользователем", "DependencyManager");
             InstallFinished?.Invoke(key, false, "Установка отменена пользователем.");
         }
         catch (Exception ex)
         {
             SetStatus(key, DependencyStatus.Error);
+            LogService.Instance.Error($"Сбой при установке зависимости '{dep.DisplayName}': {ex.Message}", "DependencyManager");
             InstallFinished?.Invoke(key, false, ex.Message);
         }
         finally
@@ -396,12 +408,15 @@ public class DependencyManager
         var dep = _registry.FirstOrDefault(d => d.Key.Equals(key, StringComparison.OrdinalIgnoreCase));
         if (dep == null)
         {
+            LogService.Instance.Error($"Попытка удаления неизвестной зависимости '{key}'", "DependencyManager");
             return false;
         }
 
+        LogService.Instance.Info($"Запрос на удаление зависимости '{dep.DisplayName}'", "DependencyManager");
         string folderPath = Path.Combine(_binDir, dep.Subfolder);
         if (!Directory.Exists(folderPath))
         {
+            LogService.Instance.Warn($"Папка зависимости '{dep.DisplayName}' не обнаружена на диске. Сброс статуса в NotInstalled", "DependencyManager");
             SetStatus(key, DependencyStatus.NotInstalled);
             return true;
         }
@@ -409,11 +424,13 @@ public class DependencyManager
         try
         {
             Directory.Delete(folderPath, true);
+            LogService.Instance.Info($"Папка зависимости '{dep.DisplayName}' успешно удалена с диска", "DependencyManager");
             SetStatus(key, DependencyStatus.NotInstalled);
             return true;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            LogService.Instance.Error($"Не удалось удалить папку зависимости '{dep.DisplayName}': {ex.Message}", "DependencyManager");
             SetStatus(key, DependencyStatus.Error);
             return false;
         }

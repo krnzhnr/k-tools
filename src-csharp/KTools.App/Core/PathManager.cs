@@ -38,6 +38,36 @@ public static class PathManager
     }
 
     /// <summary>
+    /// Возвращает путь к директории для хранения конфигурационных файлов.
+    /// Поддерживает Portable-режим при наличии прав на запись в папку приложения,
+    /// иначе выполняет переключение в LOCALAPPDATA пользователя.
+    /// </summary>
+    /// <returns>Абсолютный путь к папке настроек.</returns>
+    public static string GetSettingsDirectory()
+    {
+        // 1. Проверяем доступность папки приложения на запись (Portable)
+        string testFile = Path.Combine(BaseDir, ".write_test");
+        try
+        {
+            File.WriteAllText(testFile, "test");
+            File.Delete(testFile);
+            return BaseDir;
+        }
+        catch (Exception)
+        {
+            // 2. Fallback в LOCALAPPDATA при отсутствии прав
+            string appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            string fallbackPath = Path.Combine(appData, "KTools");
+            
+            if (!Directory.Exists(fallbackPath))
+            {
+                Directory.CreateDirectory(fallbackPath);
+            }
+            return fallbackPath;
+        }
+    }
+
+    /// <summary>
     /// Найти путь к исполняемому файлу утилиты (ffmpeg, mkvmerge, eac3to и др.).
     /// </summary>
     /// <param name="binaryName">Имя бинарного файла утилиты.</param>

@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 
 namespace KTools_App.Core;
@@ -22,9 +23,9 @@ public sealed class SettingsManager
 
     private SettingsManager()
     {
-        // Создаем путь к файлу настроек в изолированной bin директории
-        string binDir = PathManager.GetBinDirectory();
-        _settingsFilePath = Path.Combine(binDir, "settings.json");
+        // Создаем путь к файлу настроек в безопасной директории
+        string settingsDir = PathManager.GetSettingsDirectory();
+        _settingsFilePath = Path.Combine(settingsDir, "settings.json");
         _cache = new Dictionary<string, Dictionary<string, object>>();
 
         LoadSettings();
@@ -34,6 +35,96 @@ public sealed class SettingsManager
     /// Возвращает единственный экземпляр класса SettingsManager.
     /// </summary>
     public static SettingsManager Instance => LazyInstance.Value;
+
+    /// <summary>
+    /// Перезаписывать ли существующие файлы.
+    /// </summary>
+    public bool OverwriteExisting
+    {
+        get => GetSetting("General", "OverwriteExisting", false);
+        set => SetSetting("General", "OverwriteExisting", value);
+    }
+
+    /// <summary>
+    /// Имя подпапки для результатов по умолчанию.
+    /// </summary>
+    public string DefaultOutputSubfolder
+    {
+        get => GetSetting("General", "DefaultOutputSubfolder", "KTools_Result");
+        set => SetSetting("General", "DefaultOutputSubfolder", value);
+    }
+
+    /// <summary>
+    /// Использовать ли автоматическое создание подпапки.
+    /// </summary>
+    public bool UseAutoSubfolder
+    {
+        get => GetSetting("General", "UseAutoSubfolder", false);
+        set => SetSetting("General", "UseAutoSubfolder", value);
+    }
+
+    /// <summary>
+    /// Тема оформления интерфейса.
+    /// </summary>
+    public string Theme
+    {
+        get => GetSetting("General", "Theme", "Dark");
+        set => SetSetting("General", "Theme", value);
+    }
+
+    /// <summary>
+    /// Максимальное количество параллельных задач обработки.
+    /// </summary>
+    public int MaxParallelTasks
+    {
+        get => GetSetting("General", "MaxParallelTasks", Math.Max(1, Environment.ProcessorCount / 2));
+        set => SetSetting("General", "MaxParallelTasks", value);
+    }
+
+    /// <summary>
+    /// Очищать ли очередь перед добавлением новых файлов.
+    /// </summary>
+    public bool ClearListOnAdd
+    {
+        get => GetSetting("General", "ClearListOnAdd", false);
+        set => SetSetting("General", "ClearListOnAdd", value);
+    }
+
+    /// <summary>
+    /// Отображать ли монитор логов (вкладку).
+    /// </summary>
+    public bool ShowLogsTab
+    {
+        get => GetSetting("Logging", "ShowLogsTab", false);
+        set => SetSetting("Logging", "ShowLogsTab", value);
+    }
+
+    /// <summary>
+    /// Пользовательский путь к директории хранения логов.
+    /// </summary>
+    public string LogDir
+    {
+        get => GetSetting("Logging", "LogDir", string.Empty);
+        set => SetSetting("Logging", "LogDir", value);
+    }
+
+    /// <summary>
+    /// Автоматически проверять обновления при старте.
+    /// </summary>
+    public bool AutoCheckUpdates
+    {
+        get => GetSetting("Updates", "AutoCheckUpdates", true);
+        set => SetSetting("Updates", "AutoCheckUpdates", value);
+    }
+
+    /// <summary>
+    /// Включать ли бета-версии при поиске обновлений.
+    /// </summary>
+    public bool IncludePreReleases
+    {
+        get => GetSetting("Updates", "IncludePreReleases", false);
+        set => SetSetting("Updates", "IncludePreReleases", value);
+    }
 
     /// <summary>
     /// Загрузить настройки из JSON-файла на диске в кэш.
@@ -77,22 +168,23 @@ public sealed class SettingsManager
             {
                 var options = new JsonSerializerOptions
                 {
-                    WriteIndented = true
+                    WriteIndented = true,
+                    Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
                 };
                 string json = JsonSerializer.Serialize(_cache, options);
 
-                // Обеспечиваем существование папки bin
-                string binDir = PathManager.GetBinDirectory();
-                if (!Directory.Exists(binDir))
+                string? dir = Path.GetDirectoryName(_settingsFilePath);
+                if (dir != null && !Directory.Exists(dir))
                 {
-                    Directory.CreateDirectory(binDir);
+                    Directory.CreateDirectory(dir);
                 }
 
                 File.WriteAllText(_settingsFilePath, json);
+                LogService.Instance.DebugLog("Конфигурация успешно сохранена на диск", "SettingsManager");
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                // Игнорируем ошибки записи, логируем в консоль
+                LogService.Instance.Error($"Ошибка сохранения конфигурации на диск: {ex.Message}", "SettingsManager");
             }
         }
     }
@@ -174,6 +266,7 @@ public sealed class SettingsManager
                 groupDict[key] = value;
             }
 
+            LogService.Instance.Info($"Изменён параметр [{group}/{key}] -> '{value}'", "SettingsManager");
             SaveSettings();
         }
     }
@@ -203,6 +296,45 @@ public sealed class SettingsManager
                 SetSettingInternal("General", "UseAutoSubfolder", false);
                 modified = true;
             }
+            if (!HasSetting("General", "Theme"))
+            {
+                SetSettingInternal("General", "Theme", "Dark");
+                modified = true;
+            }
+            if (!HasSetting("General", "MaxParallelTasks"))
+            {
+                SetSettingInternal("General", "MaxParallelTasks", Math.Max(1, Environment.ProcessorCount / 2));
+                modified = true;
+            }
+            if (!HasSetting("General", "ClearListOnAdd"))
+            {
+                SetSettingInternal("General", "ClearListOnAdd", false);
+                modified = true;
+            }
+
+            // Настройки логирования
+            if (!HasSetting("Logging", "ShowLogsTab"))
+            {
+                SetSettingInternal("Logging", "ShowLogsTab", false);
+                modified = true;
+            }
+            if (!HasSetting("Logging", "LogDir"))
+            {
+                SetSettingInternal("Logging", "LogDir", string.Empty);
+                modified = true;
+            }
+
+            // Настройки обновлений
+            if (!HasSetting("Updates", "AutoCheckUpdates"))
+            {
+                SetSettingInternal("Updates", "AutoCheckUpdates", true);
+                modified = true;
+            }
+            if (!HasSetting("Updates", "IncludePreReleases"))
+            {
+                SetSettingInternal("Updates", "IncludePreReleases", false);
+                modified = true;
+            }
 
             // Инициализация настроек для каждого скрипта
             foreach (var script in scripts)
@@ -225,6 +357,7 @@ public sealed class SettingsManager
 
             if (modified)
             {
+                LogService.Instance.Warn("Выполнена инициализация настроек по умолчанию", "SettingsManager");
                 SaveSettings();
             }
         }

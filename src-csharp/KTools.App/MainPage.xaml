@@ -62,8 +62,16 @@
 
             <!-- Фиксированные пункты меню внизу -->
             <NavigationView.FooterMenuItems>
-                <NavigationViewItem Content="Логи" Icon="Document" x:Name="NavItemLogs" Tag="logs" />
-                <NavigationViewItem Content="Компоненты" Icon="Setting" x:Name="NavItemDependencies" Tag="dependencies" />
+                <NavigationViewItem Content="Логи" x:Name="NavItemLogs" Tag="logs">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE756;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="Компоненты" x:Name="NavItemDependencies" Tag="dependencies">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xF003;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
             </NavigationView.FooterMenuItems>
 
             <!-- Основной контент страницы -->

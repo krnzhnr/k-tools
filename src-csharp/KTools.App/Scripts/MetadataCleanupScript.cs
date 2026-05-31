@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using KTools_App.Core;
 
@@ -17,17 +18,17 @@ public sealed class MetadataCleanupScript : AbstractScript
     /// <summary>
     /// Русское название скрипта.
     /// </summary>
-    public override string Name => "Очистка метаданных";
+    public override string Name => AppConstants.ScriptMetadata.MetadataCleanName;
 
     /// <summary>
     /// Русское описание возможностей скрипта для UI.
     /// </summary>
-    public override string Description => "Удаление метаданных из видеофайлов с сохранением оригинального качества";
+    public override string Description => AppConstants.ScriptMetadata.MetadataCleanDesc;
 
     /// <summary>
     /// Категория медиаобработки.
     /// </summary>
-    public override string Category => "Видео";
+    public override string Category => AppConstants.ScriptCategory.Video;
 
     /// <summary>
     /// Название системной Fluent-иконки.
@@ -37,7 +38,7 @@ public sealed class MetadataCleanupScript : AbstractScript
     /// <summary>
     /// Поддерживаемые расширения медиафайлов.
     /// </summary>
-    public override string[] FileExtensions => new[] { ".mp4", ".mkv", ".avi", ".ts", ".m2ts" };
+    public override string[] FileExtensions => AppConstants.VideoContainers.ToArray();
 
     /// <summary>
     /// Обязательные зависимости скрипта.

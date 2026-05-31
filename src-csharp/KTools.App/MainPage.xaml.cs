@@ -13,6 +13,11 @@ namespace KTools_App;
 public sealed partial class MainPage : Page
 {
     /// <summary>
+    /// Глобальная статическая ссылка на текущий экземпляр MainPage.
+    /// </summary>
+    public static MainPage? Current { get; private set; }
+
+    /// <summary>
     /// Словарь для быстрого поиска скрипта по его идентификатору.
     /// </summary>
     private Dictionary<string, ScriptInfo> _scriptsByTag = new();
@@ -20,6 +25,7 @@ public sealed partial class MainPage : Page
     public MainPage()
     {
         InitializeComponent();
+        Current = this;
         InitializeScripts();
     }
 
@@ -70,16 +76,33 @@ public sealed partial class MainPage : Page
     }
 
     /// <summary>
+    /// Динамически управляет видимостью вкладки логов в боковой навигационной панели
+    /// на основе пользовательских настроек приложения.
+    /// </summary>
+    public void UpdateLogsTabVisibility()
+    {
+        bool show = SettingsManager.Instance.ShowLogsTab;
+        NavItemLogs.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    /// <summary>
     /// Обработчик загрузки NavigationView. Проверяет наличие обязательных зависимостей.
     /// Если обязательные компоненты не обнаружены, принудительно перенаправляет на страницу настройки.
     /// </summary>
     private void NavView_Loaded(object sender, RoutedEventArgs e)
     {
+        LogService.Instance.Info("Загрузка главного навигационного интерфейса MainPage", "MainPage");
+
+        // Синхронизируем видимость вкладки журналов логов
+        UpdateLogsTabVisibility();
+
         // Выполняем верификацию наличия обязательного бинарного окружения на диске
         bool hasRequired = DependencyManager.Instance.AreRequiredDependenciesInstalled();
+        LogService.Instance.Info($"Результат проверки обязательных зависимостей: {hasRequired}", "MainPage");
         
         if (!hasRequired)
         {
+            LogService.Instance.Warn("Отсутствуют обязательные бинарные компоненты. Перенаправление на страницу установки", "MainPage");
             // Перенаправляем пользователя на экран установки внешних бинарников
             NavView.SelectedItem = NavItemDependencies;
         }
@@ -117,6 +140,7 @@ public sealed partial class MainPage : Page
     {
         if (args.IsSettingsSelected)
         {
+            LogService.Instance.Info("Пользователь переключился на страницу настроек приложения", "MainPage");
             // Переход на страницу общих настроек
             HeaderTitle.Text = "Настройки";
             HeaderSubtitle.Text = "Общие параметры и конфигурация приложения";
@@ -131,6 +155,7 @@ public sealed partial class MainPage : Page
 
             if (tag == "home")
             {
+                LogService.Instance.Info("Пользователь переключился на домашнюю страницу", "MainPage");
                 // Выполняем переход на домашнюю страницу с плитками скриптов
                 ContentFrame.Navigate(typeof(HomePage));
 
@@ -144,6 +169,7 @@ public sealed partial class MainPage : Page
                 // Обработка клика на отдельный скрипт
                 if (_scriptsByTag.TryGetValue(tag, out var script))
                 {
+                    LogService.Instance.Info($"Пользователь переключился на рабочий скрипт: '{script.Name}'", "MainPage");
                     HeaderTitle.Text = script.Name;
                     HeaderSubtitle.Text = script.Description;
                     HeaderSubtitle.Visibility = Visibility.Visible;
@@ -154,18 +180,24 @@ public sealed partial class MainPage : Page
                     {
                         ContentFrame.Navigate(typeof(WorkPanel), realScript);
                     }
+                    else
+                    {
+                        LogService.Instance.Error($"Не удалось найти скрипт с именем '{script.Name}' в реестре", "MainPage");
+                    }
                 }
             }
             else if (tag == "logs")
             {
+                LogService.Instance.Info("Пользователь переключился на страницу просмотра логов", "MainPage");
                 // Обработка клика на Логи
                 HeaderTitle.Text = "Логи";
                 HeaderSubtitle.Text = "Просмотр журналов выполнения и системных сообщений в реальном времени";
                 HeaderSubtitle.Visibility = Visibility.Visible;
-                ContentFrame.Content = null;
+                ContentFrame.Navigate(typeof(LogPage));
             }
             else if (tag == "dependencies")
             {
+                LogService.Instance.Info("Пользователь переключился на страницу настройки компонентов (зависимостей)", "MainPage");
                 // Переход на страницу управления внешними бинарными зависимостями
                 HeaderTitle.Text = "Компоненты";
                 HeaderSubtitle.Text = "Установка, обновление и удаление внешних бинарных утилит (FFmpeg, MKVToolNix, eac3to, DEE)";

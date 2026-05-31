@@ -10,6 +10,7 @@ using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Navigation;
 using Microsoft.UI.Xaml.Shapes;
+using KTools_App.Core;
 
 // To learn more about WinUI, the WinUI project structure,
 // and more about our project templates, see: http://aka.ms/winui-project-info.
@@ -43,6 +44,16 @@ public partial class App : Application
     /// <param name="args">Details about the launch request and process.</param>
     protected override void OnLaunched(Microsoft.UI.Xaml.LaunchActivatedEventArgs args)
     {
+        // Инициализируем логирование при старте приложения
+        LogService.Instance.Info("=== Запуск приложения K-Tools C# Edition ===", "App");
+        
+        string settingsDir = PathManager.GetSettingsDirectory();
+        LogService.Instance.Info($"Конфигурация приложения успешно инициализирована. Папка: {settingsDir}", "SettingsManager");
+
+        // При первом запуске автоматически инициализируем все настройки по умолчанию в settings.json (как в оригинале)
+        LogService.Instance.DebugLog("Выполняется автоматическая инициализация настроек по умолчанию...", "App");
+        _ = ScriptRegistry.Instance.Scripts;
+
         _window = new MainWindow();
         CurrentMainWindow = _window;
         _window.Activate();

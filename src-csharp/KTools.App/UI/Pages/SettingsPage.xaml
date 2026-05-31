@@ -9,114 +9,260 @@
     mc:Ignorable="d">
 
     <ScrollViewer VerticalScrollBarVisibility="Auto">
-        <StackPanel Padding="36,12,36,36" Spacing="20" HorizontalAlignment="Stretch">
+        <StackPanel
+            Padding="36,12,36,36"
+            HorizontalAlignment="Stretch"
+            Spacing="20">
 
             <!-- Раздел: Общие параметры -->
             <StackPanel Spacing="8">
-                <TextBlock Text="Общие параметры" 
-                           FontSize="16" 
-                           FontWeight="Bold" 
-                           Foreground="{ThemeResource TextFillColorPrimaryBrush}"
-                           Margin="0,0,0,8" />
+                <TextBlock
+                    Margin="0,0,0,8"
+                    FontSize="16"
+                    FontWeight="Bold"
+                    Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+                    Text="Общие параметры" />
 
                 <!-- Флажок перезаписи файлов -->
-                <community:SettingsCard Header="Перезаписывать существующие файлы"
-                                        Description="Автоматически перезаписывать файлы с одинаковыми именами без запроса подтверждения"
-                                        Padding="16,12,16,12">
-                    <ToggleSwitch x:Name="OverwriteToggle" 
-                                  OnContent="Вкл" 
-                                  OffContent="Выкл"
-                                  Toggled="OverwriteToggle_Toggled" />
+                <community:SettingsCard
+                    Padding="16,12,16,12"
+                    Description="Автоматически перезаписывать файлы с одинаковыми именами без запроса подтверждения"
+                    Header="Перезаписывать существующие файлы">
+                    <ToggleSwitch
+                        x:Name="OverwriteToggle"
+                        OffContent="Выкл"
+                        OnContent="Вкл"
+                        Toggled="OverwriteToggle_Toggled" />
+                </community:SettingsCard>
+
+                <!-- Очищать ли очередь при добавлении -->
+                <community:SettingsCard
+                    Padding="16,12,16,12"
+                    Description="Автоматически сбрасывать предыдущую очередь файлов при добавлении новых"
+                    Header="Очищать очередь при добавлении">
+                    <ToggleSwitch
+                        x:Name="ClearListToggle"
+                        OffContent="Выкл"
+                        OnContent="Вкл"
+                        Toggled="ClearListToggle_Toggled" />
+                </community:SettingsCard>
+
+                <!-- Регулировка максимального параллелизма -->
+                <community:SettingsCard
+                    Padding="16,12,16,12"
+                    Description="Максимальное число одновременно запущенных фоновых потоков обработки"
+                    Header="Максимальный параллелизм">
+                    <StackPanel
+                        Orientation="Horizontal"
+                        Spacing="12">
+                        <TextBlock
+                            x:Name="ParallelValueText"
+                            Width="24"
+                            VerticalAlignment="Center"
+                            FontWeight="SemiBold"
+                            Text="1" />
+                        <Slider
+                            x:Name="ParallelSlider"
+                            Width="200"
+                            VerticalAlignment="Center"
+                            Maximum="32"
+                            Minimum="1"
+                            SnapsTo="StepValues"
+                            StepFrequency="1"
+                            TickFrequency="1"
+                            ValueChanged="ParallelSlider_ValueChanged" />
+                    </StackPanel>
                 </community:SettingsCard>
 
                 <!-- Название подпапки экспорта -->
-                <community:SettingsCard Header="Имя папки результатов"
-                                        Description="Имя подпапки, создаваемой по умолчанию в директории сохранения результатов"
-                                        Padding="16,12,16,12">
-                    <TextBox x:Name="SubfolderTextBox" 
-                             Width="200" 
-                             LostFocus="SubfolderTextBox_LostFocus" />
+                <community:SettingsCard
+                    Padding="16,12,16,12"
+                    Description="Имя подпапки, создаваемой по умолчанию в директории сохранения результатов"
+                    Header="Имя папки результатов">
+                    <TextBox
+                        x:Name="SubfolderTextBox"
+                        Width="200"
+                        LostFocus="SubfolderTextBox_LostFocus" />
                 </community:SettingsCard>
 
                 <!-- Автоматическое создание подпапки -->
-                <community:SettingsCard Header="Создавать подпапку автоматически"
-                                        Description="Всегда создавать подпапку результатов в каталоге исходных файлов"
-                                        Padding="16,12,16,12">
-                    <ToggleSwitch x:Name="AutoSubfolderToggle" 
-                                  OnContent="Вкл" 
-                                  OffContent="Выкл"
-                                  Toggled="AutoSubfolderToggle_Toggled" />
+                <community:SettingsCard
+                    Padding="16,12,16,12"
+                    Description="Всегда создавать подпапку результатов в каталоге исходных файлов"
+                    Header="Создавать подпапку автоматически">
+                    <ToggleSwitch
+                        x:Name="AutoSubfolderToggle"
+                        OffContent="Выкл"
+                        OnContent="Вкл"
+                        Toggled="AutoSubfolderToggle_Toggled" />
                 </community:SettingsCard>
             </StackPanel>
 
             <!-- Раздел: Персонализация -->
             <StackPanel Spacing="8">
-                <TextBlock Text="Персонализация" 
-                           FontSize="16" 
-                           FontWeight="Bold" 
-                           Foreground="{ThemeResource TextFillColorPrimaryBrush}"
-                           Margin="0,8,0,8" />
+                <TextBlock
+                    Margin="0,8,0,8"
+                    FontSize="16"
+                    FontWeight="Bold"
+                    Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+                    Text="Персонализация" />
 
                 <!-- Выбор цветовой темы -->
-                <community:SettingsCard Header="Тема оформления"
-                                        Description="Выберите визуальную тему интерфейса приложения (требуется перезапуск)"
-                                        Padding="16,12,16,12">
-                    <ComboBox x:Name="ThemeComboBox" 
-                              Width="160"
-                              SelectionChanged="ThemeComboBox_SelectionChanged">
-                        <ComboBoxItem Content="Темная" Tag="Dark" />
-                        <ComboBoxItem Content="Светлая" Tag="Light" />
+                <community:SettingsCard
+                    Padding="16,12,16,12"
+                    Description="Выберите визуальную тему интерфейса приложения (требуется перезапуск)"
+                    Header="Тема оформления">
+                    <ComboBox
+                        x:Name="ThemeComboBox"
+                        Width="160"
+                        SelectionChanged="ThemeComboBox_SelectionChanged">
+                        <ComboBoxItem
+                            Tag="Dark"
+                            Content="Темная" />
+                        <ComboBoxItem
+                            Tag="Light"
+                            Content="Светлая" />
                     </ComboBox>
+                </community:SettingsCard>
+            </StackPanel>
+
+            <!-- Раздел: Журналирование -->
+            <StackPanel Spacing="8">
+                <TextBlock
+                    Margin="0,8,0,8"
+                    FontSize="16"
+                    FontWeight="Bold"
+                    Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+                    Text="Журналирование" />
+
+                <!-- Отображать ли вкладку логов -->
+                <community:SettingsCard
+                    Padding="16,12,16,12"
+                    Description="Показывать вкладку «Логи» в боковом меню приложения для мониторинга в реальном времени"
+                    Header="Отображать монитор журналов">
+                    <ToggleSwitch
+                        x:Name="ShowLogsTabToggle"
+                        OffContent="Выкл"
+                        OnContent="Вкл"
+                        Toggled="ShowLogsTabToggle_Toggled" />
+                </community:SettingsCard>
+
+                <!-- Выбор папки для сохранения логов -->
+                <community:SettingsCard
+                    Padding="16,12,16,12"
+                    Description="Каталог на диске для автоматического сохранения файлов журнала событий программы"
+                    Header="Путь к папке журналов">
+                    <StackPanel
+                        Orientation="Horizontal"
+                        Spacing="8">
+                        <TextBox
+                            x:Name="LogDirTextBox"
+                            Width="300"
+                            VerticalAlignment="Center"
+                            IsReadOnly="True"
+                            PlaceholderText="Используется папка по умолчанию" />
+                        <Button
+                            x:Name="BrowseLogDirButton"
+                            VerticalAlignment="Center"
+                            Click="BrowseLogDirButton_Click"
+                            Content="Обзор" />
+                    </StackPanel>
+                </community:SettingsCard>
+            </StackPanel>
+
+            <!-- Раздел: Обновления -->
+            <StackPanel Spacing="8">
+                <TextBlock
+                    Margin="0,8,0,8"
+                    FontSize="16"
+                    FontWeight="Bold"
+                    Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+                    Text="Обновления" />
+
+                <!-- Автоматическая проверка обновлений -->
+                <community:SettingsCard
+                    Padding="16,12,16,12"
+                    Description="Выполнять поиск новой версии K-Tools на GitHub при каждом запуске"
+                    Header="Автоматический поиск обновлений">
+                    <ToggleSwitch
+                        x:Name="AutoCheckUpdatesToggle"
+                        OffContent="Выкл"
+                        OnContent="Вкл"
+                        Toggled="AutoCheckUpdatesToggle_Toggled" />
+                </community:SettingsCard>
+
+                <!-- Участие в бета-тестировании -->
+                <community:SettingsCard
+                    Padding="16,12,16,12"
+                    Description="Включать предварительные (beta) версии программы в результаты поиска обновлений"
+                    Header="Участвовать в бета-тестировании">
+                    <ToggleSwitch
+                        x:Name="IncludePreReleasesToggle"
+                        OffContent="Выкл"
+                        OnContent="Вкл"
+                        Toggled="IncludePreReleasesToggle_Toggled" />
                 </community:SettingsCard>
             </StackPanel>
 
             <!-- Раздел: Сброс и обслуживание -->
             <StackPanel Spacing="8">
-                <TextBlock Text="Обслуживание" 
-                           FontSize="16" 
-                           FontWeight="Bold" 
-                           Foreground="{ThemeResource TextFillColorPrimaryBrush}"
-                           Margin="0,8,0,8" />
+                <TextBlock
+                    Margin="0,8,0,8"
+                    FontSize="16"
+                    FontWeight="Bold"
+                    Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+                    Text="Обслуживание" />
 
                 <!-- Кнопка сброса настроек -->
-                <community:SettingsCard Header="Сбросить все параметры"
-                                        Description="Удалить файл конфигурации и вернуть все настройки приложения по умолчанию"
-                                        Padding="16,12,16,12">
-                    <Button Content="Сбросить настройки" 
-                            Style="{StaticResource DefaultButtonStyle}"
-                            Click="ResetSettings_Click" />
+                <community:SettingsCard
+                    Padding="16,12,16,12"
+                    Description="Удалить файл конфигурации и вернуть все настройки приложения по умолчанию"
+                    Header="Сбросить все параметры">
+                    <Button
+                        x:Name="ResetSettingsButton"
+                        Click="ResetSettings_Click"
+                        Content="Сбросить настройки"
+                        Style="{StaticResource DefaultButtonStyle}" />
                 </community:SettingsCard>
             </StackPanel>
 
             <!-- Блок о программе -->
-            <Border BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                    BorderThickness="1"
-                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                    CornerRadius="8"
-                    Padding="16"
-                    Margin="0,20,0,0">
+            <Border
+                Padding="16"
+                Margin="0,20,0,0"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="8">
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
-                    
-                    <SymbolIcon Symbol="Setting" 
-                                Foreground="{ThemeResource TextFillColorSecondaryBrush}" 
-                                Width="40" 
-                                Height="40" 
-                                Margin="0,0,16,0" />
-                    
-                    <StackPanel Grid.Column="1" Spacing="4" VerticalAlignment="Center">
-                        <TextBlock Text="K-Tools C# Edition" 
-                                   FontWeight="SemiBold" 
-                                   FontSize="14" />
-                        <TextBlock Text="Версия 1.7.0.0 (WinAppSDK / WinUI 3)" 
-                                   FontSize="11" 
-                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                        <TextBlock Text="Локальная изолированная сборка с открытым исходным кодом." 
-                                   FontSize="11" 
-                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+
+                    <SymbolIcon
+                        Width="40"
+                        Height="40"
+                        Margin="0,0,16,0"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Symbol="Setting" />
+
+                    <StackPanel
+                        Grid.Column="1"
+                        VerticalAlignment="Center"
+                        Spacing="4">
+                        <TextBlock
+                            FontSize="14"
+                            FontWeight="SemiBold"
+                            Text="K-Tools C# Edition" />
+                        <TextBlock
+                            FontSize="11"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Text="Версия 1.7.0.0 (WinAppSDK / WinUI 3)" />
+                        <TextBlock
+                            FontSize="11"
+                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                            Text="Локальная изолированная сборка с открытым исходным кодом." />
                     </StackPanel>
                 </Grid>
             </Border>
