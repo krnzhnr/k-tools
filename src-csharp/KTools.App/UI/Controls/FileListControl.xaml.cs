@@ -1,4 +1,3 @@
-// -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -13,6 +12,8 @@ using Microsoft.UI.Xaml.Media;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Storage;
 using Windows.Storage.Pickers;
+
+using KTools_App.Core;
 
 namespace KTools_App.UI.Controls;
 
@@ -43,6 +44,7 @@ public sealed class FileQueueItem : INotifyPropertyChanged
     public string FilePath { get; }
     public string FileName { get; }
     public string FileSizeStr { get; }
+    public MediaStructure? MediaInfo { get; set; }
 
     /// <summary>
     /// Индивидуальный прогресс обработки файла (0-100%).
@@ -229,6 +231,9 @@ public sealed partial class FileListControl : UserControl
             };
             Files.Add(item);
             addedAny = true;
+
+            // Запускаем фоновый асинхронный анализ структуры
+            StartFileAnalysis(item);
         }
 
         if (addedAny)
@@ -263,14 +268,48 @@ public sealed partial class FileListControl : UserControl
                 continue;
             }
 
-            Files.Add(new FileQueueItem(path));
+            var item = new FileQueueItem(path);
+            Files.Add(item);
             addedAny = true;
+
+            // Запускаем фоновый асинхронный анализ структуры
+            StartFileAnalysis(item);
         }
 
         if (addedAny)
         {
             UpdateEmptyState();
         }
+    }
+
+    /// <summary>
+    /// Запустить фоновый асинхронный анализ технической структуры медиафайла.
+    /// Все логи и обработка ошибок на русском языке.
+    /// </summary>
+    private void StartFileAnalysis(FileQueueItem item)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var structure = await MediaProbeService.Instance.ProbeAsync(item.FilePath);
+                if (structure != null)
+                {
+                    item.MediaInfo = structure;
+                    LogService.Instance.Info(
+                        $"Фоновый анализ завершен для '{item.FileName}'. " +
+                        $"Дорожек: {structure.Tracks.Count}, вложений: {structure.Attachments.Count}",
+                        "FileListControl");
+                }
+            }
+            catch (Exception ex)
+            {
+                LogService.Instance.Exception(
+                    ex,
+                    $"Ошибка при попытке фонового анализа структуры файла '{item.FileName}'",
+                    "FileListControl");
+            }
+        });
     }
 
     private void UpdateEmptyState()

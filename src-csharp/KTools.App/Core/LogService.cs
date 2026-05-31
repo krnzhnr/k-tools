@@ -160,6 +160,19 @@ public sealed class LogService
     public void Fatal(string message, string source = "System") => Log(LogLevel.Fatal, message, source);
 
     /// <summary>
+    /// Записать исключение в лог с подробным стеком вызовов на русском языке.
+    /// Обеспечивает детальную регистрацию всех непредвиденных сбоев.
+    /// </summary>
+    /// <param name="ex">Объект перехваченного исключения.</param>
+    /// <param name="message">Сопутствующий русскоязычный контекст ошибки.</param>
+    /// <param name="source">Компонент-источник сбоя.</param>
+    public void Exception(Exception ex, string message, string source = "System")
+    {
+        string fullMessage = $"{message}. Ошибка: {ex.Message}{Environment.NewLine}Стек вызовов: {ex.StackTrace}";
+        Log(LogLevel.Error, fullMessage, source);
+    }
+
+    /// <summary>
     /// Прочитать весь текст из текущего посуточного лог-файла.
     /// </summary>
     /// <returns>Строка с текстом лога или пустая строка.</returns>
