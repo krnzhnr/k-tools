@@ -62,7 +62,7 @@ public sealed class ScriptRegistry
         _scripts.Add(new Scripts.StreamReplacementStub());
         _scripts.Add(new Scripts.TrackExtractorScript());
 
-        _scripts.Add(new Scripts.SubtitlesConvertStub());
+        _scripts.Add(new Scripts.SubtitlesConvertScript());
 
         // Инициализируем настройки скриптов по умолчанию при регистрации
         SettingsManager.Instance.InitializeDefaults(_scripts);

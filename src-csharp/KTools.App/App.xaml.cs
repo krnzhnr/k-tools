@@ -36,6 +36,11 @@ public partial class App : Application
     /// </summary>
     public App()
     {
+        // Регистрируем провайдер кодировок для поддержки чтения файлов
+        // в локальных кодировках (например, Windows-1251 / CP1251).
+        System.Text.Encoding.RegisterProvider(
+            System.Text.CodePagesEncodingProvider.Instance);
+            
         InitializeComponent();
         Services = ConfigureServices();
     }

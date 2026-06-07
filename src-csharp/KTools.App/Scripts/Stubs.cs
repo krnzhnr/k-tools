@@ -259,36 +259,4 @@ public class StreamReplacementStub : AbstractScript
 }
 
 
-public class SubtitlesConvertStub : AbstractScript
-{
-    public override string Name => AppConstants.ScriptMetadata.AssToVttName;
-    public override string Description => AppConstants.ScriptMetadata.AssToVttDesc;
-    public override string Category => AppConstants.ScriptCategory.Subtitles;
-    public override string IconName => "font";
-    public override string[] FileExtensions => AppConstants.SubtitleExtensions.ToArray();
 
-    public override List<SettingField> SettingsSchema => new()
-    {
-        new SettingField("filter_by_actor", "Фильтровать по актерам", SettingType.Checkbox, false, "Фильтрация"),
-        new SettingField("clean_tags", "Очищать теги оформления ASS", SettingType.Checkbox, true, "Очистка"),
-        new SettingField("remove_caps", "Удалять CAPS-реплики", SettingType.Checkbox, false, "Очистка")
-    };
-
-    public override async Task<List<string>> ExecuteSingleAsync(
-        string filePath,
-        Dictionary<string, object> settings,
-        string? outputPath,
-        Action<int, int, string, double?> progressCallback,
-        int fileIndex,
-        int totalCount)
-    {
-        ResetCancellation();
-        for (int i = 0; i <= 10; i++)
-        {
-            if (IsCancelled) break;
-            progressCallback(fileIndex, totalCount, $"Конвертация субтитров... {i * 10}%", i * 10.0);
-            await Task.Delay(100);
-        }
-        return new List<string> { IsCancelled ? "⚠ Конвертация отменена" : $"✅ Субтитры конвертированы: {System.IO.Path.GetFileName(filePath)}" };
-    }
-}
