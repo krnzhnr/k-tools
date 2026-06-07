@@ -294,33 +294,6 @@ public class StreamReplacementStub : AbstractScript
     }
 }
 
-public class ContainerDemuxStub : AbstractScript
-{
-    public override string Name => AppConstants.ScriptMetadata.TrackExtrName;
-    public override string Description => AppConstants.ScriptMetadata.TrackExtrDesc;
-    public override string Category => AppConstants.ScriptCategory.Containers;
-    public override string IconName => "download";
-    public override string[] FileExtensions => AppConstants.VideoContainers.ToArray();
-    public override string[] RequiredDependencies => new[] { "mkvtoolnix", "ffmpeg" };
-
-    public override async Task<List<string>> ExecuteSingleAsync(
-        string filePath,
-        Dictionary<string, object> settings,
-        string? outputPath,
-        Action<int, int, string, double?> progressCallback,
-        int fileIndex,
-        int totalCount)
-    {
-        ResetCancellation();
-        for (int i = 0; i <= 10; i++)
-        {
-            if (IsCancelled) break;
-            progressCallback(fileIndex, totalCount, $"Извлечение дорожек... {i * 10}%", i * 10.0);
-            await Task.Delay(100);
-        }
-        return new List<string> { IsCancelled ? "⚠ Разборка отменена" : $"✅ Потоки успешно извлечены: {System.IO.Path.GetFileName(filePath)}" };
-    }
-}
 
 public class SubtitlesConvertStub : AbstractScript
 {

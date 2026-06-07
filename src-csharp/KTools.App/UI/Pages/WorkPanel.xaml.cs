@@ -27,7 +27,11 @@ public sealed partial class WorkPanel : Page
 
     // Контейнеры контента для горизонтального NavigationView
     private Grid _filesContainer = null!;
+    private TrackSelectionControl _tracksControl = null!;
     private ScriptSettingsControl _settingsControl = null!;
+
+    // Динамический элемент навигации
+    private NavigationViewItem? _tracksPageItem;
 
     // Динамические ссылки на элементы управления для сохранения совместимости с кодом запуска
     private FileListControl FileList = null!;
@@ -90,7 +94,14 @@ public sealed partial class WorkPanel : Page
         LogExpander.Content = LogTextBox;
         _filesContainer.Children.Add(LogExpander);
 
-        // 2. Создаем контейнер настроек
+        // 2. Создаем виджет выбора дорожек
+        _tracksControl = new TrackSelectionControl
+        {
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Stretch
+        };
+
+        // 3. Создаем контейнер настроек
         _settingsControl = new ScriptSettingsControl
         {
             HorizontalAlignment = HorizontalAlignment.Stretch,
@@ -148,11 +159,45 @@ public sealed partial class WorkPanel : Page
             // очереди в реальном времени
             FileList.Files.CollectionChanged += Files_CollectionChanged;
 
-            // Если настроек нет, скрываем вторую вкладку из верхнего NavigationView меню
-            if (_script.SettingsSchema == null ||
-                _script.SettingsSchema.Count == 0)
+            // Динамически управляем вкладкой "Дорожки"
+            if (_script.UseCustomWidget)
+            {
+                if (_tracksPageItem == null)
+                {
+                    _tracksPageItem = new NavigationViewItem
+                    {
+                        Content = "Дорожки",
+                        Icon = new SymbolIcon(Symbol.SelectAll),
+                        Tag = "tracks"
+                    };
+                }
+
+                if (!nvSample.MenuItems.Contains(_tracksPageItem))
+                {
+                    nvSample.MenuItems.Insert(1, _tracksPageItem);
+                }
+
+                _tracksControl.Populate(FileList.Files);
+            }
+            else
+            {
+                if (_tracksPageItem != null && nvSample.MenuItems.Contains(_tracksPageItem))
+                {
+                    nvSample.MenuItems.Remove(_tracksPageItem);
+                }
+            }
+
+            // Динамически управляем вкладкой "Настройки"
+            if (_script.SettingsSchema == null || _script.SettingsSchema.Count == 0)
             {
                 nvSample.MenuItems.Remove(SamplePage2Item);
+            }
+            else
+            {
+                if (!nvSample.MenuItems.Contains(SamplePage2Item))
+                {
+                    nvSample.MenuItems.Add(SamplePage2Item);
+                }
             }
 
             // По умолчанию принудительно выбираем первую вкладку «Файлы»
@@ -177,6 +222,10 @@ public sealed partial class WorkPanel : Page
             if (tag == "files")
             {
                 contentFrame.Content = _filesContainer;
+            }
+            else if (tag == "tracks")
+            {
+                contentFrame.Content = _tracksControl;
             }
             else if (tag == "settings")
             {
@@ -279,12 +328,20 @@ public sealed partial class WorkPanel : Page
         _script.ResetCancellation();
         string? outputPath = string.IsNullOrEmpty(OutputPathTextBox.Text) ? null : OutputPathTextBox.Text;
 
+        // Собираем текущие настройки и параметры кастомных виджетов на главном потоке
+        var settings = ReadCurrentSettings();
+        if (_script.UseCustomWidget)
+        {
+            _tracksControl.GetSelectedTracksAndAttachments(out var selectedTracks, out var selectedAttachments);
+            settings["selected_tracks_per_file"] = selectedTracks;
+            settings["selected_attachments_per_file"] = selectedAttachments;
+        }
+
         AppendLog($"🚀 Запуск скрипта '{_script.Name}' для {files.Count} файлов.\r\n");
 
         await Task.Run(async () =>
         {
             int total = files.Count;
-            var settings = ReadCurrentSettings();
 
             for (int i = 0; i < total; i++)
             {

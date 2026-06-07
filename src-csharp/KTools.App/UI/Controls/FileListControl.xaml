@@ -132,10 +132,10 @@
                                 VerticalContentAlignment="Center"
                                 Click="DeleteButton_Click"
                                 ToolTipService.ToolTip="Удалить из списка">
-                            <FontIcon FontSize="12" Glyph="&#xE711;"
+                            <FontIcon FontSize="20" Glyph="&#xE711;"
                                 HorizontalAlignment="Center"
                                 VerticalAlignment="Center"
-FontFamily="{ThemeResource SymbolThemeFontFamily}" />
+                                FontFamily="{ThemeResource SymbolThemeFontFamily}" />
                         </Button>
                     </Grid>
                 </DataTemplate>

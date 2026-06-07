@@ -44,7 +44,20 @@ public sealed class FileQueueItem : INotifyPropertyChanged
     public string FilePath { get; }
     public string FileName { get; }
     public string FileSizeStr { get; }
-    public MediaStructure? MediaInfo { get; set; }
+
+    private MediaStructure? _mediaInfo;
+    public MediaStructure? MediaInfo
+    {
+        get => _mediaInfo;
+        set
+        {
+            if (_mediaInfo != value)
+            {
+                _mediaInfo = value;
+                OnPropertyChanged();
+            }
+        }
+    }
 
     /// <summary>
     /// Индивидуальный прогресс обработки файла (0-100%).

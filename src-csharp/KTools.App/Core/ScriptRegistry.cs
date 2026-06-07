@@ -60,7 +60,7 @@ public sealed class ScriptRegistry
         _scripts.Add(new Scripts.MkvAssemblyStub());
         _scripts.Add(new Scripts.StreamManagementStub());
         _scripts.Add(new Scripts.StreamReplacementStub());
-        _scripts.Add(new Scripts.ContainerDemuxStub());
+        _scripts.Add(new Scripts.TrackExtractorScript());
 
         _scripts.Add(new Scripts.SubtitlesConvertStub());
 

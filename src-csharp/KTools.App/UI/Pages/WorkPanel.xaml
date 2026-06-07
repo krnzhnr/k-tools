@@ -30,19 +30,21 @@
 
         <!-- Двухвкладочный NavigationView-контейнер (как в примере) -->
         <NavigationView x:Name="nvSample" 
-                         Grid.Row="1" 
-                         PaneDisplayMode="Top"
-                         IsSettingsVisible="False"
-                         IsBackButtonVisible="Collapsed"
-                         AlwaysShowHeader="False"
-                         SelectionChanged="nvSample_SelectionChanged"
-                         SelectionFollowsFocus="Enabled"
-                         Margin="-12,0,-12,16">
+                          Grid.Row="1" 
+                          PaneDisplayMode="Top"
+                          IsSettingsVisible="False"
+                          IsBackButtonVisible="Collapsed"
+                          AlwaysShowHeader="False"
+                          SelectionChanged="nvSample_SelectionChanged"
+                          SelectionFollowsFocus="Enabled"
+                          Margin="0,0,0,16">
             <NavigationView.Resources>
                 <!-- Делаем фон области контента прозрачным -->
                 <SolidColorBrush x:Key="NavigationViewContentBackground" Color="Transparent" />
                 <!-- Убираем рамку вокруг области контента -->
                 <SolidColorBrush x:Key="NavigationViewContentGridBorderBrush" Color="Transparent" />
+                <!-- Сбрасываем внутренние боковые отступы области контента NavigationView -->
+                <Thickness x:Key="NavigationViewContentMargin">0,0,0,0</Thickness>
             </NavigationView.Resources>
             <NavigationView.MenuItems>
                 <NavigationViewItem Icon="Document" Content="Файлы" x:Name="SamplePage1Item" Tag="files" />
@@ -50,7 +52,7 @@
             </NavigationView.MenuItems>
             
             <!-- Фрейм контента вкладок -->
-            <Frame x:Name="contentFrame" Margin="12,0,12,0" />
+            <Frame x:Name="contentFrame" Margin="0" />
         </NavigationView>
 
         <!-- Фиксированная нижняя панель запуска и прогресса -->

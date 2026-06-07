@@ -51,6 +51,11 @@ public abstract class AbstractScript
     public virtual bool SupportsParallel => false;
 
     /// <summary>
+    /// Указывает, использует ли скрипт кастомный виджет выбора дорожек (например, TreeView).
+    /// </summary>
+    public virtual bool UseCustomWidget => false;
+
+    /// <summary>
     /// Список строковых ключей внешних зависимостей, необходимых для работы скрипта.
     /// </summary>
     public virtual string[] RequiredDependencies => Array.Empty<string>();

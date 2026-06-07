@@ -42,7 +42,7 @@ public sealed class FFmpegRunner : AbstractProcessRunner
     /// <returns>True, если процесс завершился успешно (код 0), иначе false.</returns>
     public async Task<bool> RunAsync(
         string inputPath,
-        string outputPath,
+        string? outputPath = null,
         List<string>? extraArgs = null,
         List<string>? inputArgs = null,
         bool overwrite = false,
@@ -75,7 +75,10 @@ public sealed class FFmpegRunner : AbstractProcessRunner
             argsList.AddRange(extraArgs);
         }
 
-        argsList.Add($"\"{outputPath}\"");
+        if (!string.IsNullOrEmpty(outputPath))
+        {
+            argsList.Add($"\"{outputPath}\"");
+        }
 
         string arguments = string.Join(" ", argsList);
 
