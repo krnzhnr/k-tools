@@ -6,6 +6,8 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:community="using:CommunityToolkit.WinUI.Controls"
+    xmlns:viewmodels="using:KTools_App.ViewModels"
+    x:DataType="viewmodels:SettingsViewModel"
     mc:Ignorable="d">
 
     <ScrollViewer VerticalScrollBarVisibility="Auto">
@@ -32,7 +34,7 @@
                         x:Name="OverwriteToggle"
                         OffContent="Выкл"
                         OnContent="Вкл"
-                        Toggled="OverwriteToggle_Toggled" />
+                        IsOn="{x:Bind ViewModel.OverwriteExisting, Mode=TwoWay}" />
                 </community:SettingsCard>
 
                 <!-- Очищать ли очередь при добавлении -->
@@ -44,7 +46,7 @@
                         x:Name="ClearListToggle"
                         OffContent="Выкл"
                         OnContent="Вкл"
-                        Toggled="ClearListToggle_Toggled" />
+                        IsOn="{x:Bind ViewModel.ClearListOnAdd, Mode=TwoWay}" />
                 </community:SettingsCard>
 
                 <!-- Регулировка максимального параллелизма -->
@@ -60,17 +62,17 @@
                             Width="24"
                             VerticalAlignment="Center"
                             FontWeight="SemiBold"
-                            Text="1" />
+                            Text="{x:Bind ViewModel.MaxParallelTasks, Mode=OneWay}" />
                         <Slider
                             x:Name="ParallelSlider"
                             Width="200"
                             VerticalAlignment="Center"
-                            Maximum="32"
+                            Maximum="{x:Bind ViewModel.MaxParallelLimit, Mode=OneWay}"
                             Minimum="1"
+                            Value="{x:Bind ViewModel.MaxParallelTasks, Mode=TwoWay}"
                             SnapsTo="StepValues"
                             StepFrequency="1"
-                            TickFrequency="1"
-                            ValueChanged="ParallelSlider_ValueChanged" />
+                            TickFrequency="1" />
                     </StackPanel>
                 </community:SettingsCard>
 
@@ -82,7 +84,7 @@
                     <TextBox
                         x:Name="SubfolderTextBox"
                         Width="200"
-                        LostFocus="SubfolderTextBox_LostFocus" />
+                        Text="{x:Bind ViewModel.DefaultOutputSubfolder, Mode=TwoWay}" />
                 </community:SettingsCard>
 
                 <!-- Автоматическое создание подпапки -->
@@ -94,7 +96,7 @@
                         x:Name="AutoSubfolderToggle"
                         OffContent="Выкл"
                         OnContent="Вкл"
-                        Toggled="AutoSubfolderToggle_Toggled" />
+                        IsOn="{x:Bind ViewModel.UseAutoSubfolder, Mode=TwoWay}" />
                 </community:SettingsCard>
             </StackPanel>
 
@@ -115,7 +117,7 @@
                     <ComboBox
                         x:Name="ThemeComboBox"
                         Width="160"
-                        SelectionChanged="ThemeComboBox_SelectionChanged">
+                        SelectedIndex="{x:Bind ViewModel.SelectedThemeIndex, Mode=TwoWay}">
                         <ComboBoxItem
                             Tag="Dark"
                             Content="Темная" />
@@ -144,7 +146,7 @@
                         x:Name="ShowLogsTabToggle"
                         OffContent="Выкл"
                         OnContent="Вкл"
-                        Toggled="ShowLogsTabToggle_Toggled" />
+                        IsOn="{x:Bind ViewModel.ShowLogsTab, Mode=TwoWay}" />
                 </community:SettingsCard>
 
                 <!-- Выбор папки для сохранения логов -->
@@ -160,6 +162,7 @@
                             Width="300"
                             VerticalAlignment="Center"
                             IsReadOnly="True"
+                            Text="{x:Bind ViewModel.LogDir, Mode=OneWay}"
                             PlaceholderText="Используется папка по умолчанию" />
                         <Button
                             x:Name="BrowseLogDirButton"
@@ -188,7 +191,7 @@
                         x:Name="AutoCheckUpdatesToggle"
                         OffContent="Выкл"
                         OnContent="Вкл"
-                        Toggled="AutoCheckUpdatesToggle_Toggled" />
+                        IsOn="{x:Bind ViewModel.AutoCheckUpdates, Mode=TwoWay}" />
                 </community:SettingsCard>
 
                 <!-- Участие в бета-тестировании -->
@@ -200,7 +203,7 @@
                         x:Name="IncludePreReleasesToggle"
                         OffContent="Выкл"
                         OnContent="Вкл"
-                        Toggled="IncludePreReleasesToggle_Toggled" />
+                        IsOn="{x:Bind ViewModel.IncludePreReleases, Mode=TwoWay}" />
                 </community:SettingsCard>
             </StackPanel>
 
@@ -220,7 +223,7 @@
                     Header="Сбросить все параметры">
                     <Button
                         x:Name="ResetSettingsButton"
-                        Click="ResetSettings_Click"
+                        Command="{x:Bind ViewModel.ResetSettingsCommand}"
                         Content="Сбросить настройки"
                         Style="{StaticResource DefaultButtonStyle}" />
                 </community:SettingsCard>

@@ -5,6 +5,8 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:viewmodels="using:KTools_App.ViewModels"
+    x:DataType="viewmodels:WorkPanelViewModel"
     mc:Ignorable="d">
 
     <Grid Padding="36,12,36,24">
@@ -14,13 +16,12 @@
             <RowDefinition Height="Auto" /> <!-- Нижняя панель управления -->
         </Grid.RowDefinitions>
 
-        <!-- Предупреждение об отсутствии внешних бинарных утилит -->
         <InfoBar x:Name="DependencyWarningBar" 
                  Grid.Row="0"
                  Severity="Warning"
                  Title="Недостающие компоненты"
-                 Message="Для работы данного скрипта требуются внешние бинарные утилиты."
-                 IsOpen="False"
+                 Message="{x:Bind ViewModel.DependencyWarningText, Mode=OneWay}"
+                 IsOpen="{x:Bind ViewModel.IsDependencyWarningOpen, Mode=OneWay}"
                  IsClosable="False"
                  Margin="0,0,0,12">
             <InfoBar.ActionButton>
@@ -71,12 +72,12 @@
                 <!-- Строка 1: Прогресс-бар и Статус (как в оригинале) -->
                 <StackPanel Grid.Row="0" Margin="0,0,0,12" Spacing="4">
                     <TextBlock x:Name="StatusTextBlock" 
-                               Text="Ожидание запуска..." 
+                               Text="{x:Bind ViewModel.StatusText, Mode=OneWay}" 
                                FontSize="12"
                                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                     <ProgressBar x:Name="GlobalProgressBar" 
                                  Maximum="100" 
-                                 Value="0" 
+                                 Value="{x:Bind ViewModel.GlobalProgressValue, Mode=OneWay}" 
                                  Height="4" 
                                  HorizontalAlignment="Stretch" />
                 </StackPanel>
@@ -92,6 +93,8 @@
                     <!-- Текстовое поле ввода пути -->
                     <TextBox x:Name="OutputPathTextBox" 
                              Grid.Column="0"
+                             Text="{x:Bind ViewModel.OutputPath, Mode=TwoWay}"
+                             IsEnabled="{x:Bind ViewModel.IsProcessing, Mode=OneWay, Converter={StaticResource InverseBoolConverter}}"
                              PlaceholderText="По умолчанию (в папку с исходными файлами)" 
                              VerticalAlignment="Center"
                              Height="36"
@@ -101,6 +104,7 @@
                     <Button Grid.Column="1"
                             Content="Обзор..." 
                             Click="BrowseFolder_Click" 
+                            IsEnabled="{x:Bind ViewModel.IsProcessing, Mode=OneWay, Converter={StaticResource InverseBoolConverter}}"
                             VerticalAlignment="Center"
                             Height="36"
                             Width="100"
@@ -113,14 +117,15 @@
                                 VerticalAlignment="Center">
                         <Button x:Name="CancelButton" 
                                 Content="Отменить" 
-                                Click="CancelButton_Click"
+                                Command="{x:Bind ViewModel.CancelExecutionCommand}"
                                 Style="{StaticResource DefaultButtonStyle}"
                                 Height="36"
-                                Visibility="Collapsed" />
+                                Visibility="{x:Bind ViewModel.IsProcessing, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
                         
                         <Button x:Name="StartButton" 
                                 Content="Выполнить" 
                                 Click="StartButton_Click"
+                                IsEnabled="{x:Bind ViewModel.IsStartButtonEnabled, Mode=OneWay}"
                                 Style="{StaticResource AccentButtonStyle}"
                                 Width="140"
                                 Height="36" />

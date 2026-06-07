@@ -6,11 +6,14 @@
     xmlns:core="using:KTools_App.Core"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:local="using:KTools_App.UI.Pages"
+    xmlns:models="using:KTools_App.Models"
+    xmlns:viewmodels="using:KTools_App.ViewModels"
+    x:DataType="viewmodels:DependencySetupViewModel"
     mc:Ignorable="d">
 
     <Page.Resources>
         <!-- Шаблон вертикальной карточки зависимости -->
-        <DataTemplate x:Key="DependencyCardTemplate" x:DataType="local:DependencyVM">
+        <DataTemplate x:Key="DependencyCardTemplate" x:DataType="models:DependencyVM">
             <Border Width="220" 
                     Height="190" 
                     CornerRadius="8" 
@@ -100,19 +103,19 @@
                                 Style="{StaticResource AccentButtonStyle}"
                                 HorizontalAlignment="Stretch"
                                 Visibility="{x:Bind InstallButtonVisibility, Mode=OneWay}"
-                                Click="InstallButton_Click" />
+                                Command="{x:Bind InstallCommand}" />
 
                         <!-- Кнопка Отмена (видна при Downloading/Extracting) -->
                         <Button Content="Отмена" 
                                 HorizontalAlignment="Stretch"
                                 Visibility="{x:Bind CancelButtonVisibility, Mode=OneWay}"
-                                Click="CancelButton_Click" />
+                                Command="{x:Bind CancelCommand}" />
 
                         <!-- Кнопка Удалить (видна при Installed) -->
                         <Button Content="Удалить" 
                                 HorizontalAlignment="Stretch"
                                 Visibility="{x:Bind DeleteButtonVisibility, Mode=OneWay}"
-                                Click="DeleteButton_Click" />
+                                Command="{x:Bind RemoveCommand}" />
                     </StackPanel>
                     
                 </Grid>
@@ -127,21 +130,22 @@
             <StackPanel Orientation="Horizontal" Spacing="12" Margin="0,0,0,8">
                 <Button x:Name="InstallAllButton" 
                         Style="{StaticResource AccentButtonStyle}"
-                        Click="InstallAllButton_Click">
+                        IsEnabled="{x:Bind ViewModel.IsInstallAllEnabled, Mode=OneWay}"
+                        Command="{x:Bind ViewModel.InstallAllCommand}">
                     <StackPanel Orientation="Horizontal" Spacing="8">
                         <SymbolIcon Symbol="Download" />
                         <TextBlock Text="Установить все отсутствующие" />
                     </StackPanel>
                 </Button>
                 <Button x:Name="RefreshButton" 
-                        Click="RefreshButton_Click">
+                        Command="{x:Bind ViewModel.RefreshAllCommand}">
                     <StackPanel Orientation="Horizontal" Spacing="8">
                         <SymbolIcon x:Name="RefreshIcon" Symbol="Refresh" />
-                        <TextBlock x:Name="RefreshText" Text="Проверить заново" />
+                        <TextBlock x:Name="RefreshText" Text="{x:Bind ViewModel.RefreshText, Mode=OneWay}" />
                     </StackPanel>
                 </Button>
                 <Button x:Name="OpenFolderButton" 
-                        Click="OpenFolderButton_Click">
+                        Command="{x:Bind ViewModel.OpenFolderCommand}">
                     <StackPanel Orientation="Horizontal" Spacing="8">
                         <SymbolIcon Symbol="Folder" />
                         <TextBlock Text="Открыть папку" />
@@ -158,7 +162,8 @@
                             Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
                 
                 <ItemsControl x:Name="RequiredItemsControl"
-                              ItemTemplate="{StaticResource DependencyCardTemplate}">
+                               ItemsSource="{x:Bind ViewModel.RequiredDependencies, Mode=OneWay}"
+                               ItemTemplate="{StaticResource DependencyCardTemplate}">
                     <ItemsControl.ItemsPanel>
                         <ItemsPanelTemplate>
                             <ItemsWrapGrid Orientation="Horizontal" />
@@ -176,7 +181,8 @@
                             Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
                 
                 <ItemsControl x:Name="OptionalItemsControl"
-                              ItemTemplate="{StaticResource DependencyCardTemplate}">
+                               ItemsSource="{x:Bind ViewModel.OptionalDependencies, Mode=OneWay}"
+                               ItemTemplate="{StaticResource DependencyCardTemplate}">
                     <ItemsControl.ItemsPanel>
                         <ItemsPanelTemplate>
                             <ItemsWrapGrid Orientation="Horizontal" />

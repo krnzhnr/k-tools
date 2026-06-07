@@ -5,7 +5,9 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:local="using:KTools_App"
+    xmlns:viewmodels="using:KTools_App.ViewModels"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    x:DataType="viewmodels:MainViewModel"
     mc:Ignorable="d">
 
     <Grid>
@@ -62,7 +64,8 @@
 
             <!-- Фиксированные пункты меню внизу -->
             <NavigationView.FooterMenuItems>
-                <NavigationViewItem Content="Логи" x:Name="NavItemLogs" Tag="logs">
+                <NavigationViewItem Content="Логи" x:Name="NavItemLogs" Tag="logs"
+                                    Visibility="{x:Bind ViewModel.IsLogsTabVisible, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE756;" />
                     </NavigationViewItem.Icon>
@@ -84,14 +87,14 @@
                 <!-- Статичная шапка программы, прижатая к левому краю -->
                 <StackPanel Grid.Row="0" Spacing="4" Margin="36,24,24,8" HorizontalAlignment="Left">
                     <TextBlock x:Name="HeaderTitle"
-                               Text="K-Tools" 
+                               Text="{x:Bind ViewModel.HeaderTitle, Mode=OneWay}" 
                                FontFamily="Segoe UI" 
                                FontSize="28" 
                                FontWeight="Bold"
                                Foreground="{ThemeResource TextFillColorPrimaryBrush}" 
                                HorizontalAlignment="Left" />
                     <TextBlock x:Name="HeaderSubtitle"
-                               Text="Ваш персональный набор инструментов для обработки медиа" 
+                               Text="{x:Bind ViewModel.HeaderSubtitle, Mode=OneWay}" 
                                FontFamily="Segoe UI" 
                                FontSize="14" 
                                Foreground="{ThemeResource TextFillColorSecondaryBrush}" 

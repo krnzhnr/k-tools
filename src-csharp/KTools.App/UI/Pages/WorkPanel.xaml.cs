@@ -3,46 +3,59 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Threading.Tasks;
+using System.ComponentModel;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Navigation;
+using Microsoft.Extensions.DependencyInjection;
 using Windows.Storage.Pickers;
+using WinRT.Interop;
 using KTools_App.Core;
 using KTools_App.UI.Controls;
+using KTools_App.ViewModels;
 
 namespace KTools_App.UI.Pages;
 
 /// <summary>
-/// Универсальная страница выполнения конкретного скрипта медиаобработки.
-/// Управляет ходом выполнения, считывает очереди файлов, выводит логи,
-/// отслеживает индивидуальный и интегральный прогресс, обрабатывает отмену.
+/// Класс логики (Code-Behind) универсальной рабочей панели для выполнения скриптов медиаобработки.
+/// Управляет динамическим переключением вкладок (Файлы, Дорожки, Настройки),
+/// считывает параметры из UI-компонентов и передает их во ViewModel.
 /// </summary>
 public sealed partial class WorkPanel : Page
 {
     private AbstractScript? _script;
-    private bool _isProcessing;
-    private bool _isRestoringQueue;
 
     // Контейнеры контента для горизонтального NavigationView
     private Grid _filesContainer = null!;
     private TrackSelectionControl _tracksControl = null!;
     private ScriptSettingsControl _settingsControl = null!;
 
-    // Динамический элемент навигации
+    // Динамический элемент навигации для вкладки "Дорожки"
     private NavigationViewItem? _tracksPageItem;
 
-    // Динамические ссылки на элементы управления для сохранения совместимости с кодом запуска
+    // Ссылки на элементы управления для совместимости
     private FileListControl FileList = null!;
     private Expander LogExpander = null!;
     private TextBox LogTextBox = null!;
     private ScriptSettingsControl ScriptSettings = null!;
 
+    /// <summary>
+    /// Предоставляет доступ к модели представления рабочей панели.
+    /// </summary>
+    public WorkPanelViewModel ViewModel { get; }
+
+    /// <summary>
+    /// Инициализирует новый экземпляр WorkPanel, разрешая зависимости через DI.
+    /// </summary>
     public WorkPanel()
     {
         InitializeComponent();
         InitializeTabs();
+
+        ViewModel = App.Services.GetRequiredService<WorkPanelViewModel>();
+        ViewModel.PropertyChanged += OnViewModelPropertyChanged;
+
         Unloaded += WorkPanel_Unloaded;
     }
 
@@ -56,7 +69,6 @@ public sealed partial class WorkPanel : Page
         _filesContainer.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         _filesContainer.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
-        // Список файлов очереди с Drag-and-Drop
         FileList = new FileListControl
         {
             Margin = new Thickness(0, 0, 0, 12),
@@ -66,7 +78,6 @@ public sealed partial class WorkPanel : Page
         Grid.SetRow(FileList, 0);
         _filesContainer.Children.Add(FileList);
 
-        // Разворачиваемый лог на базе Expander
         LogExpander = new Expander
         {
             Header = "Журнал выполнения",
@@ -125,38 +136,11 @@ public sealed partial class WorkPanel : Page
             FileList.ActiveScript = _script;
             ScriptSettings.GenerateSettingsUI(_script);
 
+            // Инициализируем ViewModel активным скриптом и коллекцией файлов
+            ViewModel.Initialize(_script, FileList.Files);
+
             // Отписываемся от старой подписки для предотвращения дублирования
             FileList.Files.CollectionChanged -= Files_CollectionChanged;
-
-            _isRestoringQueue = true;
-            try
-            {
-                // Восстанавливаем сохраненную очередь файлов для скрипта
-                FileList.Clear();
-                if (_script.SavedFiles.Count > 0)
-                {
-                    FileList.AddSavedFiles(_script.SavedFiles);
-                }
-
-                // Восстанавливаем текст журнала выполнения (лога)
-                LogTextBox.Text = _script.SavedLogText ?? string.Empty;
-                if (!string.IsNullOrEmpty(LogTextBox.Text))
-                {
-                    LogExpander.IsExpanded = true;
-                }
-
-                // Восстанавливаем глобальный статус и прогресс-бар
-                StatusTextBlock.Text = _script.SavedStatusText ?? 
-                    "Ожидание запуска...";
-                GlobalProgressBar.Value = _script.SavedGlobalProgress;
-            }
-            finally
-            {
-                _isRestoringQueue = false;
-            }
-
-            // Подписываемся на изменения для синхронизации
-            // очереди в реальном времени
             FileList.Files.CollectionChanged += Files_CollectionChanged;
 
             // Динамически управляем вкладкой "Дорожки"
@@ -200,17 +184,40 @@ public sealed partial class WorkPanel : Page
                 }
             }
 
-            // По умолчанию принудительно выбираем первую вкладку «Файлы»
+            // По умолчанию выбираем первую вкладку «Файлы»
             nvSample.SelectedItem = SamplePage1Item;
+        }
+    }
 
-            // Выполняем проверку бинарных зависимостей скрипта
-            CheckDependencies();
+    /// <summary>
+    /// Обработчик изменения свойств ViewModel в Code-Behind.
+    /// Синхронизирует UI-специфичные элементы (Expander, TextBox, скроллинг),
+    /// которые не поддерживают прямое связывание данных WinUI.
+    /// </summary>
+    private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(WorkPanelViewModel.LogText))
+        {
+            LogTextBox.Text = ViewModel.LogText;
+            LogTextBox.SelectionStart = LogTextBox.Text.Length;
+            LogTextBox.SelectionLength = 0;
+        }
+        else if (e.PropertyName == nameof(WorkPanelViewModel.IsLogExpanded))
+        {
+            LogExpander.IsExpanded = ViewModel.IsLogExpanded;
+        }
+        else if (e.PropertyName == nameof(WorkPanelViewModel.IsProcessing))
+        {
+            // Блокируем контролы во время обработки
+            bool isProcessing = ViewModel.IsProcessing;
+            FileList.IsEnabled = !isProcessing;
+            ScriptSettings.IsEnabled = !isProcessing;
         }
     }
 
     /// <summary>
     /// Обработчик переключения горизонтальных вкладок верхнего NavigationView.
-    /// Динамически подменяет контент фрейма contentFrame без пересоздания виджетов.
+    /// Подменяет контент фрейма без пересоздания виджетов.
     /// </summary>
     private void nvSample_SelectionChanged(
         NavigationView sender,
@@ -234,45 +241,8 @@ public sealed partial class WorkPanel : Page
         }
     }
 
-    /// <summary>
-    /// Выполнить валидацию внешних бинарных утилит, необходимых для работы скрипта.
-    /// </summary>
-    private bool CheckDependencies()
-    {
-        if (_script == null) return false;
-
-        bool allInstalled = true;
-        var missingDeps = new List<string>();
-
-        foreach (var depKey in _script.RequiredDependencies)
-        {
-            if (!DependencyManager.Instance.IsInstalled(depKey))
-            {
-                allInstalled = false;
-                missingDeps.Add(depKey.ToUpperInvariant());
-            }
-        }
-
-        if (!allInstalled)
-        {
-            // Показываем предупреждение и блокируем запуск
-            DependencyWarningBar.Message = 
-                $"Для работы требуются отсутствующие компоненты: {string.Join(", ", missingDeps)}";
-            DependencyWarningBar.IsOpen = true;
-            StartButton.IsEnabled = false;
-        }
-        else
-        {
-            DependencyWarningBar.IsOpen = false;
-            StartButton.IsEnabled = true;
-        }
-
-        return allInstalled;
-    }
-
     private void InstallDependencies_Click(object sender, RoutedEventArgs e)
     {
-        // Переход на страницу установки зависимостей через публичный метод роутинга
         var mainPage = FindParentPage<MainPage>(this);
         if (mainPage != null)
         {
@@ -280,55 +250,41 @@ public sealed partial class WorkPanel : Page
         }
     }
 
+    /// <summary>
+    /// Обработчик выбора директории сохранения результатов.
+    /// </summary>
     private async void BrowseFolder_Click(object sender, RoutedEventArgs e)
     {
-        var picker = new FolderPicker();
-        
-        // Настройка сопоставления с главным окном в WinUI 3
-        var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(App.CurrentMainWindow);
-        WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
-
-        picker.SuggestedStartLocation = PickerLocationId.ComputerFolder;
-        picker.FileTypeFilter.Add("*");
-
-        var folder = await picker.PickSingleFolderAsync();
-        if (folder != null)
+        try
         {
-            OutputPathTextBox.Text = folder.Path;
+            var picker = new FolderPicker();
+            
+            // Настройка сопоставления с главным окном в WinUI 3
+            var hwnd = WindowNative.GetWindowHandle(App.CurrentMainWindow);
+            InitializeWithWindow.Initialize(picker, hwnd);
+
+            picker.SuggestedStartLocation = PickerLocationId.ComputerFolder;
+            picker.FileTypeFilter.Add("*");
+
+            var folder = await picker.PickSingleFolderAsync();
+            if (folder != null)
+            {
+                ViewModel.OutputPath = folder.Path;
+            }
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Error($"Не удалось открыть окно выбора папки: {ex.Message}", "WorkPanel");
         }
     }
 
-    private void CancelButton_Click(object sender, RoutedEventArgs e)
+    /// <summary>
+    /// Обработчик клика по кнопке Выполнить. Собирает настройки из UI и запускает команду ViewModel.
+    /// </summary>
+    private void StartButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_script != null && _isProcessing)
-        {
-            StatusTextBlock.Text = "Отмена выполнения...";
-            _script.Cancel();
-        }
-    }
+        if (_script == null) return;
 
-    private async void StartButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (_script == null || _isProcessing) return;
-
-        var files = FileList.Files.ToList();
-        if (files.Count == 0)
-        {
-            AppendLog("❌ Ошибка: В очереди нет файлов для обработки.\r\n");
-            return;
-        }
-
-        // Блокируем интерфейс перед началом
-        SetUiProcessingState(true);
-        LogTextBox.Text = string.Empty;
-        LogExpander.IsExpanded = true; // Автоматически раскрываем лог при старте
-        GlobalProgressBar.Value = 0;
-        StatusTextBlock.Text = "Подготовка к обработке...";
-
-        _script.ResetCancellation();
-        string? outputPath = string.IsNullOrEmpty(OutputPathTextBox.Text) ? null : OutputPathTextBox.Text;
-
-        // Собираем текущие настройки и параметры кастомных виджетов на главном потоке
         var settings = ReadCurrentSettings();
         if (_script.UseCustomWidget)
         {
@@ -337,82 +293,15 @@ public sealed partial class WorkPanel : Page
             settings["selected_attachments_per_file"] = selectedAttachments;
         }
 
-        AppendLog($"🚀 Запуск скрипта '{_script.Name}' для {files.Count} файлов.\r\n");
-
-        await Task.Run(async () =>
+        if (ViewModel.StartExecutionCommand.CanExecute(settings))
         {
-            int total = files.Count;
-
-            for (int i = 0; i < total; i++)
-            {
-                if (_script.IsCancelled)
-                {
-                    break;
-                }
-
-                var fileItem = files[i];
-                
-                // Обновляем статус в UI
-                UpdateFileStatusInUi(fileItem, "Обработка...", 0.0);
-                UpdateGlobalProgress(i, total, $"Обработка файла {i + 1} из {total}: {fileItem.FileName}", 0.0);
-
-                try
-                {
-                    // Создаем прокси-callback для отправки прогресса обработки
-                    Action<int, int, string, double?> progressCallback = (currIdx, totCount, msg, percent) =>
-                    {
-                        UpdateFileStatusInUi(fileItem, msg, percent ?? 0.0);
-                        UpdateGlobalProgress(i, total, $"Файл {i + 1} из {total}: {fileItem.FileName} ({percent:F0}%)", percent ?? 0.0);
-                    };
-
-                    // Асинхронное выполнение скрипта
-                    var results = await _script.ExecuteSingleAsync(
-                        fileItem.FilePath,
-                        settings,
-                        outputPath,
-                        progressCallback,
-                        i,
-                        total);
-
-                    // Вывод логов в UI
-                    AppendLogFromThread(results);
-                    
-                    if (_script.IsCancelled)
-                    {
-                        UpdateFileStatusInUi(fileItem, "Отменено", 0.0);
-                        break;
-                    }
-
-                    UpdateFileStatusInUi(fileItem, "Завершено", 100.0);
-                }
-                catch (Exception ex)
-                {
-                    UpdateFileStatusInUi(fileItem, "Ошибка", 0.0);
-                    AppendLogFromThread(new List<string> { $"❌ Критическая ошибка: {ex.Message}" });
-                }
-            }
-
-            // Финализация обработки
-            DispatcherQueue.TryEnqueue(() =>
-            {
-                if (_script.IsCancelled)
-                {
-                    AppendLog("⚠ Обработка прервана пользователем.\r\n");
-                    StatusTextBlock.Text = "Обработка отменена";
-                    GlobalProgressBar.Value = 0;
-                }
-                else
-                {
-                    AppendLog("🎉 Все файлы успешно обработаны.\r\n");
-                    StatusTextBlock.Text = "Обработка завершена";
-                    GlobalProgressBar.Value = 100;
-                }
-
-                SetUiProcessingState(false);
-            });
-        });
+            ViewModel.StartExecutionCommand.Execute(settings);
+        }
     }
 
+    /// <summary>
+    /// Собирает текущие настройки скрипта из SettingsManager на основе схемы.
+    /// </summary>
     private Dictionary<string, object> ReadCurrentSettings()
     {
         var settings = new Dictionary<string, object>();
@@ -430,59 +319,9 @@ public sealed partial class WorkPanel : Page
         return settings;
     }
 
-    private void SetUiProcessingState(bool processing)
-    {
-        _isProcessing = processing;
-        FileList.IsEnabled = true;
-        ScriptSettings.IsEnabled = !processing;
-        OutputPathTextBox.IsEnabled = !processing;
-        StartButton.IsEnabled = !processing;
-        CancelButton.Visibility = processing
-            ? Visibility.Visible
-            : Visibility.Collapsed;
-    }
-
-    private void UpdateFileStatusInUi(FileQueueItem item, string status, double progress)
-    {
-        DispatcherQueue.TryEnqueue(() =>
-        {
-            item.Status = status;
-            item.Progress = progress;
-        });
-    }
-
-    private void UpdateGlobalProgress(int completedCount, int totalCount, string statusText, double filePercent)
-    {
-        DispatcherQueue.TryEnqueue(() =>
-        {
-            StatusTextBlock.Text = statusText;
-            double progress = (completedCount * 100.0 + filePercent) / totalCount;
-            GlobalProgressBar.Value = progress;
-        });
-    }
-
-    private void AppendLog(string message)
-    {
-        LogTextBox.Text += message;
-        // Автопрокрутка
-        LogTextBox.SelectionStart = LogTextBox.Text.Length;
-        LogTextBox.SelectionLength = 0;
-    }
-
-    private void AppendLogFromThread(List<string> lines)
-    {
-        DispatcherQueue.TryEnqueue(() =>
-        {
-            foreach (var line in lines)
-            {
-                AppendLog($"{line}\r\n");
-            }
-        });
-    }
-
     private T? FindParentPage<T>(DependencyObject child) where T : DependencyObject
     {
-        DependencyObject parentObject = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetParent(child);
+        DependencyObject parentObject = VisualTreeHelper.GetParent(child);
         if (parentObject == null) return null;
 
         if (parentObject is T parent)
@@ -494,69 +333,32 @@ public sealed partial class WorkPanel : Page
     }
 
     /// <summary>
-    /// Метод жизненного цикла страницы, вызываемый при навигации с нее.
+    /// Сохраняет состояние скрипта при уходе с этой страницы.
     /// </summary>
     protected override void OnNavigatedFrom(NavigationEventArgs e)
     {
         base.OnNavigatedFrom(e);
         
-        if (FileList != null && FileList.Files != null)
-        {
-            FileList.Files.CollectionChanged -= Files_CollectionChanged;
-        }
-
-        // Гарантированно сохраняем полное состояние перед уходом
-        if (_script != null && FileList != null && FileList.Files != null)
-        {
-            _script.SavedFiles.Clear();
-            foreach (var item in FileList.Files)
-            {
-                _script.SavedFiles.Add(new SavedFileState
-                {
-                    FilePath = item.FilePath,
-                    Status = item.Status,
-                    Progress = item.Progress
-                });
-            }
-
-            _script.SavedLogText = LogTextBox.Text;
-            _script.SavedStatusText = StatusTextBlock.Text;
-            _script.SavedGlobalProgress = GlobalProgressBar.Value;
-        }
+        FileList.Files.CollectionChanged -= Files_CollectionChanged;
+        ViewModel.SaveState();
     }
 
     /// <summary>
-    /// Гарантированная отписка от событий изменения коллекции при выгрузке.
+    /// Освобождает ресурсы при выгрузке страницы.
     /// </summary>
     private void WorkPanel_Unloaded(object sender, RoutedEventArgs e)
     {
-        if (FileList != null && FileList.Files != null)
-        {
-            FileList.Files.CollectionChanged -= Files_CollectionChanged;
-        }
+        ViewModel.PropertyChanged -= OnViewModelPropertyChanged;
+        FileList.Files.CollectionChanged -= Files_CollectionChanged;
     }
 
     /// <summary>
-    /// Синхронизирует пути к файлам в очереди с SavedFiles активного скрипта.
+    /// Синхронизирует коллекцию файлов при изменениях извне.
     /// </summary>
     private void Files_CollectionChanged(
         object? sender,
         System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
     {
-        if (_isRestoringQueue) return;
-
-        if (_script != null)
-        {
-            _script.SavedFiles.Clear();
-            foreach (var item in FileList.Files)
-            {
-                _script.SavedFiles.Add(new SavedFileState
-                {
-                    FilePath = item.FilePath,
-                    Status = item.Status,
-                    Progress = item.Progress
-                });
-            }
-        }
+        ViewModel.SyncSavedFiles();
     }
 }
