@@ -47,42 +47,6 @@ public class VideoEncodingStub : AbstractScript
         return new List<string> { IsCancelled ? "⚠ Кодирование отменено" : $"✅ Видео успешно закодировано: {System.IO.Path.GetFileName(filePath)}" };
     }
 }
-
-public class ContainerConversionStub : AbstractScript
-{
-    public override string Name => AppConstants.ScriptMetadata.ContainerConvName;
-    public override string Description => AppConstants.ScriptMetadata.ContainerConvDesc;
-    public override string Category => AppConstants.ScriptCategory.Video;
-    public override string IconName => "forward";
-    public override string[] FileExtensions => AppConstants.VideoContainers.ToArray();
-    public override string[] RequiredDependencies => new[] { "ffmpeg" };
-
-    public override List<SettingField> SettingsSchema => new()
-    {
-        new SettingField("target_format", "Формат контейнера", SettingType.Combo, "mkv", "Общие",
-            options: new List<string> { "mkv", "mp4" }),
-        new SettingField("copy_all", "Копировать все дорожки", SettingType.Checkbox, true, "Потоки")
-    };
-
-    public override async Task<List<string>> ExecuteSingleAsync(
-        string filePath,
-        Dictionary<string, object> settings,
-        string? outputPath,
-        Action<int, int, string, double?> progressCallback,
-        int fileIndex,
-        int totalCount)
-    {
-        ResetCancellation();
-        for (int i = 0; i <= 10; i++)
-        {
-            if (IsCancelled) break;
-            progressCallback(fileIndex, totalCount, $"Ремуксинг в контейнер... {i * 10}%", i * 10.0);
-            await Task.Delay(100);
-        }
-        return new List<string> { IsCancelled ? "⚠ Ремуксинг отменен" : $"✅ Контейнер успешно конвертирован: {System.IO.Path.GetFileName(filePath)}" };
-    }
-}
-
 public class AudioEncodingStub : AbstractScript
 {
     public override string Name => AppConstants.ScriptMetadata.AudioConverterName;

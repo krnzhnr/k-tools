@@ -262,14 +262,9 @@ public sealed partial class ScriptSettingsControl : UserControl
                                 field.Key,
                                 defaultValStr);
                         
-                        comboBox.SelectedItem = currentSelection;
-                        
-                        if (comboBox.SelectedIndex == -1 && 
-                            comboBox.Items.Count > 0)
-                        {
-                            comboBox.SelectedIndex = 0;
-                        }
-
+                        // Подписываемся на изменение выбора до инициализации
+                        // значения для корректной записи на диск
+                        // автоисправленного регистра настройки.
                         comboBox.SelectionChanged += (s, e) =>
                         {
                             if (comboBox.SelectedItem != null)
@@ -280,6 +275,23 @@ public sealed partial class ScriptSettingsControl : UserControl
                                     comboBox.SelectedItem.ToString());
                             }
                         };
+
+                        // Выполняем регистронезависимое сопоставление
+                        // сохраненного значения со схемой опций скрипта.
+                        string matchedOption = field.Options
+                            .FirstOrDefault(opt => opt.Equals(
+                                currentSelection,
+                                StringComparison.OrdinalIgnoreCase))
+                            ?? field.Options.FirstOrDefault()
+                            ?? defaultValStr;
+
+                        comboBox.SelectedItem = matchedOption;
+                        
+                        if (comboBox.SelectedIndex == -1 && 
+                            comboBox.Items.Count > 0)
+                        {
+                            comboBox.SelectedIndex = 0;
+                        }
                         inputControl = comboBox;
                         break;
                 }

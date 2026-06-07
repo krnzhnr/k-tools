@@ -102,6 +102,143 @@ public abstract class AbstractScript
     /// </summary>
     public double SavedGlobalProgress { get; set; }
 
+    private readonly object _batchLock = new();
+    private readonly HashSet<string> _batchReservedPaths = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Очищает список зарезервированных путей перед началом новой пакетной обработки.
+    /// </summary>
+    public virtual void PrepareBatch(IEnumerable<string>? inputFiles = null)
+    {
+        lock (_batchLock)
+        {
+            _batchReservedPaths.Clear();
+            if (inputFiles != null)
+            {
+                foreach (var file in inputFiles)
+                {
+                    _batchReservedPaths.Add(Path.GetFullPath(file));
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Возвращает безопасный путь для сохранения результата, предотвращая перезапись исходника
+    /// и коллизии имен при пакетном переименовании.
+    /// </summary>
+    protected string GetSafeOutputPath(string inputPath, string outputPath)
+    {
+        try
+        {
+            string inResolved = Path.GetFullPath(inputPath);
+            string outResolved = Path.GetFullPath(outputPath);
+
+            // 1. Защита исходного файла от перезаписи
+            if (inResolved.Equals(outResolved, StringComparison.OrdinalIgnoreCase))
+            {
+                string dir = Path.GetDirectoryName(outResolved) ?? "";
+                string stem = Path.GetFileNameWithoutExtension(outResolved);
+                string ext = Path.GetExtension(outResolved);
+                outResolved = Path.Combine(dir, $"{stem}_processed{ext}");
+                LogService.Instance.Info($"Защита исходника: добавлено '_processed' к имени файла: '{outResolved}'", "AbstractScript");
+            }
+
+            // 2. Защита от коллизий имен при пакетной обработке
+            lock (_batchLock)
+            {
+                string originalDir = Path.GetDirectoryName(outResolved) ?? "";
+                string originalStem = Path.GetFileNameWithoutExtension(outResolved);
+                string ext = Path.GetExtension(outResolved);
+                int counter = 1;
+
+                while (_batchReservedPaths.Contains(outResolved))
+                {
+                    outResolved = Path.Combine(originalDir, $"{originalStem}_{counter}{ext}");
+                    counter++;
+                }
+
+                _batchReservedPaths.Add(outResolved);
+            }
+            
+            return outResolved;
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Exception(ex, $"Ошибка при получении безопасного выходного пути для '{inputPath}': {ex.Message}", "AbstractScript");
+            return outputPath;
+        }
+    }
+
+    /// <summary>
+    /// Физически удаляет исходный файл с диска и заносит лог в результаты.
+    /// </summary>
+    protected void DeleteSource(string filePath, List<string> results)
+    {
+        try
+        {
+            if (File.Exists(filePath))
+            {
+                File.Delete(filePath);
+                string msg = $"🗑 Удален исходник: {Path.GetFileName(filePath)}";
+                results.Add(msg);
+                LogService.Instance.Info(msg, "AbstractScript");
+            }
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Exception(ex, $"Не удалось удалить исходный файл '{filePath}': {ex.Message}", "AbstractScript");
+            results.Add($"⚠ Не удалось удалить: {Path.GetFileName(filePath)}");
+        }
+    }
+
+    /// <summary>
+    /// Физически заменяет исходный файл полученным результатом с сохранением имени оригинала.
+    /// </summary>
+    protected bool ReplaceSourceWithResult(string sourcePath, string resultPath, List<string> results)
+    {
+        try
+        {
+            if (File.Exists(sourcePath))
+            {
+                File.Delete(sourcePath);
+            }
+            File.Move(resultPath, sourcePath);
+
+            string msg = $"🔄 Подменен оригинал: {Path.GetFileName(sourcePath)}";
+            results.Add(msg);
+            LogService.Instance.Info(msg, "AbstractScript");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Exception(ex, $"Ошибка при подмене оригинального файла '{sourcePath}' результатом '{resultPath}': {ex.Message}", "AbstractScript");
+            results.Add($"❌ Ошибка подмены: {Path.GetFileName(sourcePath)}");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Удаляет незавершенные выходные файлы при прерывании процесса.
+    /// </summary>
+    protected void CleanupIfCancelled(string filePath)
+    {
+        if (!IsCancelled) return;
+
+        try
+        {
+            if (File.Exists(filePath))
+            {
+                File.Delete(filePath);
+                LogService.Instance.DebugLog($"Удален неполный выходной файл: '{Path.GetFileName(filePath)}'", "AbstractScript");
+            }
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warn($"Не удалось удалить временный файл '{filePath}' при отмене: {ex.Message}", "AbstractScript");
+        }
+    }
+
     /// <summary>
     /// Асинхронный запуск обработки одного файла.
     /// </summary>

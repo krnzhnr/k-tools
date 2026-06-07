@@ -184,6 +184,14 @@ public sealed partial class FileListControl : UserControl
     {
         InitializeComponent();
         Files = new ObservableCollection<FileQueueItem>();
+        
+        // Подписываемся на событие изменения состава коллекции
+        // файлов. Это критически важно для корректного обновления
+        // видимости элементов интерфейса (списка и заглушки),
+        // когда коллекция наполняется или очищается из ViewModel
+        // при восстановлении состояния после переходов между страницами.
+        Files.CollectionChanged += (sender, args) => UpdateEmptyState();
+        
         FilesListView.ItemsSource = Files;
         UpdateEmptyState();
     }

@@ -348,53 +348,72 @@ public partial class WorkPanelViewModel : ObservableObject
             }
 
             // Завершение выполнения
-            if (ActiveScript.IsCancelled)
+            App.CurrentMainWindow?.DispatcherQueue?.TryEnqueue(() =>
             {
-                AppendLog("⚠ Обработка прервана пользователем.\r\n");
-                StatusText = "Обработка отменена";
-                GlobalProgressValue = 0;
-            }
-            else
-            {
-                AppendLog("🎉 Все файлы успешно обработаны.\r\n");
-                StatusText = "Обработка завершена";
-                GlobalProgressValue = 100;
-            }
+                if (ActiveScript.IsCancelled)
+                {
+                    LogText += "⚠ Обработка прервана пользователем.\r\n";
+                    StatusText = "Обработка отменена";
+                    GlobalProgressValue = 0;
+                }
+                else
+                {
+                    LogText += "🎉 Все файлы успешно обработаны.\r\n";
+                    StatusText = "Обработка завершена";
+                    GlobalProgressValue = 100;
+                }
 
-            SetProcessingState(false);
+                IsProcessing = false;
+                IsStartButtonEnabled = CheckDependencies();
+            });
         });
     }
 
     private void SetProcessingState(bool processing)
     {
-        IsProcessing = processing;
-        IsStartButtonEnabled = !processing && CheckDependencies();
+        App.CurrentMainWindow?.DispatcherQueue?.TryEnqueue(() =>
+        {
+            IsProcessing = processing;
+            IsStartButtonEnabled = !processing && CheckDependencies();
+        });
     }
 
     private void UpdateFileStatus(FileQueueItem item, string status, double progress)
     {
-        item.Status = status;
-        item.Progress = progress;
+        App.CurrentMainWindow?.DispatcherQueue?.TryEnqueue(() =>
+        {
+            item.Status = status;
+            item.Progress = progress;
+        });
     }
 
     private void UpdateProgressState(int completedCount, int totalCount, string status, double filePercent)
     {
-        StatusText = status;
-        GlobalProgressValue = (completedCount * 100.0 + filePercent) / totalCount;
+        App.CurrentMainWindow?.DispatcherQueue?.TryEnqueue(() =>
+        {
+            StatusText = status;
+            GlobalProgressValue = (completedCount * 100.0 + filePercent) / totalCount;
+        });
     }
 
     private void AppendLog(string message)
     {
-        LogText += message;
+        App.CurrentMainWindow?.DispatcherQueue?.TryEnqueue(() =>
+        {
+            LogText += message;
+        });
     }
 
     private void AppendLogs(List<string> lines)
     {
-        var sb = new StringBuilder(LogText);
-        foreach (var line in lines)
+        App.CurrentMainWindow?.DispatcherQueue?.TryEnqueue(() =>
         {
-            sb.AppendLine(line);
-        }
-        LogText = sb.ToString();
+            var sb = new StringBuilder(LogText);
+            foreach (var line in lines)
+            {
+                sb.AppendLine(line);
+            }
+            LogText = sb.ToString();
+        });
     }
 }

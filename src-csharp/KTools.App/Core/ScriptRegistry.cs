@@ -50,7 +50,7 @@ public sealed class ScriptRegistry
         // Сейчас регистрируем первый рабочий скрипт "Очистка метаданных" и заглушки для остальных.
         _scripts.Add(new Scripts.MetadataCleanupScript());
         _scripts.Add(new Scripts.VideoEncodingStub());
-        _scripts.Add(new Scripts.ContainerConversionStub());
+        _scripts.Add(new Scripts.ContainerConversionScript());
         
         _scripts.Add(new Scripts.AudioEncodingStub());
         _scripts.Add(new Scripts.AudioDownmixStub());
