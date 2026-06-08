@@ -24,4 +24,9 @@ public sealed class SavedFileState
     /// Текущий прогресс обработки файла от 0.0 до 100.0.
     /// </summary>
     public double Progress { get; set; }
+
+    /// <summary>
+    /// Проанализированная техническая структура медиафайла.
+    /// </summary>
+    public MediaStructure? MediaInfo { get; set; }
 }

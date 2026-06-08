@@ -59,80 +59,102 @@ public abstract class AbstractProcessRunner
 
         using var process = new Process { StartInfo = startInfo };
 
+        var tcsOut = new TaskCompletionSource<bool>();
+        var tcsErr = new TaskCompletionSource<bool>();
+
+        process.OutputDataReceived += (sender, e) =>
+        {
+            if (e.Data == null)
+            {
+                tcsOut.TrySetResult(true);
+            }
+            else
+            {
+                try
+                {
+                    onOutputLine?.Invoke(e.Data);
+                }
+                catch (Exception ex)
+                {
+                    LogService.Instance.Exception(ex,
+                        $"Ошибка обработки стандартного вывода '{binaryName}'",
+                        GetType().Name);
+                }
+            }
+        };
+
+        process.ErrorDataReceived += (sender, e) =>
+        {
+            if (e.Data == null)
+            {
+                tcsErr.TrySetResult(true);
+            }
+            else
+            {
+                try
+                {
+                    onErrorLine?.Invoke(e.Data);
+                }
+                catch (Exception ex)
+                {
+                    LogService.Instance.Exception(ex,
+                        $"Ошибка обработки вывода ошибок '{binaryName}'",
+                        GetType().Name);
+                }
+            }
+        };
+
         try
         {
             process.Start();
-            LogService.Instance.Info($"Запущен дочерний процесс '{binaryName}' с идентификатором (PID): {process.Id}", GetType().Name);
+            LogService.Instance.Info(
+                $"Запущен дочерний процесс '{binaryName}' (PID: {process.Id})",
+                GetType().Name);
+
+            process.BeginOutputReadLine();
+            process.BeginErrorReadLine();
         }
         catch (Exception ex)
         {
-            string failMsg = $"Не удалось запустить внешний процесс '{binaryName}': {ex.Message}";
+            string failMsg =
+                $"Не удалось запустить внешний процесс '{binaryName}': {ex.Message}";
             LogService.Instance.Exception(ex, failMsg, GetType().Name);
             return new ProcessResult(false, -2, failMsg);
         }
-
-        // Асинхронные задачи для построчного чтения вывода во избежание взаимных блокировок потоков
-        var outputTask = Task.Run(async () =>
-        {
-            try
-            {
-                while (!process.StandardOutput.EndOfStream)
-                {
-                    string? line = await process.StandardOutput.ReadLineAsync();
-                    if (line != null)
-                    {
-                        onOutputLine?.Invoke(line);
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                LogService.Instance.Error($"Ошибка чтения стандартного вывода процесса '{binaryName}': {ex.Message}", GetType().Name);
-            }
-        });
-
-        var errorTask = Task.Run(async () =>
-        {
-            try
-            {
-                while (!process.StandardError.EndOfStream)
-                {
-                    string? line = await process.StandardError.ReadLineAsync();
-                    if (line != null)
-                    {
-                        onErrorLine?.Invoke(line);
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                LogService.Instance.Error($"Ошибка чтения потока ошибок процесса '{binaryName}': {ex.Message}", GetType().Name);
-            }
-        });
 
         try
         {
             // Ожидание завершения с поддержкой токена отмены
             await process.WaitForExitAsync(cancellationToken);
             // Дожидаемся завершения считывания всех логов
-            await Task.WhenAll(outputTask, errorTask);
+            await Task.WhenAll(tcsOut.Task, tcsErr.Task);
         }
         catch (OperationCanceledException)
         {
-            LogService.Instance.Warn($"Получен внешний сигнал отмены. Принудительное прерывание процесса '{binaryName}' (PID: {process.Id})...", GetType().Name);
+            LogService.Instance.Warn(
+                $"Получен внешний сигнал отмены. Принудительное прерывание " +
+                $"процесса '{binaryName}' (PID: {process.Id})...",
+                GetType().Name);
             try
             {
                 if (!process.HasExited)
                 {
-                    process.Kill(true); // Принудительно завершаем процесс и все его дочерние подпроцессы
-                    LogService.Instance.Info($"Процесс '{binaryName}' (PID: {process.Id}) был успешно остановлен принудительно", GetType().Name);
+                    process.Kill(true); // Принудительно завершаем процесс
+                    LogService.Instance.Info(
+                        $"Процесс '{binaryName}' (PID: {process.Id}) был " +
+                        $"успешно остановлен принудительно",
+                        GetType().Name);
                 }
             }
             catch (Exception ex)
             {
-                LogService.Instance.Error($"Ошибка при попытке принудительного прерывания процесса '{binaryName}': {ex.Message}", GetType().Name);
+                LogService.Instance.Error(
+                    $"Ошибка при попытке принудительного прерывания " +
+                    $"процесса '{binaryName}': {ex.Message}",
+                    GetType().Name);
             }
-            return new ProcessResult(false, -3, "Операция принудительно отменена пользователем");
+            return new ProcessResult(false, -3,
+                "Операция принудительно отменена пользователем");
         }
 
         int exitCode = process.ExitCode;

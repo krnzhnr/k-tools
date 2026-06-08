@@ -1,6 +1,7 @@
 // -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Text.Json;
 using System.Threading.Tasks;
 
@@ -82,10 +83,49 @@ public abstract class AbstractScript
     }
 
     /// <summary>
-    /// Сохраненная очередь файлов с их индивидуальными
-    /// статусами и прогрессом.
+    /// Инициализирует новый экземпляр класса <see cref="AbstractScript"/>
+    /// и настраивает автоматическое удаление сохраненного выбора при удалении файлов из очереди.
     /// </summary>
-    public List<SavedFileState> SavedFiles { get; } = new();
+    protected AbstractScript()
+    {
+        FilesQueue.CollectionChanged += (sender, e) =>
+        {
+            if (e.Action == System.Collections.Specialized.NotifyCollectionChangedAction.Remove && e.OldItems != null)
+            {
+                foreach (FileQueueItem item in e.OldItems)
+                {
+                    SelectedTrackIds.Remove(item.FilePath);
+                    SelectedAttachmentIds.Remove(item.FilePath);
+                    LogService.Instance.DebugLog(
+                        $"Очищен сохраненный выбор дорожек для удаленного файла: '{item.FileName}'", 
+                        "AbstractScript");
+                }
+            }
+            else if (e.Action == System.Collections.Specialized.NotifyCollectionChangedAction.Reset)
+            {
+                SelectedTrackIds.Clear();
+                SelectedAttachmentIds.Clear();
+                LogService.Instance.DebugLog(
+                    "Очищен весь сохраненный выбор дорожек в связи со сбросом очереди файлов", 
+                    "AbstractScript");
+            }
+        };
+    }
+
+    /// <summary>
+    /// Словарь выбранных дорожек для файлов (путь -> список ID дорожек).
+    /// </summary>
+    public Dictionary<string, List<int>> SelectedTrackIds { get; } = new();
+
+    /// <summary>
+    /// Словарь выбранных вложений для файлов (путь -> список ID вложений).
+    /// </summary>
+    public Dictionary<string, List<int>> SelectedAttachmentIds { get; } = new();
+
+    /// <summary>
+    /// Очередь файлов скрипта, сохраняющаяся между переходами.
+    /// </summary>
+    public ObservableCollection<FileQueueItem> FilesQueue { get; } = new();
 
     /// <summary>
     /// Сохраненный текст журнала выполнения скрипта.
@@ -101,6 +141,24 @@ public abstract class AbstractScript
     /// Сохраненное значение интегрального прогресс-бара.
     /// </summary>
     public double SavedGlobalProgress { get; set; }
+
+    /// <summary>
+    /// Указывает, выполняется ли скрипт в данный момент.
+    /// </summary>
+    public bool IsProcessing { get; set; }
+
+    /// <summary>
+    /// Событие изменения состояния выполнения скрипта.
+    /// </summary>
+    public event EventHandler? StateChanged;
+
+    /// <summary>
+    /// Вызывает событие изменения состояния для подписчиков.
+    /// </summary>
+    public void RaiseStateChanged()
+    {
+        StateChanged?.Invoke(this, EventArgs.Empty);
+    }
 
     private readonly object _batchLock = new();
     private readonly HashSet<string> _batchReservedPaths = new(StringComparer.OrdinalIgnoreCase);

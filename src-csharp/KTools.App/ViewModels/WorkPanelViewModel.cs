@@ -8,6 +8,7 @@ using System.Text;
 using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using CommunityToolkit.Mvvm.Messaging;
 using KTools_App.Core;
 using KTools_App.UI.Controls;
 using KTools_App.Services.Contracts;
@@ -26,7 +27,6 @@ public partial class WorkPanelViewModel : ObservableObject
     private readonly LogService _logService;
 
     private ObservableCollection<FileQueueItem> _files = new();
-    private bool _isRestoringQueue;
 
     /// <summary>
     /// Активный исполняемый скрипт обработки медиаданных.
@@ -125,22 +125,38 @@ public partial class WorkPanelViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Связывает активный скрипт и коллекцию файлов с моделью представления.
+    /// Связывает активный скрипт и коллекцию файлов
+    /// с моделью представления.
     /// </summary>
-    public void Initialize(AbstractScript script, ObservableCollection<FileQueueItem> files)
+    public void Initialize(
+        AbstractScript script, 
+        ObservableCollection<FileQueueItem> files)
     {
+        if (ActiveScript != null)
+        {
+            ActiveScript.StateChanged -= OnScriptStateChanged;
+        }
+
         ActiveScript = script;
         Files = files;
 
         IsTracksTabVisible = script.UseCustomWidget;
-        IsSettingsTabVisible = script.SettingsSchema != null && script.SettingsSchema.Count > 0;
+        IsSettingsTabVisible = script.SettingsSchema != null && 
+                               script.SettingsSchema.Count > 0;
 
         RestoreState();
         CheckDependencies();
+
+        ActiveScript.StateChanged += OnScriptStateChanged;
+
+        // Отправляем сообщение об изменении активного скрипта
+        CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Send(
+            new ActiveScriptChangedMessage(script));
     }
 
     /// <summary>
-    /// Выполняет проверку установленных бинарных зависимостей, необходимых для текущего скрипта.
+    /// Выполняет проверку установленных бинарных зависимостей,
+    /// необходимых для текущего скрипта.
     /// </summary>
     public bool CheckDependencies()
     {
@@ -160,7 +176,9 @@ public partial class WorkPanelViewModel : ObservableObject
 
         if (!allInstalled)
         {
-            DependencyWarningText = $"Для работы требуются отсутствующие компоненты: {string.Join(", ", missingDeps)}";
+            DependencyWarningText = 
+                "Для работы требуются отсутствующие компоненты: " +
+                string.Join(", ", missingDeps);
             IsDependencyWarningOpen = true;
             IsStartButtonEnabled = false;
         }
@@ -174,86 +192,52 @@ public partial class WorkPanelViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Восстанавливает сохраненное ранее состояние скрипта (очередь файлов, логи, прогресс).
+    /// Восстанавливает сохраненное ранее состояние скрипта
+    /// (очередь файлов, логи, прогресс).
     /// </summary>
     public void RestoreState()
     {
         if (ActiveScript == null) return;
 
-        _isRestoringQueue = true;
-        try
+        // Поскольку файлы в FilesQueue (ссылающемся на Files)
+        // сохраняются на протяжении всей жизни скрипта,
+        // нам не нужно очищать и наполнять коллекцию заново.
+        // Мы просто запускаем анализ для файлов, у которых он
+        // по какой-то причине отсутствует (например, не завершился).
+        foreach (var item in Files)
         {
-            Files.Clear();
-            if (ActiveScript.SavedFiles.Count > 0)
+            if (item.MediaInfo == null)
             {
-                foreach (var state in ActiveScript.SavedFiles)
-                {
-                    if (!File.Exists(state.FilePath)) continue;
-                    
-                    var item = new FileQueueItem(state.FilePath)
-                    {
-                        Status = state.Status,
-                        Progress = state.Progress
-                    };
-                    Files.Add(item);
-                }
+                StartAsyncAnalysis(item);
             }
-
-            LogText = ActiveScript.SavedLogText ?? string.Empty;
-            if (!string.IsNullOrEmpty(LogText))
-            {
-                IsLogExpanded = true;
-            }
-
-            StatusText = ActiveScript.SavedStatusText ?? "Ожидание запуска...";
-            GlobalProgressValue = ActiveScript.SavedGlobalProgress;
         }
-        finally
+
+        LogText = ActiveScript.SavedLogText ?? string.Empty;
+        if (!string.IsNullOrEmpty(LogText))
         {
-            _isRestoringQueue = false;
+            IsLogExpanded = true;
         }
+
+        StatusText = 
+            ActiveScript.SavedStatusText ?? "Ожидание запуска...";
+        GlobalProgressValue = ActiveScript.SavedGlobalProgress;
+        IsProcessing = ActiveScript.IsProcessing;
+        IsStartButtonEnabled = !IsProcessing && CheckDependencies();
     }
 
     /// <summary>
-    /// Сохраняет текущее состояние очереди файлов и логов в объект скрипта перед уходом со страницы.
+    /// Сохраняет текущее состояние логов и прогресса скрипта
+    /// перед уходом со страницы.
     /// </summary>
     public void SaveState()
     {
         if (ActiveScript == null) return;
 
-        ActiveScript.SavedFiles.Clear();
-        foreach (var item in Files)
-        {
-            ActiveScript.SavedFiles.Add(new SavedFileState
-            {
-                FilePath = item.FilePath,
-                Status = item.Status,
-                Progress = item.Progress
-            });
-        }
+        ActiveScript.StateChanged -= OnScriptStateChanged;
 
         ActiveScript.SavedLogText = LogText;
         ActiveScript.SavedStatusText = StatusText;
         ActiveScript.SavedGlobalProgress = GlobalProgressValue;
-    }
-
-    /// <summary>
-    /// Синхронизирует коллекцию SavedFiles при интерактивном изменении файлов в UI.
-    /// </summary>
-    public void SyncSavedFiles()
-    {
-        if (_isRestoringQueue || ActiveScript == null) return;
-
-        ActiveScript.SavedFiles.Clear();
-        foreach (var item in Files)
-        {
-            ActiveScript.SavedFiles.Add(new SavedFileState
-            {
-                FilePath = item.FilePath,
-                Status = item.Status,
-                Progress = item.Progress
-            });
-        }
     }
 
     /// <summary>
@@ -264,7 +248,8 @@ public partial class WorkPanelViewModel : ObservableObject
     {
         if (ActiveScript != null && IsProcessing)
         {
-            StatusText = "Отмена выполнения...";
+            ActiveScript.SavedStatusText = "Отмена выполнения...";
+            ActiveScript.RaiseStateChanged();
             ActiveScript.Cancel();
         }
     }
@@ -272,9 +257,9 @@ public partial class WorkPanelViewModel : ObservableObject
     /// <summary>
     /// Асинхронная команда запуска обработки файлов.
     /// </summary>
-    /// <param name="settings">Словарь с настройками скрипта, переданный из View.</param>
     [RelayCommand]
-    private async Task StartExecutionAsync(Dictionary<string, object>? settings)
+    private async Task StartExecutionAsync(
+        Dictionary<string, object>? settings)
     {
         if (ActiveScript == null || IsProcessing) return;
 
@@ -285,135 +270,294 @@ public partial class WorkPanelViewModel : ObservableObject
             return;
         }
 
-        SetProcessingState(true);
-        LogText = string.Empty;
-        IsLogExpanded = true;
-        GlobalProgressValue = 0;
-        StatusText = "Подготовка к обработке...";
+        PrepareExecutionState(filesList);
 
-        ActiveScript.ResetCancellation();
-        string? outPath = string.IsNullOrEmpty(OutputPath) ? null : OutputPath;
         var activeSettings = settings ?? new Dictionary<string, object>();
-
-        AppendLog($"🚀 Запуск скрипта '{ActiveScript.Name}' для {filesList.Count} файлов.\r\n");
+        string? outPath = string.IsNullOrEmpty(OutputPath) 
+            ? null 
+            : OutputPath;
 
         await Task.Run(async () =>
         {
-            int total = filesList.Count;
+            await ProcessQueueAsync(
+                filesList, 
+                activeSettings, 
+                outPath);
+        });
+    }
 
-            for (int i = 0; i < total; i++)
+    /// <summary>
+    /// Инициализирует состояние скрипта перед началом обработки очереди.
+    /// </summary>
+    private void PrepareExecutionState(List<FileQueueItem> filesList)
+    {
+        if (ActiveScript == null) return;
+
+        foreach (var item in filesList)
+        {
+            item.Status = "Ожидание";
+            item.Progress = 0.0;
+        }
+
+        ActiveScript.IsProcessing = true;
+        ActiveScript.SavedLogText = string.Empty;
+        ActiveScript.SavedGlobalProgress = 0;
+        ActiveScript.SavedStatusText = "Подготовка к обработке...";
+        
+        ActiveScript.ResetCancellation();
+        ActiveScript.RaiseStateChanged();
+
+        AppendLog($"🚀 Запуск скрипта '{ActiveScript.Name}' " +
+                  $"для {filesList.Count} файлов.\r\n");
+    }
+
+    /// <summary>
+    /// Обрабатывает очередь файлов в фоновом потоке.
+    /// </summary>
+    private async Task ProcessQueueAsync(
+        List<FileQueueItem> filesList,
+        Dictionary<string, object> settings,
+        string? outPath)
+    {
+        if (ActiveScript == null) return;
+
+        int total = filesList.Count;
+        for (int i = 0; i < total; i++)
+        {
+            if (ActiveScript.IsCancelled)
             {
-                if (ActiveScript.IsCancelled)
-                {
-                    break;
-                }
-
-                var fileItem = filesList[i];
-
-                UpdateFileStatus(fileItem, "Обработка...", 0.0);
-                UpdateProgressState(i, total, $"Обработка файла {i + 1} из {total}: {fileItem.FileName}", 0.0);
-
-                try
-                {
-                    Action<int, int, string, double?> progressCallback = (currIdx, totCount, msg, percent) =>
-                    {
-                        UpdateFileStatus(fileItem, msg, percent ?? 0.0);
-                        UpdateProgressState(i, total, $"Файл {i + 1} из {total}: {fileItem.FileName} ({percent:F0}%)", percent ?? 0.0);
-                    };
-
-                    var results = await ActiveScript.ExecuteSingleAsync(
-                        fileItem.FilePath,
-                        activeSettings,
-                        outPath,
-                        progressCallback,
-                        i,
-                        total);
-
-                    AppendLogs(results);
-
-                    if (ActiveScript.IsCancelled)
-                    {
-                        UpdateFileStatus(fileItem, "Отменено", 0.0);
-                        break;
-                    }
-
-                    UpdateFileStatus(fileItem, "Завершено", 100.0);
-                }
-                catch (Exception ex)
-                {
-                    _logService.Exception(ex, $"Ошибка выполнения скрипта на файле '{fileItem.FileName}': {ex.Message}", "WorkPanelViewModel");
-                    UpdateFileStatus(fileItem, "Ошибка", 0.0);
-                    AppendLogs(new List<string> { $"❌ Критическая ошибка: {ex.Message}" });
-                }
+                break;
             }
 
-            // Завершение выполнения
-            App.CurrentMainWindow?.DispatcherQueue?.TryEnqueue(() =>
+            var fileItem = filesList[i];
+            await ProcessQueueItemAsync(
+                fileItem, 
+                settings, 
+                outPath, 
+                i, 
+                total);
+        }
+
+        FinalizeExecution();
+    }
+
+    /// <summary>
+    /// Выполняет обработку одного элемента очереди.
+    /// </summary>
+    private async Task ProcessQueueItemAsync(
+        FileQueueItem fileItem,
+        Dictionary<string, object> settings,
+        string? outPath,
+        int index,
+        int total)
+    {
+        if (ActiveScript == null) return;
+
+        UpdateFileStatus(fileItem.FilePath, "Обработка...", 0.0);
+        UpdateProgressState(
+            index, 
+            total, 
+            $"Обработка файла {index + 1} из {total}", 
+            0.0);
+
+        try
+        {
+            Action<int, int, string, double?> progressCallback = 
+                (currIdx, totCount, msg, percent) =>
+                {
+                    UpdateFileStatus(
+                        fileItem.FilePath, 
+                        msg, 
+                        percent ?? 0.0);
+                        
+                    UpdateProgressState(
+                        index, 
+                        total, 
+                        $"Файл {index + 1} из {total} ({percent:F0}%)", 
+                        percent ?? 0.0);
+                };
+
+            var results = await ActiveScript.ExecuteSingleAsync(
+                fileItem.FilePath,
+                settings,
+                outPath,
+                progressCallback,
+                index,
+                total);
+
+            AppendLogs(results);
+
+            if (ActiveScript.IsCancelled)
             {
-                if (ActiveScript.IsCancelled)
-                {
-                    LogText += "⚠ Обработка прервана пользователем.\r\n";
-                    StatusText = "Обработка отменена";
-                    GlobalProgressValue = 0;
-                }
-                else
-                {
-                    LogText += "🎉 Все файлы успешно обработаны.\r\n";
-                    StatusText = "Обработка завершена";
-                    GlobalProgressValue = 100;
-                }
+                UpdateFileStatus(fileItem.FilePath, "Отменено", 0.0);
+                return;
+            }
 
-                IsProcessing = false;
-                IsStartButtonEnabled = CheckDependencies();
+            UpdateFileStatus(fileItem.FilePath, "Завершено", 100.0);
+        }
+        catch (Exception ex)
+        {
+            _logService.Exception(
+                ex, 
+                $"Ошибка выполнения скрипта на файле " +
+                $"'{fileItem.FileName}': {ex.Message}", 
+                "WorkPanelViewModel");
+                
+            UpdateFileStatus(fileItem.FilePath, "Ошибка", 0.0);
+            AppendLogs(new List<string> { 
+                $"❌ Критическая ошибка: {ex.Message}" 
             });
-        });
+        }
     }
 
-    private void SetProcessingState(bool processing)
+    /// <summary>
+    /// Финализирует состояние скрипта после окончания обработки очереди.
+    /// </summary>
+    private void FinalizeExecution()
+    {
+        if (ActiveScript == null) return;
+
+        if (ActiveScript.IsCancelled)
+        {
+            ActiveScript.SavedLogText += 
+                "⚠ Обработка прервана пользователем.\r\n";
+            ActiveScript.SavedStatusText = "Обработка отменена";
+            ActiveScript.SavedGlobalProgress = 0;
+        }
+        else
+        {
+            ActiveScript.SavedLogText += 
+                "🎉 Все файлы успешно обработаны.\r\n";
+            ActiveScript.SavedStatusText = "Обработка завершена";
+            ActiveScript.SavedGlobalProgress = 100;
+        }
+
+        ActiveScript.IsProcessing = false;
+        ActiveScript.RaiseStateChanged();
+    }
+
+    private void OnScriptStateChanged(object? sender, EventArgs e)
     {
         App.CurrentMainWindow?.DispatcherQueue?.TryEnqueue(() =>
         {
-            IsProcessing = processing;
-            IsStartButtonEnabled = !processing && CheckDependencies();
+            if (ActiveScript == null) return;
+
+            StatusText = ActiveScript.SavedStatusText;
+            GlobalProgressValue = ActiveScript.SavedGlobalProgress;
+            LogText = ActiveScript.SavedLogText;
+            IsProcessing = ActiveScript.IsProcessing;
+            IsStartButtonEnabled = !IsProcessing && CheckDependencies();
+            
+            if (!string.IsNullOrEmpty(LogText))
+            {
+                IsLogExpanded = true;
+            }
         });
     }
 
-    private void UpdateFileStatus(FileQueueItem item, string status, double progress)
+    private void UpdateFileStatus(
+        string filePath, 
+        string status, 
+        double progress)
     {
         App.CurrentMainWindow?.DispatcherQueue?.TryEnqueue(() =>
         {
-            item.Status = status;
-            item.Progress = progress;
+            var fileItem = Files.FirstOrDefault(f => 
+                f.FilePath.Equals(
+                    filePath, 
+                    StringComparison.OrdinalIgnoreCase));
+            if (fileItem != null)
+            {
+                fileItem.Status = status;
+                fileItem.Progress = progress;
+            }
         });
+
+        ActiveScript?.RaiseStateChanged();
     }
 
-    private void UpdateProgressState(int completedCount, int totalCount, string status, double filePercent)
+    private void UpdateProgressState(
+        int completedCount, 
+        int totalCount, 
+        string status, 
+        double filePercent)
     {
-        App.CurrentMainWindow?.DispatcherQueue?.TryEnqueue(() =>
-        {
-            StatusText = status;
-            GlobalProgressValue = (completedCount * 100.0 + filePercent) / totalCount;
-        });
+        if (ActiveScript == null) return;
+
+        ActiveScript.SavedStatusText = status;
+        ActiveScript.SavedGlobalProgress = 
+            (completedCount * 100.0 + filePercent) / totalCount;
+
+        ActiveScript.RaiseStateChanged();
     }
 
     private void AppendLog(string message)
     {
-        App.CurrentMainWindow?.DispatcherQueue?.TryEnqueue(() =>
-        {
-            LogText += message;
-        });
+        if (ActiveScript == null) return;
+
+        ActiveScript.SavedLogText += message;
+        ActiveScript.RaiseStateChanged();
     }
 
     private void AppendLogs(List<string> lines)
     {
-        App.CurrentMainWindow?.DispatcherQueue?.TryEnqueue(() =>
+        if (ActiveScript == null) return;
+
+        var sb = new StringBuilder(ActiveScript.SavedLogText);
+        foreach (var line in lines)
         {
-            var sb = new StringBuilder(LogText);
-            foreach (var line in lines)
+            sb.AppendLine(line);
+        }
+        ActiveScript.SavedLogText = sb.ToString();
+        ActiveScript.RaiseStateChanged();
+    }
+
+    /// <summary>
+    /// Запускает фоновый асинхронный технический анализ медиафайла,
+    /// если он не был восстановлен из кэшированного состояния.
+    /// </summary>
+    private void StartAsyncAnalysis(FileQueueItem item)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
             {
-                sb.AppendLine(line);
+                var structure = await MediaProbeService.Instance
+                    .ProbeAsync(item.FilePath);
+                if (structure != null)
+                {
+                    App.CurrentMainWindow?.DispatcherQueue?
+                        .TryEnqueue(() =>
+                        {
+                            item.MediaInfo = structure;
+                        });
+                }
             }
-            LogText = sb.ToString();
+            catch (Exception ex)
+            {
+                _logService.Exception(
+                    ex,
+                    $"Ошибка фонового анализа при восстановлении " +
+                    $"файла '{item.FileName}': {ex.Message}",
+                    "WorkPanelViewModel");
+            }
         });
+    }
+}
+
+/// <summary>
+/// Сообщение для уведомления об изменении активного скрипта на WorkPanel.
+/// </summary>
+public sealed class ActiveScriptChangedMessage
+{
+    /// <summary>Активный исполняемый скрипт.</summary>
+    public AbstractScript Script { get; }
+
+    /// <summary>
+    /// Инициализирует новый экземпляр ActiveScriptChangedMessage.
+    /// </summary>
+    public ActiveScriptChangedMessage(AbstractScript script)
+    {
+        Script = script;
     }
 }

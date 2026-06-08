@@ -294,7 +294,7 @@ public sealed class DeeRunner : AbstractProcessRunner
   </filter>
   <output>
     <ec3 version=""1"">
-      <file_name>{Path.GetFileName(wavPath) + (encoderMode == "dd" ? ".ac3" : ".ec3")}</file_name>
+      <file_name>{Path.GetFileNameWithoutExtension(wavPath) + (encoderMode == "dd" ? ".ac3" : ".ec3")}</file_name>
       <storage>
         <local>
           <path>{Path.GetDirectoryName(outPath)}</path>

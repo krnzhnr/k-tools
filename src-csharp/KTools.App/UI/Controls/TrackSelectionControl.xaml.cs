@@ -86,8 +86,15 @@ public sealed class TrackNodeItem
 /// </summary>
 public sealed partial class TrackSelectionControl : UserControl
 {
+    private readonly Microsoft.UI.Dispatching.DispatcherQueue _dispatcherQueue = 
+        Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
     private ObservableCollection<FileQueueItem>? _files;
     private readonly HashSet<FileQueueItem> _subscribedItems = new();
+
+    /// <summary>
+    /// Текущий активный скрипт обработки для сохранения выбора.
+    /// </summary>
+    public AbstractScript? ActiveScript { get; set; }
 
     // Структуры для хранения уникальных технических параметров (опций) для фильтрации
     private readonly Dictionary<string, Dictionary<string, HashSet<string>>> _dynamicOptions = new()
@@ -115,6 +122,7 @@ public sealed partial class TrackSelectionControl : UserControl
     public TrackSelectionControl()
     {
         InitializeComponent();
+        Unloaded += TrackSelectionControl_Unloaded;
     }
 
     /// <summary>
@@ -234,9 +242,11 @@ public sealed partial class TrackSelectionControl : UserControl
     /// </summary>
     private void OnFilesCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
-        DispatcherQueue.TryEnqueue(() =>
+        _dispatcherQueue.TryEnqueue(() =>
         {
-            LogService.Instance.DebugLog("Синхронизация списка файлов в дереве выбора дорожек", "TrackSelectionControl");
+            LogService.Instance.DebugLog(
+                "Синхронизация списка файлов в дереве выбора дорожек", 
+                "TrackSelectionControl");
             
             // Обновляем подписки на элементы
             UnsubscribeFromItems();
@@ -253,11 +263,14 @@ public sealed partial class TrackSelectionControl : UserControl
     {
         if (e.PropertyName == nameof(FileQueueItem.MediaInfo))
         {
-            DispatcherQueue.TryEnqueue(() =>
+            _dispatcherQueue.TryEnqueue(() =>
             {
                 if (sender is FileQueueItem item)
                 {
-                    LogService.Instance.Info($"Получено уведомление о завершении анализа для файла: {item.FileName}. Перестраиваем дерево.", "TrackSelectionControl");
+                    LogService.Instance.Info(
+                        $"Получено уведомление о завершении анализа для " +
+                        $"файла: {item.FileName}. Перестраиваем дерево.", 
+                        "TrackSelectionControl");
                     RebuildTree();
                 }
             });
@@ -270,7 +283,7 @@ public sealed partial class TrackSelectionControl : UserControl
     /// </summary>
     private void RebuildTree()
     {
-        DispatcherQueue.TryEnqueue(() =>
+        _dispatcherQueue.TryEnqueue(() =>
         {
             try
             {
@@ -285,20 +298,26 @@ public sealed partial class TrackSelectionControl : UserControl
                     {
                         foreach (var trackNode in fileNode.Children)
                         {
-                            if (selectedNodes.Contains(trackNode) && trackNode.Content is TrackNodeItem item)
+                            if (selectedNodes.Contains(trackNode) && 
+                                trackNode.Content is TrackNodeItem item)
                             {
                                 if (item.TrackId.HasValue)
                                 {
-                                    if (!savedTracks.TryGetValue(item.FilePath, out var list))
+                                    if (!savedTracks.TryGetValue(
+                                        item.FilePath, 
+                                        out var list))
                                     {
                                         list = new List<int>();
                                         savedTracks[item.FilePath] = list;
                                     }
                                     list.Add(item.TrackId.Value);
                                 }
-                                else if (item.AttachmentId.HasValue && item.IsFont)
+                                else if (item.AttachmentId.HasValue && 
+                                         item.IsFont)
                                 {
-                                    if (!savedAttachments.TryGetValue(item.FilePath, out var list))
+                                    if (!savedAttachments.TryGetValue(
+                                        item.FilePath, 
+                                        out var list))
                                     {
                                         list = new List<int>();
                                         savedAttachments[item.FilePath] = list;
@@ -307,6 +326,18 @@ public sealed partial class TrackSelectionControl : UserControl
                                 }
                             }
                         }
+                    }
+                }
+                else if (ActiveScript != null)
+                {
+                    // Если дерево пустое, восстанавливаем выбор из скрипта
+                    foreach (var kvp in ActiveScript.SelectedTrackIds)
+                    {
+                        savedTracks[kvp.Key] = new List<int>(kvp.Value);
+                    }
+                    foreach (var kvp in ActiveScript.SelectedAttachmentIds)
+                    {
+                        savedAttachments[kvp.Key] = new List<int>(kvp.Value);
                     }
                 }
 
@@ -1392,10 +1423,32 @@ public sealed partial class TrackSelectionControl : UserControl
 
             UpdateSelectAllCheckBoxState();
             UpdateTabCounts();
+
+            if (ActiveScript != null)
+            {
+                GetSelectedTracksAndAttachments(
+                    out var currentTracks, 
+                    out var currentAttachments);
+
+                ActiveScript.SelectedTrackIds.Clear();
+                foreach (var kvp in currentTracks)
+                {
+                    ActiveScript.SelectedTrackIds[kvp.Key] = kvp.Value;
+                }
+
+                ActiveScript.SelectedAttachmentIds.Clear();
+                foreach (var kvp in currentAttachments)
+                {
+                    ActiveScript.SelectedAttachmentIds[kvp.Key] = kvp.Value;
+                }
+            }
         }
         catch (Exception ex)
         {
-            LogService.Instance.Exception(ex, "Ошибка при синхронизации изменения выделения в дереве", "TrackSelectionControl");
+            LogService.Instance.Exception(
+                ex, 
+                "Ошибка при синхронизации изменения выделения в дереве", 
+                "TrackSelectionControl");
         }
         finally
         {
@@ -1549,5 +1602,24 @@ public sealed partial class TrackSelectionControl : UserControl
                 "Ошибка при проверке переполнения панели фильтров для подсказки",
                 "TrackSelectionControl");
         }
+    }
+
+    /// <summary>
+    /// Освобождает ресурсы при выгрузке элемента управления из дерева.
+    /// </summary>
+    private void TrackSelectionControl_Unloaded(
+        object sender, 
+        RoutedEventArgs e)
+    {
+        LogService.Instance.Info(
+            "Выгрузка виджета выбора дорожек: " +
+            "освобождение зарегистрированных подписок",
+            "TrackSelectionControl");
+
+        if (_files != null)
+        {
+            _files.CollectionChanged -= OnFilesCollectionChanged;
+        }
+        UnsubscribeFromItems();
     }
 }

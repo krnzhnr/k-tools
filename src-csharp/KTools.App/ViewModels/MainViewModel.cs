@@ -69,6 +69,15 @@ public partial class MainViewModel : ObservableObject
         CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Register<MainViewModel, LogsTabVisibilityChangedMessage>(
             this,
             (r, m) => r.UpdateLogsTabVisibility());
+
+        // Подписываемся на сообщение об изменении активного скрипта
+        var messenger = CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default;
+        messenger.Register<MainViewModel, ActiveScriptChangedMessage>(
+            this,
+            (r, m) => {
+                r.HeaderTitle = m.Script.Name;
+                r.HeaderSubtitle = m.Script.Description;
+            });
     }
 
     /// <summary>

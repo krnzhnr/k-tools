@@ -18,7 +18,9 @@
                          IsBackButtonVisible="Collapsed"
                          AlwaysShowHeader="False"
                          Loaded="NavView_Loaded"
-                         SelectionChanged="NavView_SelectionChanged">
+                         SelectionChanged="NavView_SelectionChanged"
+                         PaneOpening="NavView_PaneOpening"
+                         PaneClosing="NavView_PaneClosing">
             
             <NavigationView.MenuItems>
                 <!-- Главная страница -->

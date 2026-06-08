@@ -47,70 +47,7 @@ public class VideoEncodingStub : AbstractScript
         return new List<string> { IsCancelled ? "⚠ Кодирование отменено" : $"✅ Видео успешно закодировано: {System.IO.Path.GetFileName(filePath)}" };
     }
 }
-public class AudioEncodingStub : AbstractScript
-{
-    public override string Name => AppConstants.ScriptMetadata.AudioConverterName;
-    public override string Description => AppConstants.ScriptMetadata.AudioConverterDesc;
-    public override string Category => AppConstants.ScriptCategory.Audio;
-    public override string IconName => "music";
-    public override string[] FileExtensions => AppConstants.AudioContainers.Concat(AppConstants.AudioStreams).Concat(AppConstants.VideoContainers).ToArray();
-    public override string[] RequiredDependencies => new[] { "ffmpeg" };
 
-    public override List<SettingField> SettingsSchema => new()
-    {
-        new SettingField("codec", "Аудиокодек", SettingType.Combo, "AAC", "Кодирование",
-            options: new List<string> { "AAC", "QAAC", "FLAC", "AC3", "E-AC3" }),
-        new SettingField("bitrate", "Битрейт (kbps)", SettingType.Int, 192, "Кодирование"),
-        new SettingField("wav_depth", "Разрядность WAV", SettingType.Combo, "24-bit", "Экспорт WAV",
-            options: new List<string> { "16-bit", "24-bit", "32-bit Float" })
-    };
-
-    public override async Task<List<string>> ExecuteSingleAsync(
-        string filePath,
-        Dictionary<string, object> settings,
-        string? outputPath,
-        Action<int, int, string, double?> progressCallback,
-        int fileIndex,
-        int totalCount)
-    {
-        ResetCancellation();
-        for (int i = 0; i <= 10; i++)
-        {
-            if (IsCancelled) break;
-            progressCallback(fileIndex, totalCount, $"Кодирование аудио... {i * 10}%", i * 10.0);
-            await Task.Delay(150);
-        }
-        return new List<string> { IsCancelled ? "⚠ Кодирование отменено" : $"✅ Аудио успешно закодировано: {System.IO.Path.GetFileName(filePath)}" };
-    }
-}
-
-public class AudioDownmixStub : AbstractScript
-{
-    public override string Name => AppConstants.ScriptMetadata.AudioDownmixName;
-    public override string Description => AppConstants.ScriptMetadata.AudioDownmixDesc;
-    public override string Category => AppConstants.ScriptCategory.Audio;
-    public override string IconName => "volume2";
-    public override string[] FileExtensions => AppConstants.AudioContainers.Concat(AppConstants.AudioStreams).Concat(AppConstants.VideoContainers).ToArray();
-    public override string[] RequiredDependencies => new[] { "dee", "ffmpeg" };
-
-    public override async Task<List<string>> ExecuteSingleAsync(
-        string filePath,
-        Dictionary<string, object> settings,
-        string? outputPath,
-        Action<int, int, string, double?> progressCallback,
-        int fileIndex,
-        int totalCount)
-    {
-        ResetCancellation();
-        for (int i = 0; i <= 10; i++)
-        {
-            if (IsCancelled) break;
-            progressCallback(fileIndex, totalCount, $"Даунмикс в Stereo через DEE... {i * 10}%", i * 10.0);
-            await Task.Delay(200);
-        }
-        return new List<string> { IsCancelled ? "⚠ Даунмикс отменен" : $"✅ Даунмикс успешно выполнен: {System.IO.Path.GetFileName(filePath)}" };
-    }
-}
 
 public class AudioSpeedStub : AbstractScript
 {

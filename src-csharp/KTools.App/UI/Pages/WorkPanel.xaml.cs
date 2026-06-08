@@ -134,14 +134,13 @@ public sealed partial class WorkPanel : Page
             
             // Связываем скрипт со списком файлов и генерируем его параметры настроек
             FileList.ActiveScript = _script;
+            FileList.SetFiles(_script.FilesQueue);
             ScriptSettings.GenerateSettingsUI(_script);
 
             // Инициализируем ViewModel активным скриптом и коллекцией файлов
             ViewModel.Initialize(_script, FileList.Files);
 
-            // Отписываемся от старой подписки для предотвращения дублирования
-            FileList.Files.CollectionChanged -= Files_CollectionChanged;
-            FileList.Files.CollectionChanged += Files_CollectionChanged;
+
 
             // Динамически управляем вкладкой "Дорожки"
             if (_script.UseCustomWidget)
@@ -161,6 +160,7 @@ public sealed partial class WorkPanel : Page
                     nvSample.MenuItems.Insert(1, _tracksPageItem);
                 }
 
+                _tracksControl.ActiveScript = _script;
                 _tracksControl.Populate(FileList.Files);
             }
             else
@@ -332,14 +332,10 @@ public sealed partial class WorkPanel : Page
         return FindParentPage<T>(parentObject);
     }
 
-    /// <summary>
-    /// Сохраняет состояние скрипта при уходе с этой страницы.
-    /// </summary>
     protected override void OnNavigatedFrom(NavigationEventArgs e)
     {
         base.OnNavigatedFrom(e);
         
-        FileList.Files.CollectionChanged -= Files_CollectionChanged;
         ViewModel.SaveState();
     }
 
@@ -349,16 +345,7 @@ public sealed partial class WorkPanel : Page
     private void WorkPanel_Unloaded(object sender, RoutedEventArgs e)
     {
         ViewModel.PropertyChanged -= OnViewModelPropertyChanged;
-        FileList.Files.CollectionChanged -= Files_CollectionChanged;
     }
 
-    /// <summary>
-    /// Синхронизирует коллекцию файлов при изменениях извне.
-    /// </summary>
-    private void Files_CollectionChanged(
-        object? sender,
-        System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
-    {
-        ViewModel.SyncSavedFiles();
-    }
+
 }

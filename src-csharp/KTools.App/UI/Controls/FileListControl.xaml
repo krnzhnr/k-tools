@@ -6,6 +6,7 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:local="using:KTools_App.UI.Controls"
+    xmlns:core="using:KTools_App.Core"
     mc:Ignorable="d"
     d:DesignHeight="300"
     d:DesignWidth="400">
@@ -61,7 +62,7 @@
                   Margin="0,0,0,12"
                   Padding="4">
             <ListView.ItemTemplate>
-                <DataTemplate x:DataType="local:FileQueueItem">
+                <DataTemplate x:DataType="core:FileQueueItem">
                     <Grid HorizontalAlignment="Stretch" Padding="4">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="*"/>

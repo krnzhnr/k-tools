@@ -130,21 +130,40 @@ public sealed class TrackExtractorScript : AbstractScript
             }
         }
 
-        string nameFormat = GetSettingValue(settings, "name_format", "{original}_{lang}_{id}");
-        bool overwrite = SettingsManager.Instance.GetSetting("General", "OverwriteExisting", false);
+        string nameFormat = GetSettingValue(
+            settings, 
+            "name_format", 
+            "{original}_{lang}_{id}");
+            
+        bool overwrite = SettingsManager.Instance.GetSetting(
+            "General", 
+            "OverwriteExisting", 
+            false);
 
-        var ffmpegArgs = new List<string>();
         var filesToExtract = new List<string>();
         var extractResults = new List<string>();
+        var ffmpegArgs = new List<string>();
+        bool tracksSuccess = true;
+        bool fontsSuccess = true;
 
         // 4. Определение языковых дубликатов для формирования уникальных суффиксов
-        var activeTracks = structure.Tracks.Where(t => selectedTrackIds != null && selectedTrackIds.Contains(t.TrackId)).ToList();
+        var activeTracks = structure.Tracks
+            .Where(t => 
+                selectedTrackIds != null && 
+                selectedTrackIds.Contains(t.TrackId))
+            .ToList();
+            
         var langCounts = activeTracks
-            .Where(t => !string.IsNullOrEmpty(t.Language) && t.Language != "und")
+            .Where(t => 
+                !string.IsNullOrEmpty(t.Language) && 
+                t.Language != "und")
             .GroupBy(t => t.Language)
             .ToDictionary(g => g.Key, g => g.Count());
 
-        var duplicateLangs = langCounts.Where(kv => kv.Value > 1).Select(kv => kv.Key).ToHashSet();
+        var duplicateLangs = langCounts
+            .Where(kv => kv.Value > 1)
+            .Select(kv => kv.Key)
+            .ToHashSet();
 
         // 5. Формирование аргументов One-Pass извлечения дорожек
         if (hasTracks && selectedTrackIds != null)
@@ -222,7 +241,7 @@ public sealed class TrackExtractorScript : AbstractScript
         }
 
         // 6. Запуск FFmpeg для One-Pass извлечения дорожек
-        bool tracksSuccess = true;
+        tracksSuccess = true;
         if (ffmpegArgs.Count > 0)
         {
             LogService.Instance.Info($"Запуск процесса FFmpeg для One-Pass извлечения дорожек из {Path.GetFileName(filePath)}", "TrackExtractorScript");
@@ -273,7 +292,7 @@ public sealed class TrackExtractorScript : AbstractScript
         }
 
         // 7. Последовательное извлечение выбранных шрифтов (вложений)
-        bool fontsSuccess = true;
+        fontsSuccess = true;
         if (hasAttachments && selectedAttachmentIds != null)
         {
             var activeFonts = structure.Attachments.Where(a => selectedAttachmentIds.Contains(a.AttachmentId) && a.IsFont).ToList();
@@ -300,8 +319,25 @@ public sealed class TrackExtractorScript : AbstractScript
 
                 progressCallback(fileIndex, totalCount, $"Извлечение шрифтов | {fontIndex} из {totalFonts} ({font.FileName})", 100.0 * fontIndex / totalFonts);
                 
-                int ffmpegAttachmentIndex = structure.Attachments.IndexOf(font);
-                LogService.Instance.Info($"Запуск извлечения шрифта #{font.AttachmentId} (индекс FFmpeg: {ffmpegAttachmentIndex}, файл: {font.FileName})", "TrackExtractorScript");
+                string inputExt = Path.GetExtension(filePath)
+                    .ToLowerInvariant();
+                bool isMkv = 
+                    inputExt.Equals(
+                        ".mkv", 
+                        StringComparison.OrdinalIgnoreCase) ||
+                    inputExt.Equals(
+                        ".mka", 
+                        StringComparison.OrdinalIgnoreCase);
+                int ffmpegAttachmentIndex = isMkv
+                    ? structure.Tracks.Count + 
+                      structure.Attachments.IndexOf(font)
+                    : font.AttachmentId;
+
+                LogService.Instance.Info(
+                    $"Запуск извлечения шрифта #{font.AttachmentId} " +
+                    $"(индекс FFmpeg: {ffmpegAttachmentIndex}, " +
+                    $"файл: {font.FileName})", 
+                    "TrackExtractorScript");
                 
                 bool fSuccess = await FFmpegRunner.Instance.ExtractAttachmentAsync(filePath, ffmpegAttachmentIndex, outFontPath);
                 

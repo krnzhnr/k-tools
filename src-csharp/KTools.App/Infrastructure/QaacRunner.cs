@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using KTools_App.Core;
@@ -11,8 +12,8 @@ namespace KTools_App.Infrastructure;
 
 /// <summary>
 /// Синглтон-обертка для запуска кодировщика Apple AAC (qaac64.exe) через конвейер с FFmpeg.
-/// Позволяет кодировать любые медиаформаты, поддерживаемые FFmpeg, напрямую в высококачественный AAC/M4A 
-/// без создания промежуточных временных WAV-файлов на диске.
+/// Использует изолированный запуск во временной папке для обхода ограничений AppContainer (MSIX),
+/// гарантируя чистоту папки бинарных зависимостей bin/.
 /// Все комментарии и логирование выполнены строго на русском языке в соответствии с регламентом.
 /// </summary>
 public sealed class QaacRunner
@@ -30,13 +31,6 @@ public sealed class QaacRunner
     /// <summary>
     /// Запустить кодирование AAC через потоковый конвейер FFmpeg | QAAC64.
     /// </summary>
-    /// <param name="inputPath">Абсолютный путь к исходному медиафайлу.</param>
-    /// <param name="outputPath">Абсолютный путь к выходному файлу M4A/AAC.</param>
-    /// <param name="tvbr">Уровень качества переменного битрейта (True VBR, например, "127").</param>
-    /// <param name="adts">Использовать ли контейнер ADTS (расширение .aac) вместо M4A.</param>
-    /// <param name="extraArgs">Дополнительные параметры для qaac64.</param>
-    /// <param name="cancellationToken">Токен отмены задачи.</param>
-    /// <returns>True в случае успеха, иначе false.</returns>
     public async Task<bool> RunAsync(
         string inputPath,
         string outputPath,
@@ -50,22 +44,83 @@ public sealed class QaacRunner
 
         if (!File.Exists(qaacPath))
         {
-            LogService.Instance.Error($"Критическая ошибка: отсутствует кодировщик qaac64.exe по пути: '{qaacPath}'", "QaacRunner");
+            LogService.Instance.Error(
+                $"Критическая ошибка: отсутствует кодировщик qaac64.exe по пути: '{qaacPath}'", 
+                "QaacRunner");
             return false;
         }
 
         if (!File.Exists(ffmpegPath))
         {
-            LogService.Instance.Error($"Критическая ошибка: отсутствует декодер ffmpeg.exe по пути: '{ffmpegPath}'", "QaacRunner");
+            LogService.Instance.Error(
+                $"Критическая ошибка: отсутствует декодер ffmpeg.exe по пути: '{ffmpegPath}'", 
+                "QaacRunner");
             return false;
         }
 
-        LogService.Instance.Info($"Начало кодирования QAAC (TVBR: {tvbr}) для файла: '{Path.GetFileName(inputPath)}'", "QaacRunner");
+        LogService.Instance.Info(
+            $"Начало кодирования QAAC (TVBR: {tvbr}) для файла: '{Path.GetFileName(inputPath)}'", 
+            "QaacRunner");
 
-        // 1. Формируем аргументы для FFmpeg (декодирование в WAV и вывод в stdout)
+        // 1. Создаем изолированную временную папку для обхода ограничений AppContainer (WinUI 3 MSIX)
+        string tempDir = Path.Combine(Path.GetTempPath(), "KTools_Qaac_" + Guid.NewGuid().ToString("N"));
+        string tempQaacPath = Path.Combine(tempDir, "qaac64.exe");
+
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            
+            // Копируем исполняемый файл во временную директорию
+            File.Copy(qaacPath, tempQaacPath, true);
+
+            // Копируем все DLL библиотеки Apple из подпапки QTfiles64 / QTFiles64
+            string baseDir = Path.GetDirectoryName(qaacPath) ?? AppContext.BaseDirectory;
+            string[] sourceSubfolders = { "QTfiles64", "QTFiles64", "QTFiles", "QTfiles" };
+            string? sourceDir = null;
+
+            foreach (var subfolder in sourceSubfolders)
+            {
+                string path = Path.Combine(baseDir, subfolder);
+                if (Directory.Exists(path) && File.Exists(Path.Combine(path, "CoreAudioToolbox.dll")))
+                {
+                    sourceDir = path;
+                    break;
+                }
+            }
+
+            if (sourceDir != null)
+            {
+                var dllFiles = Directory.GetFiles(sourceDir, "*.dll");
+                foreach (var dllFile in dllFiles)
+                {
+                    File.Copy(dllFile, Path.Combine(tempDir, Path.GetFileName(dllFile)), true);
+                }
+                LogService.Instance.DebugLog(
+                    $"Изолированное окружение QAAC подготовлено во временной папке: '{tempDir}'", 
+                    "QaacRunner");
+            }
+            else
+            {
+                LogService.Instance.Warn(
+                    "Не найдена папка QTfiles64 с библиотеками Apple Application Support. Возможен сбой запуска.", 
+                    "QaacRunner");
+            }
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Exception(
+                ex, 
+                $"Не удалось создать изолированное временное окружение для QAAC: {ex.Message}", 
+                "QaacRunner");
+            // Фоллбэк: пробуем запуск из оригинальной папки
+            tempQaacPath = qaacPath;
+            tempDir = Path.GetDirectoryName(qaacPath) ?? AppContext.BaseDirectory;
+        }
+
+        // 2. Формируем аргументы для FFmpeg (декодирование в WAV и вывод в stdout)
         string ffmpegArgs = $"-v error -i \"{inputPath}\" -f wav -";
 
-        // 2. Формируем аргументы для QAAC (чтение из stdin и запись в файл)
+        // 3. Формируем аргументы для QAAC (чтение из stdin и запись в файл)
         var qaacArgsList = new List<string>();
         if (adts)
         {
@@ -84,10 +139,9 @@ public sealed class QaacRunner
 
         string qaacArgs = string.Join(" ", qaacArgsList);
 
-        // 3. Подготовка переменных окружения Apple Application Support
-        var env = PrepareAppleEnvironment(qaacPath);
-
-        LogService.Instance.DebugLog($"Запуск конвейера: ffmpeg {ffmpegArgs} | qaac64 {qaacArgs}", "QaacRunner");
+        LogService.Instance.DebugLog(
+            $"Запуск конвейера: ffmpeg {ffmpegArgs} | qaac64 {qaacArgs}", 
+            "QaacRunner");
 
         // 4. Настройка процессов
         var ffmpegStartInfo = new ProcessStartInfo
@@ -103,21 +157,18 @@ public sealed class QaacRunner
 
         var qaacStartInfo = new ProcessStartInfo
         {
-            FileName = qaacPath,
+            FileName = tempQaacPath,
             Arguments = qaacArgs,
             CreateNoWindow = true,
             UseShellExecute = false,
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
-            WorkingDirectory = Path.GetDirectoryName(qaacPath) ?? AppContext.BaseDirectory
+            WorkingDirectory = tempDir
         };
 
-        // Заполняем переменные окружения Apple
-        foreach (var pair in env)
-        {
-            qaacStartInfo.EnvironmentVariables[pair.Key] = pair.Value;
-        }
+        // Заполняем переменную PATH во временном процессе
+        SetupQaacEnvironment(qaacStartInfo, tempDir);
 
         using var ffmpegProc = new Process { StartInfo = ffmpegStartInfo };
         using var qaacProc = new Process { StartInfo = qaacStartInfo };
@@ -127,13 +178,19 @@ public sealed class QaacRunner
             ffmpegProc.Start();
             qaacProc.Start();
             
-            LogService.Instance.DebugLog($"Запущены процессы конвейера. FFmpeg PID: {ffmpegProc.Id}, QAAC PID: {qaacProc.Id}", "QaacRunner");
+            LogService.Instance.DebugLog(
+                $"Запущены процессы конвейера. FFmpeg PID: {ffmpegProc.Id}, QAAC PID: {qaacProc.Id}", 
+                "QaacRunner");
         }
         catch (Exception ex)
         {
-            LogService.Instance.Exception(ex, $"Не удалось запустить процессы конвейера QAAC: {ex.Message}", "QaacRunner");
+            LogService.Instance.Exception(
+                ex, 
+                $"Не удалось запустить процессы конвейера QAAC: {ex.Message}", 
+                "QaacRunner");
             try { ffmpegProc.Kill(true); } catch { }
             try { qaacProc.Kill(true); } catch { }
+            CleanupTempDir(tempDir);
             return false;
         }
 
@@ -192,13 +249,15 @@ public sealed class QaacRunner
             }
             catch (Exception ex)
             {
-                LogService.Instance.Error($"Ошибка конвейерной передачи данных FFmpeg -> QAAC: {ex.Message}", "QaacRunner");
+                LogService.Instance.Error(
+                    $"Ошибка конвейерной передачи данных FFmpeg -> QAAC: {ex.Message}", 
+                    "QaacRunner");
             }
             finally
             {
                 try
                 {
-                    qaacProc.StandardInput.BaseStream.Close(); // Закрываем поток, чтобы qaac понял конец файла
+                    qaacProc.StandardInput.BaseStream.Close();
                 }
                 catch { }
             }
@@ -214,9 +273,12 @@ public sealed class QaacRunner
         }
         catch (OperationCanceledException)
         {
-            LogService.Instance.Warn("Конвейер QAAC прерван пользователем. Принудительная остановка процессов...", "QaacRunner");
+            LogService.Instance.Warn(
+                "Конвейер QAAC прерван пользователем. Принудительная остановка процессов...", 
+                "QaacRunner");
             try { ffmpegProc.Kill(true); } catch { }
             try { qaacProc.Kill(true); } catch { }
+            CleanupTempDir(tempDir);
             return false;
         }
 
@@ -227,43 +289,69 @@ public sealed class QaacRunner
         {
             string ffErr = string.Join(Environment.NewLine, ffmpegStderrLines);
             string qaacErr = string.Join(Environment.NewLine, qaacStderrLines);
-            LogService.Instance.Error($"Сбой конвейера QAAC.\nFFmpeg Code: {ffmpegProc.ExitCode}, Err: {ffErr}\nQAAC Code: {qaacProc.ExitCode}, Err: {qaacErr}", "QaacRunner");
-            return false;
+            LogService.Instance.Error(
+                $"Сбой конвейера QAAC.\nFFmpeg Code: {ffmpegProc.ExitCode}, Err: {ffErr}\nQAAC Code: {qaacProc.ExitCode}, Err: {qaacErr}", 
+                "QaacRunner");
+        }
+        else
+        {
+            LogService.Instance.Info(
+                $"Конвейер QAAC успешно завершил работу: '{Path.GetFileName(outputPath)}'", 
+                "QaacRunner");
         }
 
-        LogService.Instance.Info($"Конвейер QAAC успешно завершил работу: '{Path.GetFileName(outputPath)}'", "QaacRunner");
-        return true;
+        // Удаляем временное окружение
+        CleanupTempDir(tempDir);
+        return success;
     }
 
     /// <summary>
-    /// Настраивает PATH для Apple Application Support, необходимый для работы библиотек QAAC.
+    /// Настраивает PATH для Apple Application Support в окружении процесса QAAC.
     /// </summary>
-    private Dictionary<string, string> PrepareAppleEnvironment(string qaacPath)
+    private void SetupQaacEnvironment(ProcessStartInfo qaacStartInfo, string tempDir)
     {
-        string baseDir = Path.GetDirectoryName(qaacPath) ?? AppContext.BaseDirectory;
-        
-        // Стандартные пути Apple Application Support в системе
-        string pf = Environment.ExpandEnvironmentVariables(@"%ProgramFiles%\Common Files\Apple\Apple Application Support");
-        string pfx86 = Environment.ExpandEnvironmentVariables(@"%ProgramFiles(x86)%\Common Files\Apple\Apple Application Support");
+        string pathKey = "PATH";
+        string currentPath = string.Empty;
 
-        var applePaths = new List<string>
+        foreach (var key in qaacStartInfo.Environment.Keys)
         {
-            baseDir,
-            Path.Combine(baseDir, "QTFiles64"),
-            Path.Combine(baseDir, "QTFiles")
-        };
+            if (key.Equals("PATH", StringComparison.OrdinalIgnoreCase))
+            {
+                pathKey = key;
+                currentPath = qaacStartInfo.Environment[key] ?? string.Empty;
+                break;
+            }
+        }
 
-        if (Directory.Exists(pf)) applePaths.Add(pf);
-        if (Directory.Exists(pfx86)) applePaths.Add(pfx86);
+        if (string.IsNullOrEmpty(currentPath))
+        {
+            currentPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+        }
 
-        // Получаем текущую переменную PATH
-        string currentPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
-        
-        // Объединяем пути через разделитель
-        string newPath = string.Join(Path.PathSeparator, applePaths) + Path.PathSeparator + currentPath;
+        string newPath = tempDir + Path.PathSeparator + currentPath;
+        qaacStartInfo.Environment[pathKey] = newPath;
+    }
 
-        var env = new Dictionary<string, string>();
-        env["PATH"] = newPath;
-        return env;
+    /// <summary>
+    /// Безопасно удаляет временное изолированное окружение QAAC.
+    /// </summary>
+    private void CleanupTempDir(string tempDir)
+    {
+        try
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, true);
+                LogService.Instance.DebugLog(
+                    $"Изолированное временное окружение QAAC удалено: '{tempDir}'", 
+                    "QaacRunner");
+            }
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warn(
+                $"Не удалось удалить временную папку QAAC '{tempDir}': {ex.Message}", 
+                "QaacRunner");
+        }
     }
 }

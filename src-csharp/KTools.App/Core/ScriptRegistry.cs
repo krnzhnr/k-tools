@@ -52,8 +52,8 @@ public sealed class ScriptRegistry
         _scripts.Add(new Scripts.VideoEncodingStub());
         _scripts.Add(new Scripts.ContainerConversionScript());
         
-        _scripts.Add(new Scripts.AudioEncodingStub());
-        _scripts.Add(new Scripts.AudioDownmixStub());
+        _scripts.Add(new Scripts.AudioEncodingScript());
+        _scripts.Add(new Scripts.AudioDownmixScript());
         _scripts.Add(new Scripts.AudioSpeedStub());
         _scripts.Add(new Scripts.AudioChannelsStub());
 
