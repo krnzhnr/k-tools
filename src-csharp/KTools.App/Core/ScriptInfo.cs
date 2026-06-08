@@ -19,6 +19,11 @@ public class ScriptInfo
     public bool IsAvailable { get; set; } = true;
 
     /// <summary>
+    /// Непрозрачность карточки (уменьшается для недоступных скриптов).
+    /// </summary>
+    public double CardOpacity => IsAvailable ? 1.0 : 0.4;
+
+    /// <summary>
     /// Автоматическое сопоставление текстовой иконки с системным перечислением Symbol WinUI.
     /// </summary>
     public Symbol IconSymbol => IconName.ToLowerInvariant() switch

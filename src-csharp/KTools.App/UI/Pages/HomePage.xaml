@@ -23,6 +23,8 @@
                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                     BorderThickness="1"
                     Tag="{x:Bind}"
+                    IsHitTestVisible="{x:Bind IsAvailable}"
+                    Opacity="{x:Bind CardOpacity}"
                     PointerEntered="Card_PointerEntered"
                     PointerExited="Card_PointerExited"
                     Tapped="Card_Tapped">

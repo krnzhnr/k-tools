@@ -56,10 +56,22 @@ public sealed partial class MainPage : Page
 
     /// <summary>
     /// Вызывается при загрузке боковой панели навигации.
-    /// Делегирует инициализацию (проверку зависимостей) во ViewModel.
+    /// Переводит стандартную кнопку настроек и инициализирует ViewModel.
     /// </summary>
     private void NavView_Loaded(object sender, RoutedEventArgs e)
     {
+        if (NavView.SettingsItem is NavigationViewItem settingsItem)
+        {
+            settingsItem.Content = "Настройки";
+            var autoName = "Настройки";
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(
+                settingsItem, autoName);
+            ToolTipService.SetToolTip(settingsItem, "Настройки");
+            LogService.Instance.Info(
+                "Выполнена локализация кнопки настроек на русский язык",
+                "MainPage");
+        }
+
         if (ViewModel.InitializeCommand.CanExecute(null))
         {
             ViewModel.InitializeCommand.Execute(null);

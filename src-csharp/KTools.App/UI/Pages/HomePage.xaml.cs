@@ -48,9 +48,10 @@ public sealed partial class HomePage : Page
     /// </summary>
     private void Card_PointerExited(object sender, PointerRoutedEventArgs e)
     {
-        if (sender is Border border)
+        if (sender is Border border && 
+            border.Tag is ScriptInfo scriptInfo)
         {
-            border.Opacity = 1.0;
+            border.Opacity = scriptInfo.CardOpacity;
         }
     }
 

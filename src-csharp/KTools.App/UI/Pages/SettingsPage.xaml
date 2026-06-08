@@ -261,11 +261,11 @@
                         <TextBlock
                             FontSize="11"
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                            Text="Версия 1.7.0.0 (WinAppSDK / WinUI 3)" />
+                            Text="Версия 2.0.0 (WinAppSDK / WinUI 3)" />
                         <TextBlock
                             FontSize="11"
                             Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                            Text="Локальная изолированная сборка с открытым исходным кодом." />
+                            Text="Тестовая сборка." />
                     </StackPanel>
                 </Grid>
             </Border>
