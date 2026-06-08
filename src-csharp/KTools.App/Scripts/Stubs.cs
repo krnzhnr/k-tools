@@ -49,40 +49,6 @@ public class VideoEncodingStub : AbstractScript
 }
 
 
-public class AudioSpeedStub : AbstractScript
-{
-    public override string Name => AppConstants.ScriptMetadata.AudioSpeedName;
-    public override string Description => AppConstants.ScriptMetadata.AudioSpeedDesc;
-    public override string Category => AppConstants.ScriptCategory.Audio;
-    public override string IconName => "sync";
-    public override string[] FileExtensions => AppConstants.AudioContainers.Concat(AppConstants.AudioStreams).Concat(AppConstants.VideoContainers).ToArray();
-    public override string[] RequiredDependencies => new[] { "eac3to" };
-
-    public override List<SettingField> SettingsSchema => new()
-    {
-        new SettingField("conversion", "Направление конвертации", SettingType.Combo, "25.000 -> 23.976", "Настройки скорости",
-            options: new List<string> { "25.000 -> 23.976", "23.976 -> 25.000", "24.000 -> 23.976" })
-    };
-
-    public override async Task<List<string>> ExecuteSingleAsync(
-        string filePath,
-        Dictionary<string, object> settings,
-        string? outputPath,
-        Action<int, int, string, double?> progressCallback,
-        int fileIndex,
-        int totalCount)
-    {
-        ResetCancellation();
-        for (int i = 0; i <= 10; i++)
-        {
-            if (IsCancelled) break;
-            progressCallback(fileIndex, totalCount, $"Изменение скорости в eac3to... {i * 10}%", i * 10.0);
-            await Task.Delay(150);
-        }
-        return new List<string> { IsCancelled ? "⚠ Изменение скорости отменено" : $"✅ Скорость аудио успешно изменена: {System.IO.Path.GetFileName(filePath)}" };
-    }
-}
-
 public class AudioChannelsStub : AbstractScript
 {
     public override string Name => AppConstants.ScriptMetadata.AudioSplitName;
