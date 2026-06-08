@@ -55,7 +55,7 @@ public sealed class ScriptRegistry
         _scripts.Add(new Scripts.AudioEncodingScript());
         _scripts.Add(new Scripts.AudioDownmixScript());
         _scripts.Add(new Scripts.AudioSpeedScript());
-        _scripts.Add(new Scripts.AudioChannelsStub());
+        _scripts.Add(new Scripts.AudioChannelsScript());
 
         _scripts.Add(new Scripts.MkvAssemblyStub());
         _scripts.Add(new Scripts.StreamManagementStub());

@@ -49,34 +49,6 @@ public class VideoEncodingStub : AbstractScript
 }
 
 
-public class AudioChannelsStub : AbstractScript
-{
-    public override string Name => AppConstants.ScriptMetadata.AudioSplitName;
-    public override string Description => AppConstants.ScriptMetadata.AudioSplitDesc;
-    public override string Category => AppConstants.ScriptCategory.Audio;
-    public override string IconName => "map";
-    public override string[] FileExtensions => AppConstants.AudioContainers.Concat(AppConstants.AudioStreams).Concat(AppConstants.VideoContainers).ToArray();
-    public override string[] RequiredDependencies => new[] { "ffmpeg" };
-
-    public override async Task<List<string>> ExecuteSingleAsync(
-        string filePath,
-        Dictionary<string, object> settings,
-        string? outputPath,
-        Action<int, int, string, double?> progressCallback,
-        int fileIndex,
-        int totalCount)
-    {
-        ResetCancellation();
-        for (int i = 0; i <= 10; i++)
-        {
-            if (IsCancelled) break;
-            progressCallback(fileIndex, totalCount, $"Разделение аудио по каналам... {i * 10}%", i * 10.0);
-            await Task.Delay(100);
-        }
-        return new List<string> { IsCancelled ? "⚠ Разделение отменено" : $"✅ Каналы успешно разделены: {System.IO.Path.GetFileName(filePath)}" };
-    }
-}
-
 public class MkvAssemblyStub : AbstractScript
 {
     public override string Name => AppConstants.ScriptMetadata.MuxerName;
