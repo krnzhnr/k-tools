@@ -8,7 +8,8 @@
     xmlns:community="using:CommunityToolkit.WinUI.Controls"
     xmlns:viewmodels="using:KTools_App.ViewModels"
     x:DataType="viewmodels:SettingsViewModel"
-    mc:Ignorable="d">
+    mc:Ignorable="d"
+    NavigationCacheMode="Required">
 
     <ScrollViewer VerticalScrollBarVisibility="Auto">
         <StackPanel
@@ -141,7 +142,7 @@
                             Content="Mica" />
                         <ComboBoxItem
                             Tag="Acrylic"
-                            Content="Acrylic (размытие)" />
+                            Content="Acrylic" />
                     </ComboBox>
                 </community:SettingsCard>
             </StackPanel>
@@ -283,7 +284,7 @@
                         <TextBlock
                             FontSize="11"
                             Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                            Text="Тестовая сборка." />
+                            Text="Тестовая сборка" />
                     </StackPanel>
                 </Grid>
             </Border>

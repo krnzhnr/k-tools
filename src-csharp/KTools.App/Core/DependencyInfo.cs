@@ -42,6 +42,11 @@ public class DependencyInfo
     public double SizeMb { get; set; }
 
     /// <summary>
+    /// Приблизительный размер скачиваемого архива (в мегабайтах).
+    /// </summary>
+    public double ArchiveSizeMb { get; set; }
+
+    /// <summary>
     /// Имя архивного файла (.tar.xz) в облачном хранилище релизов.
     /// </summary>
     public string ArchiveName { get; set; } = string.Empty;

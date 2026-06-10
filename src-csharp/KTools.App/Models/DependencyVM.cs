@@ -94,7 +94,7 @@ public class DependencyVM : INotifyPropertyChanged
     }
 
     /// <summary>Форматированный текст размера компонента.</summary>
-    public string SizeText => $"Размер на диске: ~{Info.SizeMb:F1} МБ";
+    public string SizeText => $"~{Info.SizeMb:F1} МБ (архив ~{Info.ArchiveSizeMb:F1} МБ)";
 
     /// <summary>Локализованный текст статуса зависимости.</summary>
     public string StatusText => Status switch

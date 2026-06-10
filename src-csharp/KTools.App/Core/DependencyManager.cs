@@ -88,7 +88,8 @@ public class DependencyManager
             Description = "Кодирование аудио и видео потоков",
             IconName = "video",
             Subfolder = "ffmpeg",
-            SizeMb = 122.0,
+            SizeMb = 471.4,
+            ArchiveSizeMb = 122.0,
             ArchiveName = "ffmpeg.tar.xz",
             VerifyBinary = "kt-ffmpeg.exe",
             IsRequired = true
@@ -101,7 +102,8 @@ public class DependencyManager
             Description = "Слияние, сборка и парсинг контейнеров MKV",
             IconName = "share",
             Subfolder = "mkvtoolnix",
-            SizeMb = 5.68,
+            SizeMb = 20.6,
+            ArchiveSizeMb = 5.68,
             ArchiveName = "mkvtoolnix.tar.xz",
             VerifyBinary = "mkvmerge.exe",
             IsRequired = true
@@ -114,7 +116,8 @@ public class DependencyManager
             Description = "Изменение скорости аудио (PAL NTSC)",
             IconName = "music",
             Subfolder = "eac3to",
-            SizeMb = 3.89,
+            SizeMb = 11.4,
+            ArchiveSizeMb = 3.89,
             ArchiveName = "eac3to.tar.xz",
             VerifyBinary = "eac3to.exe",
             IsRequired = false
@@ -127,7 +130,8 @@ public class DependencyManager
             Description = "Профессиональный даунмикс аудио в Stereo 2.0",
             IconName = "headphone",
             Subfolder = "DEE",
-            SizeMb = 48.1,
+            SizeMb = 185.8,
+            ArchiveSizeMb = 48.1,
             ArchiveName = "dee.tar.xz",
             VerifyBinary = "dee.exe",
             IsRequired = false

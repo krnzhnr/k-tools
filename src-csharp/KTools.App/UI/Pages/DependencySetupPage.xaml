@@ -71,12 +71,18 @@
 
                     <!-- Секция 3: Индикация статуса и прогресс-бар -->
                     <StackPanel Grid.Row="2" Spacing="2" Margin="0,2,0,6" Height="34" VerticalAlignment="Bottom">
-                        <!-- Текст статуса -->
-                        <TextBlock Text="{x:Bind StatusText, Mode=OneWay}" 
-                                   FontFamily="Segoe UI" 
-                                   FontSize="11" 
-                                   FontWeight="SemiBold"
-                                   Foreground="{x:Bind StatusColor, Mode=OneWay}" />
+                        <!-- Текст статуса в контейнере с обрезкой -->
+                        <Grid Width="196" HorizontalAlignment="Left" Background="Transparent">
+                            <Grid.Clip>
+                                <RectangleGeometry Rect="0,0,196,18" />
+                            </Grid.Clip>
+                            <TextBlock Text="{x:Bind StatusText, Mode=OneWay}" 
+                                       Tag="StatusText"
+                                       FontFamily="Segoe UI" 
+                                       FontSize="11" 
+                                       FontWeight="SemiBold"
+                                       Foreground="{x:Bind StatusColor, Mode=OneWay}" />
+                        </Grid>
 
                         <!-- Прогресс-бар скачивания (виден только при Downloading/Extracting) -->
                         <ProgressBar Value="{x:Bind Progress, Mode=OneWay}" 
@@ -87,13 +93,18 @@
                                      Height="4" 
                                      CornerRadius="2" />
 
-                        <!-- Скорость скачивания / Ошибка -->
-                        <TextBlock Text="{x:Bind SubStatusText, Mode=OneWay}" 
-                                   FontFamily="Segoe UI" 
-                                   FontSize="9.5" 
-                                   TextTrimming="CharacterEllipsis"
-                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                   Visibility="{x:Bind SubStatusVisibility, Mode=OneWay}" />
+                        <!-- Скорость скачивания / Ошибка в контейнере с обрезкой -->
+                        <Grid Width="196" HorizontalAlignment="Left" Background="Transparent"
+                              Visibility="{x:Bind SubStatusVisibility, Mode=OneWay}">
+                            <Grid.Clip>
+                                <RectangleGeometry Rect="0,0,196,16" />
+                            </Grid.Clip>
+                            <TextBlock Text="{x:Bind SubStatusText, Mode=OneWay}" 
+                                       Tag="SubStatusText"
+                                       FontFamily="Segoe UI" 
+                                       FontSize="9.5" 
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        </Grid>
                     </StackPanel>
 
                     <!-- Секция 4: Кнопки управления -->
