@@ -48,7 +48,7 @@ jobs:
             with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
                 f.write(f"version={version}\n")
             start_idx = changelog.find(match.group(0)) + len(match.group(0))
-            next_match = re.search(r"^#\s*", changelog[start_idx:], re.MULTILINE)
+            next_match = re.search(r"^#\s+[^#]", changelog[start_idx:], re.MULTILINE)
             notes = changelog[start_idx : start_idx + next_match.start()].strip() if next_match else changelog[start_idx:].strip()
             open("release_notes.md", "w", encoding="utf-8").write(notes)
         else:
@@ -68,7 +68,7 @@ jobs:
       uses: softprops/action-gh-release@v2
       with:
         tag_name: csharp-pre-release
-        name: "K-Tools C# Edition v${{ steps.extract_notes.outputs.version }} (Pre-release)"
+        name: "K-Tools C# Edition v${{ steps.extract_notes.outputs.version }}"
         body_path: release_notes.md
         prerelease: true
         make_latest: false
