@@ -60,14 +60,30 @@ public sealed class LogService
                 // Определяем папку логов (настройки пользователя или папка по умолчанию)
                 string settingsDir = PathManager.GetSettingsDirectory();
                 string defaultLogDir = Path.Combine(settingsDir, "logs");
-                
+
                 string logDir = string.IsNullOrEmpty(SettingsManager.Instance.LogDir)
                     ? defaultLogDir
                     : SettingsManager.Instance.LogDir;
 
-                if (!Directory.Exists(logDir))
+                // Попытка использовать заданную папку логов
+                try
                 {
-                    Directory.CreateDirectory(logDir);
+                    if (!Directory.Exists(logDir))
+                    {
+                        Directory.CreateDirectory(logDir);
+                    }
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    // Если пользовательская папка логов недоступна (например, в Program Files при MSIX),
+                    // используем папку логов по умолчанию в LocalAppData
+                    Debug.WriteLine($"[Warning] Нет доступа к папке логов {logDir}, используется папка по умолчанию");
+                    logDir = defaultLogDir;
+
+                    if (!Directory.Exists(logDir))
+                    {
+                        Directory.CreateDirectory(logDir);
+                    }
                 }
 
                 // Уникальный файл лога для каждого запуска на основе даты и времени
@@ -138,15 +154,31 @@ public sealed class LogService
                 string? dir = Path.GetDirectoryName(_currentLogFile);
                 if (dir != null && !Directory.Exists(dir))
                 {
-                    Directory.CreateDirectory(dir);
+                    try
+                    {
+                        Directory.CreateDirectory(dir);
+                    }
+                    catch (UnauthorizedAccessException ex)
+                    {
+                        // Если нет доступа на запись, выводим в Debug и продолжаем без записи на диск
+                        Debug.WriteLine($"[Error] Нет доступа для создания папки логов {dir}: {ex.Message}");
+                        goto SkipFileWrite;
+                    }
                 }
 
                 File.AppendAllText(_currentLogFile, formatted + Environment.NewLine, Encoding.UTF8);
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                Debug.WriteLine($"[Error] Нет доступа для записи лога на диск: {ex.Message}");
             }
             catch (Exception ex)
             {
                 Debug.WriteLine($"[Error] Не удалось записать лог на диск: {ex.Message}");
             }
+
+            SkipFileWrite:
+            ;
         }
 
         // 3. Вызываем событие для трансляции в графический интерфейс
@@ -208,6 +240,10 @@ public sealed class LogService
                 {
                     File.WriteAllText(_currentLogFile, string.Empty, Encoding.UTF8);
                 }
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                Debug.WriteLine($"[Error] Нет доступа для очистки лог-файла: {ex.Message}");
             }
             catch (Exception ex)
             {

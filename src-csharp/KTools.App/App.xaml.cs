@@ -82,37 +82,48 @@ public partial class App : Application
     protected override void OnLaunched(
         LaunchActivatedEventArgs args)
     {
-        // Инициализируем логирование при старте приложения
-        LogService.Instance.Info(
-            "=== Запуск приложения K-Tools C# Edition ===",
-            "App");
-
-        string settingsDir = PathManager.GetSettingsDirectory();
-        LogService.Instance.Info(
-            $"Конфигурация приложения успешно "
-            + $"инициализирована. Папка: {settingsDir}",
-            "SettingsManager");
-
-        // При первом запуске автоматически инициализируем
-        // все настройки по умолчанию
-        LogService.Instance.DebugLog(
-            "Выполняется автоматическая инициализация "
-            + "настроек по умолчанию...",
-            "App");
-        _ = ScriptRegistry.Instance.Scripts;
-
-        // Создаём и активируем главное окно
-        var window = new MainWindow();
-        CurrentMainWindow = window;
-
-        // Инициализируем провайдер дескриптора окна
-        var handleProvider = Services
-            .GetRequiredService<IWindowHandleProvider>();
-        if (handleProvider is WindowHandleProvider provider)
+        try
         {
-            provider.SetMainWindow(window);
-        }
+            // Инициализируем логирование при старте приложения
+            LogService.Instance.Info(
+                "=== Запуск приложения K-Tools C# Edition ===",
+                "App");
 
-        window.Activate();
+            string settingsDir = PathManager.GetSettingsDirectory();
+            LogService.Instance.Info(
+                $"Конфигурация приложения успешно "
+                + $"инициализирована. Папка: {settingsDir}",
+                "SettingsManager");
+
+            // При первом запуске автоматически инициализируем
+            // все настройки по умолчанию
+            LogService.Instance.DebugLog(
+                "Выполняется автоматическая инициализация "
+                + "настроек по умолчанию...",
+                "App");
+            _ = ScriptRegistry.Instance.Scripts;
+
+            // Создаём и активируем главное окно
+            var window = new MainWindow();
+            CurrentMainWindow = window;
+
+            // Инициализируем провайдер дескриптора окна
+            var handleProvider = Services
+                .GetRequiredService<IWindowHandleProvider>();
+            if (handleProvider is WindowHandleProvider provider)
+            {
+                provider.SetMainWindow(window);
+            }
+
+            window.Activate();
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Exception(
+                ex,
+                "Критическая ошибка при инициализации приложения.",
+                "App");
+            throw;
+        }
     }
 }

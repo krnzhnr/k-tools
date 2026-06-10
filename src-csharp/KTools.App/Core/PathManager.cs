@@ -28,24 +28,52 @@ public static class PathManager
 
     /// <summary>
     /// Возвращает абсолютный путь к директории bin для утилит.
-    /// Обеспечивает полную изоляцию C#-версии приложения, размещая все загружаемые бинарники
-    /// строго в локальном каталоге установки приложения (рядом с исполняемыми файлами).
+    /// 
+    /// Для обычных приложений: использует папку bin рядом с исполняемым файлом.
+    /// Для MSIX приложений: использует LocalAppData (так как Program Files доступен только для чтения).
+    /// Это обеспечивает работу скачивания и распаковки зависимостей в MSIX приложениях.
     /// </summary>
     /// <returns>Абсолютный путь к локальной папке bin утилит.</returns>
     public static string GetBinDirectory()
     {
+        // Железобетонная проверка: если приложение запущено из защищенной системной папки, это MSIX
+        bool isMsix = BaseDir.Contains("WindowsApps", StringComparison.OrdinalIgnoreCase);
+
+        if (isMsix)
+        {
+            // Пишем в стандартный AppData пользователя, у FullTrust приложений туда есть доступ
+            string appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            return Path.Combine(appData, "KTools", "bin");
+        }
+
+        // Для запуска из Visual Studio: используем папку сборки
         return Path.Combine(BaseDir, "bin");
     }
 
     /// <summary>
     /// Возвращает путь к директории для хранения конфигурационных файлов.
-    /// Поддерживает Portable-режим при наличии прав на запись в папку приложения,
-    /// иначе выполняет переключение в LOCALAPPDATA пользователя.
+    /// 
+    /// Для обычных приложений (Portable): попытается использовать папку приложения,
+    /// если нет прав - использует LOCALAPPDATA.
+    /// Для MSIX приложений: всегда использует LOCALAPPDATA (так как Program Files доступен только для чтения).
     /// </summary>
     /// <returns>Абсолютный путь к папке настроек.</returns>
     public static string GetSettingsDirectory()
     {
-        // 1. Проверяем доступность папки приложения на запись (Portable)
+        bool isMsix = BaseDir.Contains("WindowsApps", StringComparison.OrdinalIgnoreCase);
+
+        if (isMsix)
+        {
+            string appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            string msixSettingsPath = Path.Combine(appData, "KTools");
+            if (!Directory.Exists(msixSettingsPath))
+            {
+                Directory.CreateDirectory(msixSettingsPath);
+            }
+            return msixSettingsPath;
+        }
+
+        // 1. Проверяем доступность папки приложения на запись (Portable/VS)
         string testFile = Path.Combine(BaseDir, ".write_test");
         try
         {
@@ -58,7 +86,7 @@ public static class PathManager
             // 2. Fallback в LOCALAPPDATA при отсутствии прав
             string appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
             string fallbackPath = Path.Combine(appData, "KTools");
-            
+
             if (!Directory.Exists(fallbackPath))
             {
                 Directory.CreateDirectory(fallbackPath);

@@ -9,14 +9,14 @@
   IgnorableNamespaces="uap rescap systemai">
 
   <Identity
-    Name="FC4F6FA0-C109-454F-A986-B9D1A24F7CF1"
+    Name="KTools-WinUI"
     Publisher="CN=AppPublisher"
-    Version="1.0.0.0" />
+    Version="2.0.0.0" />
 
   <mp:PhoneIdentity PhoneProductId="FC4F6FA0-C109-454F-A986-B9D1A24F7CF1" PhonePublisherId="00000000-0000-0000-0000-000000000000"/>
 
   <Properties>
-    <DisplayName>K-Tools</DisplayName>
+    <DisplayName>KTools-WinUI</DisplayName>
     <PublisherDisplayName>AppPublisher</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
@@ -35,8 +35,8 @@
       Executable="$targetnametoken$.exe"
       EntryPoint="$targetentrypoint$">
       <uap:VisualElements
-        DisplayName="K-Tools"
-        Description="K-Tools"
+        DisplayName="KTools-WinUI"
+        Description="KTools-WinUI"
         BackgroundColor="transparent"
         Square150x150Logo="Assets\Square150x150Logo.png"
         Square44x44Logo="Assets\Square44x44Logo.png">

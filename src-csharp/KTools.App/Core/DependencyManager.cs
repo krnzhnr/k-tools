@@ -7,6 +7,9 @@ using System.Linq;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
+using SharpCompress.Common;
+using SharpCompress.Compressors.Xz;
+using SharpCompress.Readers;
 
 namespace KTools_App.Core;
 
@@ -299,9 +302,22 @@ public class DependencyManager
             // 2. Распаковка архива через системную утилиту tar.exe
             SetStatus(key, DependencyStatus.Extracting);
             string destinationFolder = Path.Combine(_binDir, dep.Subfolder);
-            
+
             // Гарантируем наличие целевых папок
-            Directory.CreateDirectory(destinationFolder);
+            try
+            {
+                Directory.CreateDirectory(destinationFolder);
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                SetStatus(key, DependencyStatus.Error);
+                string errMsg = $"Нет прав доступа для создания папки '{destinationFolder}'. " +
+                    $"Это может быть связано с ограничениями MSIX или прав пользователя. " +
+                    $"Убедитесь что приложение запущено от правильного пользователя. Подробности: {ex.Message}";
+                LogService.Instance.Error($"Ошибка доступа при распаковке '{dep.DisplayName}': {errMsg}", "DependencyManager");
+                InstallFinished?.Invoke(key, false, errMsg);
+                return;
+            }
 
             LogService.Instance.Info($"Начало распаковки архива в папку '{destinationFolder}'", "DependencyManager");
             var cancellationToken = _activeDownloads[key].Token;
@@ -333,7 +349,8 @@ public class DependencyManager
         catch (Exception ex)
         {
             SetStatus(key, DependencyStatus.Error);
-            LogService.Instance.Error($"Сбой при установке зависимости '{dep.DisplayName}': {ex.Message}", "DependencyManager");
+            string detailedErrorMessage = $"Критический сбой в процессе загрузки, верификации или распаковки зависимости '{dep.DisplayName}' (ключ: {dep.Key}). Подробности возникшего исключения: {ex.Message}. Стек вызовов: {ex.StackTrace}";
+            LogService.Instance.Error(detailedErrorMessage, "DependencyManager");
             InstallFinished?.Invoke(key, false, ex.Message);
         }
         finally
@@ -370,34 +387,55 @@ public class DependencyManager
     }
 
     /// <summary>
-    /// Асинхронно распаковывает архив .tar.xz в целевую папку, вызывая встроенный системный tar.exe операционной системы Windows.
+    /// Асинхронно распаковывает архив .tar.xz в целевую папку, используя стороннюю библиотеку SharpCompress.
+    /// Выполняется в фоновом режиме на пуле потоков без блокировки основного UI-потока.
     /// </summary>
+    /// <param name="archivePath">Абсолютный путь к исходному tar.xz-архиву на диске.</param>
+    /// <param name="destinationDir">Абсолютный путь к целевой директории распаковки.</param>
+    /// <param name="cancellationToken">Токен отмены для прерывания процесса распаковки по требованию пользователя.</param>
+    /// <exception cref="ArgumentNullException">Инициируется, если один из входных путей равен null.</exception>
+    /// <exception cref="OperationCanceledException">Инициируется, если процесс был отменен через token.</exception>
     private static async Task ExtractArchiveAsync(string archivePath, string destinationDir, CancellationToken cancellationToken)
     {
-        var processInfo = new ProcessStartInfo
+        if (archivePath == null)
         {
-            FileName = "tar",
-            // Флаг -x распаковывает, -f указывает архив, -C указывает целевую директорию
-            Arguments = $"-xf \"{archivePath}\" -C \"{destinationDir}\"",
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardError = true,
-            RedirectStandardOutput = true
-        };
-
-        using var process = Process.Start(processInfo);
-        if (process == null)
-        {
-            throw new Exception("Не удалось запустить встроенный системный декомпрессор 'tar.exe'.");
+            throw new ArgumentNullException(nameof(archivePath), "Путь к архиву не может быть пустым (null).");
         }
 
-        await process.WaitForExitAsync(cancellationToken);
-
-        if (process.ExitCode != 0)
+        if (destinationDir == null)
         {
-            string errorOutput = await process.StandardError.ReadToEndAsync(cancellationToken);
-            throw new Exception($"tar.exe завершился с кодом ошибки {process.ExitCode}. Подробности: {errorOutput}");
+            throw new ArgumentNullException(nameof(destinationDir), "Путь к целевой папке не может быть пустым (null).");
         }
+
+        LogService.Instance.Info($"Запуск асинхронной распаковки tar.xz архива '{archivePath}' в папку '{destinationDir}'...", "DependencyManager");
+
+        await Task.Run(() =>
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            using var fileStream = File.OpenRead(archivePath);
+            using var xzStream = new XZStream(fileStream);
+            using var reader = ReaderFactory.OpenReader(xzStream);
+
+            var options = new ExtractionOptions
+            {
+                ExtractFullPath = true,
+                Overwrite = true
+            };
+
+            while (reader.MoveToNextEntry())
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (!reader.Entry.IsDirectory)
+                {
+                    LogService.Instance.Info($"Распаковка файла из архива: {reader.Entry.Key}", "DependencyManager");
+                    reader.WriteEntryToDirectory(destinationDir, options);
+                }
+            }
+
+            LogService.Instance.Info($"Распаковка архива '{archivePath}' успешно завершена через SharpCompress", "DependencyManager");
+        }, cancellationToken);
     }
 
     /// <summary>

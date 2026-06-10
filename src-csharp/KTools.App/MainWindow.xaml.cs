@@ -2,6 +2,7 @@ using System;
 using System.Runtime.InteropServices;
 using Microsoft.UI.Xaml;
 using Windows.Graphics;
+using KTools_App.Core;
 
 namespace KTools_App;
 
@@ -61,28 +62,69 @@ public sealed partial class MainWindow : Window
         IntPtr wParam,
         IntPtr lParam);
 
-    private readonly SubclassProc _subclassProcDelegate;
+    private SubclassProc? _subclassProcDelegate;
 
     public MainWindow()
     {
-        InitializeComponent();
+        try
+        {
+            InitializeComponent();
 
-        ExtendsContentIntoTitleBar = true;
-        SetTitleBar(AppTitleBar);
+            ExtendsContentIntoTitleBar = true;
+            SetTitleBar(AppTitleBar);
 
-        // Установка иконки приложения
-        AppWindow.SetIcon("Assets/AppIcon.ico");
+            // Установка иконки приложения
+            try
+            {
+                AppWindow.SetIcon("Assets/AppIcon.ico");
+            }
+            catch (Exception ex)
+            {
+                LogService.Instance.Warn(
+                    $"Не удалось установить иконку приложения: {ex.Message}",
+                    "MainWindow");
+            }
 
-        // Установка точного размера окна (800 x 960 пикселей)
-        AppWindow.Resize(new SizeInt32(800, 960));
+            // Установка точного размера окна (800 x 960 пикселей)
+            AppWindow.Resize(new SizeInt32(800, 960));
 
-        // Навигация по умолчанию на главную страницу
-        RootFrame.Navigate(typeof(MainPage));
+            // Навигация по умолчанию на главную страницу
+            RootFrame.Navigate(typeof(MainPage));
 
-        // Подключение subclass-процедуры для ограничения минимального размера
-        IntPtr hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
-        _subclassProcDelegate = new SubclassProc(WindowSubclassProc);
-        SetWindowSubclass(hwnd, _subclassProcDelegate, 1, IntPtr.Zero);
+            // Подключение subclass-процедуры для ограничения минимального размера
+            // С защитой от ошибок при P/Invoke
+            try
+            {
+                IntPtr hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+                if (hwnd != IntPtr.Zero)
+                {
+                    _subclassProcDelegate = new SubclassProc(WindowSubclassProc);
+                    bool result = SetWindowSubclass(hwnd, _subclassProcDelegate, 1, IntPtr.Zero);
+                    if (!result)
+                    {
+                        LogService.Instance.Warn(
+                            "SetWindowSubclass вернул false - обработчик размера не установлен.",
+                            "MainWindow");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                // Если SetWindowSubclass не работает, логируем, но не падаем
+                LogService.Instance.Warn(
+                    $"Не удалось установить обработчик минимального размера окна: {ex.Message}. " +
+                    "Будет использован размер по умолчанию.",
+                    "MainWindow");
+            }
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Exception(
+                ex,
+                "Критическая ошибка при инициализации главного окна.",
+                "MainWindow");
+            throw;
+        }
     }
 
     /// <summary>

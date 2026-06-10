@@ -196,3 +196,5 @@ src-csharp/**/obj/
 src-csharp/.vs/
 src-csharp/**/*.user
 
+*.md
+*.msix
