@@ -33,10 +33,10 @@ public sealed partial class MainPage : Page
     /// </summary>
     public MainPage()
     {
-        InitializeComponent();
-
         ViewModel = App.Services.GetRequiredService<MainViewModel>();
         _navigationService = App.Services.GetRequiredService<INavigationService>();
+
+        InitializeComponent();
 
         // Настраиваем фрейм для службы навигации
         if (_navigationService is NavigationService service)

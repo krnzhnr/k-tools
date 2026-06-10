@@ -66,5 +66,28 @@ public sealed class ScriptRegistry
 
         // Инициализируем настройки скриптов по умолчанию при регистрации
         SettingsManager.Instance.InitializeDefaults(_scripts);
+
+        // Явно гарантируем сброс всех очередей файлов и выбранных дорожек
+        // для обеспечения запуска приложения с абсолютно чистого листа
+        foreach (var script in _scripts)
+        {
+            try
+            {
+                script.FilesQueue.Clear();
+                script.SelectedTrackIds.Clear();
+                script.SelectedAttachmentIds.Clear();
+                script.SavedLogText = string.Empty;
+                script.SavedStatusText = "Ожидание запуска...";
+                script.SavedGlobalProgress = 0.0;
+                script.IsProcessing = false;
+            }
+            catch (Exception ex)
+            {
+                LogService.Instance.Exception(
+                    ex, 
+                    $"Не удалось очистить состояние скрипта '{script.Name}' при регистрации в реестре.", 
+                    "ScriptRegistry");
+            }
+        }
     }
 }

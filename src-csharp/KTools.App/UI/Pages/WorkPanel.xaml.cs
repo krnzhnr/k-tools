@@ -50,11 +50,10 @@ public sealed partial class WorkPanel : Page
     /// </summary>
     public WorkPanel()
     {
-        InitializeComponent();
-        InitializeTabs();
-
         ViewModel = App.Services.GetRequiredService<WorkPanelViewModel>();
         ViewModel.PropertyChanged += OnViewModelPropertyChanged;
+        InitializeTabs();
+        InitializeComponent();
 
         Unloaded += WorkPanel_Unloaded;
     }

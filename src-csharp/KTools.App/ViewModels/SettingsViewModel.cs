@@ -26,6 +26,23 @@ public sealed class LogsTabVisibilityChangedMessage
 }
 
 /// <summary>
+/// Сообщение для уведомления об изменении темы оформления приложения.
+/// </summary>
+public sealed class ThemeChangedMessage
+{
+    /// <summary>Новая выбранная тема ("Light" или "Dark").</summary>
+    public string NewTheme { get; }
+
+    /// <summary>
+    /// Инициализирует новый экземпляр сообщения.
+    /// </summary>
+    public ThemeChangedMessage(string newTheme)
+    {
+        NewTheme = newTheme;
+    }
+}
+
+/// <summary>
 /// Модель представления страницы настроек приложения.
 /// Управляет всеми пользовательскими конфигурациями и синхронизирует их с SettingsManager.
 /// </summary>
@@ -169,7 +186,9 @@ public partial class SettingsViewModel : ObservableObject
 
     partial void OnSelectedThemeIndexChanged(int value)
     {
-        _settingsManager.Theme = value == 1 ? "Light" : "Dark";
+        string newTheme = value == 1 ? "Light" : "Dark";
+        _settingsManager.Theme = newTheme;
+        WeakReferenceMessenger.Default.Send(new ThemeChangedMessage(newTheme));
     }
 
     partial void OnShowLogsTabChanged(bool value)

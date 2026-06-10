@@ -1,4 +1,4 @@
-﻿$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Stop"
 
 function Invoke-BuildProcess {
     $timestamp = Get-Date -Format "yyyyMMddHHmmss"

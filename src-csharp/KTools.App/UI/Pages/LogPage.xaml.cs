@@ -30,8 +30,8 @@ public sealed partial class LogPage : Page
     /// </summary>
     public LogPage()
     {
-        InitializeComponent();
         ViewModel = App.Services.GetRequiredService<LogViewModel>();
+        InitializeComponent();
     }
 
     /// <summary>

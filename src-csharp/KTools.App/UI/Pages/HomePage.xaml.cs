@@ -26,8 +26,8 @@ public sealed partial class HomePage : Page
     /// </summary>
     public HomePage()
     {
-        InitializeComponent();
         ViewModel = App.Services.GetRequiredService<HomeViewModel>();
+        InitializeComponent();
     }
 
     /// <summary>

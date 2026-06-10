@@ -2,7 +2,9 @@ using System;
 using System.Runtime.InteropServices;
 using Microsoft.UI.Xaml;
 using Windows.Graphics;
+using CommunityToolkit.Mvvm.Messaging;
 using KTools_App.Core;
+using KTools_App.ViewModels;
 
 namespace KTools_App;
 
@@ -116,6 +118,46 @@ public sealed partial class MainWindow : Window
                     "Будет использован размер по умолчанию.",
                     "MainWindow");
             }
+
+            // Применение сохраненной темы при запуске
+            ApplySavedTheme();
+
+            // Регистрация на получение сообщения об изменении темы для мгновенного применения
+            WeakReferenceMessenger.Default.Register<ThemeChangedMessage>(this, (r, m) =>
+            {
+                DispatcherQueue.TryEnqueue(() =>
+                {
+                    if (Content is FrameworkElement rootElement)
+                    {
+                        rootElement.RequestedTheme = m.NewTheme.Equals("Light", StringComparison.OrdinalIgnoreCase)
+                            ? ElementTheme.Light
+                            : ElementTheme.Dark;
+                    }
+                });
+            });
+
+            // Подписка на событие закрытия окна для гарантированного завершения процесса приложения
+            Closed += (sender, args) =>
+            {
+                LogService.Instance.Info(
+                    "Главное окно закрыто пользователем. Запуск процедуры полного завершения процесса приложения.", 
+                    "MainWindow");
+                
+                try
+                {
+                    Application.Current.Exit();
+                    LogService.Instance.Info(
+                        "Запрос на выход из приложения успешно отправлен через Application.Current.Exit().", 
+                        "MainWindow");
+                }
+                catch (Exception ex)
+                {
+                    LogService.Instance.Exception(
+                        ex, 
+                        "Возникло исключение при попытке принудительного завершения работы приложения.", 
+                        "MainWindow");
+                }
+            };
         }
         catch (Exception ex)
         {
@@ -124,6 +166,28 @@ public sealed partial class MainWindow : Window
                 "Критическая ошибка при инициализации главного окна.",
                 "MainWindow");
             throw;
+        }
+    }
+
+    /// <summary>
+    /// Считывает сохраненную тему оформления из SettingsManager и применяет её к корневому контейнеру окна.
+    /// </summary>
+    private void ApplySavedTheme()
+    {
+        try
+        {
+            string theme = SettingsManager.Instance.Theme;
+            if (Content is FrameworkElement rootElement)
+            {
+                rootElement.RequestedTheme = theme.Equals("Light", StringComparison.OrdinalIgnoreCase)
+                    ? ElementTheme.Light
+                    : ElementTheme.Dark;
+                LogService.Instance.Info($"Успешно применена сохраненная тема оформления: '{theme}'", "MainWindow");
+            }
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Error($"Не удалось применить сохраненную тему оформления при старте: {ex.Message}", "MainWindow");
         }
     }
 

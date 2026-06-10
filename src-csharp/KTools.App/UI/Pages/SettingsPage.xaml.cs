@@ -25,8 +25,8 @@ public partial class SettingsPage : Page
     /// </summary>
     public SettingsPage()
     {
-        InitializeComponent();
         ViewModel = App.Services.GetRequiredService<SettingsViewModel>();
+        InitializeComponent();
     }
 
     /// <summary>

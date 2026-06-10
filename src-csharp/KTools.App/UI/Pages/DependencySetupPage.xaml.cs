@@ -25,8 +25,8 @@ public sealed partial class DependencySetupPage : Page
     /// </summary>
     public DependencySetupPage()
     {
-        InitializeComponent();
         ViewModel = App.Services.GetRequiredService<DependencySetupViewModel>();
+        InitializeComponent();
         
         // Подписываемся на изменение состояния ViewModel для синхронизации иконок
         ViewModel.PropertyChanged += OnViewModelPropertyChanged;
