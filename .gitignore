@@ -190,11 +190,14 @@ file_version_info.txt
 CLAUDE.md
 .claudeignore
 
-# C# / Visual Studio Build Artifacts
-src-csharp/**/bin/
-src-csharp/**/obj/
-src-csharp/.vs/
-src-csharp/**/*.user
-
-*.md
+# Visual Studio / C# / .NET
+.vs/
+[Bb]in/
+[Oo]bj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.xbf
+*.pubxml
 *.msix
