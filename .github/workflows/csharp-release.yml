@@ -1,0 +1,77 @@
+name: Build K-Tools C# Release
+
+on:
+  push:
+    branches:
+      - feature/csharp-migration
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-csharp:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Setup .NET SDK
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install Inno Setup
+      run: |
+        choco install innosetup
+
+    - name: Build C# App and Installer
+      run: |
+        python build_csharp.py
+
+    - name: Extract Changelog Notes
+      id: extract_notes
+      shell: python
+      run: |
+        import re, os
+        changelog = open("CHANGELOG.md", "r", encoding="utf-8").read()
+        match = re.search(r"^#\s*([\d\.\-\w]+)", changelog, re.MULTILINE)
+        if match:
+            version = match.group(1)
+            print(f"Detected version: {version}")
+            with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
+                f.write(f"version={version}\n")
+            start_idx = changelog.find(match.group(0)) + len(match.group(0))
+            next_match = re.search(r"^#\s*", changelog[start_idx:], re.MULTILINE)
+            notes = changelog[start_idx : start_idx + next_match.start()].strip() if next_match else changelog[start_idx:].strip()
+            open("release_notes.md", "w", encoding="utf-8").write(notes)
+        else:
+            print("Version not found")
+            with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
+                f.write("version=2.0.0-csharp-dev\n")
+            open("release_notes.md", "w", encoding="utf-8").write("Тестовая сборка C# версии")
+
+    - name: Delete Old Pre-Release
+      shell: bash
+      run: |
+        gh release delete csharp-pre-release --cleanup-tag --yes || true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Create or Update GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: csharp-pre-release
+        name: "K-Tools C# Edition v${{ steps.extract_notes.outputs.version }} (Pre-release)"
+        body_path: release_notes.md
+        prerelease: true
+        make_latest: false
+        files: setup_output/K-Tools_*.exe
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
