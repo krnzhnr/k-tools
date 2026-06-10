@@ -73,6 +73,15 @@ public sealed class SettingsManager
     }
 
     /// <summary>
+    /// Тип фона окон приложения (Mica или Acrylic).
+    /// </summary>
+    public string BackdropType
+    {
+        get => GetSetting("General", "BackdropType", "Mica");
+        set => SetSetting("General", "BackdropType", value);
+    }
+
+    /// <summary>
     /// Максимальное количество параллельных задач обработки.
     /// </summary>
     public int MaxParallelTasks
@@ -299,6 +308,11 @@ public sealed class SettingsManager
             if (!HasSetting("General", "Theme"))
             {
                 SetSettingInternal("General", "Theme", "Dark");
+                modified = true;
+            }
+            if (!HasSetting("General", "BackdropType"))
+            {
+                SetSettingInternal("General", "BackdropType", "Mica");
                 modified = true;
             }
             if (!HasSetting("General", "MaxParallelTasks"))

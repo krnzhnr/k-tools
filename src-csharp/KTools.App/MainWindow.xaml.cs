@@ -122,6 +122,9 @@ public sealed partial class MainWindow : Window
             // Применение сохраненной темы при запуске
             ApplySavedTheme();
 
+            // Применение сохраненного типа фона при запуске
+            ApplySavedBackdrop();
+
             // Регистрация на получение сообщения об изменении темы для мгновенного применения
             WeakReferenceMessenger.Default.Register<ThemeChangedMessage>(this, (r, m) =>
             {
@@ -133,6 +136,15 @@ public sealed partial class MainWindow : Window
                             ? ElementTheme.Light
                             : ElementTheme.Dark;
                     }
+                });
+            });
+
+            // Регистрация на получение сообщения об изменении типа фона
+            WeakReferenceMessenger.Default.Register<BackdropChangedMessage>(this, (r, m) =>
+            {
+                DispatcherQueue.TryEnqueue(() =>
+                {
+                    ApplyBackdrop(m.NewBackdrop);
                 });
             });
 
@@ -188,6 +200,45 @@ public sealed partial class MainWindow : Window
         catch (Exception ex)
         {
             LogService.Instance.Error($"Не удалось применить сохраненную тему оформления при старте: {ex.Message}", "MainWindow");
+        }
+    }
+
+    /// <summary>
+    /// Считывает сохраненный тип фона из SettingsManager и применяет его к окну.
+    /// </summary>
+    private void ApplySavedBackdrop()
+    {
+        try
+        {
+            string backdrop = SettingsManager.Instance.BackdropType;
+            ApplyBackdrop(backdrop);
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Error($"Не удалось применить сохраненный тип фона при старте: {ex.Message}", "MainWindow");
+        }
+    }
+
+    /// <summary>
+    /// Применяет выбранный тип фона (Mica или Acrylic) к окну приложения.
+    /// </summary>
+    private void ApplyBackdrop(string backdropType)
+    {
+        try
+        {
+            if (backdropType.Equals("Acrylic", StringComparison.OrdinalIgnoreCase))
+            {
+                SystemBackdrop = new Microsoft.UI.Xaml.Media.DesktopAcrylicBackdrop();
+            }
+            else
+            {
+                SystemBackdrop = new Microsoft.UI.Xaml.Media.MicaBackdrop();
+            }
+            LogService.Instance.Info($"Успешно применен тип фона окна: '{backdropType}'", "MainWindow");
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Error($"Не удалось применить тип фона окна '{backdropType}': {ex.Message}", "MainWindow");
         }
     }
 

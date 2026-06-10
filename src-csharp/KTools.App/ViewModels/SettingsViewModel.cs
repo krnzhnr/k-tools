@@ -43,6 +43,23 @@ public sealed class ThemeChangedMessage
 }
 
 /// <summary>
+/// Сообщение для уведомления об изменении типа фона (Mica/Acrylic) приложения.
+/// </summary>
+public sealed class BackdropChangedMessage
+{
+    /// <summary>Новый выбранный тип фона ("Mica" или "Acrylic").</summary>
+    public string NewBackdrop { get; }
+
+    /// <summary>
+    /// Инициализирует новый экземпляр сообщения.
+    /// </summary>
+    public BackdropChangedMessage(string newBackdrop)
+    {
+        NewBackdrop = newBackdrop;
+    }
+}
+
+/// <summary>
 /// Модель представления страницы настроек приложения.
 /// Управляет всеми пользовательскими конфигурациями и синхронизирует их с SettingsManager.
 /// </summary>
@@ -92,6 +109,12 @@ public partial class SettingsViewModel : ObservableObject
     /// </summary>
     [ObservableProperty]
     public partial int SelectedThemeIndex { get; set; }
+
+    /// <summary>
+    /// Индекс выбранного типа фона окон (0 - Mica, 1 - Acrylic).
+    /// </summary>
+    [ObservableProperty]
+    public partial int SelectedBackdropIndex { get; set; }
 
     /// <summary>
     /// Флаг отображения вкладки логов в основном меню навигации.
@@ -147,6 +170,11 @@ public partial class SettingsViewModel : ObservableObject
             ? 1
             : 0;
 
+        SelectedBackdropIndex = _settingsManager.BackdropType
+            .Equals("Acrylic", StringComparison.OrdinalIgnoreCase)
+            ? 1
+            : 0;
+
         ShowLogsTab = _settingsManager.ShowLogsTab;
         LogDir = string.IsNullOrEmpty(_settingsManager.LogDir)
             ? "Используется папка по умолчанию"
@@ -189,6 +217,13 @@ public partial class SettingsViewModel : ObservableObject
         string newTheme = value == 1 ? "Light" : "Dark";
         _settingsManager.Theme = newTheme;
         WeakReferenceMessenger.Default.Send(new ThemeChangedMessage(newTheme));
+    }
+
+    partial void OnSelectedBackdropIndexChanged(int value)
+    {
+        string newBackdrop = value == 1 ? "Acrylic" : "Mica";
+        _settingsManager.BackdropType = newBackdrop;
+        WeakReferenceMessenger.Default.Send(new BackdropChangedMessage(newBackdrop));
     }
 
     partial void OnShowLogsTabChanged(bool value)
@@ -242,6 +277,7 @@ public partial class SettingsViewModel : ObservableObject
             _settingsManager.DefaultOutputSubfolder = "KTools_Result";
             _settingsManager.UseAutoSubfolder = false;
             _settingsManager.Theme = "Dark";
+            _settingsManager.BackdropType = "Mica";
             _settingsManager.ShowLogsTab = false;
             _settingsManager.LogDir = string.Empty;
             _settingsManager.AutoCheckUpdates = true;

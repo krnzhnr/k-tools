@@ -126,6 +126,24 @@
                             Content="Светлая" />
                     </ComboBox>
                 </community:SettingsCard>
+
+                <!-- Эффект прозрачности (Backdrop) -->
+                <community:SettingsCard
+                    Padding="16,12,16,12"
+                    Description="Выберите эффект оформления фона окон приложения (Mica или Acrylic)"
+                    Header="Эффект фона окон">
+                    <ComboBox
+                        x:Name="BackdropComboBox"
+                        Width="160"
+                        SelectedIndex="{x:Bind ViewModel.SelectedBackdropIndex, Mode=TwoWay}">
+                        <ComboBoxItem
+                            Tag="Mica"
+                            Content="Mica" />
+                        <ComboBoxItem
+                            Tag="Acrylic"
+                            Content="Acrylic (размытие)" />
+                    </ComboBox>
+                </community:SettingsCard>
             </StackPanel>
 
             <!-- Раздел: Журналирование -->
