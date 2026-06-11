@@ -12,7 +12,6 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Storage;
-using Windows.Storage.Pickers;
 
 using KTools_App.Core;
 
@@ -226,32 +225,51 @@ public sealed partial class FileListControl : UserControl
 
     private async void AddFilesButton_Click(object sender, RoutedEventArgs e)
     {
-        var picker = new FileOpenPicker();
-        
-        // Настройка сопоставления окна с главным окном в WinUI 3
-        var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(App.CurrentMainWindow);
-        WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
+        LogService.Instance.Info(
+            "[FileListControl] Открытие диалога выбора файлов с повышенными привилегиями через Microsoft.Windows.Storage.Pickers",
+            "FileListControl");
 
-        picker.ViewMode = PickerViewMode.List;
-        picker.SuggestedStartLocation = PickerLocationId.ComputerFolder;
-
-        // Фильтры расширений
-        if (ActiveScript != null && ActiveScript.FileExtensions.Length > 0)
+        try
         {
-            foreach (var ext in ActiveScript.FileExtensions)
+            // Получаем HWND главного окна
+            var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(App.CurrentMainWindow);
+            // Получаем WindowId из HWND
+            var windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(hwnd);
+            
+            // Инициализируем picker с WindowId
+            var picker = new Microsoft.Windows.Storage.Pickers.FileOpenPicker(windowId);
+
+            picker.ViewMode = Microsoft.Windows.Storage.Pickers.PickerViewMode.List;
+            picker.SuggestedStartLocation = Microsoft.Windows.Storage.Pickers.PickerLocationId.ComputerFolder;
+
+            // Фильтры расширений
+            if (ActiveScript != null && ActiveScript.FileExtensions.Length > 0)
             {
-                picker.FileTypeFilter.Add(ext);
+                foreach (var ext in ActiveScript.FileExtensions)
+                {
+                    picker.FileTypeFilter.Add(ext);
+                }
+            }
+            else
+            {
+                picker.FileTypeFilter.Add("*");
+            }
+
+            var files = await picker.PickMultipleFilesAsync();
+            if (files != null && files.Count > 0)
+            {
+                LogService.Instance.Info(
+                    $"[FileListControl] Выбрано файлов вручную: {files.Count}",
+                    "FileListControl");
+                AddFiles(files.Select(f => f.Path));
             }
         }
-        else
+        catch (Exception ex)
         {
-            picker.FileTypeFilter.Add("*");
-        }
-
-        var files = await picker.PickMultipleFilesAsync();
-        if (files != null && files.Count > 0)
-        {
-            AddFiles(files.Select(f => f.Path));
+            LogService.Instance.Exception(
+                ex,
+                "Ошибка при открытии диалогового окна выбора файлов через Microsoft.Windows.Storage.Pickers",
+                "FileListControl");
         }
     }
 
