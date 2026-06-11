@@ -37,6 +37,8 @@ public sealed class QaacRunner
         string tvbr = "127",
         bool adts = false,
         List<string>? extraArgs = null,
+        double totalDuration = 0.0,
+        Action<ProgressInfo>? onProgress = null,
         CancellationToken cancellationToken = default)
     {
         string qaacPath = PathManager.GetBinaryPath("qaac64");
@@ -194,37 +196,118 @@ public sealed class QaacRunner
             return false;
         }
 
-        // Задачи для перенаправления вывода ошибок
+        // Задачи для перенаправления вывода ошибок с поддержкой \r и \n
         var ffmpegStderrLines = new List<string>();
         var qaacStderrLines = new List<string>();
 
         var ffmpegErrorTask = Task.Run(async () =>
         {
-            while (!ffmpegProc.StandardError.EndOfStream)
+            try
             {
-                string? line = await ffmpegProc.StandardError.ReadLineAsync();
-                if (line != null)
+                var buffer = new char[4096];
+                var sb = new System.Text.StringBuilder();
+                while (true)
                 {
+                    int read = await ffmpegProc.StandardError.ReadAsync(buffer, 0, buffer.Length);
+                    if (read <= 0) break;
+
+                    for (int i = 0; i < read; i++)
+                    {
+                        char c = buffer[i];
+                        if (c == '\r' || c == '\n')
+                        {
+                            if (sb.Length > 0)
+                            {
+                                string line = sb.ToString();
+                                lock (ffmpegStderrLines)
+                                {
+                                    ffmpegStderrLines.Add(line);
+                                }
+                                sb.Clear();
+                            }
+                        }
+                        else
+                        {
+                            sb.Append(c);
+                        }
+                    }
+                }
+                if (sb.Length > 0)
+                {
+                    string line = sb.ToString();
                     lock (ffmpegStderrLines)
                     {
                         ffmpegStderrLines.Add(line);
                     }
                 }
             }
+            catch (Exception ex)
+            {
+                LogService.Instance.Exception(ex, "Ошибка чтения stderr FFmpeg в QaacRunner", "QaacRunner");
+            }
         });
 
         var qaacErrorTask = Task.Run(async () =>
         {
-            while (!qaacProc.StandardError.EndOfStream)
+            try
             {
-                string? line = await qaacProc.StandardError.ReadLineAsync();
-                if (line != null)
+                var buffer = new char[4096];
+                var sb = new System.Text.StringBuilder();
+                while (true)
                 {
+                    int read = await qaacProc.StandardError.ReadAsync(buffer, 0, buffer.Length);
+                    if (read <= 0) break;
+
+                    for (int i = 0; i < read; i++)
+                    {
+                        char c = buffer[i];
+                        if (c == '\r' || c == '\n')
+                        {
+                            if (sb.Length > 0)
+                            {
+                                string line = sb.ToString();
+                                lock (qaacStderrLines)
+                                {
+                                    qaacStderrLines.Add(line);
+                                }
+
+                                if (onProgress != null)
+                                {
+                                    var progress = QaacOutputParser.ParseLine(line, totalDuration);
+                                    if (progress != null)
+                                    {
+                                        onProgress(progress);
+                                    }
+                                }
+                                sb.Clear();
+                            }
+                        }
+                        else
+                        {
+                            sb.Append(c);
+                        }
+                    }
+                }
+                if (sb.Length > 0)
+                {
+                    string line = sb.ToString();
                     lock (qaacStderrLines)
                     {
                         qaacStderrLines.Add(line);
                     }
+                    if (onProgress != null)
+                    {
+                        var progress = QaacOutputParser.ParseLine(line, totalDuration);
+                        if (progress != null)
+                        {
+                            onProgress(progress);
+                        }
+                    }
                 }
+            }
+            catch (Exception ex)
+            {
+                LogService.Instance.Exception(ex, "Ошибка чтения stderr QAAC в QaacRunner", "QaacRunner");
             }
         });
 

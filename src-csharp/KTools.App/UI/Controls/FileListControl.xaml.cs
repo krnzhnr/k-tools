@@ -33,6 +33,7 @@ public sealed partial class FileListControl : UserControl
         _files.CollectionChanged += OnFilesCollectionChanged;
         FilesListView.ItemsSource = _files;
         UpdateEmptyState();
+        CheckAdministratorStatus();
     }
 
     /// <summary>
@@ -73,6 +74,44 @@ public sealed partial class FileListControl : UserControl
     /// Ссылка на текущий активный скрипт для фильтрации входящих расширений файлов.
     /// </summary>
     public Core.AbstractScript? ActiveScript { get; set; }
+
+    /// <summary>
+    /// Регистрация свойства зависимостей IsProcessingProperty для управления состоянием чтения списка файлов.
+    /// </summary>
+    public static readonly DependencyProperty IsProcessingProperty =
+        DependencyProperty.Register(
+            nameof(IsProcessing),
+            typeof(bool),
+            typeof(FileListControl),
+            new PropertyMetadata(false, OnIsProcessingChanged));
+
+    /// <summary>
+    /// Получает или задает значение, указывающее, выполняется ли в данный момент обработка скрипта.
+    /// Влияет на доступность добавления, удаления и очистки списка файлов.
+    /// </summary>
+    public bool IsProcessing
+    {
+        get => (bool)GetValue(IsProcessingProperty);
+        set => SetValue(IsProcessingProperty, value);
+    }
+
+    private static void OnIsProcessingChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        if (d is FileListControl control)
+        {
+            control.UpdateReadOnlyState((bool)e.NewValue);
+        }
+    }
+
+    /// <summary>
+    /// Обновляет доступность элементов управления списка файлов в зависимости от режима обработки.
+    /// </summary>
+    private void UpdateReadOnlyState(bool isProcessing)
+    {
+        AddFilesButton.IsEnabled = !isProcessing;
+        ClearListButton.IsEnabled = !isProcessing;
+        RootGrid.AllowDrop = !isProcessing;
+    }
 
     /// <summary>
     /// Очистить список файлов.
@@ -218,6 +257,12 @@ public sealed partial class FileListControl : UserControl
 
     private void RootGrid_DragOver(object sender, DragEventArgs e)
     {
+        if (IsProcessing)
+        {
+            e.AcceptedOperation = DataPackageOperation.None;
+            return;
+        }
+
         e.AcceptedOperation = DataPackageOperation.Copy;
         e.DragUIOverride.Caption = "Добавить в K-Tools";
         e.DragUIOverride.IsCaptionVisible = true;
@@ -226,20 +271,77 @@ public sealed partial class FileListControl : UserControl
 
     private async void RootGrid_Drop(object sender, DragEventArgs e)
     {
-        if (e.DataView.Contains(StandardDataFormats.StorageItems))
+        if (IsProcessing) return;
+        try
         {
-            var items = await e.DataView.GetStorageItemsAsync();
-            var paths = new List<string>();
-
-            foreach (var item in items)
+            if (e.DataView.Contains(StandardDataFormats.StorageItems))
             {
-                if (item is StorageFile file)
+                var items = await e.DataView.GetStorageItemsAsync();
+                var paths = new List<string>();
+
+                foreach (var item in items)
                 {
-                    paths.Add(file.Path);
+                    if (item is StorageFile file)
+                    {
+                        paths.Add(file.Path);
+                    }
                 }
+
+                AddFiles(paths);
+            }
+        }
+        catch (Exception ex)
+        {
+            string formatsList = string.Empty;
+            try
+            {
+                formatsList = string.Join(", ", e.DataView.AvailableFormats);
+            }
+            catch
+            {
+                formatsList = "не удалось извлечь форматы";
             }
 
-            AddFiles(paths);
+            LogService.Instance.Exception(
+                ex,
+                $"Возникло исключение при обработке события Drop (перетаскивание файлов). " +
+                $"Доступные форматы в DataView: [{formatsList}]",
+                "FileListControl");
+        }
+    }
+
+    /// <summary>
+    /// Проверяет, запущено ли приложение с повышенными привилегиями (от имени администратора),
+    /// и выводит соответствующие предупреждения в интерфейсе, так как в этом режиме
+    /// операционная система Windows блокирует механизм Drag-and-Drop (UIPI).
+    /// </summary>
+    private void CheckAdministratorStatus()
+    {
+        try
+        {
+            using (var identity = System.Security.Principal.WindowsIdentity.GetCurrent())
+            {
+                var principal = new System.Security.Principal.WindowsPrincipal(identity);
+                if (principal.IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator))
+                {
+                    AdminWarningBar.IsOpen = true;
+                    DragDropPromptTextBlock.Text = "Перетаскивание заблокировано (запущено от администратора)";
+                    DragDropSubPromptTextBlock.Text = "Используйте кнопку «Добавить файлы» ниже для выбора файлов вручную.";
+                    
+                    LogService.Instance.Info(
+                        "FileListControl: Обнаружен запуск процесса от имени администратора. " +
+                        "Drag-and-Drop заблокирован операционной системой Windows (UIPI). " +
+                        "Пользователю выведено предупреждение в интерфейсе.",
+                        "FileListControl");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Exception(
+                ex,
+                "Исключение при проверке прав администратора для управления отображением Drag-and-Drop",
+                "FileListControl");
         }
     }
 }

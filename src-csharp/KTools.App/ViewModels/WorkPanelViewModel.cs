@@ -27,6 +27,9 @@ public partial class WorkPanelViewModel : ObservableObject
     private readonly LogService _logService;
 
     private ObservableCollection<FileQueueItem> _files = new();
+    private DateTime _startTime;
+    private readonly Dictionary<int, double> _filesProgress = new();
+    private readonly HashSet<int> _finishedIndices = new();
 
     /// <summary>
     /// Активный исполняемый скрипт обработки медиаданных.
@@ -293,10 +296,21 @@ public partial class WorkPanelViewModel : ObservableObject
     {
         if (ActiveScript == null) return;
 
+        _startTime = DateTime.Now;
+        _filesProgress.Clear();
+        _finishedIndices.Clear();
+
+        for (int i = 0; i < filesList.Count; i++)
+        {
+            _filesProgress[i] = 0.0;
+        }
+
         foreach (var item in filesList)
         {
             item.Status = "Ожидание";
             item.Progress = 0.0;
+            item.State = FileProcessingState.Pending;
+            item.IsProcessing = true;
         }
 
         ActiveScript.IsProcessing = true;
@@ -353,7 +367,7 @@ public partial class WorkPanelViewModel : ObservableObject
     {
         if (ActiveScript == null) return;
 
-        UpdateFileStatus(fileItem.FilePath, "Обработка...", 0.0);
+        UpdateFileStatus(fileItem.FilePath, "Обработка...", 0.0, FileProcessingState.Processing);
         UpdateProgressState(
             index, 
             total, 
@@ -368,7 +382,8 @@ public partial class WorkPanelViewModel : ObservableObject
                     UpdateFileStatus(
                         fileItem.FilePath, 
                         msg, 
-                        percent ?? 0.0);
+                        percent ?? 0.0,
+                        FileProcessingState.Processing);
                         
                     UpdateProgressState(
                         index, 
@@ -389,11 +404,11 @@ public partial class WorkPanelViewModel : ObservableObject
 
             if (ActiveScript.IsCancelled)
             {
-                UpdateFileStatus(fileItem.FilePath, "Отменено", 0.0);
+                UpdateFileStatus(fileItem.FilePath, "Отменено", 0.0, FileProcessingState.Cancelled);
                 return;
             }
 
-            UpdateFileStatus(fileItem.FilePath, "Завершено", 100.0);
+            UpdateFileStatus(fileItem.FilePath, "Завершено", 100.0, FileProcessingState.Completed);
         }
         catch (Exception ex)
         {
@@ -403,7 +418,7 @@ public partial class WorkPanelViewModel : ObservableObject
                 $"'{fileItem.FileName}': {ex.Message}", 
                 "WorkPanelViewModel");
                 
-            UpdateFileStatus(fileItem.FilePath, "Ошибка", 0.0);
+            UpdateFileStatus(fileItem.FilePath, "Ошибка", 0.0, FileProcessingState.Failed);
             AppendLogs(new List<string> { 
                 $"❌ Критическая ошибка: {ex.Message}" 
             });
@@ -416,6 +431,16 @@ public partial class WorkPanelViewModel : ObservableObject
     private void FinalizeExecution()
     {
         if (ActiveScript == null) return;
+
+        // Обновляем состояние обработки элементов списка в UI-потоке,
+        // чтобы избежать исключения перекрестного доступа к потокам (thread access violation)
+        App.CurrentMainWindow?.DispatcherQueue?.TryEnqueue(() =>
+        {
+            foreach (var item in Files)
+            {
+                item.IsProcessing = false;
+            }
+        });
 
         if (ActiveScript.IsCancelled)
         {
@@ -458,7 +483,8 @@ public partial class WorkPanelViewModel : ObservableObject
     private void UpdateFileStatus(
         string filePath, 
         string status, 
-        double progress)
+        double progress,
+        FileProcessingState? state = null)
     {
         App.CurrentMainWindow?.DispatcherQueue?.TryEnqueue(() =>
         {
@@ -470,23 +496,108 @@ public partial class WorkPanelViewModel : ObservableObject
             {
                 fileItem.Status = status;
                 fileItem.Progress = progress;
+                if (state.HasValue)
+                {
+                    fileItem.State = state.Value;
+                }
+                else
+                {
+                    fileItem.State = InferStateFromStatus(status);
+                }
             }
         });
 
         ActiveScript?.RaiseStateChanged();
     }
 
+    private FileProcessingState InferStateFromStatus(string status)
+    {
+        if (status == "Завершено") return FileProcessingState.Completed;
+        if (status == "Ошибка") return FileProcessingState.Failed;
+        if (status == "Отменено") return FileProcessingState.Cancelled;
+        if (status.StartsWith("Пропуск") || status.StartsWith("Пропущен")) return FileProcessingState.Skipped;
+        if (status == "Обработка" || status.StartsWith("Обработка") || status.Contains("%")) return FileProcessingState.Processing;
+        if (status == "Ожидание") return FileProcessingState.Pending;
+        
+        return FileProcessingState.Processing;
+    }
+
     private void UpdateProgressState(
-        int completedCount, 
+        int fileIndex, 
         int totalCount, 
         string status, 
         double filePercent)
     {
         if (ActiveScript == null) return;
 
-        ActiveScript.SavedStatusText = status;
-        ActiveScript.SavedGlobalProgress = 
-            (completedCount * 100.0 + filePercent) / totalCount;
+        // 1. Обновляем индивидуальный прогресс файла в словаре
+        _filesProgress[fileIndex] = filePercent;
+
+        if (filePercent >= 100.0)
+        {
+            _finishedIndices.Add(fileIndex);
+        }
+
+        // 2. Рассчитываем общий процент очереди (0-100%)
+        double totalProgressSum = 0.0;
+        foreach (var val in _filesProgress.Values)
+        {
+            totalProgressSum += val;
+        }
+        double overallPercent = (totalProgressSum / (totalCount * 100.0)) * 100.0;
+        overallPercent = Math.Min(Math.Max(overallPercent, 0.0), 100.0);
+
+        // 3. Рассчитываем общее оставшееся время (ETA) для очереди
+        double elapsedSeconds = (DateTime.Now - _startTime).TotalSeconds;
+        string etaStr = "-";
+
+        if (overallPercent > 1.0) // Начинаем расчет после 1% для стабильности
+        {
+            double totalEstSeconds = elapsedSeconds / (overallPercent / 100.0);
+            double remainingSeconds = totalEstSeconds - elapsedSeconds;
+            if (remainingSeconds > 0)
+            {
+                int remM = (int)(remainingSeconds / 60);
+                int remS = (int)(remainingSeconds % 60);
+                if (remM > 60)
+                {
+                    int remH = remM / 60;
+                    remM = remM % 60;
+                    etaStr = $"{remH:D2}:{remM:D2}:{remS:D2}";
+                }
+                else
+                {
+                    etaStr = $"{remM:D2}:{remS:D2}";
+                }
+            }
+        }
+
+        // 4. Формируем информативный текст статуса
+        int finishedCount = _finishedIndices.Count;
+        string queueStats = $"Готово: {finishedCount}/{totalCount} ({overallPercent:F1}%)";
+
+        // Очищаем сообщение от дублирования процентов
+        string percentStr = $"{filePercent:F1}%";
+        string cleanMsg = status;
+        if (!string.IsNullOrEmpty(status))
+        {
+            var parts = status.Split('|', StringSplitOptions.RemoveEmptyEntries);
+            var cleanParts = new List<string>();
+            foreach (var part in parts)
+            {
+                string trimmed = part.Trim();
+                if (!string.IsNullOrEmpty(trimmed) && !trimmed.Contains(percentStr))
+                {
+                    cleanParts.Add(trimmed);
+                }
+            }
+            cleanMsg = string.Join(" | ", cleanParts);
+        }
+
+        string displayStatusText = $"{queueStats} | {cleanMsg} | Осталось (очередь): {etaStr}";
+
+        ActiveScript.SavedStatusText = displayStatusText;
+        ActiveScript.SavedGlobalProgress = overallPercent;
 
         ActiveScript.RaiseStateChanged();
     }

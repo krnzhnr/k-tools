@@ -59,60 +59,12 @@ public abstract class AbstractProcessRunner
 
         using var process = new Process { StartInfo = startInfo };
 
-        var tcsOut = new TaskCompletionSource<bool>();
-        var tcsErr = new TaskCompletionSource<bool>();
-
-        process.OutputDataReceived += (sender, e) =>
-        {
-            if (e.Data == null)
-            {
-                tcsOut.TrySetResult(true);
-            }
-            else
-            {
-                try
-                {
-                    onOutputLine?.Invoke(e.Data);
-                }
-                catch (Exception ex)
-                {
-                    LogService.Instance.Exception(ex,
-                        $"Ошибка обработки стандартного вывода '{binaryName}'",
-                        GetType().Name);
-                }
-            }
-        };
-
-        process.ErrorDataReceived += (sender, e) =>
-        {
-            if (e.Data == null)
-            {
-                tcsErr.TrySetResult(true);
-            }
-            else
-            {
-                try
-                {
-                    onErrorLine?.Invoke(e.Data);
-                }
-                catch (Exception ex)
-                {
-                    LogService.Instance.Exception(ex,
-                        $"Ошибка обработки вывода ошибок '{binaryName}'",
-                        GetType().Name);
-                }
-            }
-        };
-
         try
         {
             process.Start();
             LogService.Instance.Info(
                 $"Запущен дочерний процесс '{binaryName}' (PID: {process.Id})",
                 GetType().Name);
-
-            process.BeginOutputReadLine();
-            process.BeginErrorReadLine();
         }
         catch (Exception ex)
         {
@@ -122,12 +74,96 @@ public abstract class AbstractProcessRunner
             return new ProcessResult(false, -2, failMsg);
         }
 
+        var readOutTask = Task.Run(async () =>
+        {
+            try
+            {
+                var buffer = new char[4096];
+                var sb = new System.Text.StringBuilder();
+                while (true)
+                {
+                    int read = await process.StandardOutput.ReadAsync(buffer, 0, buffer.Length);
+                    if (read <= 0) break;
+
+                    for (int i = 0; i < read; i++)
+                    {
+                        char c = buffer[i];
+                        if (c == '\r' || c == '\n')
+                        {
+                            if (sb.Length > 0)
+                            {
+                                string line = sb.ToString();
+                                onOutputLine?.Invoke(line);
+                                sb.Clear();
+                            }
+                        }
+                        else
+                        {
+                            sb.Append(c);
+                        }
+                    }
+                }
+                if (sb.Length > 0)
+                {
+                    onOutputLine?.Invoke(sb.ToString());
+                }
+            }
+            catch (Exception ex)
+            {
+                LogService.Instance.Exception(ex,
+                    $"Ошибка обработки стандартного вывода '{binaryName}'",
+                    GetType().Name);
+            }
+        });
+
+        var readErrTask = Task.Run(async () =>
+        {
+            try
+            {
+                var buffer = new char[4096];
+                var sb = new System.Text.StringBuilder();
+                while (true)
+                {
+                    int read = await process.StandardError.ReadAsync(buffer, 0, buffer.Length);
+                    if (read <= 0) break;
+
+                    for (int i = 0; i < read; i++)
+                    {
+                        char c = buffer[i];
+                        if (c == '\r' || c == '\n')
+                        {
+                            if (sb.Length > 0)
+                            {
+                                string line = sb.ToString();
+                                onErrorLine?.Invoke(line);
+                                sb.Clear();
+                            }
+                        }
+                        else
+                        {
+                            sb.Append(c);
+                        }
+                    }
+                }
+                if (sb.Length > 0)
+                {
+                    onErrorLine?.Invoke(sb.ToString());
+                }
+            }
+            catch (Exception ex)
+            {
+                LogService.Instance.Exception(ex,
+                    $"Ошибка обработки вывода ошибок '{binaryName}'",
+                    GetType().Name);
+            }
+        });
+
         try
         {
             // Ожидание завершения с поддержкой токена отмены
             await process.WaitForExitAsync(cancellationToken);
             // Дожидаемся завершения считывания всех логов
-            await Task.WhenAll(tcsOut.Task, tcsErr.Task);
+            await Task.WhenAll(readOutTask, readErrTask);
         }
         catch (OperationCanceledException)
         {

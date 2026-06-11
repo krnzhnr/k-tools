@@ -119,8 +119,12 @@ public sealed class AudioEncodingScript : AbstractScript
             SettingType.Checkbox,
             true,
             "Экспорт",
-            comment: "ВНИМАНИЕ! Рекомендуется оставить упаковку включенной для " +
-                     "предотвращения ошибок отображения длительности в плеерах."),
+            comment: "Рекомендуется для корректного отображения длительности в плеерах",
+            visibleIfKey: "target_format",
+            visibleIfValues: new List<string> { "QAAC", "AAC", "ALAC" },
+            requiresWarning: true,
+            warningTitle: "ВНИМАНИЕ! АЛЯРМ! НЕ ТРОЖЬ!!!111",
+            warningText: "Если вы отключите эту опцию, то плееры, проводник Windows или Telegram могут показывать неправильную длительность аудио (чаще всего - очень большую длительность вплоть до десятков часов).\n\nЭто лишь ошибка отображения — сам звук будет в полном порядке, а внутри файла ничего не сломано. Рекомендуется оставить упаковку включенной для вашего удобства и душевного спокойствия."),
 
         // 2. Группа "Параметры кодирования"
         new SettingField(
@@ -129,7 +133,9 @@ public sealed class AudioEncodingScript : AbstractScript
             SettingType.Combo,
             "127",
             "Параметры кодирования",
-            options: new List<string> { "0", "16", "32", "48", "64", "80", "96", "112", "127" }),
+            options: new List<string> { "0", "16", "32", "48", "64", "80", "96", "112", "127" },
+            visibleIfKey: "target_format",
+            visibleIfValues: new List<string> { "QAAC" }),
 
         new SettingField(
             "bitrate",
@@ -137,7 +143,9 @@ public sealed class AudioEncodingScript : AbstractScript
             SettingType.Combo,
             "320k",
             "Параметры кодирования",
-            options: new List<string> { "64k", "96k", "128k", "160k", "192k", "224k", "256k", "320k", "448k", "640k" }),
+            options: new List<string> { "64k", "96k", "128k", "160k", "192k", "224k", "256k", "320k", "448k", "640k" },
+            visibleIfKey: "target_format",
+            visibleIfValues: new List<string> { "MP3", "AAC", "OGG", "AC3", "EAC3", "DTS", "WMA", "OPUS", "ADPCM" }),
 
         new SettingField(
             "compression",
@@ -145,7 +153,9 @@ public sealed class AudioEncodingScript : AbstractScript
             SettingType.Combo,
             "5",
             "Параметры кодирования",
-            options: Enumerable.Range(0, 13).Select(i => i.ToString()).ToList()),
+            options: Enumerable.Range(0, 13).Select(i => i.ToString()).ToList(),
+            visibleIfKey: "target_format",
+            visibleIfValues: new List<string> { "FLAC", "WavPack" }),
 
         new SettingField(
             "wav_bit_depth",
@@ -153,7 +163,9 @@ public sealed class AudioEncodingScript : AbstractScript
             SettingType.Combo,
             "24-bit",
             "Параметры кодирования",
-            options: WavBitDepths.Keys.ToList()),
+            options: WavBitDepths.Keys.ToList(),
+            visibleIfKey: "target_format",
+            visibleIfValues: new List<string> { "WAV" }),
 
         // 3. Группа "Общие"
         new SettingField(
@@ -246,7 +258,11 @@ public sealed class AudioEncodingScript : AbstractScript
                 if (formatProp.TryGetProperty("duration", out var durProp))
                 {
                     if (durProp.ValueKind == JsonValueKind.String &&
-                        double.TryParse(durProp.GetString(), out double d))
+                        double.TryParse(
+                            durProp.GetString(),
+                            System.Globalization.NumberStyles.Any,
+                            System.Globalization.CultureInfo.InvariantCulture,
+                            out double d))
                     {
                         duration = d;
                     }
@@ -289,6 +305,13 @@ public sealed class AudioEncodingScript : AbstractScript
                 outputPath: outputFilePath,
                 tvbr: tvbr,
                 adts: adts,
+                totalDuration: duration,
+                onProgress: progressInfo =>
+                {
+                    string speedStr = progressInfo.Speed > 0 ? $"{progressInfo.Speed:F1}x" : "н/д";
+                    string msg = $"Кодирование QAAC | {progressInfo.Percent:F1}% | Скорость: {speedStr}";
+                    progressCallback(fileIndex, totalCount, msg, progressInfo.Percent);
+                },
                 cancellationToken: cts.Token);
 
             while (!qaacTask.IsCompleted)

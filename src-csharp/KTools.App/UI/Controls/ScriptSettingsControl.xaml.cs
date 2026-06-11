@@ -16,6 +16,17 @@ namespace KTools_App.UI.Controls;
 /// </summary>
 public sealed partial class ScriptSettingsControl : UserControl
 {
+    private readonly List<(SettingField Field, FrameworkElement Element)> _generatedElements = new();
+
+    private class GroupVisual
+    {
+        public StackPanel GroupPanel { get; set; } = null!;
+        public Border CardBorder { get; set; } = null!;
+        public List<FrameworkElement> Elements { get; set; } = new();
+    }
+    private readonly List<GroupVisual> _groups = new();
+    private bool _isInternalCheckBoxUpdate;
+
     public ScriptSettingsControl()
     {
         InitializeComponent();
@@ -27,6 +38,8 @@ public sealed partial class ScriptSettingsControl : UserControl
     public void GenerateSettingsUI(AbstractScript script)
     {
         SettingsContainer.Children.Clear();
+        _generatedElements.Clear();
+        _groups.Clear();
 
         if (script.SettingsSchema == null ||
             script.SettingsSchema.Count == 0)
@@ -57,8 +70,8 @@ public sealed partial class ScriptSettingsControl : UserControl
             // Создаем визуальный контейнер для группы настроек
             var groupPanel = new StackPanel
             {
-                Spacing = 8,
-                Margin = new Thickness(0, 8, 0, 16),
+                Spacing = 6,
+                Margin = new Thickness(0),
                 HorizontalAlignment = HorizontalAlignment.Stretch
             };
 
@@ -70,7 +83,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                 FontWeight = Microsoft.UI.Text.FontWeights.Bold,
                 Foreground = (Brush)Application.Current.Resources[
                     "TextFillColorPrimaryBrush"],
-                Margin = new Thickness(0, 0, 0, 8)
+                Margin = new Thickness(0)
             };
             groupPanel.Children.Add(groupTitle);
 
@@ -85,7 +98,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                 CornerRadius = new CornerRadius(8),
                 Padding = new Thickness(16, 16, 16, 16),
                 HorizontalAlignment = HorizontalAlignment.Stretch,
-                Margin = new Thickness(0, 0, 0, 16)
+                Margin = new Thickness(0)
             };
 
             var cardContentStack = new StackPanel
@@ -94,6 +107,12 @@ public sealed partial class ScriptSettingsControl : UserControl
                 HorizontalAlignment = HorizontalAlignment.Stretch
             };
             cardBorder.Child = cardContentStack;
+
+            var groupVisual = new GroupVisual
+            {
+                GroupPanel = groupPanel,
+                CardBorder = cardBorder
+            };
 
             // Наполняем карточку параметрами группы
             foreach (var field in group)
@@ -147,14 +166,50 @@ public sealed partial class ScriptSettingsControl : UserControl
                     };
 
                     checkBox.Checked += (s, e) =>
+                    {
+                        if (_isInternalCheckBoxUpdate) return;
                         SettingsManager.Instance.SetSetting(
                             settingsGroup, field.Key, true);
+                        UpdateVisibility(settingsGroup);
+                    };
 
-                    checkBox.Unchecked += (s, e) =>
+                    checkBox.Unchecked += async (s, e) =>
+                    {
+                        if (_isInternalCheckBoxUpdate) return;
+
+                        if (field.RequiresWarning)
+                        {
+                            var xamlRoot = this.XamlRoot ?? checkBox.XamlRoot;
+                            if (xamlRoot != null)
+                            {
+                                var dialog = new ContentDialog
+                                {
+                                    Title = field.WarningTitle ?? "Предупреждение",
+                                    Content = field.WarningText ?? "Вы действительно хотите отключить этот параметр?",
+                                    PrimaryButtonText = "Я понимаю",
+                                    CloseButtonText = "Отмена",
+                                    XamlRoot = xamlRoot
+                                };
+
+                                var result = await dialog.ShowAsync();
+                                if (result != ContentDialogResult.Primary)
+                                {
+                                    _isInternalCheckBoxUpdate = true;
+                                    checkBox.IsChecked = true;
+                                    _isInternalCheckBoxUpdate = false;
+                                    return;
+                                }
+                            }
+                        }
+
                         SettingsManager.Instance.SetSetting(
                             settingsGroup, field.Key, false);
+                        UpdateVisibility(settingsGroup);
+                    };
 
                     cardContentStack.Children.Add(checkBox);
+                    _generatedElements.Add((field, checkBox));
+                    groupVisual.Elements.Add(checkBox);
                     continue;
                 }
 
@@ -171,7 +226,11 @@ public sealed partial class ScriptSettingsControl : UserControl
                     { Width = GridLength.Auto });
 
                 var textStack = new StackPanel 
-                    { Spacing = 2, Margin = new Thickness(0, 0, 16, 0) };
+                { 
+                    Spacing = 2, 
+                    Margin = new Thickness(0, 0, 16, 0),
+                    VerticalAlignment = VerticalAlignment.Center 
+                };
 
                 textStack.Children.Add(new TextBlock
                 {
@@ -211,8 +270,11 @@ public sealed partial class ScriptSettingsControl : UserControl
                             VerticalAlignment = VerticalAlignment.Center
                         };
                         textBox.LostFocus += (s, e) =>
+                        {
                             SettingsManager.Instance.SetSetting(
                                 settingsGroup, field.Key, textBox.Text);
+                            UpdateVisibility(settingsGroup);
+                        };
                         inputControl = textBox;
                         break;
 
@@ -238,6 +300,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                                     settingsGroup,
                                     field.Key,
                                     (int)numberBox.Value);
+                                UpdateVisibility(settingsGroup);
                             }
                         };
                         inputControl = numberBox;
@@ -273,6 +336,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                                     settingsGroup,
                                     field.Key,
                                     comboBox.SelectedItem.ToString());
+                                UpdateVisibility(settingsGroup);
                             }
                         };
 
@@ -301,11 +365,56 @@ public sealed partial class ScriptSettingsControl : UserControl
                     Grid.SetColumn(inputControl, 1);
                     rowGrid.Children.Add(inputControl);
                     cardContentStack.Children.Add(rowGrid);
+                    _generatedElements.Add((field, rowGrid));
+                    groupVisual.Elements.Add(rowGrid);
                 }
             }
 
             groupPanel.Children.Add(cardBorder);
             SettingsContainer.Children.Add(groupPanel);
+            _groups.Add(groupVisual);
+        }
+
+        UpdateVisibility(settingsGroup);
+    }
+
+    /// <summary>
+    /// Обновляет видимость полей настроек и групп на основе управляющих условий VisibleIf.
+    /// </summary>
+    private void UpdateVisibility(string settingsGroup)
+    {
+        // 1. Обновляем видимость отдельных элементов настроек
+        foreach (var item in _generatedElements)
+        {
+            if (string.IsNullOrEmpty(item.Field.VisibleIfKey) || item.Field.VisibleIfValues == null)
+            {
+                item.Element.Visibility = Visibility.Visible;
+                continue;
+            }
+
+            string controlValue = SettingsManager.Instance.GetSetting(
+                settingsGroup,
+                item.Field.VisibleIfKey,
+                string.Empty);
+
+            bool isVisible = false;
+            foreach (var val in item.Field.VisibleIfValues)
+            {
+                if (val.Equals(controlValue, StringComparison.OrdinalIgnoreCase))
+                {
+                    isVisible = true;
+                    break;
+                }
+            }
+
+            item.Element.Visibility = isVisible ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        // 2. Обновляем видимость целых групп настроек (StackPanel)
+        foreach (var group in _groups)
+        {
+            bool hasVisibleElements = group.Elements.Any(e => e.Visibility == Visibility.Visible);
+            group.GroupPanel.Visibility = hasVisibleElements ? Visibility.Visible : Visibility.Collapsed;
         }
     }
 }

@@ -58,7 +58,7 @@ public sealed class FFmpegRunner : AbstractProcessRunner
             "-hide_banner",
             "-loglevel", "info",
             "-stats",
-            "-stats_period", "0.5",
+            "-stats_period", "0.1",
             overwriteFlag
         };
 

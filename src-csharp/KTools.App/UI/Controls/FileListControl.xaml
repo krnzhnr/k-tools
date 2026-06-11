@@ -18,12 +18,23 @@
           Background="Transparent">
         
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
+        <!-- Предупреждение о правах администратора (влияет на Drag & Drop) -->
+        <InfoBar Grid.Row="0"
+                 x:Name="AdminWarningBar"
+                 Severity="Warning"
+                 Title="Запуск от имени администратора"
+                 Message="Перетаскивание файлов (Drag-and-Drop) заблокировано безопасностью Windows из-за повышенных привилегий приложения. Пожалуйста, используйте кнопку «Добавить файлы» ниже."
+                 IsOpen="False"
+                 IsClosable="True"
+                 Margin="0,0,0,12" />
+        
         <!-- Пустая панель: когда файлы не выбраны -->
-        <Border Grid.Row="0" 
+        <Border Grid.Row="1" 
                 x:Name="EmptyPanel"
                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                 BorderThickness="1"
@@ -38,12 +49,14 @@
                              Foreground="{ThemeResource TextFillColorSecondaryBrush}" 
                              Width="48" 
                              Height="48" />
-                <TextBlock Text="Перетащите файлы сюда или используйте кнопку ниже" 
+                <TextBlock x:Name="DragDropPromptTextBlock"
+                            Text="Перетащите файлы сюда или используйте кнопку ниже" 
                             FontSize="14" 
                             FontWeight="SemiBold"
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                             HorizontalAlignment="Center" />
-                <TextBlock Text="Поддерживаются файлы медиаформатов для выбранного скрипта" 
+                <TextBlock x:Name="DragDropSubPromptTextBlock"
+                            Text="Поддерживаются файлы медиаформатов для выбранного скрипта" 
                             FontSize="11" 
                             Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                             HorizontalAlignment="Center" />
@@ -51,7 +64,7 @@
         </Border>
 
         <!-- Список файлов -->
-        <ListView Grid.Row="0"
+        <ListView Grid.Row="1"
                   x:Name="FilesListView"
                   Visibility="Collapsed"
                   SelectionMode="Extended"
@@ -101,15 +114,17 @@
                             
                             <ProgressRing Value="{x:Bind Progress, Mode=OneWay}"
                                           Maximum="100"
-                                          IsIndeterminate="False"
-                                          Width="32"
-                                          Height="32"
+                                          IsIndeterminate="{x:Bind IsProgressIndeterminate, Mode=OneWay}"
+                                          IsActive="True"
+                                          Width="24"
+                                          Height="24"
                                           Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
                                           Background="{ThemeResource SystemControlBackgroundBaseLowBrush}"
                                           Visibility="{x:Bind ProgressRingVisibility, Mode=OneWay}" />
 
                             <SymbolIcon Symbol="{x:Bind StatusIcon, Mode=OneWay}"
                                         Foreground="{x:Bind StatusIconBrush, Mode=OneWay}"
+                                        Visibility="{x:Bind StatusIconVisibility, Mode=OneWay}"
                                         Width="24"
                                         Height="24"
                                         HorizontalAlignment="Center"
@@ -132,7 +147,8 @@
                                 HorizontalContentAlignment="Center"
                                 VerticalContentAlignment="Center"
                                 Click="DeleteButton_Click"
-                                ToolTipService.ToolTip="Удалить из списка">
+                                ToolTipService.ToolTip="Удалить из списка"
+                                IsEnabled="{x:Bind IsDeleteEnabled, Mode=OneWay}">
                             <FontIcon FontSize="20" Glyph="&#xE711;"
                                 HorizontalAlignment="Center"
                                 VerticalAlignment="Center"
@@ -142,17 +158,19 @@
                 </DataTemplate>
             </ListView.ItemTemplate>
         </ListView>
-
+ 
         <!-- Тулбар списка файлов снизу -->
-        <CommandBar Grid.Row="1" 
+        <CommandBar Grid.Row="2" 
                     DefaultLabelPosition="Right"
                     Background="Transparent"
                     BorderThickness="0"
                     HorizontalAlignment="Left">
-            <AppBarButton Icon="OpenFile" 
+            <AppBarButton x:Name="AddFilesButton"
+                          Icon="OpenFile" 
                           Label="Добавить файлы" 
                           Click="AddFilesButton_Click" />
-            <AppBarButton Icon="Clear" 
+            <AppBarButton x:Name="ClearListButton"
+                          Icon="Clear" 
                           Label="Очистить список" 
                           Click="ClearListButton_Click" />
         </CommandBar>

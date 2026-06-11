@@ -185,6 +185,12 @@ public sealed partial class WorkPanel : Page
 
             // По умолчанию выбираем первую вкладку «Файлы»
             nvSample.SelectedItem = SamplePage1Item;
+
+            // Инициализируем состояние кнопки запуска/отмены в соответствии с текущим состоянием обработки
+            UpdateActionButtonState(ViewModel.IsProcessing);
+
+            // Инициализируем режим блокировки списка файлов
+            FileList.IsProcessing = ViewModel.IsProcessing;
         }
     }
 
@@ -209,8 +215,19 @@ public sealed partial class WorkPanel : Page
         {
             // Блокируем контролы во время обработки
             bool isProcessing = ViewModel.IsProcessing;
-            FileList.IsEnabled = !isProcessing;
+            FileList.IsProcessing = isProcessing;
             ScriptSettings.IsEnabled = !isProcessing;
+            
+            // Синхронизируем состояние кнопки запуска/отмены при изменении статуса обработки
+            UpdateActionButtonState(isProcessing);
+        }
+        else if (e.PropertyName == nameof(WorkPanelViewModel.IsStartButtonEnabled))
+        {
+            // Обновляем доступность кнопки запуска в режиме ожидания
+            if (!ViewModel.IsProcessing)
+            {
+                ActionButton.IsEnabled = ViewModel.IsStartButtonEnabled;
+            }
         }
     }
 
@@ -278,23 +295,55 @@ public sealed partial class WorkPanel : Page
     }
 
     /// <summary>
-    /// Обработчик клика по кнопке Выполнить. Собирает настройки из UI и запускает команду ViewModel.
+    /// Обработчик клика по кнопке-переключателю (Выполнить/Отменить).
     /// </summary>
-    private void StartButton_Click(object sender, RoutedEventArgs e)
+    private void ActionButton_Click(object sender, RoutedEventArgs e)
     {
         if (_script == null) return;
 
-        var settings = ReadCurrentSettings();
-        if (_script.UseCustomWidget)
+        if (ViewModel.IsProcessing)
         {
-            _tracksControl.GetSelectedTracksAndAttachments(out var selectedTracks, out var selectedAttachments);
-            settings["selected_tracks_per_file"] = selectedTracks;
-            settings["selected_attachments_per_file"] = selectedAttachments;
+            // Если процесс запущен, выполняем его отмену
+            if (ViewModel.CancelExecutionCommand.CanExecute(null))
+            {
+                ViewModel.CancelExecutionCommand.Execute(null);
+            }
         }
-
-        if (ViewModel.StartExecutionCommand.CanExecute(settings))
+        else
         {
-            ViewModel.StartExecutionCommand.Execute(settings);
+            // Если процесс не запущен, собираем настройки из UI и запускаем команду ViewModel на выполнение
+            var settings = ReadCurrentSettings();
+            if (_script.UseCustomWidget)
+            {
+                _tracksControl.GetSelectedTracksAndAttachments(out var selectedTracks, out var selectedAttachments);
+                settings["selected_tracks_per_file"] = selectedTracks;
+                settings["selected_attachments_per_file"] = selectedAttachments;
+            }
+
+            if (ViewModel.StartExecutionCommand.CanExecute(settings))
+            {
+                ViewModel.StartExecutionCommand.Execute(settings);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Обновляет текстовое содержимое, стиль оформления и доступность кнопки-переключателя
+    /// в зависимости от того, запущена ли в данный момент обработка.
+    /// </summary>
+    private void UpdateActionButtonState(bool isProcessing)
+    {
+        if (isProcessing)
+        {
+            ActionButton.Content = "Отменить";
+            ActionButton.Style = (Style)Application.Current.Resources["DefaultButtonStyle"];
+            ActionButton.IsEnabled = true;
+        }
+        else
+        {
+            ActionButton.Content = "Выполнить";
+            ActionButton.Style = (Style)Application.Current.Resources["AccentButtonStyle"];
+            ActionButton.IsEnabled = ViewModel.IsStartButtonEnabled;
         }
     }
 

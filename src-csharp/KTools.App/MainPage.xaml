@@ -19,8 +19,8 @@
                          AlwaysShowHeader="False"
                          Loaded="NavView_Loaded"
                          SelectionChanged="NavView_SelectionChanged"
-                         PaneOpening="NavView_PaneOpening"
-                         PaneClosing="NavView_PaneClosing">
+                         PaneOpened="NavView_PaneOpened"
+                         PaneClosed="NavView_PaneClosed">
             
             <NavigationView.Resources>
                 <!-- Отключаем наложение Acrylic на панель, делая ее фон прозрачным. 
@@ -35,7 +35,7 @@
                 <NavigationViewItemHeader Content="Скрипты обработки" />
 
                 <!-- Группа: Видео -->
-                <NavigationViewItem Content="Видео" Icon="Video" x:Name="NavItemVideo">
+                <NavigationViewItem Content="Видео" Icon="Video" x:Name="NavItemVideo" SelectsOnInvoked="False">
                     <NavigationViewItem.MenuItems>
                         <NavigationViewItem Content="Кодирование видео" Tag="script:video_encoding" />
                         <NavigationViewItem Content="Конвертация контейнера" Tag="script:container_conversion" />
@@ -44,7 +44,7 @@
                 </NavigationViewItem>
 
                 <!-- Группа: Аудио -->
-                <NavigationViewItem Content="Аудио" Icon="Audio" x:Name="NavItemAudio">
+                <NavigationViewItem Content="Аудио" Icon="Audio" x:Name="NavItemAudio" SelectsOnInvoked="False">
                     <NavigationViewItem.MenuItems>
                         <NavigationViewItem Content="Кодирование аудио" Tag="script:audio_encoding" />
                         <NavigationViewItem Content="Даунмикс в Stereo" Tag="script:audio_downmix" />
@@ -54,7 +54,7 @@
                 </NavigationViewItem>
 
                 <!-- Группа: Контейнеры -->
-                <NavigationViewItem Content="Контейнеры" Icon="Share" x:Name="NavItemContainers">
+                <NavigationViewItem Content="Контейнеры" Icon="Share" x:Name="NavItemContainers" SelectsOnInvoked="False">
                     <NavigationViewItem.MenuItems>
                         <NavigationViewItem Content="Сборка MKV" Tag="script:mkv_assembly" />
                         <NavigationViewItem Content="Управление потоками" Tag="script:stream_management" />
@@ -64,7 +64,7 @@
                 </NavigationViewItem>
 
                 <!-- Группа: Субтитры -->
-                <NavigationViewItem Content="Субтитры" Icon="Font" x:Name="NavItemSubtitles">
+                <NavigationViewItem Content="Субтитры" Icon="Font" x:Name="NavItemSubtitles" SelectsOnInvoked="False">
                     <NavigationViewItem.MenuItems>
                         <NavigationViewItem Content="ASS/SRT → VTT" Tag="script:subtitles_convert" />
                     </NavigationViewItem.MenuItems>

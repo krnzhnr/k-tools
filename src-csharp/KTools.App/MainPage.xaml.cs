@@ -22,6 +22,7 @@ public sealed partial class MainPage : Page
 {
     private readonly INavigationService _navigationService;
     private string? _pendingScriptTag;
+    private bool _isSyncingNavigation;
 
     /// <summary>
     /// Предоставляет доступ к модели представления главной страницы.
@@ -86,6 +87,8 @@ public sealed partial class MainPage : Page
         NavigationView sender,
         NavigationViewSelectionChangedEventArgs args)
     {
+        if (_isSyncingNavigation) return;
+
         if (args.IsSettingsSelected)
         {
             if (ViewModel.NavigateCommand.CanExecute("settings"))
@@ -277,48 +280,36 @@ public sealed partial class MainPage : Page
             _pendingScriptTag = null;
         }
 
-        if (targetTag == "settings")
+        _isSyncingNavigation = true;
+        try
         {
-            NavView.SelectedItem = NavView.SettingsItem;
-        }
-        else
-        {
-            var item = FindNavItemByTag(NavView.MenuItems, targetTag)
-                ?? FindNavItemByTag(NavView.FooterMenuItems, targetTag);
-
-            if (item != null)
+            if (targetTag == "settings")
             {
-                if (targetTag.StartsWith("script:"))
+                NavView.SelectedItem = NavView.SettingsItem;
+            }
+            else
+            {
+                var item = FindNavItemByTag(NavView.MenuItems, targetTag)
+                    ?? FindNavItemByTag(NavView.FooterMenuItems, targetTag);
+
+                if (item != null)
                 {
                     var parentItem = FindParentItemForChildTag(
                         NavView.MenuItems, 
                         targetTag);
 
-                    if (NavView.IsPaneOpen)
+                    if (parentItem != null && NavView.IsPaneOpen)
                     {
-                        // Если панель открыта, раскрываем родительскую 
-                        // категорию и выделяем сам скрипт
-                        if (parentItem != null)
-                        {
-                            parentItem.IsExpanded = true;
-                        }
-                        NavView.SelectedItem = item;
+                        parentItem.IsExpanded = true;
                     }
-                    else
-                    {
-                        // Если панель свернута, выделяем только родительскую 
-                        // категорию, чтобы избежать открытия Flyout
-                        if (parentItem != null)
-                        {
-                            NavView.SelectedItem = parentItem;
-                        }
-                    }
-                }
-                else
-                {
+
                     NavView.SelectedItem = item;
                 }
             }
+        }
+        finally
+        {
+            _isSyncingNavigation = false;
         }
     }
 
@@ -361,28 +352,29 @@ public sealed partial class MainPage : Page
     /// Вызывается перед началом открытия боковой панели.
     /// Синхронизирует выделение и раскрывает категорию, если был выбран скрипт.
     /// </summary>
-    private void NavView_PaneOpening(NavigationView sender, object args)
+    private void NavView_PaneOpened(NavigationView sender, object args)
     {
         if (_pendingScriptTag != null)
         {
-            var item = FindNavItemByTag(NavView.MenuItems, _pendingScriptTag)
-                ?? FindNavItemByTag(NavView.FooterMenuItems, _pendingScriptTag);
+            var parentItem = FindParentItemForChildTag(
+                NavView.MenuItems, 
+                _pendingScriptTag);
 
-            if (item != null)
+            if (parentItem != null)
             {
-                var parentItem = FindParentItemForChildTag(
-                    NavView.MenuItems, 
-                    _pendingScriptTag);
-                if (parentItem != null)
+                _isSyncingNavigation = true;
+                try
                 {
                     parentItem.IsExpanded = true;
                 }
-
-                NavView.SelectedItem = item;
+                finally
+                {
+                    _isSyncingNavigation = false;
+                }
 
                 LogService.Instance.Info(
-                    $"[MainPage] При открытии панели выбор переключен на " +
-                    $"дочерний скрипт: '{item.Content}' для тега " +
+                    $"[MainPage] При открытии панели раскрыта родительская " +
+                    $"категория: '{parentItem.Content}' для тега " +
                     $"'{_pendingScriptTag}'",
                     "MainPage");
             }
@@ -390,29 +382,13 @@ public sealed partial class MainPage : Page
     }
 
     /// <summary>
-    /// Вызывается перед началом закрытия боковой панели.
-    /// Переключает выделение на родительскую категорию во избежание 
-    /// багов отрисовки.
+    /// Вызывается после полного закрытия боковой панели.
     /// </summary>
-    private void NavView_PaneClosing(
-        NavigationView sender, 
-        NavigationViewPaneClosingEventArgs args)
+    private void NavView_PaneClosed(NavigationView sender, object args)
     {
-        if (_pendingScriptTag != null)
-        {
-            var parentItem = FindParentItemForChildTag(
-                NavView.MenuItems, 
-                _pendingScriptTag);
-            if (parentItem != null)
-            {
-                NavView.SelectedItem = parentItem;
-
-                LogService.Instance.Info(
-                    $"[MainPage] При закрытии панели выбор переключен на " +
-                    $"родительскую категорию: '{parentItem.Content}'",
-                    "MainPage");
-            }
-        }
+        // В свернутом режиме не требуется программно менять SelectedItem, 
+        // так как NavigationView автоматически проецирует выделение дочернего
+        // элемента на родительскую категорию.
     }
 
     /// <summary>

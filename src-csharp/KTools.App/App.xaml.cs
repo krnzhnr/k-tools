@@ -85,8 +85,25 @@ public partial class App : Application
         try
         {
             // Инициализируем логирование при старте приложения
+            bool isAdmin = false;
+            try
+            {
+                using (var identity = System.Security.Principal.WindowsIdentity.GetCurrent())
+                {
+                    var principal = new System.Security.Principal.WindowsPrincipal(identity);
+                    isAdmin = principal.IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
+                }
+            }
+            catch (Exception ex)
+            {
+                LogService.Instance.Exception(
+                    ex,
+                    "Не удалось определить, запущено ли приложение с правами администратора",
+                    "App");
+            }
+
             LogService.Instance.Info(
-                "=== Запуск приложения K-Tools C# Edition ===",
+                $"=== Запуск приложения K-Tools C# Edition (Права администратора: {(isAdmin ? "Да" : "Нет")}) ===",
                 "App");
 
             string settingsDir = PathManager.GetSettingsDirectory();

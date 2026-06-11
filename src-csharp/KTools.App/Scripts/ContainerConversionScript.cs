@@ -148,7 +148,12 @@ public sealed class ContainerConversionScript : AbstractScript
         {
             if (formatProp.TryGetProperty("duration", out var durProp))
             {
-                if (durProp.ValueKind == JsonValueKind.String && double.TryParse(durProp.GetString(), out double d))
+                if (durProp.ValueKind == JsonValueKind.String &&
+                    double.TryParse(
+                        durProp.GetString(),
+                        System.Globalization.NumberStyles.Any,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        out double d))
                 {
                     duration = d;
                 }

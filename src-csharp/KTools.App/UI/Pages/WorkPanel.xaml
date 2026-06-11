@@ -110,22 +110,14 @@
                             Width="100"
                             Margin="0,0,12,0" />
 
-                    <!-- Кнопки Запуска и Отмены -->
+                    <!-- Единая кнопка-переключатель запуска/отмены обработки -->
                     <StackPanel Grid.Column="2" 
                                 Orientation="Horizontal" 
                                 Spacing="8" 
                                 VerticalAlignment="Center">
-                        <Button x:Name="CancelButton" 
-                                Content="Отменить" 
-                                Command="{x:Bind ViewModel.CancelExecutionCommand}"
-                                Style="{StaticResource DefaultButtonStyle}"
-                                Height="36"
-                                Visibility="{x:Bind ViewModel.IsProcessing, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
-                        
-                        <Button x:Name="StartButton" 
+                        <Button x:Name="ActionButton" 
                                 Content="Выполнить" 
-                                Click="StartButton_Click"
-                                IsEnabled="{x:Bind ViewModel.IsStartButtonEnabled, Mode=OneWay}"
+                                Click="ActionButton_Click"
                                 Style="{StaticResource AccentButtonStyle}"
                                 Width="140"
                                 Height="36" />

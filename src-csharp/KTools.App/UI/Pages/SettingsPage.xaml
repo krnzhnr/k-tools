@@ -147,14 +147,14 @@
                 </community:SettingsCard>
             </StackPanel>
 
-            <!-- Раздел: Журналирование -->
+            <!-- Раздел: Логирование -->
             <StackPanel Spacing="8">
                 <TextBlock
                     Margin="0,8,0,8"
                     FontSize="16"
                     FontWeight="Bold"
                     Foreground="{ThemeResource TextFillColorPrimaryBrush}"
-                    Text="Журналирование" />
+                    Text="Логирование" />
 
                 <!-- Отображать ли вкладку логов -->
                 <community:SettingsCard
@@ -171,8 +171,8 @@
                 <!-- Выбор папки для сохранения логов -->
                 <community:SettingsCard
                     Padding="16,12,16,12"
-                    Description="Каталог на диске для автоматического сохранения файлов журнала событий программы"
-                    Header="Путь к папке журналов">
+                    Description="Каталог на диске для автоматического сохранения файлов логов программы"
+                    Header="Путь к папке логов">
                     <StackPanel
                         Orientation="Horizontal"
                         Spacing="8">

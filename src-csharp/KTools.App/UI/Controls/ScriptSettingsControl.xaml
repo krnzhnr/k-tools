@@ -12,7 +12,7 @@
 
     <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,0,8,0">
         <StackPanel x:Name="SettingsContainer" 
-                    Spacing="16" 
+                    Spacing="12" 
                     Padding="4,4,12,24" 
                     HorizontalAlignment="Stretch">
             <!-- Динамические группы настроек будут вставляться сюда программно -->
