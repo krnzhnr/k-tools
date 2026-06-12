@@ -37,36 +37,36 @@
                 <!-- Группа: Видео -->
                 <NavigationViewItem Content="Видео" Icon="Video" x:Name="NavItemVideo" SelectsOnInvoked="False">
                     <NavigationViewItem.MenuItems>
-                        <NavigationViewItem Content="Кодирование видео" Tag="script:video_encoding" />
-                        <NavigationViewItem Content="Конвертация контейнера" Tag="script:container_conversion" />
-                        <NavigationViewItem Content="Очистка метаданных" Tag="script:metadata_cleanup" />
+                        <NavigationViewItem Content="Кодирование видео" Tag="script:video_encoding" Icon="Video" />
+                        <NavigationViewItem Content="Конвертация контейнера" Tag="script:container_conversion" Icon="Forward" />
+                        <NavigationViewItem Content="Очистка метаданных" Tag="script:metadata_cleanup" Icon="Delete" />
                     </NavigationViewItem.MenuItems>
                 </NavigationViewItem>
 
                 <!-- Группа: Аудио -->
                 <NavigationViewItem Content="Аудио" Icon="Audio" x:Name="NavItemAudio" SelectsOnInvoked="False">
                     <NavigationViewItem.MenuItems>
-                        <NavigationViewItem Content="Кодирование аудио" Tag="script:audio_encoding" />
-                        <NavigationViewItem Content="Даунмикс в Stereo" Tag="script:audio_downmix" />
-                        <NavigationViewItem Content="Изменение скорости" Tag="script:audio_speed" />
-                        <NavigationViewItem Content="Разделение каналов" Tag="script:audio_channels" />
+                        <NavigationViewItem Content="Кодирование аудио" Tag="script:audio_encoding" Icon="Audio" />
+                        <NavigationViewItem Content="Даунмикс в Stereo" Tag="script:audio_downmix" Icon="Volume" />
+                        <NavigationViewItem Content="Изменение скорости" Tag="script:audio_speed" Icon="Sync" />
+                        <NavigationViewItem Content="Разделение каналов" Tag="script:audio_channels" Icon="Map" />
                     </NavigationViewItem.MenuItems>
                 </NavigationViewItem>
 
                 <!-- Группа: Контейнеры -->
                 <NavigationViewItem Content="Контейнеры" Icon="Share" x:Name="NavItemContainers" SelectsOnInvoked="False">
                     <NavigationViewItem.MenuItems>
-                        <NavigationViewItem Content="Сборка MKV" Tag="script:mkv_assembly" />
-                        <NavigationViewItem Content="Управление потоками" Tag="script:stream_management" />
-                        <NavigationViewItem Content="Замена потоков" Tag="script:stream_replacement" />
-                        <NavigationViewItem Content="Разборка контейнера" Tag="script:container_demux" />
+                        <NavigationViewItem Content="Сборка MKV" Tag="script:mkv_assembly" Icon="Add" />
+                        <NavigationViewItem Content="Управление потоками" Tag="script:stream_management" Icon="List" />
+                        <NavigationViewItem Content="Замена потоков" Tag="script:stream_replacement" Icon="Switch" />
+                        <NavigationViewItem Content="Разборка контейнера" Tag="script:container_demux" Icon="Download" />
                     </NavigationViewItem.MenuItems>
                 </NavigationViewItem>
 
                 <!-- Группа: Субтитры -->
                 <NavigationViewItem Content="Субтитры" Icon="Font" x:Name="NavItemSubtitles" SelectsOnInvoked="False">
                     <NavigationViewItem.MenuItems>
-                        <NavigationViewItem Content="ASS/SRT → VTT" Tag="script:subtitles_convert" />
+                        <NavigationViewItem Content="ASS/SRT → VTT" Tag="script:subtitles_convert" Icon="Font" />
                     </NavigationViewItem.MenuItems>
                 </NavigationViewItem>
             </NavigationView.MenuItems>

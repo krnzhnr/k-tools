@@ -118,6 +118,7 @@ public sealed partial class TrackSelectionControl : UserControl
     private bool _isResettingFilters;
     private bool _isUpdatingSelection;
     private bool _hasShownScrollTip;
+    private bool _isUnloaded;
 
     public TrackSelectionControl()
     {
@@ -132,6 +133,7 @@ public sealed partial class TrackSelectionControl : UserControl
     /// </summary>
     private void TrackSelectionControl_Loaded(object sender, RoutedEventArgs e)
     {
+        _isUnloaded = false;
         LogService.Instance.Info(
             "Загрузка виджета выбора дорожек: " +
             "восстановление зарегистрированных подписок и перестроение дерева",
@@ -1136,6 +1138,26 @@ public sealed partial class TrackSelectionControl : UserControl
             }
             _isUpdatingSelection = false;
 
+            // Явно сохраняем измененное состояние выбора в ActiveScript
+            if (ActiveScript != null)
+            {
+                GetSelectedTracksAndAttachments(
+                    out var currentTracks, 
+                    out var currentAttachments);
+
+                ActiveScript.SelectedTrackIds.Clear();
+                foreach (var kvp in currentTracks)
+                {
+                    ActiveScript.SelectedTrackIds[kvp.Key] = kvp.Value;
+                }
+
+                ActiveScript.SelectedAttachmentIds.Clear();
+                foreach (var kvp in currentAttachments)
+                {
+                    ActiveScript.SelectedAttachmentIds[kvp.Key] = kvp.Value;
+                }
+            }
+
             UpdateSelectAllCheckBoxState();
             UpdateTabCounts();
         }
@@ -1377,7 +1399,7 @@ public sealed partial class TrackSelectionControl : UserControl
     /// </summary>
     private void TracksTreeView_SelectionChanged(TreeView sender, TreeViewSelectionChangedEventArgs args)
     {
-        if (_isUpdatingSelection) return;
+        if (_isUpdatingSelection || _isUnloaded || !IsLoaded) return;
 
         _isUpdatingSelection = true;
         try
@@ -1636,6 +1658,7 @@ public sealed partial class TrackSelectionControl : UserControl
         object sender, 
         RoutedEventArgs e)
     {
+        _isUnloaded = true;
         LogService.Instance.Info(
             "Выгрузка виджета выбора дорожек: " +
             "освобождение зарегистрированных подписок",
