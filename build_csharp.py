@@ -120,7 +120,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 
 [Components]
 Name: "main"; Description: "Основные файлы K-Tools"; Types: full compact custom; Flags: fixed
-Name: "decoders"; Description: "Декодеры eac3to (требуются для работы с AAC/DTS/AC3)"; Types: full; Flags: checkedonce
+Name: "decoders"; Description: "Декодеры eac3to (требуются для работы с AAC/DTS/AC3)"; Types: full
 
 [Tasks]
 Name: "desktopicon"; Description: "{{cm:CreateDesktopIcon}}"; \\
@@ -131,7 +131,7 @@ GroupDescription: "{{cm:AdditionalIcons}}"; Flags: unchecked
 Source: "{publish_p}\\*"; DestDir: "{{app}}"; \\
 Flags: ignoreversion recursesubdirs createallsubdirs
 ; Установщик декодеров eac3to
-Source: "{cwd}\\assets\\setup\\eac3to Decoder Pack 1.4.exe"; DestDir: "{{tmp}}"; \\
+Source: "{cwd}\\bin\\eac3to_decoders\\eac3to Decoder Pack 1.4.exe"; DestDir: "{{tmp}}"; \\
 Flags: deleteafterinstall; Components: decoders
 
 [Icons]
