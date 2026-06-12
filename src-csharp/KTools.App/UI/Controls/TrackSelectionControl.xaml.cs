@@ -122,7 +122,32 @@ public sealed partial class TrackSelectionControl : UserControl
     public TrackSelectionControl()
     {
         InitializeComponent();
+        Loaded += TrackSelectionControl_Loaded;
         Unloaded += TrackSelectionControl_Unloaded;
+    }
+
+    /// <summary>
+    /// Восстанавливает подписки на события при загрузке элемента управления в визуальное дерево
+    /// и запускает перестроение дерева дорожек для отражения актуального состояния файлов.
+    /// </summary>
+    private void TrackSelectionControl_Loaded(object sender, RoutedEventArgs e)
+    {
+        LogService.Instance.Info(
+            "Загрузка виджета выбора дорожек: " +
+            "восстановление зарегистрированных подписок и перестроение дерева",
+            "TrackSelectionControl");
+
+        if (_files != null)
+        {
+            _files.CollectionChanged -= OnFilesCollectionChanged;
+            _files.CollectionChanged += OnFilesCollectionChanged;
+            
+            // Восстанавливаем индивидуальные подписки на файлы
+            UnsubscribeFromItems();
+            SubscribeToItems();
+
+            RebuildTree();
+        }
     }
 
     /// <summary>
