@@ -204,6 +204,14 @@ public sealed class AudioSpeedScript : AbstractScript
         using var cts = new CancellationTokenSource();
         var eac3toTask = Eac3toRunner.Instance.RunAsync(
             eac3toArgs,
+            onProgress: pct =>
+            {
+                progressCallback(
+                    fileIndex,
+                    totalCount,
+                    $"Изменение скорости через eac3to... {pct:0}%",
+                    pct);
+            },
             cancellationToken: cts.Token);
 
         while (!eac3toTask.IsCompleted)

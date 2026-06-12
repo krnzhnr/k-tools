@@ -31,11 +31,13 @@ public sealed class Eac3toRunner : AbstractProcessRunner
     /// </summary>
     /// <param name="args">Список аргументов для запуска.</param>
     /// <param name="workingDir">Рабочая папка для запуска (если null, используется папка бинарника).</param>
+    /// <param name="onProgress">Колбек для передачи прогресса (процентов от 0 до 100).</param>
     /// <param name="cancellationToken">Токен отмены задачи.</param>
     /// <returns>True при успешном завершении (код 0), иначе false.</returns>
     public async Task<bool> RunAsync(
         List<string> args,
         string? workingDir = null,
+        Action<double>? onProgress = null,
         CancellationToken cancellationToken = default)
     {
         string arguments = string.Join(" ", args);
@@ -53,6 +55,15 @@ public sealed class Eac3toRunner : AbstractProcessRunner
                 lock (stdoutLines)
                 {
                     stdoutLines.Add(line);
+                }
+
+                if (onProgress != null)
+                {
+                    double? percent = Eac3toOutputParser.ParseLine(line);
+                    if (percent.HasValue)
+                    {
+                        onProgress(percent.Value);
+                    }
                 }
             },
             onErrorLine: line =>
