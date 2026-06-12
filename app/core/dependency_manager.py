@@ -5,6 +5,8 @@
 и распаковку внешних бинарных зависимостей (bin/).
 """
 
+import ctypes
+import ctypes.wintypes
 import logging
 import tarfile
 import urllib.error
@@ -25,6 +27,31 @@ from app.core.path_utils import _get_base_dir
 from app.core.singleton import SingletonMeta
 
 logger = logging.getLogger(__name__)
+
+
+class SHELLEXECUTEINFO(ctypes.Structure):
+    """Структура для работы с ShellExecuteExW."""
+
+    _fields_ = [
+        ("cbSize", ctypes.wintypes.DWORD),
+        ("fMask", ctypes.c_ulong),
+        ("hwnd", ctypes.wintypes.HWND),
+        ("lpVerb", ctypes.wintypes.LPCWSTR),
+        ("lpFile", ctypes.wintypes.LPCWSTR),
+        ("lpParameters", ctypes.wintypes.LPCWSTR),
+        ("lpDirectory", ctypes.wintypes.LPCWSTR),
+        ("nShow", ctypes.c_int),
+        ("hInstApp", ctypes.wintypes.HINSTANCE),
+        ("lpIDList", ctypes.c_void_p),
+        ("lpClass", ctypes.wintypes.LPCWSTR),
+        ("hkeyClass", ctypes.wintypes.HKEY),
+        ("dwHotKey", ctypes.wintypes.DWORD),
+        ("hIconOrMonitor", ctypes.c_void_p),
+        ("hProcess", ctypes.wintypes.HANDLE),
+    ]
+
+
+SEE_MASK_NOCLOSEPROCESS = 0x00000040
 
 
 class DependencyStatus(Enum):
@@ -88,6 +115,15 @@ class DependencyManager(metaclass=SingletonMeta):
         Returns:
             True, если контрольный файл существует.
         """
+        if dep.key == "eac3to_decoders":
+            import os
+            # Проверяем DirectShow-фильтр Nero Audio Decoder
+            # в системных папках Windows
+            windir = os.environ.get("SystemRoot", "C:\\Windows")
+            syswow64 = os.path.join(windir, "SysWOW64", "NeAudio2.ax")
+            system32 = os.path.join(windir, "System32", "NeAudio2.ax")
+            return os.path.exists(syswow64) or os.path.exists(system32)
+
         verify_path = (
             self._bin_dir / dep.subfolder / dep.verify_binary
         )
@@ -197,6 +233,58 @@ class DependencyManager(metaclass=SingletonMeta):
             for dep in DEPENDENCY_REGISTRY
         )
 
+    def _get_eac3to_decoders_uninstall_string(self) -> str | None:
+        """Найти строку деинсталляции eac3to Decoder Pack в реестре."""
+        import winreg
+
+        registry_paths = [
+            r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+            r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
+        ]
+
+        for path in registry_paths:
+            try:
+                with winreg.OpenKey(
+                    winreg.HKEY_LOCAL_MACHINE, path
+                ) as key:
+                    # Попытка прямого поиска по известному GUID инсталлятора
+                    try:
+                        guid = "{167887DA-6C4F-4265-8139-8750A543FD52}_is1"
+                        with winreg.OpenKey(key, guid) as subkey:
+                            val, _ = winreg.QueryValueEx(
+                                subkey, "UninstallString"
+                            )
+                            if val:
+                                return str(val)
+                    except OSError:
+                        pass
+
+                    # Резервный поиск сканированием разделов по DisplayName
+                    info = winreg.QueryInfoKey(key)
+                    for i in range(info[0]):
+                        try:
+                            name = winreg.EnumKey(key, i)
+                            with winreg.OpenKey(key, name) as subkey:
+                                try:
+                                    disp, _ = winreg.QueryValueEx(
+                                        subkey, "DisplayName"
+                                    )
+                                    if disp and "eac3to Decoder Pack" in str(
+                                        disp
+                                    ):
+                                        val, _ = winreg.QueryValueEx(
+                                            subkey, "UninstallString"
+                                        )
+                                        if val:
+                                            return str(val)
+                                except OSError:
+                                    pass
+                        except OSError:
+                            pass
+            except OSError:
+                pass
+        return None
+
     def remove_dependency(self, key: str) -> bool:
         """Удалить установленную зависимость.
 
@@ -215,6 +303,229 @@ class DependencyManager(metaclass=SingletonMeta):
                 key,
             )
             return False
+
+        if key == "eac3to_decoders":
+            logger.info(
+                "Запрос на удаление декодеров eac3to: "
+                "использование оригинального деинсталлятора"
+            )
+            uninstall_str = self._get_eac3to_decoders_uninstall_string()
+            uninstalled_via_setup = False
+            if uninstall_str:
+                import os
+                exe_path = uninstall_str.strip().strip('"')
+                if os.path.exists(exe_path):
+                    logger.info(
+                        "Запуск оригинального деинсталлятора: %s",
+                        exe_path,
+                    )
+
+                    sei = SHELLEXECUTEINFO()
+                    sei.cbSize = ctypes.sizeof(SHELLEXECUTEINFO)
+                    sei.fMask = SEE_MASK_NOCLOSEPROCESS
+                    sei.lpVerb = "runas"
+                    sei.lpFile = exe_path
+                    sei.lpParameters = (
+                        "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART"
+                    )
+                    sei.nShow = 1
+
+                    try:
+                        res = ctypes.windll.shell32.ShellExecuteExW(
+                            ctypes.byref(sei)
+                        )
+                        if res:
+                            if sei.hProcess:
+                                INFINITE = 0xFFFFFFFF
+                                ctypes.windll.kernel32.WaitForSingleObject(
+                                    sei.hProcess, INFINITE
+                                )
+                                ctypes.windll.kernel32.CloseHandle(
+                                    sei.hProcess
+                                )
+                                logger.info(
+                                    "Оригинальный деинсталлятор завершил"
+                                    " работу"
+                                )
+                                uninstalled_via_setup = True
+                    except Exception as e:
+                        logger.error(
+                            "Ошибка при запуске оригинального "
+                            "деинсталлятора: %s",
+                            e,
+                        )
+
+            if not uninstalled_via_setup:
+                logger.warning(
+                    "Официальный деинсталлятор не найден. Запуск "
+                    "резервного метода безопасной ручной деинсталляции"
+                )
+                import os
+                import tempfile
+                import uuid
+
+                # Создаем уникальный временный файл .bat
+                temp_dir = tempfile.gettempdir()
+                bat_filename = (
+                    f"uninstall_eac3to_decoders_"
+                    f"{uuid.uuid4().hex}.bat"
+                )
+                temp_bat_path = os.path.join(temp_dir, bat_filename)
+
+                sys_dirs = [
+                    "%SystemRoot%\\SysWOW64",
+                    "%SystemRoot%\\System32",
+                ]
+                filters = [
+                    "NeAudio2.ax",
+                    "ASAudioHD.ax",
+                    "CinemasterAudio.dll",
+                ]
+                files = [
+                    "NeAudio2.ax",
+                    "NeDtsDec.dll",
+                    "NeEacDec.dll",
+                    "AdvrCntr2.dll",
+                    "ASAudioHD.ax",
+                    "checkactivate.dll",
+                    "MagCore.dll",
+                    "MagPCMac.dll",
+                    "MagUIEngine.dll",
+                    "MagUIInter.dll",
+                    "dtsdecoderdll.dll",
+                    "CinemasterAudio.dll",
+                ]
+
+                commands = [
+                    "@echo off",
+                    "chcp 65001 > nul",
+                    "",
+                    ":: Разрегистрация DirectShow-фильтров",
+                ]
+                for d in sys_dirs:
+                    for f_name in filters:
+                        commands.append(
+                            f'if exist "{d}\\{f_name}" '
+                            f'"{d}\\regsvr32.exe" /u /s '
+                            f'"{d}\\{f_name}"'
+                        )
+
+                commands.extend(["", ":: Удаление файлов декодеров"])
+                for d in sys_dirs:
+                    for f_name in files:
+                        commands.append(
+                            f'if exist "{d}\\{f_name}" '
+                            f'del /f /q "{d}\\{f_name}"'
+                        )
+
+                commands.extend(
+                    [
+                        "",
+                        ":: Удаление файлов из директории Windows",
+                        (
+                            'if exist "%SystemRoot%\\neroAacEnc.exe" '
+                            'del /f /q "%SystemRoot%\\neroAacEnc.exe"'
+                        ),
+                        (
+                            'if exist "%SystemRoot%\\surcode" '
+                            'rd /s /q "%SystemRoot%\\surcode"'
+                        ),
+                        "",
+                        ":: Очистка разделов реестра",
+                        (
+                            "reg delete "
+                            '"HKLM\\SOFTWARE\\Ahead\\Installation\\'
+                            'Families\\Nero 7" /f >nul 2>&1'
+                        ),
+                        (
+                            "reg delete "
+                            '"HKLM\\SOFTWARE\\Ahead\\Installation\\'
+                            'Families\\Plugins" /f >nul 2>&1'
+                        ),
+                        (
+                            "reg delete "
+                            '"HKLM\\SOFTWARE\\Sonic\\CommonMPEGDecoders\\'
+                            '4.2\\AudioDecoder" /f >nul 2>&1'
+                        ),
+                        (
+                            "reg delete "
+                            '"HKLM\\SOFTWARE\\Minnetonka Audio Software\\'
+                            'SurCode DVD-DTS" /f >nul 2>&1'
+                        ),
+                        (
+                            "reg delete "
+                            '"HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\'
+                            "Windows\\CurrentVersion\\Uninstall\\"
+                            '{167887DA-6C4F-4265-8139-8750A543FD52}_is1" '
+                            "/f >nul 2>&1"
+                        ),
+                        (
+                            "reg delete "
+                            '"HKLM\\SOFTWARE\\Microsoft\\Windows\\'
+                            "CurrentVersion\\Uninstall\\"
+                            '{167887DA-6C4F-4265-8139-8750A543FD52}_is1" '
+                            "/f >nul 2>&1"
+                        ),
+                    ]
+                )
+
+                try:
+                    # Записываем с кодировкой UTF-8
+                    with open(temp_bat_path, "w", encoding="utf-8") as f:
+                        f.write("\n".join(commands))
+
+                    logger.info(
+                        "Запуск временного батника удаления %s "
+                        "с правами администратора",
+                        temp_bat_path,
+                    )
+
+                    sei = SHELLEXECUTEINFO()
+                    sei.cbSize = ctypes.sizeof(SHELLEXECUTEINFO)
+                    sei.fMask = SEE_MASK_NOCLOSEPROCESS
+                    sei.lpVerb = "runas"
+                    sei.lpFile = "cmd.exe"
+                    sei.lpParameters = f'/c "{temp_bat_path}"'
+                    sei.nShow = 0  # Скрытое окно
+
+                    res = ctypes.windll.shell32.ShellExecuteExW(
+                        ctypes.byref(sei)
+                    )
+                    if res:
+                        if sei.hProcess:
+                            INFINITE = 0xFFFFFFFF
+                            ctypes.windll.kernel32.WaitForSingleObject(
+                                sei.hProcess, INFINITE
+                            )
+                            ctypes.windll.kernel32.CloseHandle(
+                                sei.hProcess
+                            )
+                        logger.info(
+                            "Резервное удаление декодеров eac3to "
+                            "успешно завершено"
+                        )
+                    else:
+                        raise RuntimeError(
+                            "Не удалось запустить процесс удаления "
+                            "с правами администратора."
+                        )
+                except Exception as e:
+                    logger.error(
+                        "Ошибка при резервном удалении декодеров "
+                        "Nero: %s",
+                        e,
+                    )
+                finally:
+                    if os.path.exists(temp_bat_path):
+                        try:
+                            os.unlink(temp_bat_path)
+                        except Exception as e:
+                            logger.warning(
+                                "Не удалось удалить временный батник "
+                                "%s: %s",
+                                temp_bat_path,
+                                e,
+                            )
 
         dep_dir = self._bin_dir / dep.subfolder
         if not dep_dir.exists():
@@ -352,6 +663,44 @@ class DependencyDownloadWorker(QThread):
 
             # Удаление архива
             tmp_path.unlink(missing_ok=True)
+
+            # Если устанавливаем декодеры eac3to, нужно запустить
+            # тихую установку с повышением прав
+            if key == "eac3to_decoders":
+                setup_path = (
+                    self._bin_dir
+                    / self._dep.subfolder
+                    / self._dep.verify_binary
+                )
+                if setup_path.exists():
+                    logger.info("Запуск тихой установки декодеров eac3to...")
+
+                    sei = SHELLEXECUTEINFO()
+                    sei.cbSize = ctypes.sizeof(SHELLEXECUTEINFO)
+                    sei.fMask = SEE_MASK_NOCLOSEPROCESS
+                    sei.lpVerb = "runas"
+                    sei.lpFile = str(setup_path)
+                    sei.lpParameters = (
+                        "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART"
+                    )
+                    sei.nShow = 1
+
+                    res = ctypes.windll.shell32.ShellExecuteExW(
+                        ctypes.byref(sei)
+                    )
+                    if res:
+                        if sei.hProcess:
+                            INFINITE = 0xFFFFFFFF
+                            ctypes.windll.kernel32.WaitForSingleObject(
+                                sei.hProcess, INFINITE
+                            )
+                            ctypes.windll.kernel32.CloseHandle(sei.hProcess)
+                            logger.info("Установка декодеров eac3to завершена")
+                    else:
+                        raise RuntimeError(
+                            "Не удалось запустить установщик "
+                            "декодеров с правами администратора."
+                        )
 
             # Верификация
             dep_mgr = DependencyManager()

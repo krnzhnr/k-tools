@@ -44,6 +44,7 @@ jobs:
         Archive-Folder "mkvtoolnix" "mkvtoolnix.tar.xz"
         Archive-Folder "eac3to" "eac3to.tar.xz"
         Archive-Folder "DEE" "dee.tar.xz"
+        Archive-Folder "eac3to_decoders" "eac3to_decoders.tar.xz"
 
     - name: Create or Update Release deps-v1
       uses: softprops/action-gh-release@v2

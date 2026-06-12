@@ -72,11 +72,11 @@ def test_update_checker_has_update(mock_urlopen: MagicMock) -> None:
     mock_response.read.return_value = json.dumps(
         [
             {
-                "tag_name": "v1.8.0",
+                "tag_name": "v3.0.0",
                 "prerelease": False,
-                "body": "Новые фичи в v1.8.0",
-                "zipball_url": "https://github.com/zipball/v1.8.0",
-                "assets": [{"browser_download_url": "https://github.com/exe/v1.8.0"}],
+                "body": "Новые фичи в v3.0.0",
+                "zipball_url": "https://github.com/zipball/v3.0.0",
+                "assets": [{"browser_download_url": "https://github.com/exe/v3.0.0"}],
             }
         ]
     ).encode("utf-8")
@@ -90,9 +90,9 @@ def test_update_checker_has_update(mock_urlopen: MagicMock) -> None:
         nonlocal finished_called
         finished_called = True
         assert available
-        assert version == "v1.8.0"
-        assert body == "Новые фичи в v1.8.0"
-        assert url == "https://github.com/exe/v1.8.0"
+        assert version == "v3.0.0"
+        assert body == "Новые фичи в v3.0.0"
+        assert url == "https://github.com/exe/v3.0.0"
 
     worker.checkFinished.connect(on_finished)
     worker.run()

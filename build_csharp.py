@@ -118,6 +118,10 @@ SolidCompression=yes
 LZMADictionarySize=65536
 ArchitecturesInstallIn64BitMode=x64compatible
 
+[Components]
+Name: "main"; Description: "Основные файлы K-Tools"; Types: full compact custom; Flags: fixed
+Name: "decoders"; Description: "Декодеры eac3to (требуются для работы с AAC/DTS/AC3)"; Types: full; Flags: checkedonce
+
 [Tasks]
 Name: "desktopicon"; Description: "{{cm:CreateDesktopIcon}}"; \\
 GroupDescription: "{{cm:AdditionalIcons}}"; Flags: unchecked
@@ -126,6 +130,9 @@ GroupDescription: "{{cm:AdditionalIcons}}"; Flags: unchecked
 ; Основная папка публикации .NET self-contained
 Source: "{publish_p}\\*"; DestDir: "{{app}}"; \\
 Flags: ignoreversion recursesubdirs createallsubdirs
+; Установщик декодеров eac3to
+Source: "{cwd}\\assets\\setup\\eac3to Decoder Pack 1.4.exe"; DestDir: "{{tmp}}"; \\
+Flags: deleteafterinstall; Components: decoders
 
 [Icons]
 Name: "{{group}}\\K-Tools"; \\
@@ -140,6 +147,10 @@ Tasks: desktopicon
 Filename: "{{app}}\\{EXE_BASE_NAME}.exe"; \\
 Description: "{{cm:LaunchProgram,K-Tools}}"; \\
 Flags: nowait postinstall skipifsilent
+Filename: "{{tmp}}\\eac3to Decoder Pack 1.4.exe"; \\
+Parameters: "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART"; \\
+StatusMsg: "Установка декодеров для eac3to..."; \\
+Flags: runascurrentuser; Components: decoders
 """
     iss_path = SRC_DIR / "KTools_CSharp.iss"
     iss_path.write_text(iss_content, encoding="utf-8")

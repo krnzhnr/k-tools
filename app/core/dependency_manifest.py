@@ -94,6 +94,17 @@ DEPENDENCY_REGISTRY: tuple[DependencyInfo, ...] = (
         verify_binary="dee.exe",
         required=False,
     ),
+    DependencyInfo(
+        key="eac3to_decoders",
+        display_name="Декодеры eac3to",
+        description="Декодеры Nero для поддержки AAC/DTS",
+        icon_name="MUSIC",
+        subfolder="eac3to_decoders",
+        size_mb=5.0,
+        archive_name="eac3to_decoders.tar.xz",
+        verify_binary="eac3to Decoder Pack 1.4.exe",
+        required=False,
+    ),
 )
 
 # Быстрый доступ к зависимости по ключу.

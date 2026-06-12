@@ -83,6 +83,7 @@ public class DependencyInfo
         "mkvtoolnix" => new SolidColorBrush(ColorHelper.FromArgb(0x33, 0xEB, 0x6E, 0x4D)),   // Терракотовый
         "eac3to" => new SolidColorBrush(ColorHelper.FromArgb(0x33, 0x28, 0xCA, 0xC6)),       // Бирюзовый
         "dee" => new SolidColorBrush(ColorHelper.FromArgb(0x33, 0x28, 0xCA, 0xC6)),          // Бирюзовый
+        "eac3to_decoders" => new SolidColorBrush(ColorHelper.FromArgb(0x33, 0x28, 0xCA, 0xC6)), // Бирюзовый
         _ => new SolidColorBrush(ColorHelper.FromArgb(0x33, 0xFF, 0xFF, 0xFF))
     };
 
@@ -95,6 +96,7 @@ public class DependencyInfo
         "mkvtoolnix" => new SolidColorBrush(ColorHelper.FromArgb(0xFF, 0xEB, 0x6E, 0x4D)),
         "eac3to" => new SolidColorBrush(ColorHelper.FromArgb(0xFF, 0x28, 0xCA, 0xC6)),
         "dee" => new SolidColorBrush(ColorHelper.FromArgb(0xFF, 0x28, 0xCA, 0xC6)),
+        "eac3to_decoders" => new SolidColorBrush(ColorHelper.FromArgb(0xFF, 0x28, 0xCA, 0xC6)),
         _ => new SolidColorBrush(ColorHelper.FromArgb(0xFF, 0xFF, 0xFF, 0xFF))
     };
 }

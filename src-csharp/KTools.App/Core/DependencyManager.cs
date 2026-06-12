@@ -136,6 +136,20 @@ public class DependencyManager
             VerifyBinary = "dee.exe",
             IsRequired = false
         });
+
+        _registry.Add(new DependencyInfo
+        {
+            Key = "eac3to_decoders",
+            DisplayName = "Декодеры eac3to",
+            Description = "Декодеры Nero для поддержки AAC/DTS",
+            IconName = "music",
+            Subfolder = "eac3to_decoders",
+            SizeMb = 5.0,
+            ArchiveSizeMb = 4.8,
+            ArchiveName = "eac3to_decoders.tar.xz",
+            VerifyBinary = "eac3to Decoder Pack 1.4.exe",
+            IsRequired = false
+        });
     }
 
     /// <summary>
@@ -163,6 +177,23 @@ public class DependencyManager
     /// </summary>
     private bool IsBinaryPresent(DependencyInfo dep)
     {
+        // Для декодеров eac3to проверяем наличие системных DirectShow-фильтров Nero в Windows
+        if (dep.Key.Equals("eac3to_decoders", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                // Проверяем как SysWOW64 (для 32-битного фильтра на 64-битной ОС), так и System32
+                string sysWow64Path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.SystemX86), "NeAudio2.ax");
+                string system32Path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "NeAudio2.ax");
+                return File.Exists(sysWow64Path) || File.Exists(system32Path);
+            }
+            catch (Exception ex)
+            {
+                LogService.Instance.Error($"Ошибка при проверке установленных декодеров Nero: {ex.Message}", "DependencyManager");
+                return false;
+            }
+        }
+
         // 1. Проверяем локальный путь релиза
         string localPath = Path.Combine(_binDir, dep.Subfolder, dep.VerifyBinary);
         if (File.Exists(localPath))
@@ -328,6 +359,50 @@ public class DependencyManager
             await ExtractArchiveAsync(tempArchivePath, destinationFolder, cancellationToken);
             LogService.Instance.Info($"Распаковка архива '{dep.ArchiveName}' успешно завершена", "DependencyManager");
 
+            // Если устанавливаем декодеры eac3to, нужно запустить тихую установку с повышением прав
+            if (key.Equals("eac3to_decoders", StringComparison.OrdinalIgnoreCase))
+            {
+                string setupPath = Path.Combine(destinationFolder, dep.VerifyBinary);
+                if (File.Exists(setupPath))
+                {
+                    LogService.Instance.Info($"Запуск тихой установки декодеров из файла: '{setupPath}' с повышением прав UAC", "DependencyManager");
+                    var startInfo = new ProcessStartInfo
+                    {
+                        FileName = setupPath,
+                        Arguments = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART",
+                        UseShellExecute = true,
+                        Verb = "runas"
+                    };
+
+                    try
+                    {
+                        using var process = Process.Start(startInfo);
+                        if (process != null)
+                        {
+                            LogService.Instance.Info("Ожидание завершения установщика декодеров eac3to...", "DependencyManager");
+                            await process.WaitForExitAsync(cancellationToken);
+                            LogService.Instance.Info("Установщик декодеров eac3to успешно завершил работу", "DependencyManager");
+                        }
+                        else
+                        {
+                            throw new InvalidOperationException("Не удалось инициализировать процесс установщика декодеров.");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        string detailedErr = $"Ошибка при выполнении тихого установщика декодеров eac3to. Описание ошибки: {ex.Message}";
+                        LogService.Instance.Error(detailedErr, "DependencyManager");
+                        throw new InvalidOperationException(detailedErr, ex);
+                    }
+                }
+                else
+                {
+                    string missingSetupErr = $"Файл установщика декодеров '{setupPath}' не найден после распаковки архива.";
+                    LogService.Instance.Error(missingSetupErr, "DependencyManager");
+                    throw new FileNotFoundException(missingSetupErr);
+                }
+            }
+
             // 3. Верификация установки
             RefreshAllStatuses();
             if (IsInstalled(key))
@@ -455,6 +530,142 @@ public class DependencyManager
         }
 
         LogService.Instance.Info($"Запрос на удаление зависимости '{dep.DisplayName}'", "DependencyManager");
+
+        if (key.Equals("eac3to_decoders", StringComparison.OrdinalIgnoreCase))
+        {
+            LogService.Instance.Info("Запрос на удаление декодеров eac3to: использование оригинального деинсталлятора из реестра", "DependencyManager");
+            bool uninstalledViaSetup = false;
+            try
+            {
+                string? uninstallStr = GetEac3toDecodersUninstallString();
+                if (!string.IsNullOrEmpty(uninstallStr))
+                {
+                    string exePath = uninstallStr.Trim().Trim('"');
+                    if (File.Exists(exePath))
+                    {
+                        LogService.Instance.Info($"Запуск оригинального деинсталлятора: '{exePath}' в тихом режиме", "DependencyManager");
+                        var startInfo = new ProcessStartInfo
+                        {
+                            FileName = exePath,
+                            Arguments = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART",
+                            UseShellExecute = true,
+                            Verb = "runas"
+                        };
+                        using var process = Process.Start(startInfo);
+                        if (process != null)
+                        {
+                            process.WaitForExit();
+                            LogService.Instance.Info("Деинсталлятор eac3to Decoder Pack успешно завершил работу", "DependencyManager");
+                            uninstalledViaSetup = true;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                LogService.Instance.Error($"Ошибка при вызове официального деинсталлятора eac3to: {ex.Message}", "DependencyManager");
+            }
+
+            if (!uninstalledViaSetup)
+            {
+                LogService.Instance.Warn("Не удалось использовать официальный деинсталлятор. Запуск резервного метода безопасной ручной деинсталляции", "DependencyManager");
+                string tempBatPath = Path.Combine(Path.GetTempPath(), $"uninstall_eac3to_decoders_{Guid.NewGuid():N}.bat");
+                try
+                {
+                    var commands = new List<string>
+                    {
+                        "@echo off",
+                        "chcp 65001 > nul",
+                        "",
+                        ":: Разрегистрация DirectShow-фильтров из SysWOW64",
+                        "if exist \"%SystemRoot%\\SysWOW64\\NeAudio2.ax\" \"%SystemRoot%\\SysWOW64\\regsvr32.exe\" /u /s \"%SystemRoot%\\SysWOW64\\NeAudio2.ax\"",
+                        "if exist \"%SystemRoot%\\SysWOW64\\ASAudioHD.ax\" \"%SystemRoot%\\SysWOW64\\regsvr32.exe\" /u /s \"%SystemRoot%\\SysWOW64\\ASAudioHD.ax\"",
+                        "if exist \"%SystemRoot%\\SysWOW64\\CinemasterAudio.dll\" \"%SystemRoot%\\SysWOW64\\regsvr32.exe\" /u /s \"%SystemRoot%\\SysWOW64\\CinemasterAudio.dll\"",
+                        "",
+                        ":: Разрегистрация DirectShow-фильтров из System32",
+                        "if exist \"%SystemRoot%\\System32\\NeAudio2.ax\" \"%SystemRoot%\\System32\\regsvr32.exe\" /u /s \"%SystemRoot%\\System32\\NeAudio2.ax\"",
+                        "if exist \"%SystemRoot%\\System32\\ASAudioHD.ax\" \"%SystemRoot%\\System32\\regsvr32.exe\" /u /s \"%SystemRoot%\\System32\\ASAudioHD.ax\"",
+                        "if exist \"%SystemRoot%\\System32\\CinemasterAudio.dll\" \"%SystemRoot%\\System32\\regsvr32.exe\" /u /s \"%SystemRoot%\\System32\\CinemasterAudio.dll\"",
+                        "",
+                        ":: Удаление специфичных файлов декодеров из SysWOW64",
+                        "if exist \"%SystemRoot%\\SysWOW64\\NeAudio2.ax\" del /f /q \"%SystemRoot%\\SysWOW64\\NeAudio2.ax\"",
+                        "if exist \"%SystemRoot%\\SysWOW64\\NeDtsDec.dll\" del /f /q \"%SystemRoot%\\SysWOW64\\NeDtsDec.dll\"",
+                        "if exist \"%SystemRoot%\\SysWOW64\\NeEacDec.dll\" del /f /q \"%SystemRoot%\\SysWOW64\\NeEacDec.dll\"",
+                        "if exist \"%SystemRoot%\\SysWOW64\\AdvrCntr2.dll\" del /f /q \"%SystemRoot%\\SysWOW64\\AdvrCntr2.dll\"",
+                        "if exist \"%SystemRoot%\\SysWOW64\\ASAudioHD.ax\" del /f /q \"%SystemRoot%\\SysWOW64\\ASAudioHD.ax\"",
+                        "if exist \"%SystemRoot%\\SysWOW64\\checkactivate.dll\" del /f /q \"%SystemRoot%\\SysWOW64\\checkactivate.dll\"",
+                        "if exist \"%SystemRoot%\\SysWOW64\\MagCore.dll\" del /f /q \"%SystemRoot%\\SysWOW64\\MagCore.dll\"",
+                        "if exist \"%SystemRoot%\\SysWOW64\\MagPCMac.dll\" del /f /q \"%SystemRoot%\\SysWOW64\\MagPCMac.dll\"",
+                        "if exist \"%SystemRoot%\\SysWOW64\\MagUIEngine.dll\" del /f /q \"%SystemRoot%\\SysWOW64\\MagUIEngine.dll\"",
+                        "if exist \"%SystemRoot%\\SysWOW64\\MagUIInter.dll\" del /f /q \"%SystemRoot%\\SysWOW64\\MagUIInter.dll\"",
+                        "if exist \"%SystemRoot%\\SysWOW64\\dtsdecoderdll.dll\" del /f /q \"%SystemRoot%\\SysWOW64\\dtsdecoderdll.dll\"",
+                        "if exist \"%SystemRoot%\\SysWOW64\\CinemasterAudio.dll\" del /f /q \"%SystemRoot%\\SysWOW64\\CinemasterAudio.dll\"",
+                        "",
+                        ":: Удаление специфичных файлов декодеров из System32",
+                        "if exist \"%SystemRoot%\\System32\\NeAudio2.ax\" del /f /q \"%SystemRoot%\\System32\\NeAudio2.ax\"",
+                        "if exist \"%SystemRoot%\\System32\\NeDtsDec.dll\" del /f /q \"%SystemRoot%\\System32\\NeDtsDec.dll\"",
+                        "if exist \"%SystemRoot%\\System32\\NeEacDec.dll\" del /f /q \"%SystemRoot%\\System32\\NeEacDec.dll\"",
+                        "if exist \"%SystemRoot%\\System32\\AdvrCntr2.dll\" del /f /q \"%SystemRoot%\\System32\\AdvrCntr2.dll\"",
+                        "if exist \"%SystemRoot%\\System32\\ASAudioHD.ax\" del /f /q \"%SystemRoot%\\System32\\ASAudioHD.ax\"",
+                        "if exist \"%SystemRoot%\\System32\\checkactivate.dll\" del /f /q \"%SystemRoot%\\System32\\checkactivate.dll\"",
+                        "if exist \"%SystemRoot%\\System32\\MagCore.dll\" del /f /q \"%SystemRoot%\\System32\\MagCore.dll\"",
+                        "if exist \"%SystemRoot%\\System32\\MagPCMac.dll\" del /f /q \"%SystemRoot%\\System32\\MagPCMac.dll\"",
+                        "if exist \"%SystemRoot%\\System32\\MagUIEngine.dll\" del /f /q \"%SystemRoot%\\System32\\MagUIEngine.dll\"",
+                        "if exist \"%SystemRoot%\\System32\\MagUIInter.dll\" del /f /q \"%SystemRoot%\\System32\\MagUIInter.dll\"",
+                        "if exist \"%SystemRoot%\\System32\\dtsdecoderdll.dll\" del /f /q \"%SystemRoot%\\System32\\dtsdecoderdll.dll\"",
+                        "if exist \"%SystemRoot%\\System32\\CinemasterAudio.dll\" del /f /q \"%SystemRoot%\\System32\\CinemasterAudio.dll\"",
+                        "",
+                        ":: Удаление файлов из директории Windows",
+                        "if exist \"%SystemRoot%\\neroAacEnc.exe\" del /f /q \"%SystemRoot%\\neroAacEnc.exe\"",
+                        "if exist \"%SystemRoot%\\surcode\" rd /s /q \"%SystemRoot%\\surcode\"",
+                        "",
+                        ":: Очистка разделов реестра",
+                        "reg delete \"HKLM\\SOFTWARE\\Ahead\\Installation\\Families\\Nero 7\" /f >nul 2>&1",
+                        "reg delete \"HKLM\\SOFTWARE\\Ahead\\Installation\\Families\\Plugins\" /f >nul 2>&1",
+                        "reg delete \"HKLM\\SOFTWARE\\Sonic\\CommonMPEGDecoders\\4.2\\AudioDecoder\" /f >nul 2>&1",
+                        "reg delete \"HKLM\\SOFTWARE\\Minnetonka Audio Software\\SurCode DVD-DTS\" /f >nul 2>&1",
+                        "reg delete \"HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{167887DA-6C4F-4265-8139-8750A543FD52}_is1\" /f >nul 2>&1",
+                        "reg delete \"HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{167887DA-6C4F-4265-8139-8750A543FD52}_is1\" /f >nul 2>&1"
+                    };
+
+                    File.WriteAllLines(tempBatPath, commands, System.Text.Encoding.UTF8);
+
+                    LogService.Instance.Info($"Запуск временного батника удаления '{tempBatPath}' с правами администратора", "DependencyManager");
+                    var startInfo = new ProcessStartInfo
+                    {
+                        FileName = "cmd.exe",
+                        Arguments = $"/c \"{tempBatPath}\"",
+                        UseShellExecute = true,
+                        Verb = "runas",
+                        CreateNoWindow = true,
+                        WindowStyle = ProcessWindowStyle.Hidden
+                    };
+
+                    using var process = Process.Start(startInfo);
+                    if (process != null)
+                    {
+                        process.WaitForExit();
+                        LogService.Instance.Info("Резервное удаление декодеров eac3to завершено успешно", "DependencyManager");
+                    }
+                    else
+                    {
+                        throw new InvalidOperationException("Не удалось запустить процесс удаления.");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LogService.Instance.Error($"Ошибка при резервном удалении декодеров Nero: {ex.Message}", "DependencyManager");
+                }
+                finally
+                {
+                    if (File.Exists(tempBatPath))
+                    {
+                        try { File.Delete(tempBatPath); } catch { /* Игнорируем ошибки удаления временного файла */ }
+                    }
+                }
+            }
+        }
+
         string folderPath = Path.Combine(_binDir, dep.Subfolder);
         if (!Directory.Exists(folderPath))
         {
@@ -492,5 +703,54 @@ public class DependencyManager
             return $"{bytesPerSec / 1024:F1} КБ/с";
         }
         return $"{bytesPerSec:F0} Б/с";
+    }
+
+    /// <summary>
+    /// Ищет строку деинсталляции eac3to Decoder Pack в реестре Windows.
+    /// </summary>
+    private static string? GetEac3toDecodersUninstallString()
+    {
+        string[] registryPaths = new[]
+        {
+            @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+            @"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
+        };
+
+        foreach (var path in registryPaths)
+        {
+            try
+            {
+                using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(path);
+                if (key == null) continue;
+
+                // Сначала пробуем прямой поиск по известному GUID инсталлятора
+                using var subKeyGuid = key.OpenSubKey("{167887DA-6C4F-4265-8139-8750A543FD52}_is1");
+                if (subKeyGuid != null)
+                {
+                    var val = subKeyGuid.GetValue("UninstallString")?.ToString();
+                    if (!string.IsNullOrEmpty(val)) return val;
+                }
+
+                // Резервный поиск по DisplayName в цикле
+                foreach (var subKeyName in key.GetSubKeyNames())
+                {
+                    try
+                    {
+                        using var subKey = key.OpenSubKey(subKeyName);
+                        if (subKey == null) continue;
+
+                        var displayName = subKey.GetValue("DisplayName")?.ToString();
+                        if (displayName != null && displayName.Contains("eac3to Decoder Pack", StringComparison.OrdinalIgnoreCase))
+                        {
+                            var val = subKey.GetValue("UninstallString")?.ToString();
+                            if (!string.IsNullOrEmpty(val)) return val;
+                        }
+                    }
+                    catch { /* Игнорируем ошибки доступа к отдельным разделам */ }
+                }
+            }
+            catch { /* Игнорируем ошибки доступа к ветке реестра */ }
+        }
+        return null;
     }
 }
