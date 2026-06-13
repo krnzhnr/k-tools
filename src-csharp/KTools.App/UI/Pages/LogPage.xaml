@@ -6,8 +6,15 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:viewmodels="using:KTools_App.ViewModels"
+    xmlns:models="using:KTools_App.Models"
+    xmlns:converters="using:KTools_App.Converters"
     x:DataType="viewmodels:LogViewModel"
     mc:Ignorable="d">
+
+    <Page.Resources>
+        <!-- Регистрация конвертера для раскраски текста логов по уровням -->
+        <converters:LogLevelToBrushConverter x:Key="LogLevelToBrushConverter" />
+    </Page.Resources>
 
     <Grid Padding="36,12,36,36">
         <Grid.RowDefinitions>
@@ -23,7 +30,7 @@
             Margin="0,0,0,16">
             <Button 
                 x:Name="CopyAllButton" 
-                Click="CopyAllButton_Click"
+                Command="{x:Bind ViewModel.CopyAllLogsCommand}"
                 ToolTipService.ToolTip="Копировать все логи в буфер обмена Windows">
                 <StackPanel Orientation="Horizontal" Spacing="8">
                     <SymbolIcon Symbol="Copy" />
@@ -41,7 +48,7 @@
             </Button>
             <Button 
                 x:Name="ClearLogButton" 
-                Click="ClearLogButton_Click"
+                Command="{x:Bind ViewModel.ClearLogsCommand}"
                 ToolTipService.ToolTip="Очистить текущее окно отображения журналов">
                 <StackPanel Orientation="Horizontal" Spacing="8">
                     <SymbolIcon Symbol="Delete" />
@@ -50,23 +57,43 @@
             </Button>
         </StackPanel>
 
-        <!-- Область вывода логов в реальном времени с цветовой подсветкой -->
-        <RichEditBox 
+        <!-- Высокопроизводительный виртуализированный список вывода логов в реальном времени -->
+        <ListView 
             Grid.Row="1"
-            x:Name="LogRichEditBox"
-            FontFamily="Consolas"
-            FontSize="13"
-            IsReadOnly="True"
-            TextWrapping="Wrap"
-            ScrollViewer.VerticalScrollBarVisibility="Auto"
-            ScrollViewer.HorizontalScrollBarVisibility="Auto"
+            x:Name="LogListView"
+            ItemsSource="{x:Bind ViewModel.Logs, Mode=OneWay}"
+            SelectionMode="None"
             HorizontalAlignment="Stretch"
             VerticalAlignment="Stretch"
+            Background="Transparent"
             CornerRadius="8"
-            Background="#1E1E1E"
-            Foreground="#DCDCDC"
             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
             BorderThickness="1"
-            Padding="12" />
+            Padding="12"
+            ScrollViewer.VerticalScrollBarVisibility="Auto"
+            ScrollViewer.HorizontalScrollBarVisibility="Auto">
+            
+            <ListView.ItemTemplate>
+                <DataTemplate x:DataType="models:LogItem">
+                    <!-- Вывод строки лога шрифтом фиксированной ширины Consolas -->
+                    <TextBlock 
+                        Text="{x:Bind Message}" 
+                        Foreground="{x:Bind Level, Converter={StaticResource LogLevelToBrushConverter}}"
+                        FontFamily="Consolas"
+                        FontSize="13"
+                        TextWrapping="Wrap" />
+                </DataTemplate>
+            </ListView.ItemTemplate>
+            
+            <ListView.ItemContainerStyle>
+                <!-- Сброс дефолтных рамок и отступов ListViewItem для обеспечения плотного вывода консольного типа -->
+                <Style TargetType="ListViewItem">
+                    <Setter Property="MinHeight" Value="0"/>
+                    <Setter Property="Padding" Value="0,1,0,1"/>
+                    <Setter Property="Margin" Value="0"/>
+                    <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                </Style>
+            </ListView.ItemContainerStyle>
+        </ListView>
     </Grid>
 </Page>
