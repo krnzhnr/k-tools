@@ -27,15 +27,15 @@ if hasattr(sys.stdout, "reconfigure"):
         pass
 
 # === Настройки ===
-BASE_DIR = Path(__name__).parent.resolve()
+BASE_DIR = Path(__file__).parent.resolve()
 VENV_DIR = BASE_DIR / "venv"
 PYTHON_EXE = VENV_DIR / "Scripts" / "python.exe"
 REQUIREMENTS = BASE_DIR / "requirements.txt"
 SCRIPT = BASE_DIR / "main.py"
 EXE_BASE_NAME = "KTools"
 ICON = BASE_DIR / "assets" / "app_icon.ico"
-VERSION_FILE = BASE_DIR / "version.txt"
-CHANGELOG_FILE = BASE_DIR / "CHANGELOG.md"
+VERSION_FILE = BASE_DIR.parent / "version.txt"
+CHANGELOG_FILE = BASE_DIR.parent / "CHANGELOG.md"
 
 
 def get_current_version() -> str:

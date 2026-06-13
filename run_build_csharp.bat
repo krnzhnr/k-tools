@@ -3,9 +3,9 @@ chcp 65001 >nul
 setlocal
 
 echo [*] Activating Python venv...
-call ..\venv\Scripts\activate.bat
+call src-python\venv\Scripts\activate.bat
 
 echo [*] Running C# build script...
-python ..\build_csharp.py
+python src-python\build_csharp.py
 
 pause

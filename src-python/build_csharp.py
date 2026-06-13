@@ -25,8 +25,8 @@ if hasattr(sys.stdout, "reconfigure"):
         pass
 
 # === Настройки ===
-BASE_DIR = Path(__file__).parent.resolve()
-SRC_DIR = BASE_DIR / "src-csharp"
+BASE_DIR = Path(__file__).parent.parent.resolve()
+SRC_DIR = BASE_DIR
 PROJECT_FILE = SRC_DIR / "KTools.App" / "KTools.App.csproj"
 VERSION_FILE = BASE_DIR / "version.txt"
 CHANGELOG_FILE = BASE_DIR / "CHANGELOG.md"

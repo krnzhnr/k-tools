@@ -180,8 +180,7 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
-/setup_output
-/icons
+setup_output/
 *.iss
 settings.ini
 bin/eac3to/log*.txt
@@ -202,4 +201,4 @@ CLAUDE.md
 *.xbf
 *.pubxml
 *.msix
-*.md
+devcert.pfx
