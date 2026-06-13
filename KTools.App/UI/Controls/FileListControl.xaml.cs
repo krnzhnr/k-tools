@@ -14,23 +14,142 @@ using Windows.ApplicationModel.DataTransfer;
 using Windows.Storage;
 
 using KTools_App.Core;
+using KTools_App.Scripts;
 
 namespace KTools_App.UI.Controls;
 
 /// <summary>
-/// Пользовательский элемент управления списком файлов с полной поддержкой Drag-and-Drop.
+/// Модель данных строки в таблице сборки MKV (Муксинга).
+/// Группирует сопутствующие видео, аудио и субтитры с одинаковым базовым именем.
+/// Отслеживает внутреннее состояние изменения файлов для корректной блокировки кнопок удаления.
+/// </summary>
+public sealed class MuxingRowItem : INotifyPropertyChanged
+{
+    private FileQueueItem? _videoFile;
+    private FileQueueItem? _audioFile;
+    private FileQueueItem? _subsFile;
+
+    /// <summary>
+    /// Базовое имя группы файлов.
+    /// </summary>
+    public string Stem { get; }
+
+    /// <summary>
+    /// Элемент видеофайла.
+    /// </summary>
+    public FileQueueItem? VideoFile
+    {
+        get => _videoFile;
+        set
+        {
+            if (_videoFile != value)
+            {
+                if (_videoFile != null) _videoFile.PropertyChanged -= OnFilePropertyChanged;
+                _videoFile = value;
+                if (_videoFile != null) _videoFile.PropertyChanged += OnFilePropertyChanged;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(IsDeleteEnabled));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Элемент сопутствующего аудиофайла.
+    /// </summary>
+    public FileQueueItem? AudioFile
+    {
+        get => _audioFile;
+        set
+        {
+            if (_audioFile != value)
+            {
+                if (_audioFile != null) _audioFile.PropertyChanged -= OnFilePropertyChanged;
+                _audioFile = value;
+                if (_audioFile != null) _audioFile.PropertyChanged += OnFilePropertyChanged;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(IsDeleteEnabled));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Элемент сопутствующих субтитров.
+    /// </summary>
+    public FileQueueItem? SubsFile
+    {
+        get => _subsFile;
+        set
+        {
+            if (_subsFile != value)
+            {
+                if (_subsFile != null) _subsFile.PropertyChanged -= OnFilePropertyChanged;
+                _subsFile = value;
+                if (_subsFile != null) _subsFile.PropertyChanged += OnFilePropertyChanged;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(IsDeleteEnabled));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Разрешено ли удаление строки из таблицы (разрешено, если все входящие в нее файлы разблокированы для удаления).
+    /// </summary>
+    public bool IsDeleteEnabled
+    {
+        get
+        {
+            if (VideoFile != null && !VideoFile.IsDeleteEnabled) return false;
+            if (AudioFile != null && !AudioFile.IsDeleteEnabled) return false;
+            if (SubsFile != null && !SubsFile.IsDeleteEnabled) return false;
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Инициализирует новую строку муксинга для заданного имени.
+    /// </summary>
+    public MuxingRowItem(string stem)
+    {
+        Stem = stem;
+    }
+
+    private void OnFilePropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(FileQueueItem.IsDeleteEnabled) || 
+            e.PropertyName == nameof(FileQueueItem.IsProcessing))
+        {
+            OnPropertyChanged(nameof(IsDeleteEnabled));
+        }
+    }
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    private void OnPropertyChanged([CallerMemberName] string? prop = null)
+    {
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(prop));
+    }
+}
+
+/// <summary>
+/// Пользовательский элемент управления списком файлов с поддержкой Drag-and-Drop и табличного представления сборки MKV.
 /// </summary>
 public sealed partial class FileListControl : UserControl
 {
     private readonly Microsoft.UI.Dispatching.DispatcherQueue _dispatcherQueue = 
         Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
     private ObservableCollection<FileQueueItem> _files = new();
+    private readonly ObservableCollection<MuxingRowItem> _muxingRows = new();
+    private AbstractScript? _activeScript;
 
+    /// <summary>
+    /// Инициализирует FileListControl.
+    /// </summary>
     public FileListControl()
     {
         InitializeComponent();
         _files.CollectionChanged += OnFilesCollectionChanged;
         FilesListView.ItemsSource = _files;
+        MuxingListView.ItemsSource = _muxingRows;
         UpdateEmptyState();
         CheckAdministratorStatus();
     }
@@ -49,6 +168,7 @@ public sealed partial class FileListControl : UserControl
                 _files = value;
                 _files.CollectionChanged += OnFilesCollectionChanged;
                 FilesListView.ItemsSource = _files;
+                SyncMuxingRows();
                 UpdateEmptyState();
             }
         }
@@ -66,13 +186,26 @@ public sealed partial class FileListControl : UserControl
         object? sender,
         NotifyCollectionChangedEventArgs e)
     {
+        SyncMuxingRows();
         UpdateEmptyState();
     }
 
     /// <summary>
     /// Ссылка на текущий активный скрипт для фильтрации входящих расширений файлов.
     /// </summary>
-    public Core.AbstractScript? ActiveScript { get; set; }
+    public AbstractScript? ActiveScript
+    {
+        get => _activeScript;
+        set
+        {
+            if (_activeScript != value)
+            {
+                _activeScript = value;
+                SyncMuxingRows();
+                UpdateEmptyState();
+            }
+        }
+    }
 
     /// <summary>
     /// Регистрация свойства зависимостей IsProcessingProperty для управления состоянием чтения списка файлов.
@@ -118,6 +251,7 @@ public sealed partial class FileListControl : UserControl
     public void Clear()
     {
         Files.Clear();
+        SyncMuxingRows();
         UpdateEmptyState();
     }
 
@@ -157,6 +291,7 @@ public sealed partial class FileListControl : UserControl
 
         if (addedAny)
         {
+            SyncMuxingRows();
             UpdateEmptyState();
         }
     }
@@ -195,17 +330,71 @@ public sealed partial class FileListControl : UserControl
         });
     }
 
+    /// <summary>
+    /// Синхронизирует плоский список файлов с табличной моделью муксинга (сборки MKV).
+    /// </summary>
+    private void SyncMuxingRows()
+    {
+        _muxingRows.Clear();
+        if (ActiveScript is not MkvAssemblyScript)
+        {
+            return;
+        }
+
+        var groups = new Dictionary<string, MuxingRowItem>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var file in _files)
+        {
+            string stem = Path.GetFileNameWithoutExtension(file.FilePath);
+            string ext = Path.GetExtension(file.FilePath).ToLowerInvariant();
+
+            if (!groups.TryGetValue(stem, out var row))
+            {
+                row = new MuxingRowItem(stem);
+                groups[stem] = row;
+            }
+
+            if (AppConstants.VideoContainers.Contains(ext))
+            {
+                row.VideoFile = file;
+            }
+            else if (AppConstants.AudioContainers.Contains(ext) || AppConstants.AudioStreams.Contains(ext))
+            {
+                row.AudioFile = file;
+            }
+            else if (AppConstants.SubtitleExtensions.Contains(ext))
+            {
+                row.SubsFile = file;
+            }
+        }
+
+        foreach (var row in groups.Values)
+        {
+            _muxingRows.Add(row);
+        }
+    }
+
     private void UpdateEmptyState()
     {
         if (Files.Count == 0)
         {
             EmptyPanel.Visibility = Visibility.Visible;
             FilesListView.Visibility = Visibility.Collapsed;
+            MuxingGrid.Visibility = Visibility.Collapsed;
         }
         else
         {
             EmptyPanel.Visibility = Visibility.Collapsed;
-            FilesListView.Visibility = Visibility.Visible;
+            if (ActiveScript is MkvAssemblyScript)
+            {
+                FilesListView.Visibility = Visibility.Collapsed;
+                MuxingGrid.Visibility = Visibility.Visible;
+            }
+            else
+            {
+                FilesListView.Visibility = Visibility.Visible;
+                MuxingGrid.Visibility = Visibility.Collapsed;
+            }
         }
     }
 
@@ -214,6 +403,22 @@ public sealed partial class FileListControl : UserControl
         if (sender is Button btn && btn.DataContext is FileQueueItem item)
         {
             Files.Remove(item);
+            UpdateEmptyState();
+        }
+    }
+
+    /// <summary>
+    /// Обработчик кнопки удаления строки из таблицы муксинга.
+    /// Удаляет видео, аудио и субтитры текущей строки из основной очереди.
+    /// </summary>
+    private void DeleteMuxingRow_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button btn && btn.DataContext is MuxingRowItem row)
+        {
+            if (row.VideoFile != null) Files.Remove(row.VideoFile);
+            if (row.AudioFile != null) Files.Remove(row.AudioFile);
+            if (row.SubsFile != null) Files.Remove(row.SubsFile);
+            SyncMuxingRows();
             UpdateEmptyState();
         }
     }

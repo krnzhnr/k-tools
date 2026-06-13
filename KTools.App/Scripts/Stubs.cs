@@ -49,33 +49,7 @@ public class VideoEncodingStub : AbstractScript
 }
 
 
-public class MkvAssemblyStub : AbstractScript
-{
-    public override string Name => AppConstants.ScriptMetadata.MuxerName;
-    public override string Description => AppConstants.ScriptMetadata.MuxerDesc;
-    public override string Category => AppConstants.ScriptCategory.Containers;
-    public override string IconName => "add";
-    public override string[] FileExtensions => AppConstants.VideoContainers.ToArray();
-    public override string[] RequiredDependencies => new[] { "mkvtoolnix" };
 
-    public override async Task<List<string>> ExecuteSingleAsync(
-        string filePath,
-        Dictionary<string, object> settings,
-        string? outputPath,
-        Action<int, int, string, double?> progressCallback,
-        int fileIndex,
-        int totalCount)
-    {
-        ResetCancellation();
-        for (int i = 0; i <= 10; i++)
-        {
-            if (IsCancelled) break;
-            progressCallback(fileIndex, totalCount, $"Сборка MKV в mkvmerge... {i * 10}%", i * 10.0);
-            await Task.Delay(100);
-        }
-        return new List<string> { IsCancelled ? "⚠ Сборка отменена" : $"✅ Контейнер MKV собран: {System.IO.Path.GetFileName(filePath)}" };
-    }
-}
 
 public class StreamManagementStub : AbstractScript
 {

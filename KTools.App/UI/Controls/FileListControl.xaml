@@ -63,7 +63,7 @@
             </StackPanel>
         </Border>
 
-        <!-- Список файлов -->
+        <!-- Список файлов (Обычный) -->
         <ListView Grid.Row="1"
                   x:Name="FilesListView"
                   Visibility="Collapsed"
@@ -105,30 +105,30 @@
 
                         <!-- Кольцевой прогресс-бар и иконка статуса -->
                         <Grid Grid.Column="1"
-                              Grid.RowSpan="2" 
-                              Width="32" 
-                              Height="32" 
-                              Margin="6,6,12,6" 
-                              VerticalAlignment="Center" 
-                              HorizontalAlignment="Center">
+                               Grid.RowSpan="2" 
+                               Width="32" 
+                               Height="32" 
+                               Margin="6,6,12,6" 
+                               VerticalAlignment="Center" 
+                               HorizontalAlignment="Center">
                             
                             <ProgressRing Value="{x:Bind Progress, Mode=OneWay}"
-                                          Maximum="100"
-                                          IsIndeterminate="{x:Bind IsProgressIndeterminate, Mode=OneWay}"
-                                          IsActive="True"
-                                          Width="24"
-                                          Height="24"
-                                          Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
-                                          Background="{ThemeResource SystemControlBackgroundBaseLowBrush}"
-                                          Visibility="{x:Bind ProgressRingVisibility, Mode=OneWay}" />
+                                           Maximum="100"
+                                           IsIndeterminate="{x:Bind IsProgressIndeterminate, Mode=OneWay}"
+                                           IsActive="True"
+                                           Width="24"
+                                           Height="24"
+                                           Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
+                                           Background="{ThemeResource SystemControlBackgroundBaseLowBrush}"
+                                           Visibility="{x:Bind ProgressRingVisibility, Mode=OneWay}" />
 
                             <SymbolIcon Symbol="{x:Bind StatusIcon, Mode=OneWay}"
-                                        Foreground="{x:Bind StatusIconBrush, Mode=OneWay}"
-                                        Visibility="{x:Bind StatusIconVisibility, Mode=OneWay}"
-                                        Width="24"
-                                        Height="24"
-                                        HorizontalAlignment="Center"
-                                        VerticalAlignment="Center" />
+                                         Foreground="{x:Bind StatusIconBrush, Mode=OneWay}"
+                                         Visibility="{x:Bind StatusIconVisibility, Mode=OneWay}"
+                                         Width="24"
+                                         Height="24"
+                                         HorizontalAlignment="Center"
+                                         VerticalAlignment="Center" />
                         </Grid>
 
                         <!-- Кнопка удаления файла из очереди -->
@@ -158,6 +158,148 @@
                 </DataTemplate>
             </ListView.ItemTemplate>
         </ListView>
+
+        <!-- Таблица для сборки MKV (Муксинг) -->
+        <Grid Grid.Row="1" 
+              x:Name="MuxingGrid" 
+              Visibility="Collapsed"
+              Margin="0,0,0,12">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" /> <!-- Заголовки колонок -->
+                <RowDefinition Height="*" />    <!-- Список строк -->
+            </Grid.RowDefinitions>
+
+            <!-- Заголовки колонок таблицы -->
+            <Border Grid.Row="0"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1,1,1,0"
+                    Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
+                    CornerRadius="8,8,0,0"
+                    Padding="12,8,12,8">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="72" /> <!-- Столбец статуса и удаления -->
+                    </Grid.ColumnDefinitions>
+                    
+                    <TextBlock Grid.Column="0" Text="Видео" FontWeight="SemiBold" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <TextBlock Grid.Column="1" Text="Аудио" FontWeight="SemiBold" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Margin="12,0,0,0" />
+                    <TextBlock Grid.Column="2" Text="Субтитры" FontWeight="SemiBold" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Margin="12,0,0,0" />
+                    <TextBlock Grid.Column="3" Text="Статус" FontWeight="SemiBold" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Margin="8,0,0,0" HorizontalAlignment="Left" />
+                </Grid>
+            </Border>
+
+            <!-- Список строк муксинга -->
+            <ListView Grid.Row="1"
+                      x:Name="MuxingListView"
+                      SelectionMode="None"
+                      BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                      BorderThickness="1"
+                      Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                      CornerRadius="0,0,8,8"
+                      Padding="0">
+                <ListView.ItemContainerStyle>
+                    <Style TargetType="ListViewItem">
+                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                        <Setter Property="Padding" Value="4,2,4,2" />
+                        <Setter Property="MinHeight" Value="0" />
+                    </Style>
+                </ListView.ItemContainerStyle>
+                <ListView.ItemTemplate>
+                    <DataTemplate x:DataType="local:MuxingRowItem">
+                        <Grid Padding="8,4,8,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="72" />
+                            </Grid.ColumnDefinitions>
+
+                            <!-- Видеофайл -->
+                            <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                <TextBlock Text="{x:Bind VideoFile.FileName, Mode=OneWay, FallbackValue='—'}" 
+                                           TextTrimming="CharacterEllipsis"
+                                           Style="{ThemeResource BaseTextBlockStyle}" />
+                            </StackPanel>
+
+                            <!-- Аудиофайл -->
+                            <StackPanel Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center">
+                                <TextBlock Text="{x:Bind AudioFile.FileName, Mode=OneWay, FallbackValue='—'}" 
+                                           TextTrimming="CharacterEllipsis"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                           Style="{ThemeResource BodyTextBlockStyle}" />
+                            </StackPanel>
+
+                            <!-- Файл субтитров -->
+                            <StackPanel Grid.Column="2" Margin="12,0,0,0" VerticalAlignment="Center">
+                                <TextBlock Text="{x:Bind SubsFile.FileName, Mode=OneWay, FallbackValue='—'}" 
+                                           TextTrimming="CharacterEllipsis"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                           Style="{ThemeResource BodyTextBlockStyle}" />
+                            </StackPanel>
+
+                            <!-- Статус сборки и кнопка удаления всей строки -->
+                            <Grid Grid.Column="3" Margin="8,0,0,0" VerticalAlignment="Center">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+
+                                <!-- Иконка статуса / Кольцевой прогресс-бар -->
+                                <Grid Grid.Column="0" 
+                                      Width="24" 
+                                      Height="24" 
+                                      HorizontalAlignment="Left" 
+                                      VerticalAlignment="Center">
+                                    
+                                    <ProgressRing Value="{x:Bind VideoFile.Progress, Mode=OneWay, FallbackValue=0}"
+                                                  Maximum="100"
+                                                  IsIndeterminate="{x:Bind VideoFile.IsProgressIndeterminate, Mode=OneWay, FallbackValue=False}"
+                                                  IsActive="True"
+                                                  Width="20"
+                                                  Height="20"
+                                                  Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
+                                                  Background="{ThemeResource SystemControlBackgroundBaseLowBrush}"
+                                                  Visibility="{x:Bind VideoFile.ProgressRingVisibility, Mode=OneWay, FallbackValue=Collapsed}" />
+
+                                    <SymbolIcon Symbol="{x:Bind VideoFile.StatusIcon, Mode=OneWay, FallbackValue=Clock}"
+                                                Foreground="{x:Bind VideoFile.StatusIconBrush, Mode=OneWay}"
+                                                Visibility="{x:Bind VideoFile.StatusIconVisibility, Mode=OneWay, FallbackValue=Visible}"
+                                                Width="20"
+                                                Height="20"
+                                                HorizontalAlignment="Center"
+                                                VerticalAlignment="Center" />
+                                </Grid>
+
+                                <!-- Кнопка удаления -->
+                                <Button Grid.Column="1" 
+                                        Click="DeleteMuxingRow_Click"
+                                        Background="Transparent"
+                                        BorderThickness="0"
+                                        Padding="0"
+                                        Width="32"
+                                        Height="32"
+                                        MinWidth="0"
+                                        MinHeight="0"
+                                        HorizontalAlignment="Right"
+                                        VerticalAlignment="Center"
+                                        HorizontalContentAlignment="Center"
+                                        VerticalContentAlignment="Center"
+                                        ToolTipService.ToolTip="Удалить из списка"
+                                        IsEnabled="{x:Bind IsDeleteEnabled, Mode=OneWay}">
+                                    <FontIcon FontSize="20" Glyph="&#xE711;"
+                                              HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"
+                                              FontFamily="{ThemeResource SymbolThemeFontFamily}" />
+                                </Button>
+                            </Grid>
+                        </Grid>
+                    </DataTemplate>
+                </ListView.ItemTemplate>
+            </ListView>
+        </Grid>
  
         <!-- Тулбар списка файлов снизу -->
         <CommandBar Grid.Row="2" 

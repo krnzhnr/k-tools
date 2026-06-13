@@ -111,8 +111,7 @@ public partial class HomeViewModel : ObservableObject
                 IconName = "add",
                 Description = "Сборка контейнера MKV из отдельных " +
                               "потоков видео, аудио и субтитров с " +
-                              "сопоставлением по имени",
-                IsAvailable = false
+                              "сопоставлением по имени"
             },
             new ScriptInfo
             {
