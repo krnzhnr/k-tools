@@ -202,3 +202,4 @@ CLAUDE.md
 *.pubxml
 *.msix
 devcert.pfx
+/.vscode
