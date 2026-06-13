@@ -61,6 +61,7 @@ public sealed partial class MainPage : Page
     /// </summary>
     private void NavView_Loaded(object sender, RoutedEventArgs e)
     {
+        UpdateSeparatorVisibility();
         if (NavView.SettingsItem is NavigationViewItem settingsItem)
         {
             settingsItem.Content = "Настройки";
@@ -355,6 +356,7 @@ public sealed partial class MainPage : Page
     /// </summary>
     private void NavView_PaneOpened(NavigationView sender, object args)
     {
+        UpdateSeparatorVisibility();
         if (_pendingScriptTag != null)
         {
             var parentItem = FindParentItemForChildTag(
@@ -387,9 +389,23 @@ public sealed partial class MainPage : Page
     /// </summary>
     private void NavView_PaneClosed(NavigationView sender, object args)
     {
+        UpdateSeparatorVisibility();
         // В свернутом режиме не требуется программно менять SelectedItem, 
         // так как NavigationView автоматически проецирует выделение дочернего
         // элемента на родительскую категорию.
+    }
+
+    /// <summary>
+    /// <summary>
+    /// Обновляет видимость разделителя HomeSeparator в зависимости от состояния боковой панели навигации.
+    /// Разделитель отображается только в свернутом состоянии (IsPaneOpen = false) для аккуратного разделения иконок.
+    /// </summary>
+    private void UpdateSeparatorVisibility()
+    {
+        if (HomeSeparator != null)
+        {
+            HomeSeparator.Visibility = NavView.IsPaneOpen ? Visibility.Collapsed : Visibility.Visible;
+        }
     }
 
     /// <summary>

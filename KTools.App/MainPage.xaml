@@ -32,6 +32,7 @@
             <NavigationView.MenuItems>
                 <!-- Главная страница -->
                 <NavigationViewItem Content="Главная" Icon="Home" x:Name="NavItemHome" Tag="home" />
+                <NavigationViewItemSeparator x:Name="HomeSeparator" Visibility="Visible" />
                 <NavigationViewItemHeader Content="Скрипты обработки" />
 
                 <!-- Группа: Видео -->
