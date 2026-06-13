@@ -33,7 +33,7 @@ jobs:
 
     - name: Build C# App and Installer
       run: |
-        python build_csharp.py
+        python src-python/build_csharp.py
 
     - name: Extract Changelog Notes
       id: extract_notes
