@@ -120,8 +120,7 @@ public partial class HomeViewModel : ObservableObject
                 IconName = "list",
                 Description = "Удаление или сохранение выбранных " +
                               "дорожек (видео, аудио, субтитры) в " +
-                              "MKV и MP4 файлах.",
-                IsAvailable = false
+                              "MKV и MP4 файлах."
             },
             new ScriptInfo
             {
