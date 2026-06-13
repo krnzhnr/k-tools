@@ -58,7 +58,7 @@ public sealed class ScriptRegistry
         _scripts.Add(new Scripts.AudioChannelsScript());
 
         _scripts.Add(new Scripts.MkvAssemblyScript());
-        _scripts.Add(new Scripts.StreamManagementStub());
+        _scripts.Add(new Scripts.StreamManagementScript());
         _scripts.Add(new Scripts.StreamReplacementStub());
         _scripts.Add(new Scripts.TrackExtractorScript());
 
