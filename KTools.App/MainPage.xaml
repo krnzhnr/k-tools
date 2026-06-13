@@ -20,7 +20,9 @@
                          Loaded="NavView_Loaded"
                          SelectionChanged="NavView_SelectionChanged"
                          PaneOpened="NavView_PaneOpened"
-                         PaneClosed="NavView_PaneClosed">
+                         PaneClosed="NavView_PaneClosed"
+                         PaneOpening="NavView_PaneOpening"
+                         PaneClosing="NavView_PaneClosing">
             
             <NavigationView.Resources>
                 <!-- Отключаем наложение Acrylic на панель, делая ее фон прозрачным. 
@@ -32,7 +34,7 @@
             <NavigationView.MenuItems>
                 <!-- Главная страница -->
                 <NavigationViewItem Content="Главная" Icon="Home" x:Name="NavItemHome" Tag="home" />
-                <NavigationViewItemSeparator x:Name="HomeSeparator" Visibility="Visible" />
+                <NavigationViewItemSeparator x:Name="HomeSeparator" />
                 <NavigationViewItemHeader Content="Скрипты обработки" />
 
                 <!-- Группа: Видео -->

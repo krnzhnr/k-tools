@@ -61,7 +61,6 @@ public sealed partial class MainPage : Page
     /// </summary>
     private void NavView_Loaded(object sender, RoutedEventArgs e)
     {
-        UpdateSeparatorVisibility();
         if (NavView.SettingsItem is NavigationViewItem settingsItem)
         {
             settingsItem.Content = "Настройки";
@@ -79,6 +78,11 @@ public sealed partial class MainPage : Page
             ViewModel.InitializeCommand.Execute(null);
         }
 
+        // Устанавливаем начальное состояние видимости разделителя на основе состояния панели
+        HomeSeparator.Visibility = NavView.IsPaneOpen ? Visibility.Collapsed : Visibility.Visible;
+        LogService.Instance.Info(
+            $"[MainPage] Инициализация видимости разделителя: {(NavView.IsPaneOpen ? "Скрыт" : "Показан")}",
+            "MainPage");
     }
 
     /// <summary>
@@ -356,7 +360,6 @@ public sealed partial class MainPage : Page
     /// </summary>
     private void NavView_PaneOpened(NavigationView sender, object args)
     {
-        UpdateSeparatorVisibility();
         if (_pendingScriptTag != null)
         {
             var parentItem = FindParentItemForChildTag(
@@ -389,23 +392,33 @@ public sealed partial class MainPage : Page
     /// </summary>
     private void NavView_PaneClosed(NavigationView sender, object args)
     {
-        UpdateSeparatorVisibility();
         // В свернутом режиме не требуется программно менять SelectedItem, 
         // так как NavigationView автоматически проецирует выделение дочернего
         // элемента на родительскую категорию.
     }
 
     /// <summary>
-    /// <summary>
-    /// Обновляет видимость разделителя HomeSeparator в зависимости от состояния боковой панели навигации.
-    /// Разделитель отображается только в свернутом состоянии (IsPaneOpen = false) для аккуратного разделения иконок.
+    /// Вызывается в самом начале процесса открытия боковой панели (до начала анимации).
+    /// Мгновенно скрывает разделитель под иконкой домашней страницы.
     /// </summary>
-    private void UpdateSeparatorVisibility()
+    private void NavView_PaneOpening(NavigationView sender, object args)
     {
-        if (HomeSeparator != null)
-        {
-            HomeSeparator.Visibility = NavView.IsPaneOpen ? Visibility.Collapsed : Visibility.Visible;
-        }
+        HomeSeparator.Visibility = Visibility.Collapsed;
+        LogService.Instance.Info(
+            "[MainPage] Панель начинает открываться. Разделитель скрыт мгновенно.",
+            "MainPage");
+    }
+
+    /// <summary>
+    /// Вызывается в самом начале процесса закрытия боковой панели (до начала анимации).
+    /// Мгновенно показывает разделитель под иконкой домашней страницы.
+    /// </summary>
+    private void NavView_PaneClosing(NavigationView sender, object args)
+    {
+        HomeSeparator.Visibility = Visibility.Visible;
+        LogService.Instance.Info(
+            "[MainPage] Панель начинает закрываться. Разделитель показан мгновенно.",
+            "MainPage");
     }
 
     /// <summary>
