@@ -17,11 +17,13 @@
 
         <!-- Заголовок панели выбора дорожек -->
         <StackPanel Grid.Row="0" Margin="0,0,0,16" Spacing="4">
-            <TextBlock Text="Выбор дорожек и встроенных шрифтов" 
+            <TextBlock x:Name="TitleTextBlock"
+                       Text="Выбор дорожек и встроенных шрифтов" 
                        FontSize="16" 
                        FontWeight="SemiBold" 
                        Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
-            <TextBlock Text="Отметьте галочками аудио, видео, субтитры или шрифты, которые вы хотите извлечь из контейнеров." 
+            <TextBlock x:Name="DescriptionTextBlock"
+                       Text="Отметьте галочками аудио, видео, субтитры или шрифты, которые вы хотите извлечь из контейнеров." 
                        FontSize="12" 
                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
         </StackPanel>

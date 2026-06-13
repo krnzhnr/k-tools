@@ -12,6 +12,7 @@ using Microsoft.UI.Text;
 using Windows.UI.Text;
 
 using KTools_App.Core;
+using KTools_App.Scripts;
 using CommunityToolkit.WinUI.Controls;
 
 namespace KTools_App.UI.Controls;
@@ -92,9 +93,23 @@ public sealed partial class TrackSelectionControl : UserControl
     private readonly HashSet<FileQueueItem> _subscribedItems = new();
 
     /// <summary>
+    private AbstractScript? _activeScript;
+
+    /// <summary>
     /// Текущий активный скрипт обработки для сохранения выбора.
     /// </summary>
-    public AbstractScript? ActiveScript { get; set; }
+    public AbstractScript? ActiveScript
+    {
+        get => _activeScript;
+        set
+        {
+            if (_activeScript != value)
+            {
+                _activeScript = value;
+                UpdateHeaderAndDescription();
+            }
+        }
+    }
 
     // Структуры для хранения уникальных технических параметров (опций) для фильтрации
     private readonly Dictionary<string, Dictionary<string, HashSet<string>>> _dynamicOptions = new()
@@ -128,12 +143,36 @@ public sealed partial class TrackSelectionControl : UserControl
     }
 
     /// <summary>
+    /// Динамически обновляет заголовок и описание панели выбора дорожек в зависимости от активного скрипта.
+    /// </summary>
+    private void UpdateHeaderAndDescription()
+    {
+        if (TitleTextBlock == null || DescriptionTextBlock == null)
+        {
+            return;
+        }
+
+        if (_activeScript is StreamManagementScript)
+        {
+            TitleTextBlock.Text = "Управление потоками медиа";
+            DescriptionTextBlock.Text = "Отметьте галочками аудио, видео или субтитры, которые вы хотите сохранить или удалить.";
+        }
+        else
+        {
+            // По умолчанию (для скрипта "Разборка контейнера" и др.)
+            TitleTextBlock.Text = "Выбор дорожек и встроенных шрифтов";
+            DescriptionTextBlock.Text = "Отметьте галочками аудио, видео, субтитры или шрифты, которые вы хотите извлечь из контейнеров.";
+        }
+    }
+
+    /// <summary>
     /// Восстанавливает подписки на события при загрузке элемента управления в визуальное дерево
     /// и запускает перестроение дерева дорожек для отражения актуального состояния файлов.
     /// </summary>
     private void TrackSelectionControl_Loaded(object sender, RoutedEventArgs e)
     {
         _isUnloaded = false;
+        UpdateHeaderAndDescription();
         LogService.Instance.Info(
             "Загрузка виджета выбора дорожек: " +
             "восстановление зарегистрированных подписок и перестроение дерева",
