@@ -371,7 +371,7 @@
                         <TextBlock
                             FontSize="11"
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                            Text="Версия 2.0.0 (WinAppSDK / WinUI 3)" />
+                            Text="{x:Bind ViewModel.CurrentVersionText, Mode=OneWay}" />
                         <TextBlock
                             FontSize="11"
                             Foreground="{ThemeResource TextFillColorTertiaryBrush}"

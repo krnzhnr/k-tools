@@ -107,9 +107,7 @@ def create_inno_setup_script(
     publish_p = str(publish_dir).replace("\\", "\\\\")
     icon_p = str(ICON_SRC).replace("\\", "\\\\")
 
-    from datetime import datetime
-    datetime_str = datetime.now().strftime("%d%m%Y-%H%M")
-    output_filename = f"K-Tools_v{version_str}_setup_{datetime_str}"
+    output_filename = f"K-Tools_v{version_str}_setup"
 
     iss_content = f"""
 [Setup]

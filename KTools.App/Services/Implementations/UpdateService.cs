@@ -107,17 +107,31 @@ public sealed class UpdateService : IUpdateService
                 ? releases
                 : releases.Where(r => !r.Prerelease);
 
+            GitHubReleaseDto? bestRelease = null;
+            string? bestVersionStr = null;
+            GitHubAssetDto? bestAsset = null;
+
             foreach (var release in targetReleases)
             {
                 string rawTagName = release.TagName;
-                // Имя версии может быть в tag_name или в названии релиза.
-                // Обычно теги имеют вид v2.0.0 или v2.0.0-preview.1
                 string remoteVersionStr = rawTagName.TrimStart('v');
+
+                // Если тег релиза является фиксированным (для пререлизов в CI/CD),
+                // мы извлекаем реальную SemVer-версию из названия релиза (например, из "K-Tools C# Edition v2.0.0-preview.24")
+                if (rawTagName.Equals("csharp-pre-release", StringComparison.OrdinalIgnoreCase) || 
+                    rawTagName.Equals("pre-release", StringComparison.OrdinalIgnoreCase))
+                {
+                    var match = System.Text.RegularExpressions.Regex.Match(release.Name, @"v(\d+\.\d+\.\d+[\w\-\.]*)");
+                    if (match.Success)
+                    {
+                        remoteVersionStr = match.Groups[1].Value;
+                    }
+                }
 
                 // Ищем исполняемый файл установщика среди ассетов релиза (обычно файл .exe)
                 var installerAsset = release.Assets.FirstOrDefault(
                     a => a.Name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) && 
-                         a.Name.Contains("setup", StringComparison.OrdinalIgnoreCase));
+                          a.Name.Contains("setup", StringComparison.OrdinalIgnoreCase));
 
                 if (installerAsset == null)
                 {
@@ -134,33 +148,35 @@ public sealed class UpdateService : IUpdateService
                     continue;
                 }
 
-                // Сравниваем версии
-                int comparison = CompareVersions(remoteVersionStr, currentVersionStr);
-                if (comparison > 0)
+                // Сравниваем версию релиза с текущей версией приложения
+                int comparisonWithCurrent = CompareVersions(remoteVersionStr, currentVersionStr);
+                if (comparisonWithCurrent > 0)
                 {
-                    _logService.Info(
-                        $"Найдена более новая версия: {remoteVersionStr} (Текущая: {currentVersionStr}). " +
-                        $"Название релиза: '{release.Name}'. Размер файла: {installerAsset.Size} байт.",
-                        "UpdateService");
+                    // Версия новее текущей. Теперь проверяем, новее ли она нашего лучшего найденного кандидата
+                    if (bestVersionStr == null || CompareVersions(remoteVersionStr, bestVersionStr) > 0)
+                    {
+                        bestRelease = release;
+                        bestVersionStr = remoteVersionStr;
+                        bestAsset = installerAsset;
+                    }
+                }
+            }
 
-                    return new UpdateInfo(
-                        version: remoteVersionStr,
-                        title: string.IsNullOrEmpty(release.Name) ? rawTagName : release.Name,
-                        changelog: release.Body,
-                        downloadUrl: installerAsset.BrowserDownloadUrl,
-                        fileName: installerAsset.Name,
-                        size: installerAsset.Size,
-                        isPrerelease: release.Prerelease);
-                }
-                else
-                {
-                    // Так как релизы на GitHub отсортированы по дате (свежие вверху),
-                    // если первый подходящий релиз не новее текущей версии, то и остальные проверять нет смысла.
-                    _logService.Info(
-                        $"Удаленная версия {remoteVersionStr} не новее текущей версии {currentVersionStr}. Проверка завершена.",
-                        "UpdateService");
-                    break;
-                }
+            if (bestRelease != null && bestVersionStr != null && bestAsset != null)
+            {
+                _logService.Info(
+                    $"Найдено наиболее подходящее обновление: {bestVersionStr} (Текущая: {currentVersionStr}). " +
+                    $"Название релиза: '{bestRelease.Name}'. Размер файла: {bestAsset.Size} байт.",
+                    "UpdateService");
+
+                return new UpdateInfo(
+                    version: bestVersionStr,
+                    title: string.IsNullOrEmpty(bestRelease.Name) ? bestRelease.TagName : bestRelease.Name,
+                    changelog: bestRelease.Body,
+                    downloadUrl: bestAsset.BrowserDownloadUrl,
+                    fileName: bestAsset.Name,
+                    size: bestAsset.Size,
+                    isPrerelease: bestRelease.Prerelease);
             }
 
             _logService.Info("Доступных обновлений не обнаружено.", "UpdateService");
@@ -277,6 +293,9 @@ public sealed class UpdateService : IUpdateService
     /// </summary>
     private string GetCurrentVersion()
     {
+        // ДЛЯ ТЕСТИРОВАНИЯ ОБНОВЛЕНИЙ: Раскомментируйте строчку ниже, чтобы имитировать старую версию:
+        // return "2.0.0-preview.1";
+
         try
         {
             var assembly = Assembly.GetExecutingAssembly();

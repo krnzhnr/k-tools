@@ -1,5 +1,6 @@
 // -*- coding: utf-8 -*-
 using System;
+using System.Reflection;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using CommunityToolkit.Mvvm.Messaging;
@@ -68,6 +69,11 @@ public partial class SettingsViewModel : ObservableObject
     private readonly SettingsManager _settingsManager;
     private readonly IDialogService _dialogService;
     private readonly IUpdateService _updateService;
+
+    /// <summary>
+    /// Строка версии приложения для отображения в блоке "О программе".
+    /// </summary>
+    public string CurrentVersionText { get; }
 
     /// <summary>
     /// Флаг процесса проверки обновлений.
@@ -192,6 +198,8 @@ public partial class SettingsViewModel : ObservableObject
         UpdateStatusText = "Обновления не проверялись";
         DefaultOutputSubfolder = "KTools_Result";
         LogDir = string.Empty;
+
+        CurrentVersionText = $"Версия {GetAppVersion()} (WinAppSDK / WinUI 3)";
 
         MaxParallelLimit = Environment.ProcessorCount;
         LoadCurrentSettings();
@@ -402,6 +410,28 @@ public partial class SettingsViewModel : ObservableObject
             IsDownloading = false;
             LogService.Instance.Exception(ex, "Ошибка при скачивании или установке обновления", "SettingsViewModel");
             await _dialogService.ShowMessageAsync("Ошибка", $"Не удалось загрузить или установить обновление: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Возвращает информационную версию текущей сборки приложения из метаданных сборки.
+    /// </summary>
+    private string GetAppVersion()
+    {
+        try
+        {
+            var assembly = Assembly.GetExecutingAssembly();
+            var infoVersion = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+            if (!string.IsNullOrEmpty(infoVersion))
+            {
+                int plusIdx = infoVersion.IndexOf('+');
+                return plusIdx > 0 ? infoVersion.Substring(0, plusIdx) : infoVersion;
+            }
+            return assembly.GetName().Version?.ToString() ?? "2.0.0";
+        }
+        catch
+        {
+            return "2.0.0";
         }
     }
 }
