@@ -63,12 +63,13 @@ public partial class App : Application
         services.AddSingleton<INavigationService, NavigationService>();
         services.AddSingleton<IDialogService, DialogService>();
         services.AddSingleton<IWindowHandleProvider, WindowHandleProvider>();
+        services.AddSingleton<IUpdateService, UpdateService>();
 
         // 3. Регистрация ViewModels
         services.AddSingleton<MainViewModel>();
         services.AddTransient<HomeViewModel>();
         services.AddTransient<WorkPanelViewModel>();
-        services.AddTransient<SettingsViewModel>();
+        services.AddSingleton<SettingsViewModel>();
         services.AddTransient<LogViewModel>();
         services.AddTransient<DependencySetupViewModel>();
 

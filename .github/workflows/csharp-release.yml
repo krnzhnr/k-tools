@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feature/csharp-migration
+      - develop
   workflow_dispatch:
 
 permissions:
@@ -27,35 +28,50 @@ jobs:
       with:
         python-version: '3.12'
 
-    - name: Install Inno Setup
-      run: |
-        choco install innosetup
-
-    - name: Build C# App and Installer
-      run: |
-        python src-python/build_csharp.py
-
     - name: Extract Changelog Notes
       id: extract_notes
       shell: python
       run: |
         import re, os
         changelog = open("CHANGELOG.md", "r", encoding="utf-8").read()
-        match = re.search(r"^#\s*([\d\.\-\w]+)", changelog, re.MULTILINE)
-        if match:
-            version = match.group(1)
-            print(f"Detected version: {version}")
-            with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
-                f.write(f"version={version}\n")
-            start_idx = changelog.find(match.group(0)) + len(match.group(0))
+        
+        # Находим базовую версию X.Y.Z из верхнего заголовка CHANGELOG.md (например, 2.0.0 из # 2.0.0-csharp-dev)
+        match_base = re.search(r"^#\s*(\d+\.\d+\.\d+)", changelog, re.MULTILINE)
+        match_full = re.search(r"^#\s*([\d\.\-\w]+)", changelog, re.MULTILINE)
+        
+        run_number = os.environ.get("GITHUB_RUN_NUMBER", "0")
+        
+        if match_base:
+            base_version = match_base.group(1)
+            version = f"{base_version}-preview.{run_number}"
+        elif match_full:
+            version = f"{match_full.group(1)}-preview.{run_number}"
+        else:
+            version = f"2.0.0-preview.{run_number}"
+            
+        print(f"Generated build version: {version}")
+        with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
+            f.write(f"version={version}\n")
+            
+        # Заметки для релиза вычленяем с использованием полного верхнего заголовка
+        if match_full:
+            header = match_full.group(0)
+            start_idx = changelog.find(header) + len(header)
             next_match = re.search(r"^#\s+[^#]", changelog[start_idx:], re.MULTILINE)
             notes = changelog[start_idx : start_idx + next_match.start()].strip() if next_match else changelog[start_idx:].strip()
             open("release_notes.md", "w", encoding="utf-8").write(notes)
         else:
-            print("Version not found")
-            with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
-                f.write("version=2.0.0-csharp-dev\n")
-            open("release_notes.md", "w", encoding="utf-8").write("Тестовая сборка C# версии")
+            open("release_notes.md", "w", encoding="utf-8").write("Автоматическая сборка предварительной версии C#.")
+
+    - name: Install Inno Setup
+      run: |
+        choco install innosetup
+
+    - name: Build C# App and Installer
+      env:
+        BUILD_VERSION: ${{ steps.extract_notes.outputs.version }}
+      run: |
+        python src-python/build_csharp.py
 
     - name: Delete Old Pre-Release
       shell: bash

@@ -22,6 +22,9 @@ public partial class MainViewModel : ObservableObject
     private readonly DependencyManager _dependencyManager;
     private readonly SettingsManager _settingsManager;
     private readonly LogService _logService;
+    private readonly SettingsViewModel _settingsViewModel;
+    private readonly IDialogService _dialogService;
+    private readonly IUpdateService _updateService;
 
     /// <summary>
     /// Словарь для быстрого поиска скрипта по тегу навигации.
@@ -54,13 +57,19 @@ public partial class MainViewModel : ObservableObject
         ScriptRegistry scriptRegistry,
         DependencyManager dependencyManager,
         SettingsManager settingsManager,
-        LogService logService)
+        LogService logService,
+        SettingsViewModel settingsViewModel,
+        IDialogService dialogService,
+        IUpdateService updateService)
     {
         _navigationService = navigationService;
         _scriptRegistry = scriptRegistry;
         _dependencyManager = dependencyManager;
         _settingsManager = settingsManager;
         _logService = logService;
+        _settingsViewModel = settingsViewModel;
+        _dialogService = dialogService;
+        _updateService = updateService;
 
         InitializeScripts();
         UpdateLogsTabVisibility();
@@ -156,6 +165,52 @@ public partial class MainViewModel : ObservableObject
         else
         {
             Navigate("home");
+        }
+
+        // Асинхронно запускаем автоматическую проверку обновлений, если она включена
+        if (_settingsManager.AutoCheckUpdates)
+        {
+            _ = CheckUpdatesSilentlyAsync();
+        }
+    }
+
+    /// <summary>
+    /// Выполняет фоновую автоматическую проверку обновлений при старте приложения.
+    /// </summary>
+    private async System.Threading.Tasks.Task CheckUpdatesSilentlyAsync()
+    {
+        _logService.Info("Запущена автоматическая фоновая проверка обновлений...", "MainViewModel");
+        try
+        {
+            var update = await _updateService.CheckForUpdatesAsync(_settingsManager.IncludePreReleases);
+            if (update != null)
+            {
+                _logService.Info($"[Авто-обновление] Найдена более новая версия: {update.Version}", "MainViewModel");
+
+                // Обновляем статус в SettingsViewModel, чтобы вкладка настроек знала о наличии релиза
+                _settingsViewModel.NewUpdateInfo = update;
+                _settingsViewModel.IsUpdateAvailable = true;
+                _settingsViewModel.UpdateStatusText = $"Доступна новая версия: {update.Version}";
+
+                // Предлагаем пользователю обновиться
+                bool confirm = await _dialogService.ShowConfirmationAsync(
+                    "Доступно обновление",
+                    $"Доступна новая версия K-Tools: {update.Version}.\n\nХотите скачать и установить её прямо сейчас?",
+                    "Обновиться",
+                    "Позже");
+
+                if (confirm)
+                {
+                    _logService.Info("Пользователь согласился на обновление. Перенаправление на страницу настроек.", "MainViewModel");
+                    Navigate("settings");
+                    // Запускаем процесс скачивания
+                    _ = _settingsViewModel.DownloadAndInstallUpdateCommand.ExecuteAsync(null);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logService.Exception(ex, "Ошибка при выполнении автоматической проверки обновлений", "MainViewModel");
         }
     }
 

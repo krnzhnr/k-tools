@@ -67,6 +67,43 @@ public partial class SettingsViewModel : ObservableObject
 {
     private readonly SettingsManager _settingsManager;
     private readonly IDialogService _dialogService;
+    private readonly IUpdateService _updateService;
+
+    /// <summary>
+    /// Флаг процесса проверки обновлений.
+    /// </summary>
+    [ObservableProperty]
+    public partial bool IsChecking { get; set; }
+
+    /// <summary>
+    /// Текст статуса проверки обновлений.
+    /// </summary>
+    [ObservableProperty]
+    public partial string UpdateStatusText { get; set; }
+
+    /// <summary>
+    /// Указывает, доступно ли обновление.
+    /// </summary>
+    [ObservableProperty]
+    public partial bool IsUpdateAvailable { get; set; }
+
+    /// <summary>
+    /// Метаданные доступного обновления.
+    /// </summary>
+    [ObservableProperty]
+    public partial UpdateInfo? NewUpdateInfo { get; set; }
+
+    /// <summary>
+    /// Флаг процесса скачивания файла обновления.
+    /// </summary>
+    [ObservableProperty]
+    public partial bool IsDownloading { get; set; }
+
+    /// <summary>
+    /// Прогресс скачивания обновления (от 0 до 100).
+    /// </summary>
+    [ObservableProperty]
+    public partial int DownloadProgress { get; set; }
 
     /// <summary>
     /// Флаг перезаписи существующих файлов результатов обработки.
@@ -96,7 +133,7 @@ public partial class SettingsViewModel : ObservableObject
     /// Имя папки по умолчанию для сохранения выходных файлов.
     /// </summary>
     [ObservableProperty]
-    public partial string DefaultOutputSubfolder { get; set; } = "KTools_Result";
+    public partial string DefaultOutputSubfolder { get; set; }
 
     /// <summary>
     /// Флаг автоматического создания и использования вложенных папок для вывода.
@@ -126,7 +163,7 @@ public partial class SettingsViewModel : ObservableObject
     /// Путь к пользовательской директории хранения файлов журналов (логов).
     /// </summary>
     [ObservableProperty]
-    public partial string LogDir { get; set; } = string.Empty;
+    public partial string LogDir { get; set; }
 
     /// <summary>
     /// Флаг автоматической проверки доступных обновлений приложения при запуске.
@@ -145,10 +182,16 @@ public partial class SettingsViewModel : ObservableObject
     /// </summary>
     public SettingsViewModel(
         SettingsManager settingsManager,
-        IDialogService dialogService)
+        IDialogService dialogService,
+        IUpdateService updateService)
     {
         _settingsManager = settingsManager;
         _dialogService = dialogService;
+        _updateService = updateService;
+
+        UpdateStatusText = "Обновления не проверялись";
+        DefaultOutputSubfolder = "KTools_Result";
+        LogDir = string.Empty;
 
         MaxParallelLimit = Environment.ProcessorCount;
         LoadCurrentSettings();
@@ -291,6 +334,74 @@ public partial class SettingsViewModel : ObservableObject
             await _dialogService.ShowMessageAsync(
                 "Настройки сброшены",
                 "Все настройки были успешно сброшены к значениям по умолчанию.");
+        }
+    }
+
+    /// <summary>
+    /// Выполняет проверку наличия обновлений на основе текущих настроек пользователя.
+    /// </summary>
+    [RelayCommand]
+    public async System.Threading.Tasks.Task CheckForUpdatesAsync()
+    {
+        if (IsChecking) return;
+
+        IsChecking = true;
+        UpdateStatusText = "Выполняется проверка обновлений...";
+        IsUpdateAvailable = false;
+        NewUpdateInfo = null;
+
+        try
+        {
+            var update = await _updateService.CheckForUpdatesAsync(IncludePreReleases);
+            if (update != null)
+            {
+                NewUpdateInfo = update;
+                IsUpdateAvailable = true;
+                UpdateStatusText = $"Доступна новая версия: {update.Version}";
+            }
+            else
+            {
+                UpdateStatusText = "Установлена последняя версия приложения";
+            }
+        }
+        catch (Exception ex)
+        {
+            UpdateStatusText = "Не удалось выполнить проверку обновлений";
+            LogService.Instance.Exception(ex, "Ошибка при ручной проверке обновлений из панели настроек", "SettingsViewModel");
+            await _dialogService.ShowMessageAsync("Ошибка", $"Не удалось проверить обновления: {ex.Message}");
+        }
+        finally
+        {
+            IsChecking = false;
+        }
+    }
+
+    /// <summary>
+    /// Запускает скачивание и установку найденного обновления.
+    /// </summary>
+    [RelayCommand]
+    public async System.Threading.Tasks.Task DownloadAndInstallUpdateAsync()
+    {
+        if (NewUpdateInfo == null || IsDownloading) return;
+
+        IsDownloading = true;
+        DownloadProgress = 0;
+
+        try
+        {
+            await _updateService.DownloadAndInstallUpdateAsync(
+                NewUpdateInfo.DownloadUrl,
+                NewUpdateInfo.FileName,
+                progress =>
+                {
+                    DownloadProgress = (int)Math.Round(progress);
+                });
+        }
+        catch (Exception ex)
+        {
+            IsDownloading = false;
+            LogService.Instance.Exception(ex, "Ошибка при скачивании или установке обновления", "SettingsViewModel");
+            await _dialogService.ShowMessageAsync("Ошибка", $"Не удалось загрузить или установить обновление: {ex.Message}");
         }
     }
 }

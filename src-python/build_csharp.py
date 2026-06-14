@@ -63,6 +63,14 @@ def extract_version_from_changelog() -> str:
 
 def prompt_version_update() -> str:
     """Определить версию для сборки."""
+    # Приоритет 1: версия из переменной окружения BUILD_VERSION (передается из GitHub Actions)
+    env_version = os.environ.get("BUILD_VERSION")
+    if env_version:
+        save_version(env_version)
+        print(f"[✓] Версия успешно получена из переменной окружения BUILD_VERSION: {env_version}")
+        return env_version
+
+    # Приоритет 2: из CHANGELOG.md
     try:
         version = extract_version_from_changelog()
         save_version(version)
@@ -202,14 +210,31 @@ def main() -> None:
     # Шаг 1. Очистка старых данных публикации
     clean_publish_folder()
 
-    # Шаг 2. Запуск dotnet publish
+    # Шаг 2. Запуск dotnet publish с динамической версией
     print("[*] Запуск компиляции C# проекта (.NET 8 / WinUI 3)...")
+    
+    # Формируем чисто числовую версию для AssemblyVersion/FileVersion
+    assembly_version = "2.0.0.0"
+    match_nums = re.match(r"^(\d+\.\d+\.\d+)", version_str)
+    if match_nums:
+        base_num = match_nums.group(1)
+        suffix_match = re.search(r"-[\w\.]+\.(\d+)", version_str)
+        if suffix_match:
+            assembly_version = f"{base_num}.{suffix_match.group(1)}"
+        else:
+            assembly_version = f"{base_num}.0"
+            
+    print(f"[*] Сборка с версией: ProductVersion={version_str}, AssemblyVersion={assembly_version}")
+    
     cmd = [
         "dotnet", "publish", str(PROJECT_FILE),
         "-c", "Release",
         "-r", "win-x64",
         "--self-contained", "true",
-        "-p:WindowsPackageType=None"
+        "-p:WindowsPackageType=None",
+        f"-p:Version={version_str}",
+        f"-p:AssemblyVersion={assembly_version}",
+        f"-p:FileVersion={assembly_version}"
     ]
     print(f"Команда: {' '.join(cmd)}")
     subprocess.check_call(cmd)

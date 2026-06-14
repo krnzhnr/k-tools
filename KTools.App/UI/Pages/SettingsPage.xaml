@@ -11,6 +11,19 @@
     mc:Ignorable="d"
     NavigationCacheMode="Required">
 
+    <Page.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.ThemeDictionaries>
+                <ResourceDictionary x:Key="Default">
+                    <SolidColorBrush x:Key="SuccessStrokeBrush" Color="#107C41" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="Dark">
+                    <SolidColorBrush x:Key="SuccessStrokeBrush" Color="#6BC285" />
+                </ResourceDictionary>
+            </ResourceDictionary.ThemeDictionaries>
+        </ResourceDictionary>
+    </Page.Resources>
+
     <ScrollViewer VerticalScrollBarVisibility="Auto">
         <StackPanel
             Padding="36,12,36,36"
@@ -224,6 +237,84 @@
                         OnContent="Вкл"
                         IsOn="{x:Bind ViewModel.IncludePreReleases, Mode=TwoWay}" />
                 </community:SettingsCard>
+
+                <!-- Ручная проверка обновлений -->
+                <community:SettingsCard
+                    Padding="16,12,16,12"
+                    Description="Запустить проверку наличия свежих обновлений приложения на GitHub"
+                    Header="Проверить наличие обновлений">
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <ProgressRing
+                            x:Name="UpdateProgressRing"
+                            Width="20"
+                            Height="20"
+                            VerticalAlignment="Center"
+                            IsActive="{x:Bind ViewModel.IsChecking, Mode=OneWay}"
+                            Visibility="{x:Bind ViewModel.IsChecking, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
+                        <Button
+                            x:Name="CheckUpdatesButton"
+                            Command="{x:Bind ViewModel.CheckForUpdatesCommand}"
+                            Content="Проверить"
+                            IsEnabled="{x:Bind ViewModel.IsChecking, Mode=OneWay, Converter={StaticResource InverseBoolConverter}}" />
+                    </StackPanel>
+                </community:SettingsCard>
+            </StackPanel>
+
+            <!-- Дополнительный блок проверки и загрузки обновлений -->
+            <StackPanel
+                Visibility="{x:Bind ViewModel.IsUpdateAvailable, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
+                Spacing="8">
+                <Border
+                    Padding="16"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource SuccessStrokeBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center" Spacing="4">
+                            <TextBlock
+                                FontSize="14"
+                                FontWeight="SemiBold"
+                                Text="{x:Bind ViewModel.UpdateStatusText, Mode=OneWay}" />
+                            <TextBlock
+                                FontSize="12"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                Text="{x:Bind ViewModel.NewUpdateInfo.Title, Mode=OneWay}" />
+                        </StackPanel>
+                        <Button
+                            Grid.Column="1"
+                            x:Name="InstallUpdateButton"
+                            Command="{x:Bind ViewModel.DownloadAndInstallUpdateCommand}"
+                            Content="Скачать и установить"
+                            IsEnabled="{x:Bind ViewModel.IsDownloading, Mode=OneWay, Converter={StaticResource InverseBoolConverter}}"
+                            Style="{StaticResource AccentButtonStyle}"
+                            VerticalAlignment="Center" />
+                    </Grid>
+                </Border>
+
+                <!-- Прогресс скачивания -->
+                <StackPanel
+                    Visibility="{x:Bind ViewModel.IsDownloading, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
+                    Spacing="4"
+                    Margin="4,0,4,0">
+                    <ProgressBar
+                        x:Name="DownloadProgressBar"
+                        Minimum="0"
+                        Maximum="100"
+                        Value="{x:Bind ViewModel.DownloadProgress, Mode=OneWay}" />
+                    <TextBlock
+                        FontSize="11"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        HorizontalAlignment="Right">
+                        <Run Text="Скачивание... " />
+                        <Run Text="{x:Bind ViewModel.DownloadProgress, Mode=OneWay}" />
+                        <Run Text="%" />
+                    </TextBlock>
+                </StackPanel>
             </StackPanel>
 
             <!-- Раздел: Сброс и обслуживание -->
