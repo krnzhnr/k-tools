@@ -182,13 +182,24 @@ public sealed class UpdateService : IUpdateService
             _logService.Info("Доступных обновлений не обнаружено.", "UpdateService");
             return null;
         }
+        catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Forbidden)
+        {
+            var friendlyEx = new InvalidOperationException(
+                "Превышен лимит запросов к GitHub API (Rate Limit Exceeded). Пожалуйста, повторите попытку позже.",
+                ex);
+            _logService.Exception(
+                friendlyEx,
+                "Превышен лимит запросов к GitHub API (403 Forbidden).",
+                "UpdateService");
+            throw friendlyEx;
+        }
         catch (Exception ex)
         {
             _logService.Exception(
                 ex,
                 "Произошла непредвиденная ошибка при проверке наличия обновлений на GitHub.",
                 "UpdateService");
-            return null;
+            throw;
         }
     }
 
@@ -294,7 +305,7 @@ public sealed class UpdateService : IUpdateService
     private string GetCurrentVersion()
     {
         // ДЛЯ ТЕСТИРОВАНИЯ ОБНОВЛЕНИЙ: Раскомментируйте строчку ниже, чтобы имитировать старую версию:
-        // return "2.0.0-preview.1";
+        // return "2.0.0-preview.2";
 
         try
         {
