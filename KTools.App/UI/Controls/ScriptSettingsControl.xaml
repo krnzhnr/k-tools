@@ -10,12 +10,43 @@
     d:DesignHeight="300"
     d:DesignWidth="400">
 
-    <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,0,8,0">
-        <StackPanel x:Name="SettingsContainer" 
-                    Spacing="12" 
-                    Padding="4,4,12,24" 
-                    HorizontalAlignment="Stretch">
-            <!-- Динамические группы настроек будут вставляться сюда программно -->
-        </StackPanel>
-    </ScrollViewer>
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <NavigationView x:Name="SettingsNavigationView" 
+                        Grid.Row="0"
+                        PaneDisplayMode="Top"
+                        SelectionFollowsFocus="Enabled" 
+                        IsBackButtonVisible="Collapsed"
+                        IsSettingsVisible="False"
+                        AlwaysShowHeader="False"
+                        SelectionChanged="SettingsNavigationView_SelectionChanged"
+                        Margin="0,-2,0,4"
+                        Padding="0">
+            <NavigationView.Resources>
+                <!-- Делаем фон области контента прозрачным -->
+                <SolidColorBrush x:Key="NavigationViewContentBackground" Color="Transparent" />
+                <!-- Убираем рамку вокруг области контента -->
+                <SolidColorBrush x:Key="NavigationViewContentGridBorderBrush" Color="Transparent" />
+                <!-- Сбрасываем внутренние боковые отступы области контента NavigationView -->
+                <Thickness x:Key="NavigationViewContentMargin">0,0,0,0</Thickness>
+            </NavigationView.Resources>
+            <NavigationView.MenuItems>
+                <!-- Будет заполняться динамически -->
+            </NavigationView.MenuItems>
+        </NavigationView>
+
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Margin="0">
+            <StackPanel x:Name="SettingsContainer" 
+                        Spacing="12" 
+                        Padding="0,4,0,24" 
+                        HorizontalAlignment="Stretch">
+                <!-- Динамические группы настроек будут вставляться сюда программно -->
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
 </UserControl>
+

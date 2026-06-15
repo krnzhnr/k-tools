@@ -49,7 +49,7 @@ public sealed class ScriptRegistry
         // В будущем здесь будут регистрироваться все реальные классы скриптов.
         // Сейчас регистрируем первый рабочий скрипт "Очистка метаданных" и заглушки для остальных.
         _scripts.Add(new Scripts.MetadataCleanupScript());
-        _scripts.Add(new Scripts.VideoEncodingStub());
+        _scripts.Add(new Scripts.VideoEncodingScript());
         _scripts.Add(new Scripts.ContainerConversionScript());
         
         _scripts.Add(new Scripts.AudioEncodingScript());
@@ -59,7 +59,7 @@ public sealed class ScriptRegistry
 
         _scripts.Add(new Scripts.MkvAssemblyScript());
         _scripts.Add(new Scripts.StreamManagementScript());
-        _scripts.Add(new Scripts.StreamReplacementStub());
+        _scripts.Add(new Scripts.StreamReplacementScript());
         _scripts.Add(new Scripts.TrackExtractorScript());
 
         _scripts.Add(new Scripts.SubtitlesConvertScript());

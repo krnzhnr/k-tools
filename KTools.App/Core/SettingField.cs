@@ -28,7 +28,8 @@ public class SettingField
         List<string>? visibleIfValues = null,
         bool requiresWarning = false,
         string? warningTitle = null,
-        string? warningText = null)
+        string? warningText = null,
+        List<SettingVisibilityCondition>? visibilityConditions = null)
     {
         Key = key ?? throw new ArgumentNullException(nameof(key));
         Label = label ?? throw new ArgumentNullException(nameof(label));
@@ -44,6 +45,7 @@ public class SettingField
         RequiresWarning = requiresWarning;
         WarningTitle = warningTitle;
         WarningText = warningText;
+        VisibilityConditions = visibilityConditions;
     }
 
     /// <summary>
@@ -102,6 +104,11 @@ public class SettingField
     public List<string>? VisibleIfValues { get; }
 
     /// <summary>
+    /// Список множественных условий видимости (логическое И), управляющих этим полем.
+    /// </summary>
+    public List<SettingVisibilityCondition>? VisibilityConditions { get; }
+
+    /// <summary>
     /// Флаг необходимости показа предупреждающего диалога при выключении чекбокса.
     /// </summary>
     public bool RequiresWarning { get; }
@@ -115,4 +122,45 @@ public class SettingField
     /// Текст предупреждения о возможных последствиях отключения опции.
     /// </summary>
     public string? WarningText { get; }
+}
+
+/// <summary>
+/// Представляет одно условие видимости параметра в пользовательском интерфейсе.
+/// Позволяет связать видимость поля с текущим значением другого параметра.
+/// Все комментарии и документация выполнены на русском языке.
+/// </summary>
+public sealed class SettingVisibilityCondition
+{
+    /// <summary>
+    /// Ключ управляющего параметра, от которого зависит видимость.
+    /// </summary>
+    public string Key { get; }
+
+    /// <summary>
+    /// Список строковых значений управляющего параметра, при которых условие считается истинным.
+    /// </summary>
+    public List<string> Values { get; }
+
+    /// <summary>
+    /// Если установлено в true, условие инвертируется (поле видно, если значение НЕ совпадает ни с одним из списка).
+    /// </summary>
+    public bool Negate { get; }
+
+    /// <summary>
+    /// Инициализирует новое условие видимости с списком значений.
+    /// </summary>
+    public SettingVisibilityCondition(string key, List<string> values, bool negate = false)
+    {
+        Key = key ?? throw new ArgumentNullException(nameof(key));
+        Values = values ?? throw new ArgumentNullException(nameof(values));
+        Negate = negate;
+    }
+
+    /// <summary>
+    /// Инициализирует новое условие видимости для одного конкретного значения.
+    /// </summary>
+    public SettingVisibilityCondition(string key, string value, bool negate = false)
+        : this(key, new List<string> { value }, negate)
+    {
+    }
 }

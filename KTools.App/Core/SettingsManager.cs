@@ -224,7 +224,23 @@ public sealed class SettingsManager
                             }
                             if (typeof(T) == typeof(string))
                             {
-                                return (T)(object)jsonElem.GetString()!;
+                                // Если элемент является строкой, возвращаем её значение.
+                                if (jsonElem.ValueKind == JsonValueKind.String)
+                                {
+                                    return (T)(object)jsonElem.GetString()!;
+                                }
+                                // Если элемент является логическим значением, возвращаем строковое представление ("True"/"False").
+                                if (jsonElem.ValueKind == JsonValueKind.True || jsonElem.ValueKind == JsonValueKind.False)
+                                {
+                                    return (T)(object)jsonElem.GetBoolean().ToString();
+                                }
+                                // Если элемент является числом, возвращаем его сырое текстовое представление.
+                                if (jsonElem.ValueKind == JsonValueKind.Number)
+                                {
+                                    return (T)(object)jsonElem.GetRawText();
+                                }
+                                // Для всех прочих типов используем стандартный ToString().
+                                return (T)(object)jsonElem.ToString();
                             }
                             
                             // fallback-десериализация для сложных типов

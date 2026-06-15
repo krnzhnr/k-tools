@@ -51,8 +51,7 @@ public partial class HomeViewModel : ObservableObject
                 IconName = "video",
                 Description = "Кодирование видео: изменение формата, " +
                               "вшивание субтитров, фильтрация тегов " +
-                              "и настройка звука",
-                IsAvailable = false
+                              "и настройка звука"
             },
             new ScriptInfo
             {
@@ -128,8 +127,7 @@ public partial class HomeViewModel : ObservableObject
                 Category = "Контейнеры",
                 IconName = "switch",
                 Description = "Заменяет дорожки в MKV/MP4 на внешние " +
-                              "файлы (видео, аудио, субтитры).",
-                IsAvailable = false
+                              "файлы (видео, аудио, субтитры)."
             },
             new ScriptInfo
             {

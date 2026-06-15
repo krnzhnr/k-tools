@@ -13,14 +13,16 @@ namespace KTools_App.UI.Controls;
 /// <summary>
 /// Класс автогенерации элементов управления параметрами скриптов на основе декларативной схемы настроек.
 /// Полностью динамически выстраивает Fluent-интерфейс параметров и связывает их с SettingsManager.
+/// Поддерживает горизонтальные вкладки (NavigationView) и раздельные карточки для подгрупп параметров.
 /// </summary>
 public sealed partial class ScriptSettingsControl : UserControl
 {
     private readonly List<(SettingField Field, FrameworkElement Element)> _generatedElements = new();
+    private readonly Dictionary<string, FrameworkElement> _groupContainers = new();
 
     private class GroupVisual
     {
-        public StackPanel GroupPanel { get; set; } = null!;
+        public StackPanel? GroupPanel { get; set; }
         public Border CardBorder { get; set; } = null!;
         public List<FrameworkElement> Elements { get; set; } = new();
     }
@@ -30,6 +32,14 @@ public sealed partial class ScriptSettingsControl : UserControl
     public ScriptSettingsControl()
     {
         InitializeComponent();
+
+        // Обеспечивает автоматический сброс фокуса с полей ввода при клике на свободную область формы
+        this.PointerPressed += (s, e) =>
+        {
+            this.IsTabStop = true;
+            this.Focus(FocusState.Programmatic);
+            this.IsTabStop = false;
+        };
     }
 
     /// <summary>
@@ -40,10 +50,13 @@ public sealed partial class ScriptSettingsControl : UserControl
         SettingsContainer.Children.Clear();
         _generatedElements.Clear();
         _groups.Clear();
+        _groupContainers.Clear();
+        SettingsNavigationView.MenuItems.Clear();
 
         if (script.SettingsSchema == null ||
             script.SettingsSchema.Count == 0)
         {
+            SettingsNavigationView.Visibility = Visibility.Collapsed;
             var noSettingsText = new TextBlock
             {
                 Text = "У этого скрипта нет настраиваемых параметров.",
@@ -60,190 +73,213 @@ public sealed partial class ScriptSettingsControl : UserControl
         string settingsGroup = SettingsManager.Instance
             .GetSafeGroupName(script.Name);
 
-        // Группируем настройки по имени группы (например, "Кодирование")
-        var groupedFields = script.SettingsSchema
-            .GroupBy(f => f.Group.Split(':')[0])
-            .ToList();
+        // Группируем поля по иерархии: { "ГлавнаяГруппа": { "Подгруппа": [Поля] } }
+        var hierarchicalGroups = new Dictionary<string, Dictionary<string, List<SettingField>>>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var group in groupedFields)
+        foreach (var field in script.SettingsSchema)
         {
-            // Создаем визуальный контейнер для группы настроек
-            var groupPanel = new StackPanel
-            {
-                Spacing = 6,
-                Margin = new Thickness(0),
-                HorizontalAlignment = HorizontalAlignment.Stretch
-            };
+            var parts = field.Group.Split(':', 2);
+            string mainGroup = parts[0];
+            string subGroup = parts.Length > 1 ? parts[1] : "";
 
-            // Заголовок группы
-            var groupTitle = new TextBlock
+            if (!hierarchicalGroups.ContainsKey(mainGroup))
             {
-                Text = group.Key,
-                FontSize = 16,
-                FontWeight = Microsoft.UI.Text.FontWeights.Bold,
-                Foreground = (Brush)Application.Current.Resources[
-                    "TextFillColorPrimaryBrush"],
-                Margin = new Thickness(0)
-            };
-            groupPanel.Children.Add(groupTitle);
+                hierarchicalGroups[mainGroup] = new Dictionary<string, List<SettingField>>(StringComparer.OrdinalIgnoreCase);
+            }
+            if (!hierarchicalGroups[mainGroup].ContainsKey(subGroup))
+            {
+                hierarchicalGroups[mainGroup][subGroup] = new List<SettingField>();
+            }
+            hierarchicalGroups[mainGroup][subGroup].Add(field);
+        }
 
-            // Создаем единую нативную карточку-контейнер для всей группы параметров
-            var cardBorder = new Border
-            {
-                Background = (Brush)Application.Current.Resources[
-                    "CardBackgroundFillColorDefaultBrush"],
-                BorderBrush = (Brush)Application.Current.Resources[
-                    "CardStrokeColorDefaultBrush"],
-                BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(8),
-                Padding = new Thickness(16, 16, 16, 16),
-                HorizontalAlignment = HorizontalAlignment.Stretch,
-                Margin = new Thickness(0)
-            };
+        if (hierarchicalGroups.Count <= 1)
+        {
+            // Скрываем вкладки, если основная группа всего одна
+            SettingsNavigationView.Visibility = Visibility.Collapsed;
 
-            var cardContentStack = new StackPanel
-            {
-                Spacing = 16,
-                HorizontalAlignment = HorizontalAlignment.Stretch
-            };
-            cardBorder.Child = cardContentStack;
+            string mainName = hierarchicalGroups.Keys.FirstOrDefault() ?? "Настройки";
+            var subs = hierarchicalGroups[mainName];
 
-            var groupVisual = new GroupVisual
+            foreach (var subPair in subs)
             {
-                GroupPanel = groupPanel,
-                CardBorder = cardBorder
-            };
+                string cardTitle = string.IsNullOrEmpty(subPair.Key) ? mainName : subPair.Key;
+                var card = CreateSettingsGroupCard(cardTitle, subPair.Value, settingsGroup);
+                SettingsContainer.Children.Add(card);
+            }
+        }
+        else
+        {
+            // Показываем вкладки при наличии нескольких основных групп
+            SettingsNavigationView.Visibility = Visibility.Visible;
 
-            // Наполняем карточку параметрами группы
-            foreach (var field in group)
+            foreach (var mainGroupPair in hierarchicalGroups)
             {
-                if (field.Type == SettingType.Subtitle)
+                string mainGroup = mainGroupPair.Key;
+                var subs = mainGroupPair.Value;
+
+                // Создаем StackPanel в качестве контейнера для карточек текущей основной группы
+                var mainGroupPanel = new StackPanel
                 {
-                    var subtitle = new TextBlock
-                    {
-                        Text = field.Label,
-                        FontSize = 13,
-                        FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-                        Foreground = (Brush)Application.Current.Resources[
-                            "TextFillColorSecondaryBrush"],
-                        Margin = new Thickness(0, 8, 0, 4)
-                    };
-                    cardContentStack.Children.Add(subtitle);
-                    continue;
-                }
-
-                if (field.Type == SettingType.Checkbox)
-                {
-                    var checkContent = new StackPanel { Spacing = 2 };
-                    
-                    checkContent.Children.Add(new TextBlock
-                    {
-                        Text = field.Label,
-                        FontSize = 14,
-                        Foreground = (Brush)Application.Current.Resources[
-                            "TextFillColorPrimaryBrush"]
-                    });
-
-                    if (!string.IsNullOrEmpty(field.Comment))
-                    {
-                        checkContent.Children.Add(new TextBlock
-                        {
-                            Text = field.Comment,
-                            FontSize = 12,
-                            Foreground = (Brush)Application.Current.Resources[
-                                "TextFillColorSecondaryBrush"]
-                        });
-                    }
-
-                    var checkBox = new CheckBox
-                    {
-                        Content = checkContent,
-                        IsChecked = SettingsManager.Instance.GetSetting(
-                            settingsGroup,
-                            field.Key,
-                            field.DefaultValue is bool b && b),
-                        VerticalAlignment = VerticalAlignment.Center
-                    };
-
-                    checkBox.Checked += (s, e) =>
-                    {
-                        if (_isInternalCheckBoxUpdate) return;
-                        SettingsManager.Instance.SetSetting(
-                            settingsGroup, field.Key, true);
-                        UpdateVisibility(settingsGroup);
-                    };
-
-                    checkBox.Unchecked += async (s, e) =>
-                    {
-                        if (_isInternalCheckBoxUpdate) return;
-
-                        if (field.RequiresWarning)
-                        {
-                            var xamlRoot = this.XamlRoot ?? checkBox.XamlRoot;
-                            if (xamlRoot != null)
-                            {
-                                var dialog = new ContentDialog
-                                {
-                                    Title = field.WarningTitle ?? "Предупреждение",
-                                    Content = field.WarningText ?? "Вы действительно хотите отключить этот параметр?",
-                                    PrimaryButtonText = "Я понимаю",
-                                    CloseButtonText = "Отмена",
-                                    XamlRoot = xamlRoot
-                                };
-
-                                var result = await dialog.ShowAsync();
-                                if (result != ContentDialogResult.Primary)
-                                {
-                                    _isInternalCheckBoxUpdate = true;
-                                    checkBox.IsChecked = true;
-                                    _isInternalCheckBoxUpdate = false;
-                                    return;
-                                }
-                            }
-                        }
-
-                        SettingsManager.Instance.SetSetting(
-                            settingsGroup, field.Key, false);
-                        UpdateVisibility(settingsGroup);
-                    };
-
-                    cardContentStack.Children.Add(checkBox);
-                    _generatedElements.Add((field, checkBox));
-                    groupVisual.Elements.Add(checkBox);
-                    continue;
-                }
-
-                // Для остальных типов (Text, Int, Combo) создаем строку Grid
-                var rowGrid = new Grid
-                {
+                    Spacing = 12,
                     HorizontalAlignment = HorizontalAlignment.Stretch,
-                    VerticalAlignment = VerticalAlignment.Center
+                    Visibility = Visibility.Collapsed // По умолчанию скрываем
                 };
+
+                foreach (var subPair in subs)
+                {
+                    string cardTitle = string.IsNullOrEmpty(subPair.Key) ? mainGroup : subPair.Key;
+                    var card = CreateSettingsGroupCard(cardTitle, subPair.Value, settingsGroup);
+                    mainGroupPanel.Children.Add(card);
+                }
+
+                SettingsContainer.Children.Add(mainGroupPanel);
+                _groupContainers[mainGroup] = mainGroupPanel;
+
+                // Создаем элемент вкладки NavigationViewItem
+                var navItem = new NavigationViewItem
+                {
+                    Content = mainGroup,
+                    Tag = mainGroup
+                };
+
+                // Присваиваем нативные иконки в соответствии с Microsoft гайдлайнами
+                string mainGroupLower = mainGroup.ToLowerInvariant();
+                if (mainGroupLower == "видео") navItem.Icon = new SymbolIcon(Symbol.Play);
+                else if (mainGroupLower == "аудио") navItem.Icon = new SymbolIcon(Symbol.Audio);
+                else if (mainGroupLower == "субтитры") navItem.Icon = new SymbolIcon(Symbol.Message);
+                else if (mainGroupLower == "общие") navItem.Icon = new SymbolIcon(Symbol.Setting);
+                else navItem.Icon = new SymbolIcon(Symbol.Folder);
+
+                SettingsNavigationView.MenuItems.Add(navItem);
+            }
+
+            // Выбираем первую вкладку по умолчанию
+            if (SettingsNavigationView.MenuItems.Count > 0)
+            {
+                var firstItem = (NavigationViewItem)SettingsNavigationView.MenuItems[0];
+                SettingsNavigationView.SelectedItem = firstItem;
+                string firstTag = firstItem.Tag?.ToString() ?? "";
+                if (_groupContainers.TryGetValue(firstTag, out var firstPanel))
+                {
+                    firstPanel.Visibility = Visibility.Visible;
+                }
+            }
+        }
+
+        UpdateVisibility(settingsGroup);
+
+        bool isLossless = SettingsManager.Instance.GetSetting(settingsGroup, "lossless", false);
+        HandleLosslessChange(settingsGroup, isLossless);
+
+        string rcMode = SettingsManager.Instance.GetSetting(settingsGroup, "nvenc_rc", "vbr_hq");
+        HandleRcChange(settingsGroup, rcMode);
+        HandleAutoBitrateChange(settingsGroup);
+    }
+
+    /// <summary>
+    /// Обработчик переключения горизонтальных вкладок настроек.
+    /// </summary>
+    private void SettingsNavigationView_SelectionChanged(
+        NavigationView sender,
+        NavigationViewSelectionChangedEventArgs args)
+    {
+        if (args.SelectedItemContainer is NavigationViewItem selectedItem)
+        {
+            string tag = selectedItem.Tag?.ToString() ?? string.Empty;
+
+            foreach (var pair in _groupContainers)
+            {
+                pair.Value.Visibility = pair.Key.Equals(tag, StringComparison.OrdinalIgnoreCase)
+                    ? Visibility.Visible
+                    : Visibility.Collapsed;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Создает нативную карточку параметров подгруппы с вертикальной структурой полей.
+    /// </summary>
+    private Border CreateSettingsGroupCard(string title, List<SettingField> fields, string settingsGroup)
+    {
+        var cardBorder = new Border
+        {
+            Background = (Brush)Application.Current.Resources[
+                "CardBackgroundFillColorDefaultBrush"],
+            BorderBrush = (Brush)Application.Current.Resources[
+                "CardStrokeColorDefaultBrush"],
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(8),
+            Padding = new Thickness(16),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            Margin = new Thickness(0)
+        };
+
+        var cardContentStack = new StackPanel
+        {
+            Spacing = 16,
+            HorizontalAlignment = HorizontalAlignment.Stretch
+        };
+        cardBorder.Child = cardContentStack;
+
+        // Заголовок карточки
+        var cardTitle = new TextBlock
+        {
+            Text = title,
+            FontSize = 14,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            Foreground = (Brush)Application.Current.Resources[
+                "TextFillColorPrimaryBrush"],
+            Margin = new Thickness(0, 0, 0, 4)
+        };
+        cardContentStack.Children.Add(cardTitle);
+
+        var groupVisual = new GroupVisual
+        {
+            CardBorder = cardBorder
+        };
+
+        foreach (var field in fields)
+        {
+            if (field.Type == SettingType.Subtitle)
+            {
+                var subtitle = new TextBlock
+                {
+                    Text = field.Label,
+                    FontSize = 13,
+                    FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                    Foreground = (Brush)Application.Current.Resources[
+                        "TextFillColorSecondaryBrush"],
+                    Margin = new Thickness(0, 8, 0, 4)
+                };
+                cardContentStack.Children.Add(subtitle);
+                continue;
+            }
+
+            if (field.Type == SettingType.KeywordList)
+            {
+                var keywordListContainer = CreateKeywordListContainer(settingsGroup, field);
+                cardContentStack.Children.Add(keywordListContainer);
+                _generatedElements.Add((field, keywordListContainer));
+                groupVisual.Elements.Add(keywordListContainer);
+                continue;
+            }
+
+            if (field.Type == SettingType.Checkbox)
+            {
+                var checkContent = new StackPanel { Spacing = 2 };
                 
-                rowGrid.ColumnDefinitions.Add(new ColumnDefinition 
-                    { Width = new GridLength(1, GridUnitType.Star) });
-                rowGrid.ColumnDefinitions.Add(new ColumnDefinition 
-                    { Width = GridLength.Auto });
-
-                var textStack = new StackPanel 
-                { 
-                    Spacing = 2, 
-                    Margin = new Thickness(0, 0, 16, 0),
-                    VerticalAlignment = VerticalAlignment.Center 
-                };
-
-                textStack.Children.Add(new TextBlock
+                checkContent.Children.Add(new TextBlock
                 {
                     Text = field.Label,
                     FontSize = 14,
                     Foreground = (Brush)Application.Current.Resources[
-                        "TextFillColorPrimaryBrush"],
-                    VerticalAlignment = VerticalAlignment.Center
+                        "TextFillColorPrimaryBrush"]
                 });
 
                 if (!string.IsNullOrEmpty(field.Comment))
                 {
-                    textStack.Children.Add(new TextBlock
+                    checkContent.Children.Add(new TextBlock
                     {
                         Text = field.Comment,
                         FontSize = 12,
@@ -251,131 +287,265 @@ public sealed partial class ScriptSettingsControl : UserControl
                             "TextFillColorSecondaryBrush"]
                     });
                 }
-                
-                Grid.SetColumn(textStack, 0);
-                rowGrid.Children.Add(textStack);
 
-                FrameworkElement? inputControl = null;
-
-                switch (field.Type)
+                var checkBox = new CheckBox
                 {
-                    case SettingType.Text:
-                        var textBox = new TextBox
-                        {
-                            Text = SettingsManager.Instance.GetSetting(
-                                settingsGroup,
-                                field.Key,
-                                field.DefaultValue?.ToString() ?? string.Empty),
-                            Width = 200,
-                            VerticalAlignment = VerticalAlignment.Center
-                        };
-                        textBox.LostFocus += (s, e) =>
-                        {
-                            SettingsManager.Instance.SetSetting(
-                                settingsGroup, field.Key, textBox.Text);
-                            UpdateVisibility(settingsGroup);
-                        };
-                        inputControl = textBox;
-                        break;
+                    Content = checkContent,
+                    IsChecked = SettingsManager.Instance.GetSetting(
+                        settingsGroup,
+                        field.Key,
+                        field.DefaultValue is bool b && b),
+                    VerticalAlignment = VerticalAlignment.Center
+                };
 
-                    case SettingType.Int:
-                        var numberBox = new NumberBox
-                        {
-                            Value = SettingsManager.Instance.GetSetting(
-                                settingsGroup,
-                                field.Key,
-                                field.DefaultValue is int vInt ? vInt : 0),
-                            Width = 120,
-                            SpinButtonPlacementMode = 
-                                NumberBoxSpinButtonPlacementMode.Compact,
-                            SmallChange = 1,
-                            LargeChange = 5,
-                            VerticalAlignment = VerticalAlignment.Center
-                        };
-                        numberBox.ValueChanged += (s, e) =>
-                        {
-                            if (!double.IsNaN(numberBox.Value))
-                            {
-                                SettingsManager.Instance.SetSetting(
-                                    settingsGroup,
-                                    field.Key,
-                                    (int)numberBox.Value);
-                                UpdateVisibility(settingsGroup);
-                            }
-                        };
-                        inputControl = numberBox;
-                        break;
-
-                    case SettingType.Combo:
-                        var comboBox = new ComboBox
-                        {
-                            Width = 160,
-                            VerticalAlignment = VerticalAlignment.Center
-                        };
-                        foreach (var opt in field.Options)
-                        {
-                            comboBox.Items.Add(opt);
-                        }
-                        
-                        string defaultValStr = field.DefaultValue?
-                            .ToString() ?? string.Empty;
-                        string currentSelection = SettingsManager.Instance
-                            .GetSetting(
-                                settingsGroup,
-                                field.Key,
-                                defaultValStr);
-                        
-                        // Подписываемся на изменение выбора до инициализации
-                        // значения для корректной записи на диск
-                        // автоисправленного регистра настройки.
-                        comboBox.SelectionChanged += (s, e) =>
-                        {
-                            if (comboBox.SelectedItem != null)
-                            {
-                                SettingsManager.Instance.SetSetting(
-                                    settingsGroup,
-                                    field.Key,
-                                    comboBox.SelectedItem.ToString());
-                                UpdateVisibility(settingsGroup);
-                            }
-                        };
-
-                        // Выполняем регистронезависимое сопоставление
-                        // сохраненного значения со схемой опций скрипта.
-                        string matchedOption = field.Options
-                            .FirstOrDefault(opt => opt.Equals(
-                                currentSelection,
-                                StringComparison.OrdinalIgnoreCase))
-                            ?? field.Options.FirstOrDefault()
-                            ?? defaultValStr;
-
-                        comboBox.SelectedItem = matchedOption;
-                        
-                        if (comboBox.SelectedIndex == -1 && 
-                            comboBox.Items.Count > 0)
-                        {
-                            comboBox.SelectedIndex = 0;
-                        }
-                        inputControl = comboBox;
-                        break;
-                }
-
-                if (inputControl != null)
+                checkBox.Checked += (s, e) =>
                 {
-                    Grid.SetColumn(inputControl, 1);
-                    rowGrid.Children.Add(inputControl);
-                    cardContentStack.Children.Add(rowGrid);
-                    _generatedElements.Add((field, rowGrid));
-                    groupVisual.Elements.Add(rowGrid);
-                }
+                    if (_isInternalCheckBoxUpdate) return;
+                    SettingsManager.Instance.SetSetting(
+                        settingsGroup, field.Key, true);
+                    UpdateVisibility(settingsGroup);
+
+                    if (field.Key == "lossless")
+                    {
+                        HandleLosslessChange(settingsGroup, true);
+                    }
+                    else if (field.Key == "auto_bitrate")
+                    {
+                        HandleAutoBitrateChange(settingsGroup);
+                    }
+                };
+
+                checkBox.Unchecked += async (s, e) =>
+                {
+                    if (_isInternalCheckBoxUpdate) return;
+
+                    if (field.RequiresWarning)
+                    {
+                        var xamlRoot = this.XamlRoot ?? checkBox.XamlRoot;
+                        if (xamlRoot != null)
+                        {
+                            var dialog = new ContentDialog
+                            {
+                                Title = field.WarningTitle ?? "Предупреждение",
+                                Content = field.WarningText ?? "Вы действительно хотите отключить этот параметр?",
+                                PrimaryButtonText = "Я понимаю",
+                                CloseButtonText = "Отмена",
+                                XamlRoot = xamlRoot
+                            };
+
+                            var result = await dialog.ShowAsync();
+                            if (result != ContentDialogResult.Primary)
+                            {
+                                _isInternalCheckBoxUpdate = true;
+                                checkBox.IsChecked = true;
+                                _isInternalCheckBoxUpdate = false;
+                                return;
+                            }
+                        }
+                    }
+
+                    SettingsManager.Instance.SetSetting(
+                        settingsGroup, field.Key, false);
+                    UpdateVisibility(settingsGroup);
+
+                    if (field.Key == "lossless")
+                    {
+                        HandleLosslessChange(settingsGroup, false);
+                    }
+                    else if (field.Key == "auto_bitrate")
+                    {
+                        HandleAutoBitrateChange(settingsGroup);
+                    }
+                };
+
+                cardContentStack.Children.Add(checkBox);
+                _generatedElements.Add((field, checkBox));
+                groupVisual.Elements.Add(checkBox);
+                continue;
             }
 
-            groupPanel.Children.Add(cardBorder);
-            SettingsContainer.Children.Add(groupPanel);
-            _groups.Add(groupVisual);
+            // Нативная строка параметра (метка слева, контрол справа)
+            var rowGrid = new Grid
+            {
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            
+            rowGrid.ColumnDefinitions.Add(new ColumnDefinition 
+                { Width = new GridLength(1, GridUnitType.Star) });
+            rowGrid.ColumnDefinitions.Add(new ColumnDefinition 
+                { Width = GridLength.Auto });
+
+            var textStack = new StackPanel 
+            { 
+                Spacing = 2, 
+                Margin = new Thickness(0, 0, 16, 0),
+                VerticalAlignment = VerticalAlignment.Center 
+            };
+
+            textStack.Children.Add(new TextBlock
+            {
+                Text = field.Label,
+                FontSize = 14,
+                Foreground = (Brush)Application.Current.Resources[
+                    "TextFillColorPrimaryBrush"],
+                VerticalAlignment = VerticalAlignment.Center
+            });
+
+            if (!string.IsNullOrEmpty(field.Comment))
+            {
+                textStack.Children.Add(new TextBlock
+                {
+                    Text = field.Comment,
+                    FontSize = 12,
+                    Foreground = (Brush)Application.Current.Resources[
+                        "TextFillColorSecondaryBrush"]
+                });
+            }
+            
+            Grid.SetColumn(textStack, 0);
+            rowGrid.Children.Add(textStack);
+
+            FrameworkElement? inputControl = null;
+
+            switch (field.Type)
+            {
+                case SettingType.Text:
+                    var textBox = new TextBox
+                    {
+                        Text = SettingsManager.Instance.GetSetting(
+                            settingsGroup,
+                            field.Key,
+                            field.DefaultValue?.ToString() ?? string.Empty),
+                        Width = 200,
+                        VerticalAlignment = VerticalAlignment.Center
+                    };
+                    textBox.LostFocus += (s, e) =>
+                    {
+                        SettingsManager.Instance.SetSetting(
+                            settingsGroup, field.Key, textBox.Text);
+                        UpdateVisibility(settingsGroup);
+                    };
+                    textBox.KeyDown += (s, e) =>
+                    {
+                        if (e.Key == Windows.System.VirtualKey.Enter)
+                        {
+                            this.IsTabStop = true;
+                            this.Focus(FocusState.Programmatic);
+                            this.IsTabStop = false;
+                            e.Handled = true;
+                        }
+                    };
+                    inputControl = textBox;
+                    break;
+
+                case SettingType.Int:
+                    var numberBox = new NumberBox
+                    {
+                        Value = SettingsManager.Instance.GetSetting(
+                            settingsGroup,
+                            field.Key,
+                            field.DefaultValue is int vInt ? vInt : 0),
+                        Width = 160,
+                        SpinButtonPlacementMode = 
+                            NumberBoxSpinButtonPlacementMode.Inline,
+                        SmallChange = 1,
+                        LargeChange = 5,
+                        VerticalAlignment = VerticalAlignment.Center
+                    };
+                    numberBox.ValueChanged += (s, e) =>
+                    {
+                        if (!double.IsNaN(numberBox.Value))
+                        {
+                            SettingsManager.Instance.SetSetting(
+                                settingsGroup,
+                                field.Key,
+                                (int)numberBox.Value);
+                            UpdateVisibility(settingsGroup);
+                            HandleIntSettingChanged(settingsGroup, field.Key, (int)numberBox.Value);
+                        }
+                    };
+                    numberBox.KeyDown += (s, e) =>
+                    {
+                        if (e.Key == Windows.System.VirtualKey.Enter)
+                        {
+                            this.IsTabStop = true;
+                            this.Focus(FocusState.Programmatic);
+                            this.IsTabStop = false;
+                            e.Handled = true;
+                        }
+                    };
+                    inputControl = numberBox;
+                    break;
+
+                case SettingType.Combo:
+                    var comboBox = new ComboBox
+                    {
+                        Width = 160,
+                        VerticalAlignment = VerticalAlignment.Center
+                    };
+                    foreach (var opt in field.Options)
+                    {
+                        comboBox.Items.Add(opt);
+                    }
+                    
+                    string defaultValStr = field.DefaultValue?
+                        .ToString() ?? string.Empty;
+                    string currentSelection = SettingsManager.Instance
+                        .GetSetting(
+                            settingsGroup,
+                            field.Key,
+                            defaultValStr);
+                    
+                    comboBox.SelectionChanged += (s, e) =>
+                    {
+                        if (comboBox.SelectedItem != null)
+                        {
+                            string selectedVal = comboBox.SelectedItem.ToString() ?? string.Empty;
+                            SettingsManager.Instance.SetSetting(
+                                settingsGroup,
+                                field.Key,
+                                selectedVal);
+                            UpdateVisibility(settingsGroup);
+
+                            if (field.Key == "nvenc_rc")
+                            {
+                                HandleRcChange(settingsGroup, selectedVal);
+                                HandleAutoBitrateChange(settingsGroup);
+                            }
+                        }
+                    };
+
+                    string matchedOption = field.Options
+                        .FirstOrDefault(opt => opt.Equals(
+                            currentSelection,
+                            StringComparison.OrdinalIgnoreCase))
+                        ?? field.Options.FirstOrDefault()
+                        ?? defaultValStr;
+
+                    comboBox.SelectedItem = matchedOption;
+                    
+                    if (comboBox.SelectedIndex == -1 && 
+                        comboBox.Items.Count > 0)
+                    {
+                        comboBox.SelectedIndex = 0;
+                    }
+                    inputControl = comboBox;
+                    break;
+            }
+
+            if (inputControl != null)
+            {
+                Grid.SetColumn(inputControl, 1);
+                rowGrid.Children.Add(inputControl);
+                cardContentStack.Children.Add(rowGrid);
+                _generatedElements.Add((field, rowGrid));
+                groupVisual.Elements.Add(rowGrid);
+            }
         }
 
-        UpdateVisibility(settingsGroup);
+        _groups.Add(groupVisual);
+        return cardBorder;
     }
 
     /// <summary>
@@ -386,6 +556,42 @@ public sealed partial class ScriptSettingsControl : UserControl
         // 1. Обновляем видимость отдельных элементов настроек
         foreach (var item in _generatedElements)
         {
+            if (item.Field.VisibilityConditions != null && item.Field.VisibilityConditions.Count > 0)
+            {
+                bool isCondVisible = true;
+                foreach (var cond in item.Field.VisibilityConditions)
+                {
+                    string condValue = SettingsManager.Instance.GetSetting(
+                        settingsGroup,
+                        cond.Key,
+                        string.Empty);
+
+                    bool matches = false;
+                    foreach (var val in cond.Values)
+                    {
+                        if (val.Equals(condValue, StringComparison.OrdinalIgnoreCase))
+                        {
+                            matches = true;
+                            break;
+                        }
+                    }
+
+                    if (cond.Negate)
+                    {
+                        matches = !matches;
+                    }
+
+                    if (!matches)
+                    {
+                        isCondVisible = false;
+                        break;
+                    }
+                }
+
+                item.Element.Visibility = isCondVisible ? Visibility.Visible : Visibility.Collapsed;
+                continue;
+            }
+
             if (string.IsNullOrEmpty(item.Field.VisibleIfKey) || item.Field.VisibleIfValues == null)
             {
                 item.Element.Visibility = Visibility.Visible;
@@ -410,11 +616,413 @@ public sealed partial class ScriptSettingsControl : UserControl
             item.Element.Visibility = isVisible ? Visibility.Visible : Visibility.Collapsed;
         }
 
-        // 2. Обновляем видимость целых групп настроек (StackPanel)
+        // 2. Обновляем видимость целых групп настроек (StackPanel) и карточек
         foreach (var group in _groups)
         {
             bool hasVisibleElements = group.Elements.Any(e => e.Visibility == Visibility.Visible);
-            group.GroupPanel.Visibility = hasVisibleElements ? Visibility.Visible : Visibility.Collapsed;
+            
+            if (group.GroupPanel != null)
+            {
+                group.GroupPanel.Visibility = hasVisibleElements ? Visibility.Visible : Visibility.Collapsed;
+            }
+            
+            if (group.CardBorder != null)
+            {
+                group.CardBorder.Visibility = hasVisibleElements ? Visibility.Visible : Visibility.Collapsed;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Создает визуальный контейнер для редактирования списков ключевых слов (KeywordList).
+    /// Предоставляет пользователю полноширинную область со списком элементов, чекбоксами активности,
+    /// текстовыми полями для ключевых слов и кнопками удаления, а также кнопкой добавления новых элементов.
+    /// Все изменения синхронизируются в реальном времени с SettingsManager.
+    /// </summary>
+    private FrameworkElement CreateKeywordListContainer(string settingsGroup, SettingField field)
+    {
+        var mainStack = new StackPanel
+        {
+            Spacing = 8,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            Margin = new Thickness(0, 4, 0, 8)
+        };
+
+        // Заголовок и всплывающий комментарий
+        var labelStack = new StackPanel { Spacing = 2 };
+        labelStack.Children.Add(new TextBlock
+        {
+            Text = field.Label,
+            FontSize = 14,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            Foreground = (Brush)Application.Current.Resources["TextFillColorPrimaryBrush"]
+        });
+
+        if (!string.IsNullOrEmpty(field.Comment))
+        {
+            labelStack.Children.Add(new TextBlock
+            {
+                Text = field.Comment,
+                FontSize = 12,
+                Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"]
+            });
+        }
+        mainStack.Children.Add(labelStack);
+
+        // Контейнер для списка строк ключевых слов
+        var itemsStack = new StackPanel
+        {
+            Spacing = 6,
+            HorizontalAlignment = HorizontalAlignment.Stretch
+        };
+        mainStack.Children.Add(itemsStack);
+
+        // Кнопка для добавления новой строки в список ключевых слов
+        var addButton = new Button
+        {
+            Content = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 8,
+                Children = {
+                    new FontIcon { Glyph = "\uE710", FontSize = 12 }, // Иконка "+"
+                    new TextBlock { Text = "Добавить слово", FontSize = 12 }
+                }
+            },
+            Style = (Style)Application.Current.Resources["DefaultButtonStyle"],
+            Margin = new Thickness(0, 4, 0, 0)
+        };
+        mainStack.Children.Add(addButton);
+
+        // Извлекаем текущий список из кэша настроек или берем значение по умолчанию
+        var defaultList = field.DefaultValue as List<Dictionary<string, object>> ?? new List<Dictionary<string, object>>();
+        var currentList = SettingsManager.Instance.GetSetting(settingsGroup, field.Key, defaultList);
+
+        // Локальная функция для сохранения списка в SettingsManager
+        void SaveList()
+        {
+            var listToSave = new List<Dictionary<string, object>>();
+            foreach (Grid row in itemsStack.Children.OfType<Grid>())
+            {
+                var checkBox = row.Children.OfType<CheckBox>().FirstOrDefault();
+                var textBox = row.Children.OfType<TextBox>().FirstOrDefault();
+                if (checkBox != null && textBox != null)
+                {
+                    listToSave.Add(new Dictionary<string, object>
+                    {
+                        { "word", textBox.Text },
+                        { "active", checkBox.IsChecked == true }
+                    });
+                }
+            }
+            SettingsManager.Instance.SetSetting(settingsGroup, field.Key, listToSave);
+        }
+
+        // Вспомогательная локальная функция добавления строки ключевого слова в UI
+        void AddKeywordRow(string word, bool isActive)
+        {
+            var rowGrid = new Grid
+            {
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                Margin = new Thickness(0, 2, 0, 2)
+            };
+            rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(32) }); // Галочка
+            rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }); // Поле ввода
+            rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto }); // Кнопка удаления
+
+            var checkBox = new CheckBox
+            {
+                IsChecked = isActive,
+                VerticalAlignment = VerticalAlignment.Center,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Margin = new Thickness(0),
+                Padding = new Thickness(0),
+                MinWidth = 0,
+                MinHeight = 0
+            };
+            checkBox.Checked += (s, e) => SaveList();
+            checkBox.Unchecked += (s, e) => SaveList();
+            Grid.SetColumn(checkBox, 0);
+            rowGrid.Children.Add(checkBox);
+
+            var textBox = new TextBox
+            {
+                Text = word,
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Center,
+                Height = 32,
+                Margin = new Thickness(0, 0, 8, 0)
+            };
+            textBox.TextChanged += (s, e) => SaveList();
+            Grid.SetColumn(textBox, 1);
+            rowGrid.Children.Add(textBox);
+
+            var deleteButton = new Button
+            {
+                Content = new FontIcon { Glyph = "\uE74D", FontSize = 12 }, // Иконка корзины
+                Style = (Style)Application.Current.Resources["DefaultButtonStyle"],
+                VerticalAlignment = VerticalAlignment.Center,
+                Width = 32,
+                Height = 32,
+                Padding = new Thickness(0)
+            };
+            deleteButton.Click += (s, e) =>
+            {
+                itemsStack.Children.Remove(rowGrid);
+                SaveList();
+            };
+            Grid.SetColumn(deleteButton, 2);
+            rowGrid.Children.Add(deleteButton);
+
+            itemsStack.Children.Add(rowGrid);
+        }
+
+        // Отрисовка сохраненных элементов
+        if (currentList != null)
+        {
+            foreach (var item in currentList)
+            {
+                string word = item.TryGetValue("word", out var w) ? w?.ToString() ?? "" : "";
+                bool isActive = item.TryGetValue("active", out var act) && SafeGetBool(act);
+                AddKeywordRow(word, isActive);
+            }
+        }
+
+        // Действие при клике на кнопку добавления
+        addButton.Click += (s, e) =>
+        {
+            AddKeywordRow("", true);
+            SaveList();
+        };
+
+        return mainStack;
+    }
+
+    /// <summary>
+    /// Безопасно извлекает булево значение из различных типов JsonElement и других объектов.
+    /// </summary>
+    private static bool SafeGetBool(object? obj)
+    {
+        if (obj == null) return false;
+        if (obj is bool b) return b;
+        if (obj is System.Text.Json.JsonElement elem)
+        {
+            if (elem.ValueKind == System.Text.Json.JsonValueKind.True) return true;
+            if (elem.ValueKind == System.Text.Json.JsonValueKind.False) return false;
+            if (elem.ValueKind == System.Text.Json.JsonValueKind.String)
+            {
+                return bool.TryParse(elem.GetString(), out var parsed) && parsed;
+            }
+            if (elem.ValueKind == System.Text.Json.JsonValueKind.Number)
+            {
+                return elem.TryGetInt32(out var val) && val != 0;
+            }
+        }
+        try
+        {
+            return Convert.ToBoolean(obj);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Обрабатывает изменение режима Lossless. 
+    /// Если режим включен, пресет nvenc_preset переключается на "p1" и блокируется.
+    /// Если выключен, пресет nvenc_preset разблокируется.
+    /// </summary>
+    private void HandleLosslessChange(string settingsGroup, bool isLossless)
+    {
+        var presetTuple = _generatedElements.FirstOrDefault(x => x.Field.Key == "nvenc_preset");
+        if (presetTuple.Element is Grid grid)
+        {
+            var comboBox = grid.Children.OfType<ComboBox>().FirstOrDefault();
+            if (comboBox != null)
+            {
+                if (isLossless)
+                {
+                    comboBox.SelectedItem = "p1";
+                    comboBox.IsEnabled = false;
+                    SettingsManager.Instance.SetSetting(settingsGroup, "nvenc_preset", "p1");
+                }
+                else
+                {
+                    comboBox.IsEnabled = true;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Обрабатывает изменение режима управления битрейтом (nvenc_rc).
+    /// Если выбран режим CBR, авторасчет битрейта форсируется в true и блокируется,
+    /// так как в CBR минимальный и максимальный битрейты должны быть равны целевому.
+    /// В остальных режимах выбор авторасчета разблокируется.
+    /// </summary>
+    private void HandleRcChange(string settingsGroup, string rcMode)
+    {
+        var autoBitrateTuple = _generatedElements.FirstOrDefault(x => x.Field.Key == "auto_bitrate");
+        if (autoBitrateTuple.Element is CheckBox checkBox)
+        {
+            if (rcMode.Equals("cbr", StringComparison.OrdinalIgnoreCase))
+            {
+                _isInternalCheckBoxUpdate = true;
+                checkBox.IsChecked = true;
+                _isInternalCheckBoxUpdate = false;
+
+                SettingsManager.Instance.SetSetting(settingsGroup, "auto_bitrate", true);
+                checkBox.IsEnabled = false;
+            }
+            else
+            {
+                checkBox.IsEnabled = true;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Обрабатывает изменение параметра авторасчета битрейта (auto_bitrate).
+    /// Блокирует или разблокирует поля min_bitrate, max_bitrate и bufsize.
+    /// </summary>
+    private void HandleAutoBitrateChange(string settingsGroup)
+    {
+        bool isAuto = SettingsManager.Instance.GetSetting(settingsGroup, "auto_bitrate", true);
+        string[] dependentKeys = { "min_bitrate", "max_bitrate", "bufsize" };
+
+        foreach (var key in dependentKeys)
+        {
+            var tuple = _generatedElements.FirstOrDefault(x => x.Field.Key == key);
+            if (tuple.Element is Grid grid)
+            {
+                var numberBox = grid.Children.OfType<NumberBox>().FirstOrDefault();
+                if (numberBox != null)
+                {
+                    numberBox.IsEnabled = !isAuto;
+                }
+            }
+        }
+
+        // Если включен авторасчет, производим перерасчет на базе текущего v_bitrate
+        if (isAuto)
+        {
+            RecalculateBitrates(settingsGroup);
+        }
+    }
+
+    /// <summary>
+    /// Производит автоматический расчет битрейтов по формулам:
+    /// min = target, max = target * 2, buf = max * 2.
+    /// Результаты сохраняются в конфигурации и обновляются в UI.
+    /// </summary>
+    private void RecalculateBitrates(string settingsGroup, int? targetBitrate = null)
+    {
+        int vBr = targetBitrate ?? SettingsManager.Instance.GetSetting(settingsGroup, "v_bitrate", 4000);
+        string rc = SettingsManager.Instance.GetSetting(settingsGroup, "nvenc_rc", "vbr_hq");
+
+        int minBr;
+        int maxBr;
+        int bufSize;
+
+        if (rc.Equals("cbr", StringComparison.OrdinalIgnoreCase))
+        {
+            minBr = vBr;
+            maxBr = vBr;
+            bufSize = vBr * 2;
+        }
+        else
+        {
+            minBr = vBr;
+            maxBr = vBr * 2;
+            bufSize = maxBr * 2;
+        }
+
+        // Сохраняем значения в SettingsManager
+        SettingsManager.Instance.SetSetting(settingsGroup, "min_bitrate", minBr);
+        SettingsManager.Instance.SetSetting(settingsGroup, "max_bitrate", maxBr);
+        SettingsManager.Instance.SetSetting(settingsGroup, "bufsize", bufSize);
+
+        // Обновляем визуальные значения в полях NumberBox на форме
+        UpdateNumberBoxValue("min_bitrate", minBr);
+        UpdateNumberBoxValue("max_bitrate", maxBr);
+        UpdateNumberBoxValue("bufsize", bufSize);
+    }
+
+    /// <summary>
+    /// Вспомогательный метод для программного обновления значения NumberBox в UI.
+    /// </summary>
+    private void UpdateNumberBoxValue(string key, int value)
+    {
+        var tuple = _generatedElements.FirstOrDefault(x => x.Field.Key == key);
+        if (tuple.Element is Grid grid)
+        {
+            var numberBox = grid.Children.OfType<NumberBox>().FirstOrDefault();
+            if (numberBox != null)
+            {
+                numberBox.Value = value;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Вызывается при изменении целочисленного параметра в интерфейсе.
+    /// Если изменился v_bitrate при включенном авторасчете, запускается перерасчет.
+    /// </summary>
+    private void HandleIntSettingChanged(string settingsGroup, string key, int newValue)
+    {
+        if (key == "v_bitrate")
+        {
+            bool isAuto = SettingsManager.Instance.GetSetting(settingsGroup, "auto_bitrate", true);
+            if (isAuto)
+            {
+                RecalculateBitrates(settingsGroup, newValue);
+            }
+            else
+            {
+                // При ручном вводе корректируем min и max, если они вышли за новые границы целевого битрейта
+                int minBr = SettingsManager.Instance.GetSetting(settingsGroup, "min_bitrate", newValue);
+                int maxBr = SettingsManager.Instance.GetSetting(settingsGroup, "max_bitrate", newValue);
+
+                if (minBr > newValue)
+                {
+                    SettingsManager.Instance.SetSetting(settingsGroup, "min_bitrate", newValue);
+                    UpdateNumberBoxValue("min_bitrate", newValue);
+                }
+                if (maxBr < newValue)
+                {
+                    SettingsManager.Instance.SetSetting(settingsGroup, "max_bitrate", newValue);
+                    UpdateNumberBoxValue("max_bitrate", newValue);
+                }
+            }
+        }
+        else if (key == "min_bitrate")
+        {
+            bool isAuto = SettingsManager.Instance.GetSetting(settingsGroup, "auto_bitrate", true);
+            if (!isAuto)
+            {
+                int vBr = SettingsManager.Instance.GetSetting(settingsGroup, "v_bitrate", 4000);
+                if (newValue > vBr)
+                {
+                    // Минимальный битрейт не может быть больше целевого
+                    SettingsManager.Instance.SetSetting(settingsGroup, "min_bitrate", vBr);
+                    UpdateNumberBoxValue("min_bitrate", vBr);
+                }
+            }
+        }
+        else if (key == "max_bitrate")
+        {
+            bool isAuto = SettingsManager.Instance.GetSetting(settingsGroup, "auto_bitrate", true);
+            if (!isAuto)
+            {
+                int vBr = SettingsManager.Instance.GetSetting(settingsGroup, "v_bitrate", 4000);
+                if (newValue < vBr)
+                {
+                    // Максимальный битрейт не может быть меньше целевого
+                    SettingsManager.Instance.SetSetting(settingsGroup, "max_bitrate", vBr);
+                    UpdateNumberBoxValue("max_bitrate", vBr);
+                }
+            }
         }
     }
 }

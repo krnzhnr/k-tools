@@ -30,31 +30,50 @@
         </InfoBar>
 
         <!-- Двухвкладочный NavigationView-контейнер (как в примере) -->
-        <NavigationView x:Name="nvSample" 
-                          Grid.Row="1" 
-                          PaneDisplayMode="Top"
-                          IsSettingsVisible="False"
-                          IsBackButtonVisible="Collapsed"
-                          AlwaysShowHeader="False"
-                          SelectionChanged="nvSample_SelectionChanged"
-                          SelectionFollowsFocus="Enabled"
-                          Margin="0,0,0,16">
-            <NavigationView.Resources>
-                <!-- Делаем фон области контента прозрачным -->
-                <SolidColorBrush x:Key="NavigationViewContentBackground" Color="Transparent" />
-                <!-- Убираем рамку вокруг области контента -->
-                <SolidColorBrush x:Key="NavigationViewContentGridBorderBrush" Color="Transparent" />
-                <!-- Сбрасываем внутренние боковые отступы области контента NavigationView -->
-                <Thickness x:Key="NavigationViewContentMargin">0,0,0,0</Thickness>
-            </NavigationView.Resources>
-            <NavigationView.MenuItems>
-                <NavigationViewItem Icon="Document" Content="Файлы" x:Name="SamplePage1Item" Tag="files" />
-                <NavigationViewItem Icon="Setting" Content="Настройки" x:Name="SamplePage2Item" Tag="settings" />
-            </NavigationView.MenuItems>
-            
+        <Grid Grid.Row="1" Margin="0,0,0,16">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" /> <!-- Горизонтальное меню вкладок -->
+                <RowDefinition Height="Auto" /> <!-- Тонкий горизонтальный сепаратор -->
+                <RowDefinition Height="*" />    <!-- Активный контент выбранной вкладки -->
+            </Grid.RowDefinitions>
+
+            <NavigationView x:Name="nvSample" 
+                               Grid.Row="0" 
+                               PaneDisplayMode="Top"
+                               IsSettingsVisible="False"
+                               IsBackButtonVisible="Collapsed"
+                               AlwaysShowHeader="False"
+                               SelectionChanged="nvSample_SelectionChanged"
+                               SelectionFollowsFocus="Enabled"
+                               Height="48"
+                               Margin="0"
+                               Padding="0">
+                <NavigationView.Resources>
+                    <!-- Делаем фон области контента прозрачным -->
+                    <SolidColorBrush x:Key="NavigationViewContentBackground" Color="Transparent" />
+                    <!-- Убираем рамку вокруг области контента -->
+                    <SolidColorBrush x:Key="NavigationViewContentGridBorderBrush" Color="Transparent" />
+                    <!-- Сбрасываем внутренние боковые отступы области контента NavigationView -->
+                    <Thickness x:Key="NavigationViewContentMargin">0,0,0,0</Thickness>
+                </NavigationView.Resources>
+                <NavigationView.MenuItems>
+                    <NavigationViewItem Icon="Document" Content="Файлы" x:Name="SamplePage1Item" Tag="files" />
+                    <NavigationViewItem Icon="Setting" Content="Настройки" x:Name="SamplePage2Item" Tag="settings" />
+                </NavigationView.MenuItems>
+            </NavigationView>
+
+            <!-- Сепаратор под вкладками -->
+            <Border Grid.Row="1" 
+                    Height="1" 
+                    Background="{ThemeResource DividerStrokeColorDefaultBrush}" 
+                    HorizontalAlignment="Stretch"
+                    Margin="5,4,5,6" />
+
             <!-- Фрейм контента вкладок -->
-            <Frame x:Name="contentFrame" Margin="0" />
-        </NavigationView>
+            <Frame x:Name="contentFrame" 
+                   Grid.Row="2" 
+                   Margin="0" />
+        </Grid>
 
         <!-- Фиксированная нижняя панель запуска и прогресса -->
         <Border Grid.Row="2" 

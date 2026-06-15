@@ -1,0 +1,187 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<UserControl
+    x:Class="KTools_App.UI.Controls.StreamReplaceControl"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <Grid Padding="0,16,0,0">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" /> <!-- Заголовок (0) -->
+            <RowDefinition Height="*" />    <!-- Рабочая область (1) -->
+        </Grid.RowDefinitions>
+
+        <!-- Заголовок панели подмены дорожек -->
+        <StackPanel Grid.Row="0" Margin="0,0,0,16" Spacing="4">
+            <TextBlock x:Name="TitleTextBlock"
+                       Text="Подмена дорожек в контейнере" 
+                       FontSize="16" 
+                       FontWeight="SemiBold" 
+                       Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+            <TextBlock x:Name="DescriptionTextBlock"
+                       Text="Назначьте внешние файлы-замены для внутренних аудио-, видео- или субтитров оригинального медиафайла." 
+                       FontSize="12" 
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+        </StackPanel>
+
+        <!-- Основная область с разделением на две колонки -->
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="2*" /> <!-- Левая: Карточка назначений -->
+                <ColumnDefinition Width="1*" /> <!-- Правая: Список файлов-замен -->
+            </Grid.ColumnDefinitions>
+
+            <!-- Левая колонка: Назначение замен -->
+            <Border Grid.Column="0"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    CornerRadius="8"
+                    Padding="16"
+                    Margin="0,0,12,0"
+                    VerticalAlignment="Stretch">
+                
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Text="Назначение замен" 
+                               FontWeight="SemiBold" 
+                               FontSize="14" 
+                               Margin="0,0,0,12" />
+
+                    <!-- Пустое состояние: файлы не загружены -->
+                    <StackPanel x:Name="TracksEmptyState"
+                                Grid.Row="1"
+                                VerticalAlignment="Center"
+                                HorizontalAlignment="Center"
+                                Spacing="12">
+                        <ProgressRing x:Name="TracksProgressRing" IsActive="False" Visibility="Collapsed" Width="32" Height="32" />
+                        <TextBlock x:Name="TracksEmptyText"
+                                   Text="Добавьте исходный файл на вкладке «Файлы»" 
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                   FontSize="13" />
+                    </StackPanel>
+
+                    <!-- Список дорожек оригинального контейнера с ComboBox для выбора замен -->
+                    <ScrollViewer Grid.Row="1" 
+                                  x:Name="TracksScrollViewer"
+                                  VerticalScrollBarVisibility="Auto"
+                                  Visibility="Collapsed">
+                        <StackPanel x:Name="ReplacementsStackPanel" Spacing="12" Padding="0,0,12,0" />
+                    </ScrollViewer>
+                </Grid>
+            </Border>
+
+            <!-- Правая колонка: Файлы для подмены -->
+            <Border Grid.Column="1"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    CornerRadius="8"
+                    Padding="16"
+                    VerticalAlignment="Stretch">
+                
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Text="Файлы для подмены" 
+                               FontWeight="SemiBold" 
+                               FontSize="14" 
+                               Margin="0,0,0,12" />
+
+                    <!-- Список добавленных файлов-замен -->
+                    <Grid Grid.Row="1" Margin="0,0,0,12">
+                        <!-- Пустое состояние: список пуст -->
+                        <TextBlock x:Name="ReplacementsEmptyText"
+                                   Text="Список файлов для подмены пуст. Добавьте файлы кнопкой ниже." 
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                   TextWrapping="Wrap"
+                                   FontSize="12"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"
+                                   TextAlignment="Center" />
+
+                        <ListView x:Name="ReplacementFilesListView"
+                                  SelectionMode="None"
+                                  Visibility="Collapsed"
+                                  Padding="0">
+                            <ListView.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid Padding="4" HorizontalAlignment="Stretch">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+
+                                        <!-- Имя файла -->
+                                        <TextBlock Grid.Column="0" 
+                                                   Text="{Binding FileName}" 
+                                                   FontWeight="SemiBold"
+                                                   FontSize="12"
+                                                   TextTrimming="CharacterEllipsis" />
+                                        
+                                        <!-- Подпись о типе/размере -->
+                                        <TextBlock Grid.Column="0" 
+                                                   Grid.Row="1"
+                                                   Text="{Binding InfoText}" 
+                                                   FontSize="10"
+                                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+
+                                        <!-- Кнопка удаления файла из списка замен -->
+                                        <Button Grid.Column="1" 
+                                                Grid.RowSpan="2"
+                                                Click="DeleteReplacementFile_Click"
+                                                DataContext="{Binding}"
+                                                Background="Transparent"
+                                                BorderThickness="0"
+                                                Width="28"
+                                                Height="28"
+                                                Padding="0"
+                                                MinWidth="0"
+                                                MinHeight="0"
+                                                VerticalAlignment="Center">
+                                            <FontIcon Glyph="&#xE711;" FontSize="12" FontFamily="{ThemeResource SymbolThemeFontFamily}" />
+                                        </Button>
+                                    </Grid>
+                                </DataTemplate>
+                            </ListView.ItemTemplate>
+                        </ListView>
+                    </Grid>
+
+                    <!-- Нижняя панель действий для файлов-замен -->
+                    <StackPanel Grid.Row="2" Spacing="8">
+                        <Button x:Name="AddReplacementButton"
+                                Click="AddReplacementButton_Click"
+                                HorizontalAlignment="Stretch">
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <SymbolIcon Symbol="OpenFile" />
+                                <TextBlock Text="Добавить файлы..." />
+                            </StackPanel>
+                        </Button>
+                        <Button x:Name="ClearReplacementsButton"
+                                Click="ClearReplacementsButton_Click"
+                                HorizontalAlignment="Stretch">
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <SymbolIcon Symbol="Clear" />
+                                <TextBlock Text="Очистить список" />
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
+                </Grid>
+            </Border>
+        </Grid>
+    </Grid>
+</UserControl>

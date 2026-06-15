@@ -14,6 +14,7 @@ using WinRT.Interop;
 using KTools_App.Core;
 using KTools_App.UI.Controls;
 using KTools_App.ViewModels;
+using KTools_App.Scripts;
 
 namespace KTools_App.UI.Pages;
 
@@ -29,6 +30,7 @@ public sealed partial class WorkPanel : Page
     // Контейнеры контента для горизонтального NavigationView
     private Grid _filesContainer = null!;
     private TrackSelectionControl _tracksControl = null!;
+    private StreamReplaceControl? _streamReplaceControl;
     private ScriptSettingsControl _settingsControl = null!;
 
     // Динамический элемент навигации для вкладки "Дорожки"
@@ -159,8 +161,24 @@ public sealed partial class WorkPanel : Page
                     nvSample.MenuItems.Insert(1, _tracksPageItem);
                 }
 
-                _tracksControl.ActiveScript = _script;
-                _tracksControl.Populate(FileList.Files);
+                if (_script is StreamReplacementScript)
+                {
+                    if (_streamReplaceControl == null)
+                    {
+                        _streamReplaceControl = new StreamReplaceControl
+                        {
+                            HorizontalAlignment = HorizontalAlignment.Stretch,
+                            VerticalAlignment = VerticalAlignment.Stretch
+                        };
+                    }
+                    _streamReplaceControl.ActiveScript = _script;
+                    _streamReplaceControl.Populate(FileList.Files);
+                }
+                else
+                {
+                    _tracksControl.ActiveScript = _script;
+                    _tracksControl.Populate(FileList.Files);
+                }
             }
             else
             {
@@ -248,7 +266,14 @@ public sealed partial class WorkPanel : Page
             }
             else if (tag == "tracks")
             {
-                contentFrame.Content = _tracksControl;
+                if (_script is StreamReplacementScript)
+                {
+                    contentFrame.Content = _streamReplaceControl;
+                }
+                else
+                {
+                    contentFrame.Content = _tracksControl;
+                }
             }
             else if (tag == "settings")
             {
@@ -315,9 +340,20 @@ public sealed partial class WorkPanel : Page
             var settings = ReadCurrentSettings();
             if (_script.UseCustomWidget)
             {
-                _tracksControl.GetSelectedTracksAndAttachments(out var selectedTracks, out var selectedAttachments);
-                settings["selected_tracks_per_file"] = selectedTracks;
-                settings["selected_attachments_per_file"] = selectedAttachments;
+                if (_script is StreamReplacementScript)
+                {
+                    if (_streamReplaceControl != null)
+                    {
+                        _streamReplaceControl.GetReplacements(out var replacements);
+                        settings["replacements"] = replacements;
+                    }
+                }
+                else
+                {
+                    _tracksControl.GetSelectedTracksAndAttachments(out var selectedTracks, out var selectedAttachments);
+                    settings["selected_tracks_per_file"] = selectedTracks;
+                    settings["selected_attachments_per_file"] = selectedAttachments;
+                }
             }
 
             if (ViewModel.StartExecutionCommand.CanExecute(settings))
