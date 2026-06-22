@@ -74,13 +74,13 @@ public sealed class AudioDownmixScript : AbstractScript
             "OutputFormat",
             "Формат вывода",
             SettingType.Combo,
-            "Dolby Digital Plus (E-AC3)",
+            "E-AC3",
             "Параметры даунмикса",
             options: new List<string> {
-                "Dolby Digital Plus (E-AC3)",
-                "Dolby Digital (AC3)",
-                "Advanced Audio Coding (AAC)",
-                "Free Lossless Audio Codec (FLAC)"
+                "E-AC3",
+                "AC3",
+                "AAC",
+                "FLAC"
             }),
 
         new SettingField(
@@ -91,7 +91,9 @@ public sealed class AudioDownmixScript : AbstractScript
             "Параметры даунмикса",
             options: new List<string> {
                 "128", "192", "224", "256", "320", "384", "448", "640"
-            }),
+            },
+            visibleIfKey: "OutputFormat",
+            visibleIfValues: new List<string> { "E-AC3", "AC3", "AAC" }),
 
         new SettingField(
             "Suffix",
@@ -130,7 +132,8 @@ public sealed class AudioDownmixScript : AbstractScript
         string format = GetSettingValue(
             settings, 
             "OutputFormat", 
-            "Dolby Digital Plus (E-AC3)");
+            "E-AC3");
+
         string bitrate = GetSettingValue(
             settings, 
             "Bitrate", 
@@ -149,8 +152,8 @@ public sealed class AudioDownmixScript : AbstractScript
         // 1. Валидация формата для DEE
         if (mode == "Dolby Encoding Engine (DEE)")
         {
-            if (format != "Dolby Digital Plus (E-AC3)" && 
-                format != "Dolby Digital (AC3)")
+            if (format != "E-AC3" && 
+                format != "AC3")
             {
                 string errMsg = "❌ Ошибка: Dolby Encoding Engine " +
                                 "поддерживает только форматы E-AC3 и AC3.";
@@ -170,15 +173,15 @@ public sealed class AudioDownmixScript : AbstractScript
 
         // Определение расширения выходного файла
         string ext = ".eac3";
-        if (format == "Dolby Digital (AC3)")
+        if (format == "AC3")
         {
             ext = ".ac3";
         }
-        else if (format == "Advanced Audio Coding (AAC)")
+        else if (format == "AAC")
         {
             ext = ".m4a";
         }
-        else if (format == "Free Lossless Audio Codec (FLAC)")
+        else if (format == "FLAC")
         {
             ext = ".flac";
         }
@@ -237,7 +240,7 @@ public sealed class AudioDownmixScript : AbstractScript
                 "Запуск Dolby Encoding Engine...", 
                 0.0);
 
-            string outputFormat = format == "Dolby Digital Plus (E-AC3)" 
+            string outputFormat = format == "E-AC3" 
                 ? "ddp" 
                 : "dd";
 
@@ -248,6 +251,15 @@ public sealed class AudioDownmixScript : AbstractScript
                 bitrate: bitrate,
                 outputFormat: outputFormat,
                 downmixChannels: 2,
+                onProgress: pct =>
+                {
+                    string msg = $"Даунмикс (DEE) | {pct:F1}%";
+                    progressCallback(
+                        fileIndex, 
+                        totalCount, 
+                        msg, 
+                        pct);
+                },
                 cancellationToken: cts.Token);
 
             while (!deeTask.IsCompleted)
@@ -280,15 +292,15 @@ public sealed class AudioDownmixScript : AbstractScript
             string codec = "aac";
             bool isLossless = false;
 
-            if (format == "Dolby Digital Plus (E-AC3)")
+            if (format == "E-AC3")
             {
                 codec = "eac3";
             }
-            else if (format == "Dolby Digital (AC3)")
+            else if (format == "AC3")
             {
                 codec = "ac3";
             }
-            else if (format == "Free Lossless Audio Codec (FLAC)")
+            else if (format == "FLAC")
             {
                 codec = "flac";
                 isLossless = true;

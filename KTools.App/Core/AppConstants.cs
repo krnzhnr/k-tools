@@ -38,6 +38,14 @@ public static class AppConstants
     };
 
     /// <summary>
+    /// Объединенный список всех поддерживаемых медиа-контейнеров (видео и аудио) с точкой в нижнем регистре.
+    /// </summary>
+    public static readonly IReadOnlySet<string> AllContainers = new HashSet<string>(
+        VideoContainers.Concat(AudioContainers),
+        StringComparer.OrdinalIgnoreCase
+    );
+
+    /// <summary>
     /// Множество расширений аудио-потоков с точкой в нижнем регистре.
     /// </summary>
     public static readonly IReadOnlySet<string> AudioStreams = new HashSet<string>(StringComparer.OrdinalIgnoreCase)

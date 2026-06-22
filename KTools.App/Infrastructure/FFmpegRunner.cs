@@ -130,7 +130,7 @@ public sealed class FFmpegRunner : AbstractProcessRunner
     /// <returns>Документ JsonDocument со свойствами потоков, или null при сбоях.</returns>
     public async Task<JsonDocument?> GetVideoInfoAsync(string filePath)
     {
-        string arguments = $"-v error -show_entries format=duration:stream=index,codec_name,codec_type,disposition,pix_fmt,width,height:stream_tags -of json \"{filePath}\"";
+        string arguments = $"-v error -show_entries format=duration:stream=index,codec_name,codec_type,disposition,pix_fmt,width,height,channels:stream_tags -of json \"{filePath}\"";
         
         var outputLines = new List<string>();
         var errorLines = new List<string>();

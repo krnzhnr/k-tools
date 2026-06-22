@@ -2,6 +2,8 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using KTools_App.Core;
@@ -15,6 +17,60 @@ namespace KTools_App.Infrastructure;
 /// </summary>
 public sealed class DeeRunner : AbstractProcessRunner
 {
+    [DllImport("kernel32.dll", EntryPoint = "GetShortPathNameW", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint GetShortPathName(string lpszLongPath, StringBuilder lpszShortPath, uint cchBuffer);
+
+    /// <summary>
+    /// Возвращает короткий путь в формате 8.3 для операционной системы Windows.
+    /// Это необходимо, так как Dolby Encoding Engine не поддерживает пробелы и кириллицу в путях.
+    /// </summary>
+    /// <param name="path">Исходный длинный путь.</param>
+    /// <returns>Короткий путь или исходный путь при невозможности конвертации.</returns>
+    private static string GetShortPath(string path)
+    {
+        if (string.IsNullOrEmpty(path))
+        {
+            return path;
+        }
+
+        if (!OperatingSystem.IsWindows())
+        {
+            return path;
+        }
+
+        try
+        {
+            var sb = new StringBuilder(1024);
+            uint result = GetShortPathName(path, sb, (uint)sb.Capacity);
+            if (result > 0)
+            {
+                string shortPath = sb.ToString();
+                LogService.Instance.DebugLog($"Путь преобразован в формат 8.3: '{path}' -> '{shortPath}'", "DeeRunner");
+                return shortPath;
+            }
+
+            if (result > sb.Capacity)
+            {
+                sb.EnsureCapacity((int)result);
+                result = GetShortPathName(path, sb, result);
+                if (result > 0)
+                {
+                    string shortPath = sb.ToString();
+                    LogService.Instance.DebugLog($"Путь преобразован в формат 8.3 с увеличенным буфером: '{path}' -> '{shortPath}'", "DeeRunner");
+                    return shortPath;
+                }
+            }
+
+            LogService.Instance.Warn($"Не удалось получить короткий путь для '{path}'. Код ошибки: {Marshal.GetLastWin32Error()}", "DeeRunner");
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Exception(ex, $"Исключение при получении короткого пути для '{path}'", "DeeRunner");
+        }
+
+        return path;
+    }
+
     private static readonly Lazy<DeeRunner> LazyInstance =
         new(() => new DeeRunner());
 
@@ -45,6 +101,7 @@ public sealed class DeeRunner : AbstractProcessRunner
         int downmixChannels = 2,
         string drcProfile = "film_standard",
         int dialnorm = -31,
+        Action<double>? onProgress = null,
         CancellationToken cancellationToken = default)
     {
         LogService.Instance.Info($"Начало кодирования Dolby ({outputFormat.ToUpper()}) для файла: '{Path.GetFileName(inputPath)}'", "DeeRunner");
@@ -122,12 +179,70 @@ public sealed class DeeRunner : AbstractProcessRunner
             LogService.Instance.DebugLog("XML-конфигурация для Dolby Encoding Engine сгенерирована", "DeeRunner");
 
             // Шаг 3. Запуск dee.exe с сгенерированным XML
-            string arguments = $"--xml \"{tempXmlPath}\"";
+            string shortXmlPath = GetShortPath(tempXmlPath);
+            string arguments = $"--xml \"{shortXmlPath}\"";
+
+            string currentStep = "init";
 
             var result = await RunProcessAsync(
                 "dee",
                 arguments,
-                onOutputLine: line => LogService.Instance.DebugLog($"[DEE STDOUT] {line}", "DeeRunner"),
+                onOutputLine: line =>
+                {
+                    LogService.Instance.DebugLog($"[DEE STDOUT] {line}", "DeeRunner");
+
+                    if (line.Contains("Step: measuring"))
+                    {
+                        currentStep = "measuring";
+                    }
+                    else if (line.Contains("Step: encoding"))
+                    {
+                        currentStep = "encoding";
+                    }
+
+                    if (onProgress != null && line.Contains("Stage progress:"))
+                    {
+                        try
+                        {
+                            int idx = line.IndexOf("Stage progress:");
+                            string part = line.Substring(idx + "Stage progress:".Length).Trim();
+                            int commaIdx = part.IndexOf(',');
+                            if (commaIdx != -1)
+                            {
+                                part = part.Substring(0, commaIdx).Trim();
+                            }
+
+                            if (double.TryParse(part, System.Globalization.CultureInfo.InvariantCulture, out double stageProgress))
+                            {
+                                double progressVal = 0.0;
+                                if (currentStep == "measuring")
+                                {
+                                    double norm = (stageProgress - 25.0) / 75.0;
+                                    if (norm < 0) norm = 0;
+                                    if (norm > 1) norm = 1;
+                                    progressVal = norm * 15.0;
+                                }
+                                else if (currentStep == "encoding")
+                                {
+                                    double norm = (stageProgress - 25.0) / 75.0;
+                                    if (norm < 0) norm = 0;
+                                    if (norm > 1) norm = 1;
+                                    progressVal = 15.0 + (norm * 85.0);
+                                }
+                                else
+                                {
+                                    progressVal = stageProgress * 0.05; // В начале от 0% до 1.25%
+                                }
+
+                                onProgress(progressVal);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            LogService.Instance.Exception(ex, "Ошибка расчета прогресса DEE", "DeeRunner");
+                        }
+                    }
+                },
                 onErrorLine: line => LogService.Instance.DebugLog($"[DEE STDERR] {line}", "DeeRunner"),
                 cancellationToken: cancellationToken
             );
@@ -156,7 +271,7 @@ public sealed class DeeRunner : AbstractProcessRunner
                     File.Delete(outputPath);
                 }
                 File.Move(generatedFile, outputPath);
-                LogService.Instance.Info($"Долби-кодирование успешно завершено: '{Path.GetFileName(outputPath)}'", "DeeRunner");
+                LogService.Instance.Info($"Кодирование Dolby успешно завершено: '{Path.GetFileName(outputPath)}'", "DeeRunner");
                 return true;
             }
 
@@ -228,18 +343,24 @@ public sealed class DeeRunner : AbstractProcessRunner
             _ => "off"
         };
 
+        string shortTempDir = GetShortPath(tempDir);
+        string shortWavDir = GetShortPath(Path.GetDirectoryName(wavPath) ?? string.Empty);
+        string shortWavName = Path.GetFileName(wavPath);
+        string shortOutDir = GetShortPath(Path.GetDirectoryName(outPath) ?? string.Empty);
+        string shortOutName = Path.GetFileNameWithoutExtension(wavPath) + (encoderMode == "dd" ? ".ac3" : ".ec3");
+
         return $@"<?xml version=""1.0""?>
 <job_config>
   <input>
     <audio>
       <wav version=""1"">
-        <file_name>{Path.GetFileName(wavPath)}</file_name>
+        <file_name>""{shortWavName}""</file_name>
         <timecode_frame_rate>not_indicated</timecode_frame_rate>
         <offset>auto</offset>
         <ffoa>auto</ffoa>
         <storage>
           <local>
-            <path>{Path.GetDirectoryName(wavPath)}</path>
+            <path>""{shortWavDir}""</path>
           </local>
         </storage>
       </wav>
@@ -294,10 +415,10 @@ public sealed class DeeRunner : AbstractProcessRunner
   </filter>
   <output>
     <ec3 version=""1"">
-      <file_name>{Path.GetFileNameWithoutExtension(wavPath) + (encoderMode == "dd" ? ".ac3" : ".ec3")}</file_name>
+      <file_name>""{shortOutName}""</file_name>
       <storage>
         <local>
-          <path>{Path.GetDirectoryName(outPath)}</path>
+          <path>""{shortOutDir}""</path>
         </local>
       </storage>
     </ec3>
@@ -305,7 +426,7 @@ public sealed class DeeRunner : AbstractProcessRunner
   <misc>
     <temp_dir>
       <clean_temp>true</clean_temp>
-      <path>{tempDir}</path>
+      <path>""{shortTempDir}""</path>
     </temp_dir>
   </misc>
 </job_config>";
