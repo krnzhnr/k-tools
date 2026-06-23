@@ -159,7 +159,7 @@ StatusMsg: "Установка декодеров для eac3to..."; \\
 Flags: runascurrentuser; Components: decoders
 
 [UninstallDelete]
-Type: filesandsubdirs; Name: "{{app}}\\bin"
+Type: filesandordirs; Name: "{{app}}\\bin"
 """
     iss_path = SRC_DIR / "KTools_CSharp.iss"
     iss_path.write_text(iss_content, encoding="utf-8")
