@@ -73,7 +73,8 @@ public sealed class Eac3toRunner : AbstractProcessRunner
                     stderrLines.Add(line);
                 }
             },
-            cancellationToken
+            cancellationToken,
+            workingDir: workingCwd
         );
 
         // Очищаем созданные eac3to файлы логов log*.txt

@@ -138,6 +138,61 @@ public static class PathManager
     }
 
     /// <summary>
+    /// Возвращает короткий путь в формате 8.3 для операционной системы Windows.
+    /// Это необходимо для совместимости с устаревшими 32-битными утилитами (например, eac3to),
+    /// которые некорректно работают с путями, содержащими пробелы или символы кириллицы.
+    /// </summary>
+    /// <param name="path">Исходный длинный путь к файлу или папке.</param>
+    /// <returns>Короткий путь в формате 8.3, либо исходный путь, если преобразование невозможно.</returns>
+    public static string GetShortPath(string path)
+    {
+        if (string.IsNullOrEmpty(path))
+        {
+            return path;
+        }
+
+        if (!OperatingSystem.IsWindows())
+        {
+            return path;
+        }
+
+        try
+        {
+            var sb = new System.Text.StringBuilder(1024);
+            uint result = GetShortPathName(path, sb, (uint)sb.Capacity);
+            if (result > 0)
+            {
+                string shortPath = sb.ToString();
+                LogService.Instance.DebugLog($"Путь успешно преобразован в формат 8.3: '{path}' -> '{shortPath}'", "PathManager");
+                return shortPath;
+            }
+
+            if (result > sb.Capacity)
+            {
+                sb.EnsureCapacity((int)result);
+                result = GetShortPathName(path, sb, result);
+                if (result > 0)
+                {
+                    string shortPath = sb.ToString();
+                    LogService.Instance.DebugLog($"Путь успешно преобразован в формат 8.3 с расширением буфера: '{path}' -> '{shortPath}'", "PathManager");
+                    return shortPath;
+                }
+            }
+
+            LogService.Instance.Warn($"Не удалось преобразовать путь '{path}' в формат 8.3. Код системной ошибки: {System.Runtime.InteropServices.Marshal.GetLastWin32Error()}", "PathManager");
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Exception(ex, $"Непредвиденное исключение при попытке получить короткий путь для '{path}'", "PathManager");
+        }
+
+        return path;
+    }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", EntryPoint = "GetShortPathNameW", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
+    private static extern uint GetShortPathName(string lpszLongPath, System.Text.StringBuilder lpszShortPath, uint cchBuffer);
+
+    /// <summary>
     /// Получить имя подпапки для группировки бинарных утилит в папке bin/.
     /// </summary>
     private static string GetSubfolderName(string binaryName)
@@ -157,3 +212,4 @@ public static class PathManager
         };
     }
 }
+

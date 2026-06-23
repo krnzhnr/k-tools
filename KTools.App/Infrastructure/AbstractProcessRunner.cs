@@ -32,7 +32,8 @@ public abstract class AbstractProcessRunner
         string arguments,
         Action<string>? onOutputLine = null,
         Action<string>? onErrorLine = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? workingDir = null)
     {
         string binaryPath = PathManager.GetBinaryPath(binaryName);
         if (!File.Exists(binaryPath))
@@ -42,7 +43,7 @@ public abstract class AbstractProcessRunner
             return new ProcessResult(false, -1, errorMsg);
         }
 
-        LogService.Instance.DebugLog($"Инициализация запуска процесса: '{binaryName}' с аргументами: '{arguments}'", GetType().Name);
+        LogService.Instance.DebugLog($"Инициализация запуска процесса: '{binaryName}' с аргументами: '{arguments}' в рабочей директории: '{workingDir ?? "по умолчанию"}'", GetType().Name);
 
         var startInfo = new ProcessStartInfo
         {
@@ -54,7 +55,7 @@ public abstract class AbstractProcessRunner
             RedirectStandardError = true,
             StandardOutputEncoding = System.Text.Encoding.UTF8,
             StandardErrorEncoding = System.Text.Encoding.UTF8,
-            WorkingDirectory = Path.GetDirectoryName(binaryPath) ?? AppContext.BaseDirectory
+            WorkingDirectory = workingDir ?? Path.GetDirectoryName(binaryPath) ?? AppContext.BaseDirectory
         };
 
         using var process = new Process { StartInfo = startInfo };

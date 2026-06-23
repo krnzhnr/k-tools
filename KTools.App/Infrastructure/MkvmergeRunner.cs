@@ -39,6 +39,7 @@ public sealed class MkvmergeRunner : AbstractProcessRunner
     /// <param name="inputs">Список входных медиа-источников с индивидуальными флагами.</param>
     /// <param name="title">Глобальный заголовок (метаданные) собираемого MKV.</param>
     /// <param name="extraArgs">Глобальные дополнительные аргументы для mkvmerge.</param>
+    /// <param name="onProgress">Колбек для передачи процентов прогресса (от 0 до 100).</param>
     /// <param name="cancellationToken">Токен отмены операции.</param>
     /// <returns>True, если процесс завершился успешно (код 0 или 1), иначе false.</returns>
     public async Task<bool> RunAsync(
@@ -46,6 +47,7 @@ public sealed class MkvmergeRunner : AbstractProcessRunner
         List<MkvInputSource> inputs,
         string? title = null,
         List<string>? extraArgs = null,
+        Action<double>? onProgress = null,
         CancellationToken cancellationToken = default)
     {
         if (inputs == null || inputs.Count == 0)
@@ -99,6 +101,15 @@ public sealed class MkvmergeRunner : AbstractProcessRunner
                 lock (stdoutLines)
                 {
                     stdoutLines.Add(line);
+                }
+
+                if (onProgress != null)
+                {
+                    double? percent = MkvmergeOutputParser.ParseLine(line);
+                    if (percent.HasValue)
+                    {
+                        onProgress(percent.Value);
+                    }
                 }
             },
             onErrorLine: line =>

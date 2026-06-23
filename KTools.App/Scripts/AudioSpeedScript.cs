@@ -191,8 +191,35 @@ public sealed class AudioSpeedScript : AbstractScript
             return results;
         }
 
-        // Добавляем путь выходного файла и опции к аргументам eac3to
-        eac3toArgs.Add($"\"{outputFilePath}\"");
+        // Предотвращаем зависание и сбой eac3to из-за кириллического пути.
+        // Если целевой путь содержит не-ASCII символы, сохраняем временный файл в гарантированно
+        // ASCII-совместимую директорию C:\Users\Public\KTools_Temp (к которой у любого пользователя есть права записи),
+        // так как при отключенной генерации имен 8.3 на NTFS-томах eac3to/libFLAC падает при путях с кириллицей.
+        bool usePublicTemp = targetDir.Any(c => c > 127);
+        string tempDir = usePublicTemp
+            ? Path.Combine(Environment.GetEnvironmentVariable("PUBLIC") ?? @"C:\Users\Public", "KTools_Temp")
+            : targetDir;
+
+        try
+        {
+            if (!Directory.Exists(tempDir))
+            {
+                Directory.CreateDirectory(tempDir);
+                LogService.Instance.DebugLog($"Создана временная папка для eac3to: '{tempDir}'", "AudioSpeedScript");
+            }
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Exception(ex, $"Не удалось создать временную директорию '{tempDir}', откат на стандартный путь", "AudioSpeedScript");
+            tempDir = Path.GetTempPath();
+        }
+
+        string shortInputPath = PathManager.GetShortPath(filePath);
+        string tempOutputName = $"temp_speed_{Guid.NewGuid():N}.{ext}";
+        string tempOutputFilePath = Path.Combine(tempDir, tempOutputName);
+
+        // Добавляем абсолютный путь к временному файлу (гарантированно ASCII)
+        eac3toArgs.Add($"\"{tempOutputFilePath}\"");
         eac3toArgs.AddRange(options);
 
         progressCallback(
@@ -204,6 +231,7 @@ public sealed class AudioSpeedScript : AbstractScript
         using var cts = new CancellationTokenSource();
         var eac3toTask = Eac3toRunner.Instance.RunAsync(
             eac3toArgs,
+            workingDir: tempDir,
             onProgress: pct =>
             {
                 progressCallback(
@@ -239,7 +267,7 @@ public sealed class AudioSpeedScript : AbstractScript
 
         if (IsCancelled)
         {
-            CleanupIfCancelled(outputFilePath);
+            CleanupIfCancelled(tempOutputFilePath);
             results.Add($"⚠ Отменено: {outputName}");
             LogService.Instance.Info(
                 $"Обработка файла '{originalName}' отменена пользователем.",
@@ -247,26 +275,51 @@ public sealed class AudioSpeedScript : AbstractScript
             return results;
         }
 
-        if (success && File.Exists(outputFilePath))
+        if (success && File.Exists(tempOutputFilePath))
         {
-            progressCallback(
-                fileIndex,
-                totalCount,
-                "Успешно завершено!",
-                100.0);
-            results.Add($"✅ Скорость изменена: {outputName}");
-            LogService.Instance.Info(
-                $"Успешно завершено изменение скорости для '{originalName}'. " +
-                $"Результат сохранен в '{outputName}'",
-                "AudioSpeedScript");
-
-            if (deleteOriginal)
+            try
             {
-                DeleteSource(filePath, results);
+                if (File.Exists(outputFilePath))
+                {
+                    File.Delete(outputFilePath);
+                    LogService.Instance.DebugLog($"Удален существующий файл результата перед заменой: '{outputFilePath}'", "AudioSpeedScript");
+                }
+
+                MoveFileSafe(tempOutputFilePath, outputFilePath);
+                LogService.Instance.DebugLog($"Временный файл успешно перемещен: '{tempOutputFilePath}' -> '{outputFilePath}'", "AudioSpeedScript");
+
+                progressCallback(
+                    fileIndex,
+                    totalCount,
+                    "Успешно завершено!",
+                    100.0);
+                results.Add($"✅ Скорость изменена: {outputName}");
+                LogService.Instance.Info(
+                    $"Успешно завершено изменение скорости для '{originalName}'. " +
+                    $"Результат сохранен в '{outputName}'",
+                    "AudioSpeedScript");
+
+                if (deleteOriginal)
+                {
+                    DeleteSource(filePath, results);
+                }
+            }
+            catch (Exception ex)
+            {
+                string moveErr = $"❌ Ошибка при сохранении итогового файла: {ex.Message}";
+                results.Add(moveErr);
+                LogService.Instance.Exception(ex, $"Не удалось переместить временный файл '{tempOutputFilePath}' в '{outputFilePath}'", "AudioSpeedScript");
+                CleanupIfCancelled(tempOutputFilePath);
             }
         }
         else
         {
+            // Очищаем временный файл, если он остался пустым или поврежденным
+            if (File.Exists(tempOutputFilePath))
+            {
+                try { File.Delete(tempOutputFilePath); } catch { }
+            }
+
             string errorMsg = $"❌ Ошибка обработки для " +
                               $"{Path.GetFileName(filePath)}";
             results.Add(errorMsg);
@@ -278,4 +331,27 @@ public sealed class AudioSpeedScript : AbstractScript
 
         return results;
     }
+
+    /// <summary>
+    /// Безопасно перемещает файл между дисками и томами с поддержкой перезаписи.
+    /// </summary>
+    private static void MoveFileSafe(string source, string dest)
+    {
+        string? destDir = Path.GetDirectoryName(dest);
+        if (destDir != null && !Directory.Exists(destDir))
+        {
+            Directory.CreateDirectory(destDir);
+        }
+
+        if (Path.GetPathRoot(source) == Path.GetPathRoot(dest))
+        {
+            File.Move(source, dest, overwrite: true);
+        }
+        else
+        {
+            File.Copy(source, dest, overwrite: true);
+            File.Delete(source);
+        }
+    }
 }
+

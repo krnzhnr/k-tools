@@ -127,11 +127,38 @@ public sealed class AudioChannelsScript : AbstractScript
         // Перед запуском очищаем старые файлы с такими же именами (если они есть)
         CleanupAllOutputs(basePath);
 
-        // Подготовка аргументов для eac3to
+        // Предотвращаем зависание и сбой eac3to из-за кириллического пути.
+        // Если целевой путь содержит не-ASCII символы, сохраняем временные файлы в гарантированно
+        // ASCII-совместимую директорию C:\Users\Public\KTools_Temp (к которой у любого пользователя есть права записи),
+        // так как при отключенной генерации имен 8.3 на NTFS-томах eac3to/libFLAC падает при путях с кириллицей.
+        bool usePublicTemp = targetDir.Any(c => c > 127);
+        string tempDir = usePublicTemp
+            ? Path.Combine(Environment.GetEnvironmentVariable("PUBLIC") ?? @"C:\Users\Public", "KTools_Temp")
+            : targetDir;
+
+        try
+        {
+            if (!Directory.Exists(tempDir))
+            {
+                Directory.CreateDirectory(tempDir);
+                LogService.Instance.DebugLog($"Создана временная папка для eac3to: '{tempDir}'", "AudioChannelsScript");
+            }
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Exception(ex, $"Не удалось создать временную директорию '{tempDir}', откат на стандартный путь", "AudioChannelsScript");
+            tempDir = Path.GetTempPath();
+        }
+
+        string shortInputPath = PathManager.GetShortPath(filePath);
+        string tempBaseName = $"temp_split_{Guid.NewGuid():N}";
+        string tempOutputFilePath = Path.Combine(tempDir, $"{tempBaseName}.wavs");
+
+        // Подготовка аргументов для eac3to с абсолютным путем назначения (гарантированно ASCII)
         var eac3toArgs = new List<string>
         {
-            $"\"{filePath}\"",
-            $"\"{outputFilePath}\""
+            $"\"{shortInputPath}\"",
+            $"\"{tempOutputFilePath}\""
         };
 
         progressCallback(
@@ -143,6 +170,7 @@ public sealed class AudioChannelsScript : AbstractScript
         using var cts = new CancellationTokenSource();
         var eac3toTask = Eac3toRunner.Instance.RunAsync(
             eac3toArgs,
+            workingDir: tempDir,
             cancellationToken: cts.Token);
 
         while (!eac3toTask.IsCompleted)
@@ -170,6 +198,7 @@ public sealed class AudioChannelsScript : AbstractScript
 
         if (IsCancelled)
         {
+            CleanupTempOutputs(tempDir, tempBaseName);
             CleanupAllOutputs(basePath);
             results.Add($"⚠ Отменено: {originalName}");
             LogService.Instance.Info(
@@ -180,6 +209,7 @@ public sealed class AudioChannelsScript : AbstractScript
 
         if (!success)
         {
+            CleanupTempOutputs(tempDir, tempBaseName);
             CleanupAllOutputs(basePath);
             string errorMsg = $"❌ Ошибка eac3to при разделении " +
                               $"{Path.GetFileName(filePath)}";
@@ -189,6 +219,38 @@ public sealed class AudioChannelsScript : AbstractScript
                 "AudioChannelsScript");
             return results;
         }
+
+        // Переносим и переименовываем созданные eac3to файлы
+        try
+        {
+            if (Directory.Exists(tempDir))
+            {
+                string[] tempFiles = Directory.GetFiles(tempDir, $"{tempBaseName}*");
+                foreach (string tempFile in tempFiles)
+                {
+                    string fileName = Path.GetFileName(tempFile);
+                    string suffix = fileName.Substring(tempBaseName.Length); // например, ".L.wav"
+                    string finalPath = basePath + suffix;
+
+                    if (File.Exists(finalPath))
+                    {
+                        File.Delete(finalPath);
+                    }
+                    MoveFileSafe(tempFile, finalPath);
+                    LogService.Instance.DebugLog($"Временный моно-канал перемещен: '{tempFile}' -> '{finalPath}'", "AudioChannelsScript");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            CleanupTempOutputs(tempDir, tempBaseName);
+            CleanupAllOutputs(basePath);
+            string errorMsg = $"❌ Ошибка перемещения моно-каналов для {Path.GetFileName(filePath)}";
+            results.Add(errorMsg);
+            LogService.Instance.Exception(ex, $"Не удалось переименовать временные моно-файлы после eac3to для '{originalName}'", "AudioChannelsScript");
+            return results;
+        }
+
 
         // Если разделение прошло успешно и включена склейка стереопар
         if (mergeStereo)
@@ -387,6 +449,58 @@ public sealed class AudioChannelsScript : AbstractScript
                     $"при очистке: {ex.Message}",
                     "AudioChannelsScript");
             }
+        }
+    }
+
+    /// <summary>
+    /// Физически удаляет временные моно-файлы eac3to из целевой папки при отмене или ошибках.
+    /// </summary>
+    private void CleanupTempOutputs(string targetDir, string tempBaseName)
+    {
+        try
+        {
+            if (Directory.Exists(targetDir))
+            {
+                string[] tempFiles = Directory.GetFiles(targetDir, $"{tempBaseName}*");
+                foreach (string file in tempFiles)
+                {
+                    if (File.Exists(file))
+                    {
+                        File.Delete(file);
+                        LogService.Instance.DebugLog(
+                            $"Удален неиспользованный временный моно-файл: '{Path.GetFileName(file)}'",
+                            "AudioChannelsScript");
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Warn(
+                $"Не удалось выполнить очистку временных моно-файлов для '{tempBaseName}': {ex.Message}",
+                "AudioChannelsScript");
+        }
+    }
+
+    /// <summary>
+    /// Безопасно перемещает файл между дисками и томами с поддержкой перезаписи.
+    /// </summary>
+    private static void MoveFileSafe(string source, string dest)
+    {
+        string? destDir = Path.GetDirectoryName(dest);
+        if (destDir != null && !Directory.Exists(destDir))
+        {
+            Directory.CreateDirectory(destDir);
+        }
+
+        if (Path.GetPathRoot(source) == Path.GetPathRoot(dest))
+        {
+            File.Move(source, dest, overwrite: true);
+        }
+        else
+        {
+            File.Copy(source, dest, overwrite: true);
+            File.Delete(source);
         }
     }
 }

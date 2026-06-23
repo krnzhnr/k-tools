@@ -214,6 +214,10 @@ public sealed class StreamReplacementScript : AbstractScript
                     outputPath: finalOutputFile,
                     inputs: mkvInputs,
                     extraArgs: extraArgs,
+                    onProgress: progress =>
+                    {
+                        progressCallback(fileIndex, totalCount, $"Сборка MKV | {progress:F1}%", progress);
+                    },
                     cancellationToken: cts.Token
                 );
             }
@@ -481,7 +485,7 @@ public sealed class StreamReplacementScript : AbstractScript
         if (!string.IsNullOrEmpty(track.Name))
         {
             args.Add("--track-name");
-            args.Add($"{srcId}:{track.Name}");
+            args.Add($"\"{srcId}:{track.Name}\"");
         }
 
         // Перенос флагов

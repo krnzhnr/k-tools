@@ -208,7 +208,7 @@ public sealed class MkvAssemblyScript : AbstractScript
             {
                 "--subtitle-tracks", "0",
                 "--language", "0:rus",
-                "--track-name", $"0:{subsTitle}",
+                "--track-name", $"\"0:{subsTitle}\"",
                 "--default-track", "0:yes",
                 "--forced-display-flag", "0:yes"
             }));
@@ -238,6 +238,10 @@ public sealed class MkvAssemblyScript : AbstractScript
                 mkvInputs,
                 title: stem,
                 extraArgs: null,
+                onProgress: progress =>
+                {
+                    progressCallback(fileIndex, totalCount, $"Сборка MKV | {progress:F1}%", progress);
+                },
                 cancellationToken: cts.Token
             );
         }

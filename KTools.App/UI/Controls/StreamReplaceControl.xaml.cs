@@ -118,7 +118,8 @@ public sealed partial class StreamReplaceControl : UserControl
             _files.CollectionChanged -= OnFilesCollectionChanged;
             _files.CollectionChanged += OnFilesCollectionChanged;
             SubscribeToItems();
-            RebuildUI();
+            // Вызов RebuildUI() намеренно исключен, так как Populate() уже строит интерфейс,
+            // а повторный вызов при Loaded (например, при переключении вкладок) сбрасывает выбор в ComboBox.
         }
     }
 
