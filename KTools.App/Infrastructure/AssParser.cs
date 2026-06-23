@@ -96,6 +96,16 @@ public sealed class AssParser
         @"</?[a-z][a-z0-9]*(?:\s+[^>]*?)?>",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+    // Регэкс для разделения текста по \N и \n с захватом разделителей.
+    private static readonly Regex NewlineSplitPattern = new(
+        @"(\\N|\\n)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    // Регэкс для удаления повторных переносов строк.
+    private static readonly Regex DuplicateNewlinePattern = new(
+        @"(\\N|\\n){2,}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
     private const string DialoguePrefix = "Dialogue:";
 
     private AssParser() { }
@@ -342,8 +352,8 @@ public sealed class AssParser
     /// </summary>
     public string StripCaps(string text)
     {
-        // Разделяем по \N и \n с захватом разделителей
-        string[] parts = Regex.Split(text, @"(\\N|\\n)");
+        // Разделяем по \N и \n с захватом разделителей (используем скомпилированный паттерн)
+        string[] parts = NewlineSplitPattern.Split(text);
         var resultParts = new List<string>();
 
         for (int i = 0; i < parts.Length; i += 2)
@@ -361,8 +371,8 @@ public sealed class AssParser
 
         string res = string.Concat(resultParts);
         
-        // Убираем повторные \N\N и висящие края
-        res = Regex.Replace(res, @"(\\N|\\n){2,}", "$1");
+        // Убираем повторные \N\N и висящие края (используем скомпилированный паттерн)
+        res = DuplicateNewlinePattern.Replace(res, "$1");
         
         // Обрезаем висящие слеши
         res = TrimSlashN(res);

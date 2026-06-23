@@ -92,6 +92,11 @@ public sealed class SubtitlesConvertScript : AbstractScript
     };
 
     /// <summary>
+    /// Текущее состояние фильтрации для предпросмотра и выполнения.
+    /// </summary>
+    public KTools_App.Models.SubtitleFilterState FilterState { get; } = new();
+
+    /// <summary>
     /// Асинхронно запускает процесс конвертации одного файла субтитров.
     /// </summary>
     public override async Task<List<string>> ExecuteSingleAsync(
@@ -105,11 +110,16 @@ public sealed class SubtitlesConvertScript : AbstractScript
         ResetCancellation();
         var results = new List<string>();
 
-        // Извлекаем пользовательские настройки
+        // Извлекаем пользовательские настройки и синхронизируем с FilterState
         string targetFormat = GetSettingValue(settings, "target_format", "WebVTT");
-        bool stripFormatting = GetSettingValue(settings, "strip_formatting", true);
+        
+        // Синхронизируем FilterState с текущими настройками перед выполнением
+        FilterState.StripFormatting = GetSettingValue(settings, "strip_formatting", FilterState.StripFormatting);
+        FilterState.StripCaps = GetSettingValue(settings, "strip_caps", FilterState.StripCaps);
+
+        bool stripFormatting = FilterState.StripFormatting;
         bool keepStyles = GetSettingValue(settings, "keep_styles", false);
-        bool stripCaps = GetSettingValue(settings, "strip_caps", false);
+        bool stripCaps = FilterState.StripCaps;
         bool deleteOriginal = GetSettingValue(settings, "delete_original", false);
 
         string originalName = Path.GetFileName(filePath);
@@ -248,6 +258,7 @@ public sealed class SubtitlesConvertScript : AbstractScript
             {
                 writer.Write(AssParser.Instance.GetMinimalHeader());
                 
+                int dialogueIndex = 0;
                 foreach (var d in assData.Dialogues)
                 {
                     if (IsCancelled)
@@ -259,8 +270,19 @@ public sealed class SubtitlesConvertScript : AbstractScript
                     if (string.IsNullOrWhiteSpace(
                         AssParser.Instance.StripTags(d.Text)))
                     {
+                        dialogueIndex++;
                         continue;
                     }
+
+                    // Проверяем фильтрацию по актеру, стилю или эффекту
+                    bool isFiltered = 
+                        (!string.IsNullOrEmpty(d.Actor) && FilterState.ExcludedActors.Contains(d.Actor)) ||
+                        (!string.IsNullOrEmpty(d.Style) && FilterState.ExcludedStyles.Contains(d.Style)) ||
+                        (!string.IsNullOrEmpty(d.Effect) && FilterState.ExcludedEffects.Contains(d.Effect));
+
+                    // Проверяем ручные переопределения
+                    bool isManuallyIncluded = FilterState.ManualInclusions.TryGetValue(filePath, out var incSet) && incSet.Contains(dialogueIndex);
+                    bool isManuallyExcluded = FilterState.ManualExclusions.TryGetValue(filePath, out var excSet) && excSet.Contains(dialogueIndex);
 
                     string text = d.Text;
                     
@@ -276,10 +298,28 @@ public sealed class SubtitlesConvertScript : AbstractScript
                         text = AssParser.Instance.StripTags(text);
                     }
 
-                    // Если после очистки реплика стала пустой — исключаем
-                    if (string.IsNullOrWhiteSpace(
-                        AssParser.Instance.StripTags(text)))
+                    bool isEmptyAfterFilters = string.IsNullOrWhiteSpace(AssParser.Instance.StripTags(text));
+
+                    // Если строка включена вручную и в результате очистки фильтрами она стала пустой,
+                    // возвращаем оригинальный текст, чтобы она корректно попала в финальные субтитры.
+                    if (isManuallyIncluded && isEmptyAfterFilters)
                     {
+                        text = d.Text;
+                        isEmptyAfterFilters = false;
+                    }
+
+                    // Строка удаляется, если:
+                    // 1. Она изначально пустая (всегда удаляется, обработано выше)
+                    // 2. Она явно исключена пользователем вручную
+                    // 3. Она пустая после фильтров и не была вручную включена
+                    // 4. Она попала под фильтр и не была вручную включена
+                    bool isDeleted = isManuallyExcluded || 
+                                     (isEmptyAfterFilters && !isManuallyIncluded) || 
+                                     (isFiltered && !isManuallyIncluded);
+
+                    if (isDeleted)
+                    {
+                        dialogueIndex++;
                         continue;
                     }
 
@@ -292,6 +332,7 @@ public sealed class SubtitlesConvertScript : AbstractScript
                         text: text);
 
                     writer.WriteLine(AssParser.Instance.ToAssLine(tempDialogue));
+                    dialogueIndex++;
                 }
             }
 

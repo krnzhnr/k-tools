@@ -1,0 +1,417 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Page
+    x:Class="KTools_App.UI.Pages.SubtitlePreviewPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:viewmodels="using:KTools_App.ViewModels"
+    xmlns:converters="using:KTools_App.Converters"
+    mc:Ignorable="d">
+
+    <Page.Resources>
+        <converters:InverseBoolConverter x:Key="InverseBoolConverter" />
+    </Page.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <TitleBar x:Name="AppTitleBar" Title="Предпросмотр субтитров и настройка фильтров" Grid.Row="0">
+            <TitleBar.IconSource>
+                <ImageIconSource ImageSource="Assets/AppIcon.ico" />
+            </TitleBar.IconSource>
+        </TitleBar>
+
+        <NavigationView x:Name="MainNavigation"
+                        Grid.Row="1"
+                        PaneDisplayMode="Left"
+                        OpenPaneLength="350"
+                        IsSettingsVisible="False"
+                        IsBackButtonVisible="Collapsed"
+                        AlwaysShowHeader="False"
+                        SelectionChanged="MainNavigation_SelectionChanged">
+            <NavigationView.Resources>
+                <!-- Делаем фон области контента прозрачным -->
+                <SolidColorBrush x:Key="NavigationViewContentBackground" Color="Transparent" />
+                <!-- Убираем рамку вокруг области контента -->
+                <SolidColorBrush x:Key="NavigationViewContentGridBorderBrush" Color="Transparent" />
+                <!-- Сбрасываем внутренние боковые отступы области контента NavigationView -->
+                <Thickness x:Key="NavigationViewContentMargin">0,0,0,0</Thickness>
+            </NavigationView.Resources>
+            <NavigationView.MenuItems>
+                <NavigationViewItem Icon="Contact" Content="Актёры" Tag="actors" />
+                <NavigationViewItem Icon="Font" Content="Стили" Tag="styles" />
+                <NavigationViewItem Icon="OutlineStar" Content="Эффекты" Tag="effects" />
+                <NavigationViewItemSeparator />
+                <NavigationViewItem Icon="Document" Content="Предпросмотр" Tag="preview_all" x:Name="PreviewRootItem">
+                    <NavigationViewItem.MenuItems>
+                        <!-- Сюда динамически добавляются файлы в Code-Behind -->
+                    </NavigationViewItem.MenuItems>
+                </NavigationViewItem>
+            </NavigationView.MenuItems>
+
+            <!-- ОБЛАСТЬ КОНТЕНТА -->
+            <Grid Padding="24,24,24,24">
+                
+                <!-- 1. ЭКРАН ПРЕДПРОСМОТРА -->
+                <Grid x:Name="PreviewGrid" Visibility="Visible" RowSpacing="16">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" /> <!-- Шапка: Заголовок, поиск, глобальные опции -->
+                        <RowDefinition Height="Auto" /> <!-- Заголовки колонок таблицы -->
+                        <RowDefinition Height="*" />    <!-- Таблица строк субтитров -->
+                    </Grid.RowDefinitions>
+
+                    <Grid Grid.Row="0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        
+                        <StackPanel Grid.Column="0" VerticalAlignment="Center" Spacing="4">
+                            <TextBlock Text="Результаты предпросмотра" Style="{ThemeResource SubtitleTextBlockStyle}" />
+                            <TextBlock x:Name="StatsTextBlock" 
+                                       Text="Загрузка данных..." 
+                                       FontSize="12" 
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            
+                            <!-- Глобальные опции очистки под статистикой -->
+                            <StackPanel Orientation="Horizontal" Spacing="16" Margin="0,4,0,0">
+                                <CheckBox Content="Удалять теги форматирования" 
+                                          IsChecked="{x:Bind ViewModel.StripFormatting, Mode=TwoWay}"
+                                          FontSize="12" />
+                                <CheckBox Content="Удалять текст в верхнем регистре (КАПС)" 
+                                          IsChecked="{x:Bind ViewModel.StripCaps, Mode=TwoWay}"
+                                          FontSize="12" />
+                            </StackPanel>
+                        </StackPanel>
+                        
+                        <AutoSuggestBox Grid.Column="1" 
+                                        x:Name="SearchBox"
+                                        QueryIcon="Find" 
+                                        PlaceholderText="Поиск по тексту реплик..."
+                                        Text="{x:Bind ViewModel.SearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                        Width="300"
+                                        VerticalAlignment="Center" />
+                    </Grid>
+
+                    <!-- Шапка таблицы предпросмотра -->
+                    <Border Grid.Row="1" 
+                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1"
+                            CornerRadius="4"
+                            Padding="16,8,16,8">
+                        <Grid ColumnSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="40" />  <!-- Чекбокс -->
+                                <ColumnDefinition Width="140" /> <!-- Тайминг -->
+                                <ColumnDefinition Width="130" /> <!-- Статус -->
+                                <ColumnDefinition Width="160" /> <!-- Актёр / Стиль -->
+                                <ColumnDefinition Width="*" />   <!-- Текст -->
+                                <ColumnDefinition Width="45" />  <!-- Кнопка предпросмотра -->
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Вкл." FontWeight="SemiBold" FontSize="12" />
+                            <TextBlock Grid.Column="1" Text="Тайминг" FontWeight="SemiBold" FontSize="12" />
+                            <TextBlock Grid.Column="2" Text="Статус" FontWeight="SemiBold" FontSize="12" />
+                            <TextBlock Grid.Column="3" Text="Актёр / Стиль" FontWeight="SemiBold" FontSize="12" />
+                            <TextBlock Grid.Column="4" Text="Реплика субтитра" FontWeight="SemiBold" FontSize="12" />
+                            <TextBlock Grid.Column="5" Text="Вид" FontWeight="SemiBold" FontSize="12" HorizontalAlignment="Center" />
+                        </Grid>
+                    </Border>
+
+                    <!-- Виртуализированный список предпросмотра строк субтитров -->
+                    <ListView Grid.Row="2"
+                              x:Name="PreviewListView"
+                              ItemsSource="{x:Bind ViewModel.FilteredLines, Mode=OneWay}"
+                              SelectionMode="None"
+                              Padding="0"
+                              VerticalAlignment="Stretch">
+                        <ListView.ItemContainerStyle>
+                            <Style TargetType="ListViewItem">
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                <Setter Property="Padding" Value="0" />
+                                <Setter Property="Margin" Value="0,2,0,2" />
+                                <Setter Property="MinHeight" Value="36" />
+                            </Style>
+                        </ListView.ItemContainerStyle>
+                        <ListView.ItemTemplate>
+                            <DataTemplate x:DataType="viewmodels:SubtitlePreviewLine">
+                                <StackPanel>
+                                    <!-- Заголовок файла, отображаемый для первой строки каждого файла -->
+                                    <Border Visibility="{x:Bind IsFirstLineInFile, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
+                                            Background="#15808080"
+                                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                            BorderThickness="1"
+                                            Padding="16,8,16,8"
+                                            Margin="0,8,0,4"
+                                            CornerRadius="4">
+                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <SymbolIcon Symbol="Page2" Foreground="{ThemeResource SystemControlForegroundAccentBrush}" />
+                                            <TextBlock Text="{x:Bind FileName}" FontWeight="SemiBold" FontSize="13" />
+                                        </StackPanel>
+                                    </Border>
+
+                                    <Border BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
+                                            BorderThickness="0,0,0,1"
+                                            Padding="16,6,16,6">
+                                        <Grid ColumnSpacing="12">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="40" />  <!-- Чекбокс -->
+                                                <ColumnDefinition Width="140" /> <!-- Тайминг -->
+                                                <ColumnDefinition Width="130" /> <!-- Статус -->
+                                                <ColumnDefinition Width="160" /> <!-- Актёр / Стиль -->
+                                                <ColumnDefinition Width="*" />   <!-- Текст -->
+                                                <ColumnDefinition Width="45" />  <!-- Кнопка предпросмотра -->
+                                            </Grid.ColumnDefinitions>
+
+                                            <!-- Чекбокс включения/выключения строки -->
+                                            <CheckBox Grid.Column="0" 
+                                                      IsChecked="{x:Bind IsChecked, Mode=OneWay}"
+                                                      Click="SubtitleCheckBox_Click"
+                                                      IsEnabled="{x:Bind IsOriginallyEmpty, Converter={StaticResource InverseBoolConverter}}"
+                                                      MinWidth="0"
+                                                      HorizontalAlignment="Left"
+                                                      VerticalAlignment="Center" />
+
+                                            <!-- Тайминг -->
+                                            <TextBlock Grid.Column="1" 
+                                                       Text="{x:Bind Timing}" 
+                                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" 
+                                                       FontSize="12"
+                                                       VerticalAlignment="Center" />
+
+                                            <!-- Статус -->
+                                            <TextBlock Grid.Column="2" 
+                                                       Text="{x:Bind Status}" 
+                                                       Foreground="{x:Bind StatusBrush, Mode=OneWay}" 
+                                                       FontWeight="SemiBold"
+                                                       FontSize="12"
+                                                       VerticalAlignment="Center" />
+
+                                            <!-- Актёр / Стиль -->
+                                            <TextBlock Grid.Column="3" 
+                                                       Text="{x:Bind ActorAndStyle}" 
+                                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}" 
+                                                       FontSize="12"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       VerticalAlignment="Center" />
+
+                                             <!-- Текст реплики с форматированием тегов -->
+                                             <TextBlock Grid.Column="4" 
+                                                        DataContextChanged="SubtitleTextBlock_DataContextChanged"
+                                                        TextWrapping="Wrap"
+                                                        FontSize="13"
+                                                        VerticalAlignment="Center" />
+                                            
+                                            <!-- Кнопка предпросмотра с Flyout и ToolTip -->
+                                            <Button Grid.Column="5"
+                                                    Content="&#xE7B3;" 
+                                                    FontFamily="Segoe Fluent Icons"
+                                                    Background="Transparent"
+                                                    BorderThickness="0"
+                                                    Width="32"
+                                                    Height="32"
+                                                    Padding="0"
+                                                    HorizontalAlignment="Center"
+                                                    VerticalAlignment="Center"
+                                                    IsEnabled="{x:Bind IsChecked, Mode=OneWay}">
+                                                <ToolTipService.ToolTip>
+                                                    <ToolTip Placement="Left">
+                                                        <StackPanel Width="280" Spacing="6">
+                                                            <TextBlock Text="Финальный вид реплики:" FontWeight="SemiBold" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                                            <Border BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}" BorderThickness="0,0,0,1" />
+                                                            <TextBlock Text="{x:Bind FinalText, Mode=OneWay}" TextWrapping="Wrap" FontSize="13" />
+                                                        </StackPanel>
+                                                    </ToolTip>
+                                                </ToolTipService.ToolTip>
+                                                <Button.Flyout>
+                                                    <Flyout Placement="Left">
+                                                        <StackPanel Width="320" Spacing="8">
+                                                            <TextBlock Text="Финальный вид реплики (выделяемый)" FontWeight="SemiBold" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                                            <Border BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}" BorderThickness="0,0,0,1" />
+                                                            <TextBlock Text="{x:Bind FinalText, Mode=OneWay}" 
+                                                                       TextWrapping="Wrap" 
+                                                                       FontSize="14" 
+                                                                       FontFamily="Segoe UI"
+                                                                       IsTextSelectionEnabled="True" />
+                                                        </StackPanel>
+                                                    </Flyout>
+                                                </Button.Flyout>
+                                            </Button>
+                                        </Grid>
+                                    </Border>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+                </Grid>
+
+                <!-- 2. ЭКРАН ФИЛЬТРА АКТЁРОВ -->
+                <Grid x:Name="ActorsGrid" Visibility="Collapsed" RowSpacing="16">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" /> <!-- Заголовок и кнопки управления -->
+                        <RowDefinition Height="*" />    <!-- Список чекбоксов -->
+                    </Grid.RowDefinitions>
+
+                    <StackPanel Grid.Row="0" Spacing="12">
+                        <TextBlock Text="Фильтрация по актёрам" Style="{ThemeResource SubtitleTextBlockStyle}" />
+                        <TextBlock Text="Снимите флажок с имени актёра, чтобы исключить его реплики из результирующего файла." 
+                                   FontSize="12" 
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <Grid ColumnSpacing="12" Margin="0,4,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8">
+                                <Button Content="Выбрать все" Click="SelectAllFilters_Click" Tag="actors" Height="32" Padding="12,4,12,4" />
+                                <Button Content="Снять все" Click="DeselectAllFilters_Click" Tag="actors" Height="32" Padding="12,4,12,4" />
+                            </StackPanel>
+                            <AutoSuggestBox Grid.Column="1" 
+                                            PlaceholderText="Поиск по имени актёра..." 
+                                            QueryIcon="Find"
+                                            Text="{x:Bind ViewModel.ActorsSearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                            Height="32"
+                                            HorizontalAlignment="Right"
+                                            Width="280" />
+                        </Grid>
+                    </StackPanel>
+
+                    <ListView x:Name="ActorsListView" 
+                              Grid.Row="1"
+                              SelectionMode="None" 
+                              ItemsSource="{x:Bind ViewModel.Actors, Mode=OneWay}">
+                        <ListView.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <ItemsWrapGrid Orientation="Horizontal" ItemWidth="360" ItemHeight="40" />
+                            </ItemsPanelTemplate>
+                        </ListView.ItemsPanel>
+                        <ListView.ItemTemplate>
+                            <DataTemplate x:DataType="viewmodels:FilterItemViewModel">
+                                <CheckBox Content="{x:Bind Name, Mode=OneWay}" 
+                                          IsChecked="{x:Bind IsChecked, Mode=OneWay}"
+                                          Click="FilterCheckBox_Click"
+                                          VerticalAlignment="Center" />
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+                </Grid>
+
+                <!-- 3. ЭКРАН ФИЛЬТРА СТИЛЕЙ -->
+                <Grid x:Name="StylesGrid" Visibility="Collapsed" RowSpacing="16">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" /> <!-- Заголовок и кнопки управления -->
+                        <RowDefinition Height="*" />    <!-- Список чекбоксов -->
+                    </Grid.RowDefinitions>
+
+                    <StackPanel Grid.Row="0" Spacing="12">
+                        <TextBlock Text="Фильтрация по стилям оформления" Style="{ThemeResource SubtitleTextBlockStyle}" />
+                        <TextBlock Text="Снимите флажок со стиля, чтобы исключить реплики этого стиля из результирующего файла." 
+                                   FontSize="12" 
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <Grid ColumnSpacing="12" Margin="0,4,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8">
+                                <Button Content="Выбрать все" Click="SelectAllFilters_Click" Tag="styles" Height="32" Padding="12,4,12,4" />
+                                <Button Content="Снять все" Click="DeselectAllFilters_Click" Tag="styles" Height="32" Padding="12,4,12,4" />
+                            </StackPanel>
+                            <AutoSuggestBox Grid.Column="1" 
+                                            PlaceholderText="Поиск по названию стиля..." 
+                                            QueryIcon="Find"
+                                            Text="{x:Bind ViewModel.StylesSearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                            Height="32"
+                                            HorizontalAlignment="Right"
+                                            Width="280" />
+                        </Grid>
+                    </StackPanel>
+
+                    <ListView x:Name="StylesListView" 
+                              Grid.Row="1"
+                              SelectionMode="None" 
+                              ItemsSource="{x:Bind ViewModel.Styles, Mode=OneWay}">
+                        <ListView.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <ItemsWrapGrid Orientation="Horizontal" ItemWidth="360" ItemHeight="40" />
+                            </ItemsPanelTemplate>
+                        </ListView.ItemsPanel>
+                        <ListView.ItemTemplate>
+                            <DataTemplate x:DataType="viewmodels:FilterItemViewModel">
+                                <CheckBox Content="{x:Bind Name, Mode=OneWay}" 
+                                          IsChecked="{x:Bind IsChecked, Mode=OneWay}"
+                                          Click="FilterCheckBox_Click"
+                                          VerticalAlignment="Center" />
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+                </Grid>
+
+                <!-- 4. ЭКРАН ФИЛЬТРА ЭФФЕКТОВ -->
+                <Grid x:Name="EffectsGrid" Visibility="Collapsed" RowSpacing="16">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" /> <!-- Заголовок и кнопки управления -->
+                        <RowDefinition Height="*" />    <!-- Список чекбоксов -->
+                    </Grid.RowDefinitions>
+
+                    <StackPanel Grid.Row="0" Spacing="12">
+                        <TextBlock Text="Фильтрация по спецэффектам" Style="{ThemeResource SubtitleTextBlockStyle}" />
+                        <TextBlock Text="Снимите флажок с эффекта, чтобы исключить реплики с этим спецэффектом из результирующего файла." 
+                                   FontSize="12" 
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <Grid ColumnSpacing="12" Margin="0,4,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8">
+                                <Button Content="Выбрать все" Click="SelectAllFilters_Click" Tag="effects" Height="32" Padding="12,4,12,4" />
+                                <Button Content="Снять все" Click="DeselectAllFilters_Click" Tag="effects" Height="32" Padding="12,4,12,4" />
+                            </StackPanel>
+                            <AutoSuggestBox Grid.Column="1" 
+                                            PlaceholderText="Поиск по спецэффекту..." 
+                                            QueryIcon="Find"
+                                            Text="{x:Bind ViewModel.EffectsSearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                            Height="32"
+                                            HorizontalAlignment="Right"
+                                            Width="280" />
+                        </Grid>
+                    </StackPanel>
+
+                    <ListView x:Name="EffectsListView" 
+                              Grid.Row="1"
+                              SelectionMode="None" 
+                              ItemsSource="{x:Bind ViewModel.Effects, Mode=OneWay}">
+                        <ListView.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <ItemsWrapGrid Orientation="Horizontal" ItemWidth="360" ItemHeight="40" />
+                            </ItemsPanelTemplate>
+                        </ListView.ItemsPanel>
+                        <ListView.ItemTemplate>
+                            <DataTemplate x:DataType="viewmodels:FilterItemViewModel">
+                                <CheckBox Content="{x:Bind Name, Mode=OneWay}" 
+                                          IsChecked="{x:Bind IsChecked, Mode=OneWay}"
+                                          Click="FilterCheckBox_Click"
+                                          VerticalAlignment="Center" />
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+                </Grid>
+                
+            </Grid>
+            <NavigationView.PaneFooter>
+                <Button x:Name="DoneButton"
+                        Content="Готово"
+                        Click="DoneButton_Click"
+                        Style="{StaticResource AccentButtonStyle}"
+                        HorizontalAlignment="Stretch"
+                        Margin="12,12,12,12"
+                        Height="36" />
+            </NavigationView.PaneFooter>
+        </NavigationView>
+    </Grid>
+</Page>

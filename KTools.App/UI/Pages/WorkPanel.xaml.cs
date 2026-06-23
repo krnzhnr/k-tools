@@ -120,6 +120,7 @@ public sealed partial class WorkPanel : Page
             VerticalAlignment = VerticalAlignment.Stretch
         };
         ScriptSettings = _settingsControl;
+
     }
 
     /// <summary>
@@ -186,6 +187,16 @@ public sealed partial class WorkPanel : Page
                 {
                     nvSample.MenuItems.Remove(_tracksPageItem);
                 }
+            }
+
+            // Динамически управляем кнопкой предпросмотра для скрипта субтитров
+            if (_script is SubtitlesConvertScript)
+            {
+                PreviewButton.Visibility = Visibility.Visible;
+            }
+            else
+            {
+                PreviewButton.Visibility = Visibility.Collapsed;
             }
 
             // Динамически управляем вкладкой "Настройки"
@@ -432,4 +443,59 @@ public sealed partial class WorkPanel : Page
     }
 
 
+
+    /// <summary>
+    /// Обработчик клика по кнопке "Предпросмотр...".
+    /// Выполняет фоновый парсинг файлов и открывает окно предпросмотра с интерактивными фильтрами.
+    /// </summary>
+    private async void PreviewButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_script is not SubtitlesConvertScript subScript) return;
+
+        var filePaths = FileList.Files.Select(f => f.FilePath).ToList();
+        if (filePaths.Count == 0)
+        {
+            LogService.Instance.Warn("Попытка открыть предпросмотр без добавленных файлов субтитров.", "WorkPanel");
+            return;
+        }
+
+        PreviewButton.IsEnabled = false;
+
+        try
+        {
+            // Синхронизируем FilterState с текущими настройками из SettingsManager перед открытием
+            string settingsGroup = SettingsManager.Instance.GetSafeGroupName(subScript.Name);
+            subScript.FilterState.StripFormatting = SettingsManager.Instance.GetSetting(settingsGroup, "strip_formatting", true);
+            subScript.FilterState.StripCaps = SettingsManager.Instance.GetSetting(settingsGroup, "strip_caps", false);
+
+            var viewModel = new SubtitlePreviewViewModel(subScript.FilterState, settingsGroup);
+            await viewModel.LoadDataAsync(filePaths);
+
+            var previewWindow = new SubtitlePreviewWindow(viewModel);
+            previewWindow.Closed += (s, ev) =>
+            {
+                // При закрытии окна предпросмотра принудительно перерисовываем UI настроек,
+                // чтобы актуализировать чекбоксы очистки форматирования и капса на вкладке параметров.
+                App.CurrentMainWindow?.DispatcherQueue?.TryEnqueue(() =>
+                {
+                    if (_script != null)
+                    {
+                        ScriptSettings.GenerateSettingsUI(_script);
+                    }
+                });
+            };
+            previewWindow.Activate();
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Exception(
+                ex,
+                $"Критический сбой при инициализации или открытии окна предпросмотра субтитров: {ex.Message}",
+                "WorkPanel");
+        }
+        finally
+        {
+            PreviewButton.IsEnabled = true;
+        }
+    }
 }

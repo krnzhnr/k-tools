@@ -37,30 +37,53 @@
                 <RowDefinition Height="*" />    <!-- Активный контент выбранной вкладки -->
             </Grid.RowDefinitions>
 
-            <NavigationView x:Name="nvSample" 
-                               Grid.Row="0" 
-                               PaneDisplayMode="Top"
-                               IsSettingsVisible="False"
-                               IsBackButtonVisible="Collapsed"
-                               AlwaysShowHeader="False"
-                               SelectionChanged="nvSample_SelectionChanged"
-                               SelectionFollowsFocus="Enabled"
-                               Height="48"
-                               Margin="0"
-                               Padding="0">
-                <NavigationView.Resources>
-                    <!-- Делаем фон области контента прозрачным -->
-                    <SolidColorBrush x:Key="NavigationViewContentBackground" Color="Transparent" />
-                    <!-- Убираем рамку вокруг области контента -->
-                    <SolidColorBrush x:Key="NavigationViewContentGridBorderBrush" Color="Transparent" />
-                    <!-- Сбрасываем внутренние боковые отступы области контента NavigationView -->
-                    <Thickness x:Key="NavigationViewContentMargin">0,0,0,0</Thickness>
-                </NavigationView.Resources>
-                <NavigationView.MenuItems>
-                    <NavigationViewItem Icon="Document" Content="Файлы" x:Name="SamplePage1Item" Tag="files" />
-                    <NavigationViewItem Icon="Setting" Content="Настройки" x:Name="SamplePage2Item" Tag="settings" />
-                </NavigationView.MenuItems>
-            </NavigationView>
+            <Grid Grid.Row="0" ColumnSpacing="12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <NavigationView x:Name="nvSample" 
+                                   Grid.Column="0" 
+                                   PaneDisplayMode="Top"
+                                   IsSettingsVisible="False"
+                                   IsBackButtonVisible="Collapsed"
+                                   AlwaysShowHeader="False"
+                                   SelectionChanged="nvSample_SelectionChanged"
+                                   SelectionFollowsFocus="Enabled"
+                                   Height="48"
+                                   Margin="0"
+                                   Padding="0">
+                    <NavigationView.Resources>
+                        <!-- Делаем фон области контента прозрачным -->
+                        <SolidColorBrush x:Key="NavigationViewContentBackground" Color="Transparent" />
+                        <!-- Убираем рамку вокруг области контента -->
+                        <SolidColorBrush x:Key="NavigationViewContentGridBorderBrush" Color="Transparent" />
+                        <!-- Сбрасываем внутренние боковые отступы области контента NavigationView -->
+                        <Thickness x:Key="NavigationViewContentMargin">0,0,0,0</Thickness>
+                    </NavigationView.Resources>
+                    <NavigationView.MenuItems>
+                        <NavigationViewItem Icon="Document" Content="Файлы" x:Name="SamplePage1Item" Tag="files" />
+                        <NavigationViewItem Icon="Setting" Content="Настройки" x:Name="SamplePage2Item" Tag="settings" />
+                    </NavigationView.MenuItems>
+                </NavigationView>
+
+                <Button x:Name="PreviewButton"
+                        Grid.Column="1"
+                        Click="PreviewButton_Click"
+                        VerticalAlignment="Center"
+                        Margin="0,0,12,0"
+                        Visibility="Collapsed">
+                    <Button.ContentTemplate>
+                        <DataTemplate>
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <SymbolIcon Symbol="Find" />
+                                <TextBlock Text="Предпросмотр..." />
+                            </StackPanel>
+                        </DataTemplate>
+                    </Button.ContentTemplate>
+                </Button>
+            </Grid>
 
             <!-- Сепаратор под вкладками -->
             <Border Grid.Row="1" 

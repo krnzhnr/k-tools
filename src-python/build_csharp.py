@@ -157,6 +157,9 @@ Filename: "{{tmp}}\\eac3to Decoder Pack 1.4.exe"; \\
 Parameters: "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART"; \\
 StatusMsg: "Установка декодеров для eac3to..."; \\
 Flags: runascurrentuser; Components: decoders
+
+[UninstallDelete]
+Type: filesandsubdirs; Name: "{app}\\bin"
 """
     iss_path = SRC_DIR / "KTools_CSharp.iss"
     iss_path.write_text(iss_content, encoding="utf-8")
