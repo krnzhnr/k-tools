@@ -117,6 +117,21 @@ public sealed class FFmpegRunner : AbstractProcessRunner
         {
             string lastErrors = string.Join(Environment.NewLine, stderrLines);
             LogService.Instance.Error($"Ошибка выполнения FFmpeg (Код: {result.ExitCode}). Последние строки stderr:\n{lastErrors}", "FFmpegRunner");
+            
+            // Физически удаляем поврежденный выходной файл при сбое выполнения процесса
+            if (!string.IsNullOrEmpty(outputPath) && File.Exists(outputPath))
+            {
+                try
+                {
+                    File.Delete(outputPath);
+                    LogService.Instance.DebugLog($"Удален поврежденный выходной файл после сбоя FFmpeg: '{Path.GetFileName(outputPath)}'", "FFmpegRunner");
+                }
+                catch (Exception deleteEx)
+                {
+                    LogService.Instance.Exception(deleteEx, $"Не удалось удалить поврежденный выходной файл '{outputPath}' после сбоя FFmpeg: {deleteEx.Message}", "FFmpegRunner");
+                }
+            }
+            
             return false;
         }
 

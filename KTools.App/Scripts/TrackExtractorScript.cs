@@ -368,18 +368,29 @@ public sealed class TrackExtractorScript : AbstractScript
             return results;
         }
 
-        if (tracksSuccess && fontsSuccess)
+        try
         {
-            LogService.Instance.Info($"Успешно завершено извлечение для файла: {Path.GetFileName(filePath)}", "TrackExtractorScript");
-            progressCallback(fileIndex, totalCount, "Успешно завершено!", 100.0);
-            results.AddRange(extractResults);
+            if (tracksSuccess && fontsSuccess)
+            {
+                LogService.Instance.Info($"Успешно завершено извлечение для файла: {Path.GetFileName(filePath)}", "TrackExtractorScript");
+                progressCallback(fileIndex, totalCount, "Успешно завершено!", 100.0);
+                results.AddRange(extractResults);
+            }
+            else
+            {
+                CleanupIfCancelled(filesToExtract.ToArray());
+                string failMsg = $"❌ Сбой извлечения потоков из файла: {Path.GetFileName(filePath)}";
+                LogService.Instance.Error(failMsg, "TrackExtractorScript");
+                progressCallback(fileIndex, totalCount, "Ошибка выполнения", 0.0);
+                results.Add(failMsg);
+            }
         }
-        else
+        catch (Exception ex)
         {
-            string failMsg = $"❌ Сбой извлечения потоков из файла: {Path.GetFileName(filePath)}";
-            LogService.Instance.Error(failMsg, "TrackExtractorScript");
-            progressCallback(fileIndex, totalCount, "Ошибка выполнения", 0.0);
-            results.Add(failMsg);
+            CleanupIfCancelled(filesToExtract.ToArray());
+            string errorMsg = $"❌ Ошибка выполнения скрипта для {Path.GetFileName(filePath)}: {ex.Message}";
+            results.Add(errorMsg);
+            LogService.Instance.Exception(ex, $"Ошибка при выполнении извлечения дорожек для '{Path.GetFileName(filePath)}': {ex.Message}", "TrackExtractorScript");
         }
 
         return results;

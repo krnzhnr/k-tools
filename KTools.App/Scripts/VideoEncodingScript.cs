@@ -21,6 +21,7 @@ public sealed class VideoEncodingScript : AbstractScript
 {
     private static bool _isNvencChecked;
     private static bool _isNvencSupported;
+    private string? _finalOutputFileForCleanup;
 
     /// <summary>
     /// Проверяет поддержку NVENC в фоновом/синхронном режиме с кэшированием результата.
@@ -650,6 +651,9 @@ public sealed class VideoEncodingScript : AbstractScript
             string targetFile = Path.Combine(targetDir, $"{stem}.mp4");
             string finalOutputFile = GetSafeOutputPath(filePath, targetFile);
 
+            // Объявляем finalOutputFile на уровне выше, чтобы она была доступна в catch блоке
+            _finalOutputFileForCleanup = finalOutputFile;
+
             bool overwrite = SettingsManager.Instance.GetSetting("General", "OverwriteExisting", false);
             if (File.Exists(finalOutputFile) && !overwrite)
             {
@@ -892,7 +896,7 @@ public sealed class VideoEncodingScript : AbstractScript
             // 9. Обработка результатов
             if (IsCancelled)
             {
-                CleanupIfCancelled(finalOutputFile);
+                CleanupFailedOutputFile(finalOutputFile);
                 string cancelMsg = $"⚠ Обработка отменена пользователем: {Path.GetFileName(finalOutputFile)}";
                 LogService.Instance.Info(cancelMsg, "VideoEncodingScript");
                 results.Add(cancelMsg);
@@ -914,6 +918,7 @@ public sealed class VideoEncodingScript : AbstractScript
             }
             else
             {
+                CleanupFailedOutputFile(finalOutputFile);
                 string failMsg = $"❌ ОШИБКА кодирования файла: {Path.GetFileName(filePath)}";
                 LogService.Instance.Error(failMsg, "VideoEncodingScript");
                 results.Add(failMsg);
@@ -921,6 +926,10 @@ public sealed class VideoEncodingScript : AbstractScript
         }
         catch (Exception ex)
         {
+            if (!string.IsNullOrEmpty(_finalOutputFileForCleanup))
+            {
+                CleanupFailedOutputFile(_finalOutputFileForCleanup);
+            }
             string runErr = $"❌ Критическая ошибка при кодировании видео для '{Path.GetFileName(filePath)}': {ex.Message}";
             LogService.Instance.Exception(ex, $"Исключение в процессе кодирования '{filePath}': {ex.Message}", "VideoEncodingScript");
             results.Add(runErr);
@@ -1045,5 +1054,10 @@ public sealed class VideoEncodingScript : AbstractScript
             return elem.ValueKind == System.Text.Json.JsonValueKind.String ? elem.GetString() : elem.ToString();
         }
         return obj.ToString();
+    }
+
+    public override string GetOutputExtension(string inputPath)
+    {
+        return ".mp4";
     }
 }

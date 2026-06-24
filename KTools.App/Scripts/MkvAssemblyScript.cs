@@ -267,20 +267,36 @@ public sealed class MkvAssemblyScript : AbstractScript
             return results;
         }
 
-        if (success)
+        try
         {
-            progressCallback(fileIndex, totalCount, "Сборка завершена!", 100.0);
-            string successMsg = $"✅ Собран контейнер MKV: {Path.GetFileName(finalOutputFile)}";
-            LogService.Instance.Info(successMsg, "MkvAssemblyScript");
-            results.Add(successMsg);
+            if (success)
+            {
+                progressCallback(fileIndex, totalCount, "Сборка завершена!", 100.0);
+                string successMsg = $"✅ Собран контейнер MKV: {Path.GetFileName(finalOutputFile)}";
+                LogService.Instance.Info(successMsg, "MkvAssemblyScript");
+                results.Add(successMsg);
+            }
+            else
+            {
+                CleanupFailedOutputFile(finalOutputFile);
+                string failMsg = $"❌ Ошибка сборки MKV-файла: {Path.GetFileName(finalOutputFile)}";
+                LogService.Instance.Error(failMsg, "MkvAssemblyScript");
+                results.Add(failMsg);
+            }
         }
-        else
+        catch (Exception ex)
         {
-            string failMsg = $"❌ Ошибка сборки MKV-файла: {Path.GetFileName(finalOutputFile)}";
-            LogService.Instance.Error(failMsg, "MkvAssemblyScript");
-            results.Add(failMsg);
+            CleanupFailedOutputFile(finalOutputFile);
+            string errorMsg = $"❌ Ошибка выполнения скрипта для {Path.GetFileName(filePath)}: {ex.Message}";
+            results.Add(errorMsg);
+            LogService.Instance.Exception(ex, $"Ошибка при выполнении сборки MKV для '{stem}': {ex.Message}", "MkvAssemblyScript");
         }
 
         return results;
+    }
+
+    public override string GetOutputExtension(string inputPath)
+    {
+        return ".mkv";
     }
 }

@@ -122,6 +122,11 @@ public class SettingField
     /// Текст предупреждения о возможных последствиях отключения опции.
     /// </summary>
     public string? WarningText { get; }
+
+    /// <summary>
+    /// Текст-подсказка (плейсхолдер) для отображения в пустом поле ввода.
+    /// </summary>
+    public string PlaceholderText { get; set; } = string.Empty;
 }
 
 /// <summary>

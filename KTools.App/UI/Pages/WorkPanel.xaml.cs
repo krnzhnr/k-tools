@@ -200,7 +200,8 @@ public sealed partial class WorkPanel : Page
             }
 
             // Динамически управляем вкладкой "Настройки"
-            if (_script.SettingsSchema == null || _script.SettingsSchema.Count == 0)
+            var schemaList = _script.GetFullSettingsSchema();
+            if (schemaList == null || schemaList.Count == 0)
             {
                 nvSample.MenuItems.Remove(SamplePage2Item);
             }
@@ -403,7 +404,7 @@ public sealed partial class WorkPanel : Page
         if (_script == null) return settings;
 
         string settingsGroup = SettingsManager.Instance.GetSafeGroupName(_script.Name);
-        foreach (var field in _script.SettingsSchema)
+        foreach (var field in _script.GetFullSettingsSchema())
         {
             if (field.Type == SettingType.Subtitle) continue;
 

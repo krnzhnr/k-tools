@@ -371,23 +371,34 @@ public sealed class AudioDownmixScript : AbstractScript
             return results;
         }
 
-        if (success && File.Exists(outputFilePath))
+        try
         {
-            progressCallback(
-                fileIndex, 
-                totalCount, 
-                "Успешно завершено!", 
-                100.0);
-            results.Add($"✅ Даунмикс выполнен: {outputName}");
-
-            if (deleteOriginal)
+            if (success && File.Exists(outputFilePath))
             {
-                DeleteSource(filePath, results);
+                progressCallback(
+                    fileIndex, 
+                    totalCount, 
+                    "Успешно завершено!", 
+                    100.0);
+                results.Add($"✅ Даунмикс выполнен: {outputName}");
+
+                if (deleteOriginal)
+                {
+                    DeleteSource(filePath, results);
+                }
+            }
+            else
+            {
+                CleanupFailedOutputFile(outputFilePath);
+                results.Add($"❌ Ошибка обработки для {Path.GetFileName(filePath)}");
             }
         }
-        else
+        catch (Exception ex)
         {
-            results.Add($"❌ Ошибка обработки для {Path.GetFileName(filePath)}");
+            CleanupFailedOutputFile(outputFilePath);
+            string errorMsg = $"❌ Ошибка выполнения скрипта для {Path.GetFileName(filePath)}: {ex.Message}";
+            results.Add(errorMsg);
+            LogService.Instance.Exception(ex, $"Ошибка при выполнении даунмикса для '{originalName}': {ex.Message}", "AudioDownmixScript");
         }
 
         return results;

@@ -139,6 +139,21 @@ public sealed class MkvmergeRunner : AbstractProcessRunner
         else
         {
             LogService.Instance.Error($"Ошибка выполнения mkvmerge (Код: {result.ExitCode}).\nSTDOUT:\n{stdoutText}\nSTDERR:\n{stderrText}", "MkvmergeRunner");
+            
+            // Физически удаляем поврежденный выходной файл при сбое выполнения сборки MKV
+            if (File.Exists(outputPath))
+            {
+                try
+                {
+                    File.Delete(outputPath);
+                    LogService.Instance.DebugLog($"Удален поврежденный выходной файл после сбоя mkvmerge: '{Path.GetFileName(outputPath)}'", "MkvmergeRunner");
+                }
+                catch (Exception deleteEx)
+                {
+                    LogService.Instance.Exception(deleteEx, $"Не удалось удалить поврежденный выходной файл '{outputPath}' после сбоя mkvmerge: {deleteEx.Message}", "MkvmergeRunner");
+                }
+            }
+            
             return false;
         }
     }

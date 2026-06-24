@@ -11,18 +11,7 @@
     mc:Ignorable="d"
     NavigationCacheMode="Required">
 
-    <Page.Resources>
-        <ResourceDictionary>
-            <ResourceDictionary.ThemeDictionaries>
-                <ResourceDictionary x:Key="Default">
-                    <SolidColorBrush x:Key="SuccessStrokeBrush" Color="#107C41" />
-                </ResourceDictionary>
-                <ResourceDictionary x:Key="Dark">
-                    <SolidColorBrush x:Key="SuccessStrokeBrush" Color="#6BC285" />
-                </ResourceDictionary>
-            </ResourceDictionary.ThemeDictionaries>
-        </ResourceDictionary>
-    </Page.Resources>
+
 
     <ScrollViewer VerticalScrollBarVisibility="Auto">
         <StackPanel
@@ -112,6 +101,164 @@
                         OnContent="Вкл"
                         IsOn="{x:Bind ViewModel.UseAutoSubfolder, Mode=TwoWay}" />
                 </community:SettingsCard>
+
+            </StackPanel>
+            
+            <!-- Раздел: Переименование выходных файлов -->
+            <StackPanel Spacing="8">
+                <TextBlock
+                    Margin="0,8,0,8"
+                    FontSize="16"
+                    FontWeight="Bold"
+                    Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+                    Text="Переименование выходных файлов" />
+
+                <!-- Первый экспандер: Параметры переименования -->
+                <community:SettingsExpander
+                    Padding="16,12,16,12"
+                    Description="Изменение названий готовых файлов с поддержкой регулярных выражений, шаблонов дат и автонумерации"
+                    Header="Параметры переименования"
+                    IsExpanded="{x:Bind ViewModel.RenameEnableRegex, Mode=OneWay}">
+                    <community:SettingsExpander.HeaderIcon>
+                        <FontIcon Glyph="&#xE8AC;" />
+                    </community:SettingsExpander.HeaderIcon>
+                    
+                    <ToggleSwitch
+                        x:Name="RenameRegexToggle"
+                        OffContent="Выкл"
+                        OnContent="Вкл"
+                        IsOn="{x:Bind ViewModel.RenameEnableRegex, Mode=TwoWay}" />
+
+                    <community:SettingsExpander.Items>
+                        <community:SettingsCard Header="Использовать регулярные выражения" Description="Включает поиск и замену с использованием регулярных выражений">
+                            <ToggleSwitch
+                                OffContent="Выкл"
+                                OnContent="Вкл"
+                                IsOn="{x:Bind ViewModel.RenameUseRegex, Mode=TwoWay}"
+                                IsEnabled="{x:Bind ViewModel.RenameEnableRegex, Mode=OneWay}" />
+                        </community:SettingsCard>
+
+                        <community:SettingsCard Header="Учитывать регистр" Description="Включает поиск с учетом регистра символов">
+                            <ToggleSwitch
+                                OffContent="Выкл"
+                                OnContent="Вкл"
+                                IsOn="{x:Bind ViewModel.RenameCaseSensitive, Mode=TwoWay}"
+                                IsEnabled="{x:Bind ViewModel.RenameEnableRegex, Mode=OneWay}" />
+                        </community:SettingsCard>
+
+                        <community:SettingsCard Header="Найти" Description="Шаблон поиска. Поддерживает регулярные выражения.">
+                            <Grid HorizontalAlignment="Right">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBox
+                                    x:Name="RenameRegexSearchTextBox"
+                                    Grid.Column="0"
+                                    Width="250"
+                                    PlaceholderText="Например:  - (\d+) или просто текст"
+                                    Text="{x:Bind ViewModel.RenameRegexSearch, Mode=TwoWay}"
+                                    IsEnabled="{x:Bind ViewModel.RenameEnableRegex, Mode=OneWay}" />
+                                <Button
+                                    x:Name="SearchHelpButton"
+                                    Grid.Column="1"
+                                    Content="&#xE946;"
+                                    FontFamily="{ThemeResource SymbolThemeFontFamily}"
+                                    Margin="8,0,0,0"
+                                    Width="32"
+                                    Height="32"
+                                    Padding="0"
+                                    IsEnabled="{x:Bind ViewModel.RenameEnableRegex, Mode=OneWay}" />
+                            </Grid>
+                        </community:SettingsCard>
+
+                        <community:SettingsCard Header="Заменить на" Description="Строка замены. Поддерживает $1, $2, ${ruuidv4}, ${num}, ${num:3}, ${YYYY}, ${MM}, ${DD}">
+                            <Grid HorizontalAlignment="Right">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBox
+                                    x:Name="RenameRegexReplaceTextBox"
+                                    Grid.Column="0"
+                                    Width="250"
+                                    PlaceholderText="Например:  - [$1] или серия_${num:2}"
+                                    Text="{x:Bind ViewModel.RenameRegexReplace, Mode=TwoWay}"
+                                    IsEnabled="{x:Bind ViewModel.RenameEnableRegex, Mode=OneWay}" />
+                                <Button
+                                    x:Name="ReplaceHelpButton"
+                                    Grid.Column="1"
+                                    Content="&#xE946;"
+                                    FontFamily="{ThemeResource SymbolThemeFontFamily}"
+                                    Margin="8,0,0,0"
+                                    Width="32"
+                                    Height="32"
+                                    Padding="0"
+                                    IsEnabled="{x:Bind ViewModel.RenameEnableRegex, Mode=OneWay}" />
+                            </Grid>
+                        </community:SettingsCard>
+                    </community:SettingsExpander.Items>
+                </community:SettingsExpander>
+
+                <!-- Второй экспандер: Пользовательские шаблоны подсказок -->
+                <community:SettingsExpander
+                    Padding="16,12,16,12"
+                    Description="Настройка пользовательских вариантов для меню быстрого копирования шаблонов"
+                    Header="Шаблоны подсказок"
+                    IsExpanded="True">
+                    <community:SettingsExpander.HeaderIcon>
+                        <FontIcon Glyph="&#xE8B9;" />
+                    </community:SettingsExpander.HeaderIcon>
+                    
+                    <community:SettingsExpander.Items>
+                        <ContentControl
+                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1"
+                            CornerRadius="8"
+                            Padding="16"
+                            HorizontalContentAlignment="Stretch"
+                            IsEnabled="{x:Bind ViewModel.RenameEnableRegex, Mode=OneWay}">
+                            <StackPanel Spacing="16" HorizontalAlignment="Stretch">
+                                <StackPanel Spacing="8">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="Шаблоны поиска" FontWeight="SemiBold" FontSize="14" VerticalAlignment="Center"/>
+                                        <Button Grid.Column="1" Style="{ThemeResource DefaultButtonStyle}" Click="AddSearchTemplate_Click">
+                                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                                <FontIcon Glyph="&#xE710;" FontSize="12"/>
+                                                <TextBlock Text="Добавить" FontSize="12"/>
+                                            </StackPanel>
+                                        </Button>
+                                    </Grid>
+                                    <StackPanel x:Name="SearchTemplatesContainer" Spacing="6" HorizontalAlignment="Stretch" />
+                                </StackPanel>
+
+                                <MenuFlyoutSeparator Margin="0,4,0,4"/>
+
+                                <StackPanel Spacing="8">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="Шаблоны автозамены" FontWeight="SemiBold" FontSize="14" VerticalAlignment="Center"/>
+                                        <Button Grid.Column="1" Style="{ThemeResource DefaultButtonStyle}" Click="AddReplaceTemplate_Click">
+                                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                                <FontIcon Glyph="&#xE710;" FontSize="12"/>
+                                                <TextBlock Text="Добавить" FontSize="12"/>
+                                            </StackPanel>
+                                        </Button>
+                                    </Grid>
+                                    <StackPanel x:Name="ReplaceTemplatesContainer" Spacing="6" HorizontalAlignment="Stretch" />
+                                </StackPanel>
+                            </StackPanel>
+                        </ContentControl>
+                    </community:SettingsExpander.Items>
+                </community:SettingsExpander>
             </StackPanel>
 
             <!-- Раздел: Персонализация -->

@@ -23,6 +23,12 @@ public static class QaacOutputParser
         RegexOptions.Compiled
     );
 
+    // Регулярное выражение для нового формата (например, "[100.0%] 0:05.000/0:05.000 (161.3x), ETA 0:00.000")
+    private static readonly Regex NewFormatRegex = new(
+        @"\[([\d\.]+)%\]\s*(?:(?:(\d+):)?(\d+):(\d+)(?:\.(\d+))?)?/(?:(?:(\d+):)?(\d+):(\d+)(?:\.(\d+))?)?\s*\(([\d\.]+)x\)(?:,\s*ETA\s*([\d\:\.]+))?",
+        RegexOptions.Compiled
+    );
+
     /// <summary>
     /// Парсит отдельную строку вывода QAAC и извлекает метрики прогресса.
     /// </summary>
@@ -33,7 +39,80 @@ public static class QaacOutputParser
     {
         if (string.IsNullOrWhiteSpace(line)) return null;
 
-        // Вариант 1: Строка содержит явный процент (например, при других версиях или параметрах)
+        // Вариант 1: Новый формат с квадратными скобками в начале (например, "[100.0%] 0:05.000/0:05.000 (161.3x), ETA 0:00.000")
+        var matchNew = NewFormatRegex.Match(line);
+        if (matchNew.Success)
+        {
+            try
+            {
+                double percent = double.Parse(
+                    matchNew.Groups[1].Value,
+                    System.Globalization.NumberStyles.Any,
+                    System.Globalization.CultureInfo.InvariantCulture
+                );
+                percent = Math.Min(Math.Max(percent, 0.0), 100.0);
+
+                double? speed = null;
+                if (matchNew.Groups[10].Success &&
+                    double.TryParse(
+                        matchNew.Groups[10].Value,
+                        System.Globalization.NumberStyles.Any,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        out double speedVal))
+                {
+                    speed = speedVal;
+                }
+
+                // Извлечение текущего времени
+                double currentTime = 0.0;
+                int hours = 0;
+                int minutes = 0;
+                int seconds = 0;
+                double ms = 0.0;
+
+                if (matchNew.Groups[2].Success)
+                {
+                    hours = int.Parse(matchNew.Groups[2].Value);
+                    minutes = int.Parse(matchNew.Groups[3].Value);
+                    seconds = int.Parse(matchNew.Groups[4].Value);
+                }
+                else if (matchNew.Groups[3].Success)
+                {
+                    minutes = int.Parse(matchNew.Groups[3].Value);
+                    seconds = int.Parse(matchNew.Groups[4].Value);
+                }
+
+                if (matchNew.Groups[5].Success)
+                {
+                    string msStr = matchNew.Groups[5].Value;
+                    ms = double.Parse(msStr) / Math.Pow(10, msStr.Length);
+                }
+
+                currentTime = hours * 3600 + minutes * 60 + seconds + ms;
+
+                // Извлечение ETA
+                string eta = "н/д";
+                if (matchNew.Groups[11].Success)
+                {
+                    eta = matchNew.Groups[11].Value;
+                }
+
+                return new ProgressInfo(
+                    TimeSeconds: currentTime,
+                    Percent: percent,
+                    Fps: null,
+                    Bitrate: null,
+                    Speed: speed,
+                    Eta: eta
+                );
+            }
+            catch
+            {
+                // Игнорируем и пробуем другие варианты
+            }
+        }
+
+        // Вариант 2: Строка содержит явный процент (например, при других версиях или параметрах)
         var matchProgress = ProgressRegex.Match(line);
         if (matchProgress.Success)
         {

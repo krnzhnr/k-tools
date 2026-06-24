@@ -223,9 +223,9 @@ public sealed class ContainerConversionScript : AbstractScript
         }
         else
         {
+            CleanupFailedOutputFile(outputFilePath);
             if (IsCancelled)
             {
-                CleanupIfCancelled(outputFilePath);
                 progressCallback(fileIndex, totalCount, "Отменено пользователем", 0.0);
                 results.Add($"⚠ Отменено: {outputFileName}");
             }
@@ -365,5 +365,16 @@ public sealed class ContainerConversionScript : AbstractScript
         }
 
         return (true, "");
+    }
+
+    public override string GetOutputExtension(string inputPath)
+    {
+        string settingsGroup = SettingsManager.Instance.GetSafeGroupName(Name);
+        string targetKey = SettingsManager.Instance.GetSetting(settingsGroup, "target_format", "MP4");
+        if (FormatMap.TryGetValue(targetKey, out string? targetExt))
+        {
+            return targetExt;
+        }
+        return ".mp4";
     }
 }

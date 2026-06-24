@@ -439,9 +439,9 @@ public sealed class AudioEncodingScript : AbstractScript
         }
         else
         {
+            CleanupFailedOutputFile(outputFilePath);
             if (IsCancelled)
             {
-                CleanupIfCancelled(outputFilePath);
                 progressCallback(fileIndex, totalCount, "Отменено пользователем", 0.0);
                 results.Add($"⚠ Отменено: {outputFileName}");
             }
@@ -485,5 +485,15 @@ public sealed class AudioEncodingScript : AbstractScript
         }
 
         return (targetExt, codec);
+    }
+
+    public override string GetOutputExtension(string inputPath)
+    {
+        string settingsGroup = SettingsManager.Instance.GetSafeGroupName(Name);
+        string targetFormat = SettingsManager.Instance.GetSetting(settingsGroup, "target_format", "QAAC");
+        bool useM4a = SettingsManager.Instance.GetSetting(settingsGroup, "use_m4a_container", true);
+
+        var (targetExt, _) = ResolveExtension(targetFormat, useM4a);
+        return targetExt;
     }
 }

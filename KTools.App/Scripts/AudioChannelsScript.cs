@@ -220,136 +220,147 @@ public sealed class AudioChannelsScript : AbstractScript
             return results;
         }
 
-        // Переносим и переименовываем созданные eac3to файлы
         try
         {
-            if (Directory.Exists(tempDir))
+            // Переносим и переименовываем созданные eac3to файлы
+            try
             {
-                string[] tempFiles = Directory.GetFiles(tempDir, $"{tempBaseName}*");
-                foreach (string tempFile in tempFiles)
+                if (Directory.Exists(tempDir))
                 {
-                    string fileName = Path.GetFileName(tempFile);
-                    string suffix = fileName.Substring(tempBaseName.Length); // например, ".L.wav"
-                    string finalPath = basePath + suffix;
-
-                    if (File.Exists(finalPath))
+                    string[] tempFiles = Directory.GetFiles(tempDir, $"{tempBaseName}*");
+                    foreach (string tempFile in tempFiles)
                     {
-                        File.Delete(finalPath);
+                        string fileName = Path.GetFileName(tempFile);
+                        string suffix = fileName.Substring(tempBaseName.Length); // например, ".L.wav"
+                        string finalPath = basePath + suffix;
+
+                        if (File.Exists(finalPath))
+                        {
+                            File.Delete(finalPath);
+                        }
+                        MoveFileSafe(tempFile, finalPath);
+                        LogService.Instance.DebugLog($"Временный моно-канал перемещен: '{tempFile}' -> '{finalPath}'", "AudioChannelsScript");
                     }
-                    MoveFileSafe(tempFile, finalPath);
-                    LogService.Instance.DebugLog($"Временный моно-канал перемещен: '{tempFile}' -> '{finalPath}'", "AudioChannelsScript");
                 }
+            }
+            catch (Exception ex)
+            {
+                CleanupTempOutputs(tempDir, tempBaseName);
+                CleanupAllOutputs(basePath);
+                string errorMsg = $"❌ Ошибка перемещения моно-каналов для {Path.GetFileName(filePath)}";
+                results.Add(errorMsg);
+                LogService.Instance.Exception(ex, $"Не удалось переименовать временные моно-файлы после eac3to для '{originalName}'", "AudioChannelsScript");
+                return results;
+            }
+
+
+            // Если разделение прошло успешно и включена склейка стереопар
+            if (mergeStereo)
+            {
+                progressCallback(
+                    fileIndex,
+                    totalCount,
+                    "Склеивание стереопар через FFmpeg...",
+                    50.0);
+
+                string fileL = $"{basePath}.L.wav";
+                string fileR = $"{basePath}.R.wav";
+                string fileSl = $"{basePath}.SL.wav";
+                string fileSr = $"{basePath}.SR.wav";
+                string fileBl = $"{basePath}.BL.wav";
+                string fileBr = $"{basePath}.BR.wav";
+
+                // Склеиваем Front L + R
+                if (File.Exists(fileL) && File.Exists(fileR))
+                {
+                    await MergeStereoChannelsAsync(
+                        fileL,
+                        fileR,
+                        $"{basePath}.LR.wav",
+                        cts.Token);
+                }
+
+                // Склеиваем Surround L + R
+                if (File.Exists(fileSl) && File.Exists(fileSr))
+                {
+                    await MergeStereoChannelsAsync(
+                        fileSl,
+                        fileSr,
+                        $"{basePath}.SLSR.wav",
+                        cts.Token);
+                }
+
+                // Склеиваем Back L + R
+                if (File.Exists(fileBl) && File.Exists(fileBr))
+                {
+                    await MergeStereoChannelsAsync(
+                        fileBl,
+                        fileBr,
+                        $"{basePath}.BLBR.wav",
+                        cts.Token);
+                }
+            }
+
+            if (IsCancelled)
+            {
+                CleanupAllOutputs(basePath);
+                results.Add($"⚠ Отменено: {originalName}");
+                return results;
+            }
+
+            // Сканируем созданные файлы результатов
+            var createdFiles = new List<string>();
+            string[] suffixes = {
+                ".L.wav", ".R.wav", ".C.wav", ".LFE.wav", ".SL.wav", ".SR.wav",
+                ".BL.wav", ".BR.wav", ".LR.wav", ".SLSR.wav", ".BLBR.wav"
+            };
+
+            foreach (var suffix in suffixes)
+            {
+                string path = $"{basePath}{suffix}";
+                if (File.Exists(path))
+                {
+                    createdFiles.Add(Path.GetFileName(path));
+                }
+            }
+
+            if (createdFiles.Count > 0)
+            {
+                progressCallback(
+                    fileIndex,
+                    totalCount,
+                    "Успешно завершено!",
+                    100.0);
+
+                results.Add($"✅ Разделение завершено для: {originalName}");
+                foreach (var file in createdFiles)
+                {
+                    results.Add($"  • Создан канал: {file}");
+                }
+
+                LogService.Instance.Info(
+                    $"Успешно завершено разделение каналов для '{originalName}'. " +
+                    $"Создано файлов: {createdFiles.Count}",
+                    "AudioChannelsScript");
+
+                if (deleteOriginal)
+                {
+                    DeleteSource(filePath, results);
+                }
+            }
+            else
+            {
+                results.Add($"❌ Не найдено выходных файлов для " +
+                            $"{Path.GetFileName(filePath)}");
             }
         }
         catch (Exception ex)
         {
             CleanupTempOutputs(tempDir, tempBaseName);
             CleanupAllOutputs(basePath);
-            string errorMsg = $"❌ Ошибка перемещения моно-каналов для {Path.GetFileName(filePath)}";
+            string errorMsg = $"❌ Ошибка выполнения скрипта для {Path.GetFileName(filePath)}: {ex.Message}";
             results.Add(errorMsg);
-            LogService.Instance.Exception(ex, $"Не удалось переименовать временные моно-файлы после eac3to для '{originalName}'", "AudioChannelsScript");
-            return results;
-        }
-
-
-        // Если разделение прошло успешно и включена склейка стереопар
-        if (mergeStereo)
-        {
-            progressCallback(
-                fileIndex,
-                totalCount,
-                "Склеивание стереопар через FFmpeg...",
-                50.0);
-
-            string fileL = $"{basePath}.L.wav";
-            string fileR = $"{basePath}.R.wav";
-            string fileSl = $"{basePath}.SL.wav";
-            string fileSr = $"{basePath}.SR.wav";
-            string fileBl = $"{basePath}.BL.wav";
-            string fileBr = $"{basePath}.BR.wav";
-
-            // Склеиваем Front L + R
-            if (File.Exists(fileL) && File.Exists(fileR))
-            {
-                await MergeStereoChannelsAsync(
-                    fileL,
-                    fileR,
-                    $"{basePath}.LR.wav",
-                    cts.Token);
-            }
-
-            // Склеиваем Surround L + R
-            if (File.Exists(fileSl) && File.Exists(fileSr))
-            {
-                await MergeStereoChannelsAsync(
-                    fileSl,
-                    fileSr,
-                    $"{basePath}.SLSR.wav",
-                    cts.Token);
-            }
-
-            // Склеиваем Back L + R
-            if (File.Exists(fileBl) && File.Exists(fileBr))
-            {
-                await MergeStereoChannelsAsync(
-                    fileBl,
-                    fileBr,
-                    $"{basePath}.BLBR.wav",
-                    cts.Token);
-            }
-        }
-
-        if (IsCancelled)
-        {
-            CleanupAllOutputs(basePath);
-            results.Add($"⚠ Отменено: {originalName}");
-            return results;
-        }
-
-        // Сканируем созданные файлы результатов
-        var createdFiles = new List<string>();
-        string[] suffixes = {
-            ".L.wav", ".R.wav", ".C.wav", ".LFE.wav", ".SL.wav", ".SR.wav",
-            ".BL.wav", ".BR.wav", ".LR.wav", ".SLSR.wav", ".BLBR.wav"
-        };
-
-        foreach (var suffix in suffixes)
-        {
-            string path = $"{basePath}{suffix}";
-            if (File.Exists(path))
-            {
-                createdFiles.Add(Path.GetFileName(path));
-            }
-        }
-
-        if (createdFiles.Count > 0)
-        {
-            progressCallback(
-                fileIndex,
-                totalCount,
-                "Успешно завершено!",
-                100.0);
-
-            results.Add($"✅ Разделение завершено для: {originalName}");
-            foreach (var file in createdFiles)
-            {
-                results.Add($"  • Создан канал: {file}");
-            }
-
-            LogService.Instance.Info(
-                $"Успешно завершено разделение каналов для '{originalName}'. " +
-                $"Создано файлов: {createdFiles.Count}",
-                "AudioChannelsScript");
-
-            if (deleteOriginal)
-            {
-                DeleteSource(filePath, results);
-            }
-        }
-        else
-        {
-            results.Add($"❌ Не найдено выходных файлов для " +
-                        $"{Path.GetFileName(filePath)}");
+            LogService.Instance.Exception(ex, $"Ошибка обработки каналов для '{originalName}': {ex.Message}", "AudioChannelsScript");
         }
 
         return results;

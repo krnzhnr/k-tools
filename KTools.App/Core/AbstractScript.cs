@@ -42,9 +42,68 @@ public abstract class AbstractScript
 
     /// <summary>
     /// Декларативная схема параметров настроек скрипта.
-    /// По умолчанию возвращает пустой список.
     /// </summary>
     public virtual List<SettingField> SettingsSchema => new();
+
+    /// <summary>
+    /// Возвращает полную схему параметров, включая локальные поля переименования.
+    /// </summary>
+    public List<SettingField> GetFullSettingsSchema()
+    {
+        var schema = new List<SettingField>(SettingsSchema);
+        
+        // Добавляем вкладку "Переименование" с полями локального переопределения
+        schema.Add(new SettingField(
+            "LocalRenameOverride",
+            "Переопределить глобальное переименование",
+            SettingType.Checkbox,
+            false,
+            "Переименование"));
+
+        schema.Add(new SettingField(
+            "LocalRenameUseRegex",
+            "Использовать регулярные выражения",
+            SettingType.Checkbox,
+            true,
+            "Переименование",
+            visibleIfKey: "LocalRenameOverride",
+            visibleIfValues: new List<string> { "True" }));
+
+        schema.Add(new SettingField(
+            "LocalRenameCaseSensitive",
+            "Учитывать регистр",
+            SettingType.Checkbox,
+            false,
+            "Переименование",
+            visibleIfKey: "LocalRenameOverride",
+            visibleIfValues: new List<string> { "True" }));
+
+        schema.Add(new SettingField(
+            "LocalRenameSearch",
+            "Локальный поиск",
+            SettingType.Text,
+            string.Empty,
+            "Переименование",
+            visibleIfKey: "LocalRenameOverride",
+            visibleIfValues: new List<string> { "True" })
+        {
+            PlaceholderText = "Например:  - (\\d+) или просто текст"
+        });
+
+        schema.Add(new SettingField(
+            "LocalRenameReplace",
+            "Локальная замена",
+            SettingType.Text,
+            string.Empty,
+            "Переименование",
+            visibleIfKey: "LocalRenameOverride",
+            visibleIfValues: new List<string> { "True" })
+        {
+            PlaceholderText = "Например:  - [$1] или серия_${num:2}"
+        });
+
+        return schema;
+    }
 
     /// <summary>
     /// Указывает, поддерживает ли скрипт одновременную параллельную обработку файлов.
@@ -162,6 +221,7 @@ public abstract class AbstractScript
 
     private readonly object _batchLock = new();
     private readonly HashSet<string> _batchReservedPaths = new(StringComparer.OrdinalIgnoreCase);
+    private int _batchRenameCounter = 0;
 
     /// <summary>
     /// Очищает список зарезервированных путей перед началом новой пакетной обработки.
@@ -171,6 +231,7 @@ public abstract class AbstractScript
         lock (_batchLock)
         {
             _batchReservedPaths.Clear();
+            _batchRenameCounter = 0;
             if (inputFiles != null)
             {
                 foreach (var file in inputFiles)
@@ -183,7 +244,7 @@ public abstract class AbstractScript
 
     /// <summary>
     /// Возвращает безопасный путь для сохранения результата, предотвращая перезапись исходника
-    /// и коллизии имен при пакетном переименовании.
+    /// и коллизии имен при пакетном переименовании. Поддерживает переименование по правилам PowerRename.
     /// </summary>
     protected string GetSafeOutputPath(string inputPath, string outputPath)
     {
@@ -192,12 +253,88 @@ public abstract class AbstractScript
             string inResolved = Path.GetFullPath(inputPath);
             string outResolved = Path.GetFullPath(outputPath);
 
+            string dir = Path.GetDirectoryName(outResolved) ?? "";
+            string stem = Path.GetFileNameWithoutExtension(outResolved);
+            string ext = Path.GetExtension(outResolved);
+
+            // Получаем порядковый номер файла в текущей пакетной обработке
+            int fileNum = 1;
+            lock (_batchLock)
+            {
+                _batchRenameCounter++;
+                fileNum = _batchRenameCounter;
+            }
+
+            // Переименование выходных файлов (PowerRename логика)
+            bool renameEnabled = false;
+            bool useRegex = true;
+            bool caseSensitive = false;
+            string pattern = "";
+            string replacement = "";
+
+            string settingsGroup = SettingsManager.Instance.GetSafeGroupName(Name);
+            bool localOverride = SettingsManager.Instance.GetSetting(settingsGroup, "LocalRenameOverride", false);
+
+            if (localOverride)
+            {
+                pattern = SettingsManager.Instance.GetSetting(settingsGroup, "LocalRenameSearch", string.Empty);
+                replacement = SettingsManager.Instance.GetSetting(settingsGroup, "LocalRenameReplace", string.Empty);
+                useRegex = SettingsManager.Instance.GetSetting(settingsGroup, "LocalRenameUseRegex", true);
+                caseSensitive = SettingsManager.Instance.GetSetting(settingsGroup, "LocalRenameCaseSensitive", false);
+                renameEnabled = !string.IsNullOrEmpty(pattern);
+            }
+            else
+            {
+                // Используем глобальные настройки
+                renameEnabled = SettingsManager.Instance.RenameEnableRegex;
+                pattern = SettingsManager.Instance.RenameRegexSearch;
+                replacement = SettingsManager.Instance.RenameRegexReplace;
+                useRegex = SettingsManager.Instance.RenameUseRegex;
+                caseSensitive = SettingsManager.Instance.RenameCaseSensitive;
+            }
+
+            if (renameEnabled && !string.IsNullOrEmpty(pattern))
+            {
+                try
+                {
+                    string oldStem = stem;
+
+                    // 1. Сначала вычисляем все переменные форматирования (даты, uuid, нумерацию) в строке замены
+                    string resolvedReplacement = EvaluatePowerRenameVariables(replacement, fileNum, DateTime.Now);
+
+                    // 2. Выполняем поиск и замену (через Regex или стандартный текст)
+                    if (useRegex)
+                    {
+                        var options = caseSensitive 
+                            ? System.Text.RegularExpressions.RegexOptions.None 
+                            : System.Text.RegularExpressions.RegexOptions.IgnoreCase;
+                        
+                        stem = System.Text.RegularExpressions.Regex.Replace(stem, pattern, resolvedReplacement, options);
+                    }
+                    else
+                    {
+                        var options = caseSensitive 
+                            ? System.Text.RegularExpressions.RegexOptions.None 
+                            : System.Text.RegularExpressions.RegexOptions.IgnoreCase;
+                        
+                        stem = System.Text.RegularExpressions.Regex.Replace(stem, System.Text.RegularExpressions.Regex.Escape(pattern), resolvedReplacement, options);
+                    }
+
+                    if (oldStem != stem)
+                    {
+                        outResolved = Path.Combine(dir, $"{stem}{ext}");
+                        LogService.Instance.Info($"Применено переименование PowerRename: '{oldStem}' -> '{stem}'", "AbstractScript");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LogService.Instance.Exception(ex, $"Ошибка применения переименования '{pattern}' -> '{replacement}': {ex.Message}", "AbstractScript");
+                }
+            }
+
             // 1. Защита исходного файла от перезаписи
             if (inResolved.Equals(outResolved, StringComparison.OrdinalIgnoreCase))
             {
-                string dir = Path.GetDirectoryName(outResolved) ?? "";
-                string stem = Path.GetFileNameWithoutExtension(outResolved);
-                string ext = Path.GetExtension(outResolved);
                 outResolved = Path.Combine(dir, $"{stem}_processed{ext}");
                 LogService.Instance.Info($"Защита исходника: добавлено '_processed' к имени файла: '{outResolved}'", "AbstractScript");
             }
@@ -207,7 +344,7 @@ public abstract class AbstractScript
             {
                 string originalDir = Path.GetDirectoryName(outResolved) ?? "";
                 string originalStem = Path.GetFileNameWithoutExtension(outResolved);
-                string ext = Path.GetExtension(outResolved);
+                ext = Path.GetExtension(outResolved);
                 int counter = 1;
 
                 while (_batchReservedPaths.Contains(outResolved))
@@ -226,6 +363,134 @@ public abstract class AbstractScript
             LogService.Instance.Exception(ex, $"Ошибка при получении безопасного выходного пути для '{inputPath}': {ex.Message}", "AbstractScript");
             return outputPath;
         }
+    }
+
+    /// <summary>
+    /// Возвращает выходное расширение файла на основе настроек скрипта (например, .mp4, .vtt).
+    /// </summary>
+    public virtual string GetOutputExtension(string inputPath)
+    {
+        return Path.GetExtension(inputPath);
+    }
+
+    /// <summary>
+    /// Возвращает гипотетический выходной путь для предпросмотра переименования (без изменения состояния).
+    /// </summary>
+    public string GetPreviewOutputPath(string inputPath, string outputPath, int fileNum)
+    {
+        try
+        {
+            string inResolved = Path.GetFullPath(inputPath);
+            string outResolved = Path.GetFullPath(outputPath);
+
+            string dir = Path.GetDirectoryName(outResolved) ?? "";
+            string stem = Path.GetFileNameWithoutExtension(outResolved);
+            string ext = GetOutputExtension(inputPath);
+
+            bool renameEnabled = false;
+            bool useRegex = true;
+            bool caseSensitive = false;
+            string pattern = "";
+            string replacement = "";
+
+            string settingsGroup = SettingsManager.Instance.GetSafeGroupName(Name);
+            bool localOverride = SettingsManager.Instance.GetSetting(settingsGroup, "LocalRenameOverride", false);
+
+            if (localOverride)
+            {
+                pattern = SettingsManager.Instance.GetSetting(settingsGroup, "LocalRenameSearch", string.Empty);
+                replacement = SettingsManager.Instance.GetSetting(settingsGroup, "LocalRenameReplace", string.Empty);
+                useRegex = SettingsManager.Instance.GetSetting(settingsGroup, "LocalRenameUseRegex", true);
+                caseSensitive = SettingsManager.Instance.GetSetting(settingsGroup, "LocalRenameCaseSensitive", false);
+                renameEnabled = !string.IsNullOrEmpty(pattern);
+            }
+            else
+            {
+                renameEnabled = SettingsManager.Instance.RenameEnableRegex;
+                pattern = SettingsManager.Instance.RenameRegexSearch;
+                replacement = SettingsManager.Instance.RenameRegexReplace;
+                useRegex = SettingsManager.Instance.RenameUseRegex;
+                caseSensitive = SettingsManager.Instance.RenameCaseSensitive;
+            }
+
+            if (renameEnabled && !string.IsNullOrEmpty(pattern))
+            {
+                try
+                {
+                    string oldStem = stem;
+                    string resolvedReplacement = EvaluatePowerRenameVariables(replacement, fileNum, DateTime.Now);
+
+                    if (useRegex)
+                    {
+                        var options = caseSensitive 
+                            ? System.Text.RegularExpressions.RegexOptions.None 
+                            : System.Text.RegularExpressions.RegexOptions.IgnoreCase;
+                        
+                        stem = System.Text.RegularExpressions.Regex.Replace(stem, pattern, resolvedReplacement, options);
+                    }
+                    else
+                    {
+                        var options = caseSensitive 
+                            ? System.Text.RegularExpressions.RegexOptions.None 
+                            : System.Text.RegularExpressions.RegexOptions.IgnoreCase;
+                        
+                        stem = System.Text.RegularExpressions.Regex.Replace(stem, System.Text.RegularExpressions.Regex.Escape(pattern), resolvedReplacement, options);
+                    }
+
+                    if (oldStem != stem)
+                    {
+                        outResolved = Path.Combine(dir, $"{stem}{ext}");
+                    }
+                }
+                catch
+                {
+                    // Игнорируем ошибки при предпросмотре
+                }
+            }
+
+            if (inResolved.Equals(outResolved, StringComparison.OrdinalIgnoreCase))
+            {
+                outResolved = Path.Combine(dir, $"{stem}_processed{ext}");
+            }
+
+            return outResolved;
+        }
+        catch
+        {
+            return outputPath;
+        }
+    }
+
+    /// <summary>
+    /// Парсит и заменяет переменные форматирования (PowerRename логика) в строке замены.
+    /// </summary>
+    private string EvaluatePowerRenameVariables(string replacement, int fileNum, DateTime time)
+    {
+        if (string.IsNullOrEmpty(replacement)) return replacement;
+
+        // Генерация UUID
+        replacement = replacement.Replace("${ruuidv4}", Guid.NewGuid().ToString(), StringComparison.OrdinalIgnoreCase);
+        
+        // Временные метки
+        replacement = replacement.Replace("${YYYY}", time.ToString("yyyy"), StringComparison.OrdinalIgnoreCase);
+        replacement = replacement.Replace("${MM}", time.ToString("MM"), StringComparison.OrdinalIgnoreCase);
+        replacement = replacement.Replace("${DD}", time.ToString("dd"), StringComparison.OrdinalIgnoreCase);
+        replacement = replacement.Replace("${hh}", time.ToString("HH"), StringComparison.OrdinalIgnoreCase);
+        replacement = replacement.Replace("${mm}", time.ToString("mm"), StringComparison.OrdinalIgnoreCase);
+        replacement = replacement.Replace("${ss}", time.ToString("ss"), StringComparison.OrdinalIgnoreCase);
+        
+        // Автонумерация ${num} и ${num:N}
+        replacement = System.Text.RegularExpressions.Regex.Replace(replacement, @"\$\{num\}", fileNum.ToString(), System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        replacement = System.Text.RegularExpressions.Regex.Replace(replacement, @"\$\{num:(\d+)\}", m =>
+        {
+            if (int.TryParse(m.Groups[1].Value, out int pad))
+            {
+                return fileNum.ToString().PadLeft(pad, '0');
+            }
+            return fileNum.ToString();
+        }, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        return replacement;
     }
 
     /// <summary>
@@ -294,6 +559,27 @@ public abstract class AbstractScript
         catch (Exception ex)
         {
             LogService.Instance.Warn($"Не удалось удалить временный файл '{filePath}' при отмене: {ex.Message}", "AbstractScript");
+        }
+    }
+
+    /// <summary>
+    /// Физически удаляет выходной файл при возникновении любых ошибок или сбоев в процессе выполнения.
+    /// Позволяет избежать засорения диска поврежденными или частично записанными медиафайлами.
+    /// </summary>
+    /// <param name="filePath">Абсолютный путь к неудавшимся выходному файлу.</param>
+    protected void CleanupFailedOutputFile(string filePath)
+    {
+        try
+        {
+            if (File.Exists(filePath))
+            {
+                File.Delete(filePath);
+                LogService.Instance.DebugLog($"Удален поврежденный выходной файл после сбоя или ошибки: '{Path.GetFileName(filePath)}'", "AbstractScript");
+            }
+        }
+        catch (Exception ex)
+        {
+            LogService.Instance.Exception(ex, $"Не удалось очистить поврежденный выходной файл '{filePath}' после сбоя: {ex.Message}", "AbstractScript");
         }
     }
 

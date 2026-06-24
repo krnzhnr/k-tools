@@ -184,6 +184,36 @@ public partial class SettingsViewModel : ObservableObject
     public partial bool IncludePreReleases { get; set; }
 
     /// <summary>
+    /// Флаг включения переименования выходных файлов по регулярным выражениям (Regex).
+    /// </summary>
+    [ObservableProperty]
+    public partial bool RenameEnableRegex { get; set; }
+
+    /// <summary>
+    /// Шаблон поиска (регулярное выражение) для переименования выходных файлов.
+    /// </summary>
+    [ObservableProperty]
+    public partial string RenameRegexSearch { get; set; }
+
+    /// <summary>
+    /// Строка замены для переименования выходных файлов.
+    /// </summary>
+    [ObservableProperty]
+    public partial string RenameRegexReplace { get; set; }
+
+    /// <summary>
+    /// Использовать ли регулярные выражения для переименования выходных файлов.
+    /// </summary>
+    [ObservableProperty]
+    public partial bool RenameUseRegex { get; set; }
+
+    /// <summary>
+    /// Учитывать ли регистр при переименовании выходных файлов.
+    /// </summary>
+    [ObservableProperty]
+    public partial bool RenameCaseSensitive { get; set; }
+
+    /// <summary>
     /// Инициализирует новый экземпляр SettingsViewModel с внедрением зависимостей.
     /// </summary>
     public SettingsViewModel(
@@ -233,6 +263,11 @@ public partial class SettingsViewModel : ObservableObject
 
         AutoCheckUpdates = _settingsManager.AutoCheckUpdates;
         IncludePreReleases = _settingsManager.IncludePreReleases;
+        RenameEnableRegex = _settingsManager.RenameEnableRegex;
+        RenameRegexSearch = _settingsManager.RenameRegexSearch;
+        RenameRegexReplace = _settingsManager.RenameRegexReplace;
+        RenameUseRegex = _settingsManager.RenameUseRegex;
+        RenameCaseSensitive = _settingsManager.RenameCaseSensitive;
     }
 
     partial void OnOverwriteExistingChanged(bool value)
@@ -294,6 +329,31 @@ public partial class SettingsViewModel : ObservableObject
         _settingsManager.IncludePreReleases = value;
     }
 
+    partial void OnRenameEnableRegexChanged(bool value)
+    {
+        _settingsManager.RenameEnableRegex = value;
+    }
+
+    partial void OnRenameRegexSearchChanged(string value)
+    {
+        _settingsManager.RenameRegexSearch = value;
+    }
+
+    partial void OnRenameRegexReplaceChanged(string value)
+    {
+        _settingsManager.RenameRegexReplace = value;
+    }
+
+    partial void OnRenameUseRegexChanged(bool value)
+    {
+        _settingsManager.RenameUseRegex = value;
+    }
+
+    partial void OnRenameCaseSensitiveChanged(bool value)
+    {
+        _settingsManager.RenameCaseSensitive = value;
+    }
+
     /// <summary>
     /// Устанавливает путь к директории хранения логов.
     /// </summary>
@@ -333,6 +393,11 @@ public partial class SettingsViewModel : ObservableObject
             _settingsManager.LogDir = string.Empty;
             _settingsManager.AutoCheckUpdates = true;
             _settingsManager.IncludePreReleases = false;
+            _settingsManager.RenameEnableRegex = false;
+            _settingsManager.RenameRegexSearch = string.Empty;
+            _settingsManager.RenameRegexReplace = string.Empty;
+            _settingsManager.RenameUseRegex = true;
+            _settingsManager.RenameCaseSensitive = false;
 
             LoadCurrentSettings();
 

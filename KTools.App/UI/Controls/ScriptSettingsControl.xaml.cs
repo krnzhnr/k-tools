@@ -19,6 +19,9 @@ public sealed partial class ScriptSettingsControl : UserControl
 {
     private readonly List<(SettingField Field, FrameworkElement Element)> _generatedElements = new();
     private readonly Dictionary<string, FrameworkElement> _groupContainers = new();
+    private AbstractScript? _activeScript;
+    private StackPanel? _previewPanel;
+    private bool _isPreviewExpanded;
 
     private class GroupVisual
     {
@@ -40,6 +43,14 @@ public sealed partial class ScriptSettingsControl : UserControl
             this.Focus(FocusState.Programmatic);
             this.IsTabStop = false;
         };
+
+        this.Unloaded += (s, e) =>
+        {
+            if (_activeScript != null)
+            {
+                _activeScript.FilesQueue.CollectionChanged -= OnFilesQueueCollectionChanged;
+            }
+        };
     }
 
     /// <summary>
@@ -47,14 +58,24 @@ public sealed partial class ScriptSettingsControl : UserControl
     /// </summary>
     public void GenerateSettingsUI(AbstractScript script)
     {
+        if (_activeScript != null)
+        {
+            _activeScript.FilesQueue.CollectionChanged -= OnFilesQueueCollectionChanged;
+        }
+        _activeScript = script;
+        _activeScript.FilesQueue.CollectionChanged += OnFilesQueueCollectionChanged;
+        _isPreviewExpanded = false;
+
         SettingsContainer.Children.Clear();
         _generatedElements.Clear();
         _groups.Clear();
         _groupContainers.Clear();
         SettingsNavigationView.MenuItems.Clear();
 
-        if (script.SettingsSchema == null ||
-            script.SettingsSchema.Count == 0)
+        var fullSchema = script.GetFullSettingsSchema();
+
+        if (fullSchema == null ||
+            fullSchema.Count == 0)
         {
             SettingsNavigationView.Visibility = Visibility.Collapsed;
             var noSettingsText = new TextBlock
@@ -76,7 +97,7 @@ public sealed partial class ScriptSettingsControl : UserControl
         // Группируем поля по иерархии: { "ГлавнаяГруппа": { "Подгруппа": [Поля] } }
         var hierarchicalGroups = new Dictionary<string, Dictionary<string, List<SettingField>>>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var field in script.SettingsSchema)
+        foreach (var field in fullSchema)
         {
             var parts = field.Group.Split(':', 2);
             string mainGroup = parts[0];
@@ -305,6 +326,8 @@ public sealed partial class ScriptSettingsControl : UserControl
                         settingsGroup, field.Key, true);
                     UpdateVisibility(settingsGroup);
 
+                    UpdatePreview();
+
                     if (field.Key == "lossless")
                     {
                         HandleLosslessChange(settingsGroup, true);
@@ -348,6 +371,8 @@ public sealed partial class ScriptSettingsControl : UserControl
                         settingsGroup, field.Key, false);
                     UpdateVisibility(settingsGroup);
 
+                    UpdatePreview();
+
                     if (field.Key == "lossless")
                     {
                         HandleLosslessChange(settingsGroup, false);
@@ -371,10 +396,12 @@ public sealed partial class ScriptSettingsControl : UserControl
                 VerticalAlignment = VerticalAlignment.Center
             };
             
+            bool isRenameField = field.Key == "LocalRenameSearch" || field.Key == "LocalRenameReplace";
+
             rowGrid.ColumnDefinitions.Add(new ColumnDefinition 
-                { Width = new GridLength(1, GridUnitType.Star) });
+                { Width = isRenameField ? GridLength.Auto : new GridLength(1, GridUnitType.Star) });
             rowGrid.ColumnDefinitions.Add(new ColumnDefinition 
-                { Width = GridLength.Auto });
+                { Width = isRenameField ? new GridLength(1, GridUnitType.Star) : GridLength.Auto });
 
             var textStack = new StackPanel 
             { 
@@ -417,14 +444,29 @@ public sealed partial class ScriptSettingsControl : UserControl
                             settingsGroup,
                             field.Key,
                             field.DefaultValue?.ToString() ?? string.Empty),
-                        Width = 200,
+                        PlaceholderText = field.PlaceholderText ?? string.Empty,
+                        Width = 250,
+                        HorizontalAlignment = HorizontalAlignment.Right,
                         VerticalAlignment = VerticalAlignment.Center
+                    };
+                    textBox.TextChanged += (s, e) =>
+                    {
+                        SettingsManager.Instance.SetSetting(
+                            settingsGroup, field.Key, textBox.Text);
+                        if (isRenameField)
+                        {
+                            UpdatePreview();
+                        }
                     };
                     textBox.LostFocus += (s, e) =>
                     {
                         SettingsManager.Instance.SetSetting(
                             settingsGroup, field.Key, textBox.Text);
                         UpdateVisibility(settingsGroup);
+                        if (isRenameField)
+                        {
+                            UpdatePreview();
+                        }
                     };
                     textBox.KeyDown += (s, e) =>
                     {
@@ -436,7 +478,44 @@ public sealed partial class ScriptSettingsControl : UserControl
                             e.Handled = true;
                         }
                     };
-                    inputControl = textBox;
+
+                    if (isRenameField)
+                    {
+                        var containerGrid = new Grid { HorizontalAlignment = HorizontalAlignment.Right };
+                        containerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                        containerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+                        Grid.SetColumn(textBox, 0);
+                        containerGrid.Children.Add(textBox);
+
+                        var helpBtn = new Button
+                        {
+                            Content = "\uE946",
+                            FontFamily = (Microsoft.UI.Xaml.Media.FontFamily)Application.Current.Resources["SymbolThemeFontFamily"],
+                            Margin = new Thickness(8, 0, 0, 0),
+                            Width = 32,
+                            Height = 32,
+                            Padding = new Thickness(0),
+                            VerticalAlignment = VerticalAlignment.Center
+                        };
+                        Grid.SetColumn(helpBtn, 1);
+                        containerGrid.Children.Add(helpBtn);
+
+                        if (field.Key == "LocalRenameSearch")
+                        {
+                            AttachSearchHelpFlyout(helpBtn, textBox);
+                        }
+                        else
+                        {
+                            AttachReplaceHelpFlyout(helpBtn, textBox);
+                        }
+
+                        inputControl = containerGrid;
+                    }
+                    else
+                    {
+                        inputControl = textBox;
+                    }
                     break;
 
                 case SettingType.Int:
@@ -447,6 +526,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                             field.Key,
                             field.DefaultValue is int vInt ? vInt : 0),
                         Width = 160,
+                        HorizontalAlignment = HorizontalAlignment.Right,
                         SpinButtonPlacementMode = 
                             NumberBoxSpinButtonPlacementMode.Inline,
                         SmallChange = 1,
@@ -482,6 +562,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                     var comboBox = new ComboBox
                     {
                         Width = 160,
+                        HorizontalAlignment = HorizontalAlignment.Right,
                         VerticalAlignment = VerticalAlignment.Center
                     };
                     foreach (var opt in field.Options)
@@ -513,6 +594,8 @@ public sealed partial class ScriptSettingsControl : UserControl
                                 HandleRcChange(settingsGroup, selectedVal);
                                 HandleAutoBitrateChange(settingsGroup);
                             }
+                            
+                            UpdatePreview();
                         }
                     };
 
@@ -542,6 +625,31 @@ public sealed partial class ScriptSettingsControl : UserControl
                 _generatedElements.Add((field, rowGrid));
                 groupVisual.Elements.Add(rowGrid);
             }
+        }
+
+        if (title.Equals("Переименование", StringComparison.OrdinalIgnoreCase))
+        {
+            var separator = new MenuFlyoutSeparator { Margin = new Thickness(0, 8, 0, 8) };
+            cardContentStack.Children.Add(separator);
+
+            var previewTitle = new TextBlock
+            {
+                Text = "Предпросмотр переименования",
+                FontSize = 13,
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                Foreground = (Brush)Application.Current.Resources["TextFillColorPrimaryBrush"],
+                Margin = new Thickness(0, 0, 0, 4)
+            };
+            cardContentStack.Children.Add(previewTitle);
+
+            _previewPanel = new StackPanel
+            {
+                Spacing = 6,
+                HorizontalAlignment = HorizontalAlignment.Stretch
+            };
+            cardContentStack.Children.Add(_previewPanel);
+
+            UpdatePreview();
         }
 
         _groups.Add(groupVisual);
@@ -1024,5 +1132,415 @@ public sealed partial class ScriptSettingsControl : UserControl
                 }
             }
         }
+    }
+
+    private void AttachSearchHelpFlyout(Button button, TextBox textBox)
+    {
+        var flyout = new Flyout { Placement = Microsoft.UI.Xaml.Controls.Primitives.FlyoutPlacementMode.BottomEdgeAlignedRight };
+        
+        var mainStack = new StackPanel { Spacing = 6, Width = 280 };
+        
+        var title = new TextBlock 
+        { 
+            Text = "Шаблоны поиска", 
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, 
+            FontSize = 14, 
+            Margin = new Thickness(0, 0, 0, 4) 
+        };
+        var desc = new TextBlock 
+        { 
+            Text = "Нажмите на шаблон, чтобы скопировать:", 
+            FontSize = 12, 
+            Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"], 
+            Margin = new Thickness(0, 0, 0, 8) 
+        };
+        
+        mainStack.Children.Add(title);
+        mainStack.Children.Add(desc);
+        
+        var variables = SettingsManager.Instance.SearchTemplates;
+        
+        foreach (var item in variables)
+        {
+            if (string.IsNullOrEmpty(item.Pattern)) continue;
+
+            var rowGrid = new Grid { HorizontalAlignment = HorizontalAlignment.Stretch };
+            rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+            var insertBtn = new Button
+            {
+                Content = new FontIcon { Glyph = "\uE710", FontSize = 10 },
+                Style = (Style)Application.Current.Resources["DefaultButtonStyle"],
+                Width = 32,
+                Height = 32,
+                Margin = new Thickness(0, 0, 6, 0),
+                Padding = new Thickness(0),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            insertBtn.Click += (s, e) =>
+            {
+                textBox.Text += item.Pattern;
+                textBox.Focus(FocusState.Programmatic);
+            };
+            Grid.SetColumn(insertBtn, 0);
+            rowGrid.Children.Add(insertBtn);
+
+            var btn = new Button
+            {
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                HorizontalContentAlignment = HorizontalAlignment.Left,
+                Height = 32,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            
+            var btnGrid = new Grid { HorizontalAlignment = HorizontalAlignment.Stretch };
+            var rowStack = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+            rowStack.Children.Add(new TextBlock 
+            { 
+                Text = item.Pattern, 
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, 
+                Foreground = (Brush)Application.Current.Resources["AccentTextFillColorPrimaryBrush"] 
+            });
+            rowStack.Children.Add(new TextBlock { Text = string.IsNullOrEmpty(item.Description) ? "" : $"— {CleanDescription(item.Description)}", FontSize = 12 });
+            
+            var copiedText = new TextBlock
+            {
+                Text = "Скопировано!",
+                FontSize = 12,
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                Foreground = (Brush)Application.Current.Resources["AccentTextFillColorPrimaryBrush"],
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                Visibility = Visibility.Collapsed
+            };
+            
+            btnGrid.Children.Add(rowStack);
+            btnGrid.Children.Add(copiedText);
+            btn.Content = btnGrid;
+            
+            btn.Click += (s, e) =>
+            {
+                var dataPackage = new Windows.ApplicationModel.DataTransfer.DataPackage();
+                dataPackage.SetText(item.Pattern);
+                Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(dataPackage);
+                
+                rowStack.Opacity = 0;
+                copiedText.Visibility = Visibility.Visible;
+                
+                var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+                timer.Tick += (s2, ev) =>
+                {
+                    copiedText.Visibility = Visibility.Collapsed;
+                    rowStack.Opacity = 1;
+                    timer.Stop();
+                };
+                timer.Start();
+            };
+            
+            Grid.SetColumn(btn, 1);
+            rowGrid.Children.Add(btn);
+
+            mainStack.Children.Add(rowGrid);
+        }
+        
+        flyout.Content = mainStack;
+        button.Flyout = flyout;
+    }
+
+    /// <summary>
+    /// Создает и привязывает всплывающее меню (Flyout) с шаблонами автозамены, копируемыми при клике.
+    /// </summary>
+    private void AttachReplaceHelpFlyout(Button button, TextBox textBox)
+    {
+        var flyout = new Flyout { Placement = Microsoft.UI.Xaml.Controls.Primitives.FlyoutPlacementMode.BottomEdgeAlignedRight };
+        
+        var mainStack = new StackPanel { Spacing = 6, Width = 280 };
+        
+        var title = new TextBlock 
+        { 
+            Text = "Переменные замены", 
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, 
+            FontSize = 14, 
+            Margin = new Thickness(0, 0, 0, 4) 
+        };
+        var desc = new TextBlock 
+        { 
+            Text = "Нажмите на шаблон, чтобы скопировать:", 
+            FontSize = 12, 
+            Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"], 
+            Margin = new Thickness(0, 0, 0, 8) 
+        };
+        
+        mainStack.Children.Add(title);
+        mainStack.Children.Add(desc);
+        
+        var variables = SettingsManager.Instance.ReplaceTemplates;
+        
+        foreach (var item in variables)
+        {
+            if (string.IsNullOrEmpty(item.Pattern)) continue;
+
+            var rowGrid = new Grid { HorizontalAlignment = HorizontalAlignment.Stretch };
+            rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+            var insertBtn = new Button
+            {
+                Content = new FontIcon { Glyph = "\uE710", FontSize = 10 },
+                Style = (Style)Application.Current.Resources["DefaultButtonStyle"],
+                Width = 32,
+                Height = 32,
+                Margin = new Thickness(0, 0, 6, 0),
+                Padding = new Thickness(0),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            insertBtn.Click += (s, e) =>
+            {
+                textBox.Text += item.Pattern;
+                textBox.Focus(FocusState.Programmatic);
+            };
+            Grid.SetColumn(insertBtn, 0);
+            rowGrid.Children.Add(insertBtn);
+
+            var btn = new Button
+            {
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                HorizontalContentAlignment = HorizontalAlignment.Left,
+                Height = 32,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            
+            var btnGrid = new Grid { HorizontalAlignment = HorizontalAlignment.Stretch };
+            var rowStack = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+            rowStack.Children.Add(new TextBlock 
+            { 
+                Text = item.Pattern, 
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, 
+                Foreground = (Brush)Application.Current.Resources["AccentTextFillColorPrimaryBrush"] 
+            });
+            rowStack.Children.Add(new TextBlock { Text = string.IsNullOrEmpty(item.Description) ? "" : $"— {CleanDescription(item.Description)}", FontSize = 12 });
+            
+            var copiedText = new TextBlock
+            {
+                Text = "Скопировано!",
+                FontSize = 12,
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                Foreground = (Brush)Application.Current.Resources["AccentTextFillColorPrimaryBrush"],
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                Visibility = Visibility.Collapsed
+            };
+            
+            btnGrid.Children.Add(rowStack);
+            btnGrid.Children.Add(copiedText);
+            btn.Content = btnGrid;
+            
+            btn.Click += (s, e) =>
+            {
+                var dataPackage = new Windows.ApplicationModel.DataTransfer.DataPackage();
+                dataPackage.SetText(item.Pattern);
+                Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(dataPackage);
+                
+                rowStack.Opacity = 0;
+                copiedText.Visibility = Visibility.Visible;
+                
+                var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+                timer.Tick += (s2, ev) =>
+                {
+                    copiedText.Visibility = Visibility.Collapsed;
+                    rowStack.Opacity = 1;
+                    timer.Stop();
+                };
+                timer.Start();
+            };
+            
+            Grid.SetColumn(btn, 1);
+            rowGrid.Children.Add(btn);
+
+            mainStack.Children.Add(rowGrid);
+        }
+        
+        flyout.Content = mainStack;
+        button.Flyout = flyout;
+    }
+
+    private static string CleanDescription(string desc)
+    {
+        if (string.IsNullOrEmpty(desc)) return string.Empty;
+        var result = desc.Trim();
+        if (result.StartsWith("—"))
+        {
+            result = result.Substring(1).Trim();
+        }
+        else if (result.StartsWith("-"))
+        {
+            result = result.Substring(1).Trim();
+        }
+        return result;
+    }
+
+    private void OnFilesQueueCollectionChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+    {
+        App.CurrentMainWindow?.DispatcherQueue?.TryEnqueue(() =>
+        {
+            UpdatePreview();
+        });
+    }
+
+    private void UpdatePreview()
+    {
+        if (_previewPanel == null || _activeScript == null) return;
+
+        _previewPanel.Children.Clear();
+
+        var files = _activeScript.FilesQueue;
+        if (files == null || files.Count == 0)
+        {
+            _previewPanel.Children.Add(new TextBlock
+            {
+                Text = "Добавьте файлы в очередь, чтобы увидеть предпросмотр переименования",
+                FontSize = 12,
+                Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
+                FontStyle = Windows.UI.Text.FontStyle.Italic,
+                Margin = new Thickness(0, 4, 0, 0)
+            });
+            return;
+        }
+
+        string settingsGroup = SettingsManager.Instance.GetSafeGroupName(_activeScript.Name);
+        bool renameEnabled = false;
+        string pattern = "";
+
+        bool localOverride = SettingsManager.Instance.GetSetting(settingsGroup, "LocalRenameOverride", false);
+        if (localOverride)
+        {
+            pattern = SettingsManager.Instance.GetSetting(settingsGroup, "LocalRenameSearch", string.Empty);
+            renameEnabled = !string.IsNullOrEmpty(pattern);
+        }
+        else
+        {
+            renameEnabled = SettingsManager.Instance.RenameEnableRegex;
+            pattern = SettingsManager.Instance.RenameRegexSearch;
+        }
+
+        if (!renameEnabled || string.IsNullOrEmpty(pattern))
+        {
+            _previewPanel.Children.Add(new TextBlock
+            {
+                Text = "Переименование выключено или шаблон поиска пуст",
+                FontSize = 12,
+                Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
+                FontStyle = Windows.UI.Text.FontStyle.Italic,
+                Margin = new Thickness(0, 4, 0, 0)
+            });
+            return;
+        }
+
+        int maxFiles = _isPreviewExpanded ? files.Count : 5;
+        var previewStack = new StackPanel { Spacing = 6, HorizontalAlignment = HorizontalAlignment.Stretch };
+
+        for (int i = 0; i < Math.Min(files.Count, maxFiles); i++)
+        {
+            var file = files[i];
+            string previewOutPath = _activeScript.GetPreviewOutputPath(file.FilePath, file.FilePath, i + 1);
+            string newName = Path.GetFileName(previewOutPath);
+
+            var rowGrid = new Grid { HorizontalAlignment = HorizontalAlignment.Stretch };
+            rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+            var oldText = new TextBlock
+            {
+                Text = file.FileName,
+                FontSize = 12,
+                Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                HorizontalAlignment = HorizontalAlignment.Left
+            };
+            Grid.SetColumn(oldText, 0);
+            rowGrid.Children.Add(oldText);
+
+            var arrow = new TextBlock
+            {
+                Text = " ➜ ",
+                FontSize = 12,
+                Foreground = (Brush)Application.Current.Resources["TextFillColorTertiaryBrush"],
+                Margin = new Thickness(8, 0, 8, 0),
+                HorizontalAlignment = HorizontalAlignment.Center
+            };
+            Grid.SetColumn(arrow, 1);
+            rowGrid.Children.Add(arrow);
+
+            var newText = new TextBlock
+            {
+                Text = newName,
+                FontSize = 12,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                HorizontalAlignment = HorizontalAlignment.Left
+            };
+
+            if (newName != file.FileName)
+            {
+                if (Application.Current.Resources.TryGetValue("SuccessStrokeBrush", out var brushObj) && brushObj is Brush successBrush)
+                {
+                    newText.Foreground = successBrush;
+                }
+                else
+                {
+                    newText.Foreground = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 107, 194, 133));
+                }
+                newText.FontWeight = Microsoft.UI.Text.FontWeights.SemiBold;
+            }
+            else
+            {
+                newText.Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"];
+            }
+
+            Grid.SetColumn(newText, 2);
+            rowGrid.Children.Add(newText);
+
+            previewStack.Children.Add(rowGrid);
+        }
+
+        if (files.Count > 5 && !_isPreviewExpanded)
+        {
+            // Кнопка-ссылка для разворачивания всего списка
+            var expandBtn = new HyperlinkButton
+            {
+                Content = $"... и ещё {files.Count - 5} файлов",
+                FontSize = 11,
+                Padding = new Thickness(0),
+                Margin = new Thickness(0, 2, 0, 0),
+                HorizontalAlignment = HorizontalAlignment.Left
+            };
+            expandBtn.Click += (s, e) =>
+            {
+                _isPreviewExpanded = true;
+                UpdatePreview();
+            };
+            previewStack.Children.Add(expandBtn);
+        }
+        else if (_isPreviewExpanded && files.Count > 5)
+        {
+            // Кнопка сворачивания обратно
+            var collapseBtn = new HyperlinkButton
+            {
+                Content = "Свернуть",
+                FontSize = 11,
+                Padding = new Thickness(0),
+                Margin = new Thickness(0, 2, 0, 0),
+                HorizontalAlignment = HorizontalAlignment.Left
+            };
+            collapseBtn.Click += (s, e) =>
+            {
+                _isPreviewExpanded = false;
+                UpdatePreview();
+            };
+            previewStack.Children.Add(collapseBtn);
+        }
+
+        _previewPanel.Children.Add(previewStack);
     }
 }

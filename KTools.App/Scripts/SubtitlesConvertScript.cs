@@ -190,6 +190,7 @@ public sealed class SubtitlesConvertScript : AbstractScript
             }
             else
             {
+                CleanupFailedOutputFile(outputFilePath);
                 progressCallback(fileIndex, totalCount, "Ошибка!", 0.0);
                 results.Add($"❌ Ошибка FFmpeg: {outputFileName}");
             }
@@ -372,12 +373,14 @@ public sealed class SubtitlesConvertScript : AbstractScript
             }
             else
             {
+                CleanupFailedOutputFile(outputFilePath);
                 progressCallback(fileIndex, totalCount, "Ошибка FFmpeg!", 0.0);
                 results.Add($"❌ Ошибка FFmpeg: {outputFileName}");
             }
         }
         catch (Exception ex)
         {
+            CleanupFailedOutputFile(outputFilePath);
             LogService.Instance.Exception(
                 ex,
                 $"Критическая ошибка обработки субтитров для '{originalName}': " +
@@ -406,5 +409,17 @@ public sealed class SubtitlesConvertScript : AbstractScript
         }
 
         return results;
+    }
+
+    public override string GetOutputExtension(string inputPath)
+    {
+        string settingsGroup = SettingsManager.Instance.GetSafeGroupName(Name);
+        string targetFormat = SettingsManager.Instance.GetSetting(settingsGroup, "target_format", "WebVTT");
+        return targetFormat.ToUpperInvariant() switch
+        {
+            "SRT" => ".srt",
+            "ASS" => ".ass",
+            _ => ".vtt"
+        };
     }
 }

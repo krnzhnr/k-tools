@@ -197,11 +197,13 @@ public sealed class MetadataCleanupScript : AbstractScript
             }
             else
             {
+                CleanupFailedOutputFile(outputFilePath);
                 results.Add($"❌ Ошибка обработки FFmpeg (Код: {process.ExitCode}) для {Path.GetFileName(filePath)}");
             }
         }
         catch (Exception ex)
         {
+            CleanupFailedOutputFile(outputFilePath);
             results.Add($"❌ Критическая ошибка FFmpeg: {ex.Message}");
         }
 

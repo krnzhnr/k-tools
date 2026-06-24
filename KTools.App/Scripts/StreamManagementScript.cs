@@ -325,30 +325,41 @@ public sealed class StreamManagementScript : AbstractScript
             return results;
         }
 
-        if (success)
+        try
         {
-            progressCallback(fileIndex, totalCount, "Завершено!", 100.0);
-            string successMsg = $"✅ ОБРАБОТАНО: {Path.GetFileName(finalOutputFile)}";
-            LogService.Instance.Info(successMsg, "StreamManagementScript");
-            results.Add(successMsg);
-
-            bool overwriteSource = GetSettingValue(settings, "overwrite_source", false);
-            bool deleteSource = GetSettingValue(settings, "delete_source", false);
-
-            if (overwriteSource && string.IsNullOrEmpty(outputPath))
+            if (success)
             {
-                ReplaceSourceWithResult(filePath, finalOutputFile, results);
+                progressCallback(fileIndex, totalCount, "Завершено!", 100.0);
+                string successMsg = $"✅ ОБРАБОТАНО: {Path.GetFileName(finalOutputFile)}";
+                LogService.Instance.Info(successMsg, "StreamManagementScript");
+                results.Add(successMsg);
+
+                bool overwriteSource = GetSettingValue(settings, "overwrite_source", false);
+                bool deleteSource = GetSettingValue(settings, "delete_source", false);
+
+                if (overwriteSource && string.IsNullOrEmpty(outputPath))
+                {
+                    ReplaceSourceWithResult(filePath, finalOutputFile, results);
+                }
+                else if (deleteSource)
+                {
+                    DeleteSource(filePath, results);
+                }
             }
-            else if (deleteSource)
+            else
             {
-                DeleteSource(filePath, results);
+                CleanupFailedOutputFile(finalOutputFile);
+                string failMsg = $"❌ ОШИБКА обработки файла: {Path.GetFileName(filePath)}";
+                LogService.Instance.Error(failMsg, "StreamManagementScript");
+                results.Add(failMsg);
             }
         }
-        else
+        catch (Exception ex)
         {
-            string failMsg = $"❌ ОШИБКА обработки файла: {Path.GetFileName(filePath)}";
-            LogService.Instance.Error(failMsg, "StreamManagementScript");
-            results.Add(failMsg);
+            CleanupFailedOutputFile(finalOutputFile);
+            string errorMsg = $"❌ Ошибка выполнения скрипта для {Path.GetFileName(filePath)}: {ex.Message}";
+            results.Add(errorMsg);
+            LogService.Instance.Exception(ex, $"Ошибка при выполнении фильтрации потоков для '{stem}': {ex.Message}", "StreamManagementScript");
         }
 
         return results;

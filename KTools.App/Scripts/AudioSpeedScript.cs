@@ -267,7 +267,8 @@ public sealed class AudioSpeedScript : AbstractScript
 
         if (IsCancelled)
         {
-            CleanupIfCancelled(tempOutputFilePath);
+            CleanupFailedOutputFile(tempOutputFilePath);
+            CleanupFailedOutputFile(outputFilePath);
             results.Add($"⚠ Отменено: {outputName}");
             LogService.Instance.Info(
                 $"Обработка файла '{originalName}' отменена пользователем.",
@@ -309,16 +310,15 @@ public sealed class AudioSpeedScript : AbstractScript
                 string moveErr = $"❌ Ошибка при сохранении итогового файла: {ex.Message}";
                 results.Add(moveErr);
                 LogService.Instance.Exception(ex, $"Не удалось переместить временный файл '{tempOutputFilePath}' в '{outputFilePath}'", "AudioSpeedScript");
-                CleanupIfCancelled(tempOutputFilePath);
+                CleanupFailedOutputFile(tempOutputFilePath);
+                CleanupFailedOutputFile(outputFilePath);
             }
         }
         else
         {
-            // Очищаем временный файл, если он остался пустым или поврежденным
-            if (File.Exists(tempOutputFilePath))
-            {
-                try { File.Delete(tempOutputFilePath); } catch { }
-            }
+            // Очищаем временный файл и выходной файл, если они остались пустыми или поврежденными
+            CleanupFailedOutputFile(tempOutputFilePath);
+            CleanupFailedOutputFile(outputFilePath);
 
             string errorMsg = $"❌ Ошибка обработки для " +
                               $"{Path.GetFileName(filePath)}";

@@ -361,6 +361,21 @@ public sealed class QaacRunner
                 "QaacRunner");
             try { ffmpegProc.Kill(true); } catch { }
             try { qaacProc.Kill(true); } catch { }
+            
+            // Физически удаляем неполный выходной файл при отмене операции
+            if (File.Exists(outputPath))
+            {
+                try
+                {
+                    File.Delete(outputPath);
+                    LogService.Instance.DebugLog($"Удален неполный выходной файл при отмене конвейера QAAC: '{Path.GetFileName(outputPath)}'", "QaacRunner");
+                }
+                catch (Exception deleteEx)
+                {
+                    LogService.Instance.Exception(deleteEx, $"Не удалось удалить неполный выходной файл '{outputPath}' при отмене конвейера QAAC: {deleteEx.Message}", "QaacRunner");
+                }
+            }
+
             CleanupTempDir(tempDir);
             return false;
         }
@@ -375,6 +390,20 @@ public sealed class QaacRunner
             LogService.Instance.Error(
                 $"Сбой конвейера QAAC.\nFFmpeg Code: {ffmpegProc.ExitCode}, Err: {ffErr}\nQAAC Code: {qaacProc.ExitCode}, Err: {qaacErr}", 
                 "QaacRunner");
+
+            // Физически удаляем неудавшийся или поврежденный выходной файл при ошибке
+            if (File.Exists(outputPath))
+            {
+                try
+                {
+                    File.Delete(outputPath);
+                    LogService.Instance.DebugLog($"Удален поврежденный выходной файл после ошибки конвейера QAAC: '{Path.GetFileName(outputPath)}'", "QaacRunner");
+                }
+                catch (Exception deleteEx)
+                {
+                    LogService.Instance.Exception(deleteEx, $"Не удалось удалить поврежденный выходной файл '{outputPath}' после ошибки конвейера QAAC: {deleteEx.Message}", "QaacRunner");
+                }
+            }
         }
         else
         {

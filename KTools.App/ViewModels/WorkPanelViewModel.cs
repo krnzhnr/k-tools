@@ -144,8 +144,9 @@ public partial class WorkPanelViewModel : ObservableObject
         Files = files;
 
         IsTracksTabVisible = script.UseCustomWidget;
-        IsSettingsTabVisible = script.SettingsSchema != null && 
-                               script.SettingsSchema.Count > 0;
+        var fullSchema = script.GetFullSettingsSchema();
+        IsSettingsTabVisible = fullSchema != null && 
+                               fullSchema.Count > 0;
 
         RestoreState();
         CheckDependencies();
