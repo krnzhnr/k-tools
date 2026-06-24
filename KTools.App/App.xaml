@@ -12,7 +12,7 @@
                 <!-- Other merged dictionaries here -->
             </ResourceDictionary.MergedDictionaries>
             <ResourceDictionary.ThemeDictionaries>
-                <ResourceDictionary x:Key="Default">
+                <ResourceDictionary x:Key="Light">
                     <SolidColorBrush x:Key="SuccessStrokeBrush" Color="#107C41" />
                 </ResourceDictionary>
                 <ResourceDictionary x:Key="Dark">
