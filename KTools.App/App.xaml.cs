@@ -40,9 +40,117 @@ public partial class App : Application
         // в локальных кодировках (например, Windows-1251 / CP1251).
         System.Text.Encoding.RegisterProvider(
             System.Text.CodePagesEncodingProvider.Instance);
-            
+
         InitializeComponent();
         Services = ConfigureServices();
+
+        // === Глобальные перехватчики исключений для диагностики крашей в publish-сборке ===
+
+        // 1. WinUI 3 UnhandledException — ловит исключения на UI-потоке XAML
+        this.UnhandledException += (sender, e) =>
+        {
+            string report = FormatCrashReport("WinUI3 UnhandledException", e.Exception);
+            WriteCrashReport(report);
+            LogService.Instance.Fatal(report, "App.UnhandledException");
+            e.Handled = true; // Попытка не дать процессу упасть до записи
+        };
+
+        // 2. .NET AppDomain — ловит необработанные managed-исключения
+        AppDomain.CurrentDomain.UnhandledException += (sender, e) =>
+        {
+            var ex = e.ExceptionObject as Exception;
+            string report = FormatCrashReport(
+                $"AppDomain.UnhandledException (IsTerminating={e.IsTerminating})",
+                ex);
+            WriteCrashReport(report);
+            try
+            {
+                LogService.Instance.Fatal(report, "AppDomain.UnhandledException");
+            }
+            catch
+            {
+                // LogService может быть недоступен при фатальном сбое
+            }
+        };
+
+        // 3. TaskScheduler — ловит исключения из fire-and-forget async Task
+        System.Threading.Tasks.TaskScheduler.UnobservedTaskException += (sender, e) =>
+        {
+            string report = FormatCrashReport("TaskScheduler.UnobservedTaskException", e.Exception);
+            WriteCrashReport(report);
+            LogService.Instance.Error(report, "TaskScheduler.UnobservedException");
+            e.SetObserved();
+        };
+    }
+
+    /// <summary>
+    /// Формирует полный отчёт о крахе с информацией об исключении,
+    /// внутренних исключениях и стеке вызовов для диагностики.
+    /// </summary>
+    private static string FormatCrashReport(string source, Exception? ex)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"=== АВАРИЙНЫЙ ОТЧЁТ: {source} ===");
+        sb.AppendLine($"Время: {DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}");
+        sb.AppendLine($"Версия: {typeof(App).Assembly.GetName().Version}");
+
+        if (ex == null)
+        {
+            sb.AppendLine("Исключение: (null — объект исключения отсутствует)");
+        }
+        else
+        {
+            var current = ex;
+            int depth = 0;
+            while (current != null)
+            {
+                string prefix = depth == 0 ? "Исключение" : $"Внутреннее исключение [{depth}]";
+                sb.AppendLine($"{prefix}: {current.GetType().FullName}");
+                sb.AppendLine($"  Сообщение: {current.Message}");
+                sb.AppendLine($"  Источник: {current.Source}");
+                sb.AppendLine($"  Стек вызовов:");
+                sb.AppendLine(current.StackTrace ?? "  (стек отсутствует)");
+                current = current.InnerException;
+                depth++;
+            }
+
+            // AggregateException — развернуть все внутренние
+            if (ex is AggregateException aggEx)
+            {
+                sb.AppendLine("--- Развёрнутые внутренние исключения AggregateException ---");
+                foreach (var inner in aggEx.Flatten().InnerExceptions)
+                {
+                    sb.AppendLine($"  Тип: {inner.GetType().FullName}");
+                    sb.AppendLine($"  Сообщение: {inner.Message}");
+                    sb.AppendLine($"  Стек: {inner.StackTrace}");
+                }
+            }
+        }
+
+        sb.AppendLine("=== КОНЕЦ АВАРИЙНОГО ОТЧЁТА ===");
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Записывает аварийный отчёт в файл crash_report.txt рядом с exe приложения.
+    /// Использует прямой File.AppendAllText без зависимости от LogService,
+    /// чтобы отчёт был доступен даже при сбое логгера.
+    /// </summary>
+    private static void WriteCrashReport(string report)
+    {
+        try
+        {
+            string exeDir = AppContext.BaseDirectory;
+            string crashFile = System.IO.Path.Combine(exeDir, "crash_report.txt");
+            System.IO.File.AppendAllText(
+                crashFile,
+                report + Environment.NewLine,
+                System.Text.Encoding.UTF8);
+        }
+        catch
+        {
+            // Если запись невозможна (например, нет прав на папку), просто проглатываем
+        }
     }
 
     /// <summary>

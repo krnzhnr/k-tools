@@ -114,17 +114,28 @@ public partial class SettingsPage : Page
                 {
                     btnGrid = new Grid { Tag = "CopiedWrapperGrid", HorizontalAlignment = HorizontalAlignment.Stretch };
                     normalContent = (FrameworkElement)btn.Content;
+
+                    // Безопасное получение ресурса темы с проверкой типа
+                    Microsoft.UI.Xaml.Media.Brush? accentBrush = null;
+                    if (Application.Current.Resources.TryGetValue("AccentTextFillColorPrimaryBrush", out var brushObj))
+                    {
+                        accentBrush = brushObj as Microsoft.UI.Xaml.Media.Brush;
+                    }
+
                     copiedContent = new TextBlock
                     {
                         Text = "Скопировано!",
                         FontSize = 12,
                         FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-                        Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AccentTextFillColorPrimaryBrush"],
                         HorizontalAlignment = HorizontalAlignment.Center,
                         VerticalAlignment = VerticalAlignment.Center,
                         Visibility = Visibility.Collapsed
                     };
-                    
+                    if (accentBrush != null)
+                    {
+                        copiedContent.Foreground = accentBrush;
+                    }
+
                     btn.Content = null;
                     btnGrid.Children.Add(normalContent);
                     btnGrid.Children.Add(copiedContent);
@@ -295,25 +306,31 @@ public partial class SettingsPage : Page
     {
         var flyout = new Flyout { Placement = Microsoft.UI.Xaml.Controls.Primitives.FlyoutPlacementMode.BottomEdgeAlignedRight };
         var mainStack = new StackPanel { Spacing = 6, Width = 280 };
-        
-        var title = new TextBlock 
-        { 
-            Text = "Шаблоны поиска", 
-            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, 
-            FontSize = 14, 
-            Margin = new Thickness(0, 0, 0, 4) 
+
+        // Безопасное получение ресурсов темы с проверкой типа
+        Application.Current.Resources.TryGetValue("AccentTextFillColorPrimaryBrush", out var accentBrushObj);
+        var accentBrush = accentBrushObj as Microsoft.UI.Xaml.Media.Brush;
+        Application.Current.Resources.TryGetValue("TextFillColorSecondaryBrush", out var secondaryBrushObj);
+        var secondaryBrush = secondaryBrushObj as Microsoft.UI.Xaml.Media.Brush;
+
+        var title = new TextBlock
+        {
+            Text = "Шаблоны поиска",
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            FontSize = 14,
+            Margin = new Thickness(0, 0, 0, 4)
         };
-        var desc = new TextBlock 
-        { 
-            Text = "Нажмите на шаблон, чтобы скопировать:", 
-            FontSize = 12, 
-            Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorSecondaryBrush"], 
-            Margin = new Thickness(0, 0, 0, 8) 
+        var desc = new TextBlock
+        {
+            Text = "Нажмите на шаблон, чтобы скопировать:",
+            FontSize = 12,
+            Margin = new Thickness(0, 0, 0, 8)
         };
-        
+        if (secondaryBrush != null) desc.Foreground = secondaryBrush;
+
         mainStack.Children.Add(title);
         mainStack.Children.Add(desc);
-        
+
         var variables = SettingsManager.Instance.SearchTemplates;
         foreach (var item in variables)
         {
@@ -326,7 +343,6 @@ public partial class SettingsPage : Page
             var insertBtn = new Button
             {
                 Content = new FontIcon { Glyph = "\uE710", FontSize = 10 },
-                Style = (Style)Application.Current.Resources["DefaultButtonStyle"],
                 Width = 32,
                 Height = 32,
                 Margin = new Thickness(0, 0, 6, 0),
@@ -348,41 +364,42 @@ public partial class SettingsPage : Page
                 Height = 32,
                 VerticalAlignment = VerticalAlignment.Center
             };
-            
+
             var btnGrid = new Grid { HorizontalAlignment = HorizontalAlignment.Stretch };
             var rowStack = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-            rowStack.Children.Add(new TextBlock 
-            { 
-                Text = item.Pattern, 
-                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, 
-                Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AccentTextFillColorPrimaryBrush"] 
-            });
+            var patternText = new TextBlock
+            {
+                Text = item.Pattern,
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold
+            };
+            if (accentBrush != null) patternText.Foreground = accentBrush;
+            rowStack.Children.Add(patternText);
             rowStack.Children.Add(new TextBlock { Text = string.IsNullOrEmpty(item.Description) ? "" : $"— {CleanDescription(item.Description)}", FontSize = 12 });
-            
+
             var copiedText = new TextBlock
             {
                 Text = "Скопировано!",
                 FontSize = 12,
                 FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-                Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AccentTextFillColorPrimaryBrush"],
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
                 Visibility = Visibility.Collapsed
             };
-            
+            if (accentBrush != null) copiedText.Foreground = accentBrush;
+
             btnGrid.Children.Add(rowStack);
             btnGrid.Children.Add(copiedText);
             btn.Content = btnGrid;
-            
+
             btn.Click += (s, e) =>
             {
                 var dataPackage = new Windows.ApplicationModel.DataTransfer.DataPackage();
                 dataPackage.SetText(item.Pattern);
                 Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(dataPackage);
-                
+
                 rowStack.Opacity = 0;
                 copiedText.Visibility = Visibility.Visible;
-                
+
                 var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
                 timer.Tick += (s2, ev) =>
                 {
@@ -392,13 +409,13 @@ public partial class SettingsPage : Page
                 };
                 timer.Start();
             };
-            
+
             Grid.SetColumn(btn, 1);
             rowGrid.Children.Add(btn);
 
             mainStack.Children.Add(rowGrid);
         }
-        
+
         flyout.Content = mainStack;
         button.Flyout = flyout;
     }
@@ -407,25 +424,31 @@ public partial class SettingsPage : Page
     {
         var flyout = new Flyout { Placement = Microsoft.UI.Xaml.Controls.Primitives.FlyoutPlacementMode.BottomEdgeAlignedRight };
         var mainStack = new StackPanel { Spacing = 6, Width = 280 };
-        
-        var title = new TextBlock 
-        { 
-            Text = "Переменные замены", 
-            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, 
-            FontSize = 14, 
-            Margin = new Thickness(0, 0, 0, 4) 
+
+        // Безопасное получение ресурсов темы с проверкой типа
+        Application.Current.Resources.TryGetValue("AccentTextFillColorPrimaryBrush", out var accentBrushObj);
+        var accentBrush = accentBrushObj as Microsoft.UI.Xaml.Media.Brush;
+        Application.Current.Resources.TryGetValue("TextFillColorSecondaryBrush", out var secondaryBrushObj);
+        var secondaryBrush = secondaryBrushObj as Microsoft.UI.Xaml.Media.Brush;
+
+        var title = new TextBlock
+        {
+            Text = "Переменные замены",
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            FontSize = 14,
+            Margin = new Thickness(0, 0, 0, 4)
         };
-        var desc = new TextBlock 
-        { 
-            Text = "Нажмите на шаблон, чтобы скопировать:", 
-            FontSize = 12, 
-            Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorSecondaryBrush"], 
-            Margin = new Thickness(0, 0, 0, 8) 
+        var desc = new TextBlock
+        {
+            Text = "Нажмите на шаблон, чтобы скопировать:",
+            FontSize = 12,
+            Margin = new Thickness(0, 0, 0, 8)
         };
-        
+        if (secondaryBrush != null) desc.Foreground = secondaryBrush;
+
         mainStack.Children.Add(title);
         mainStack.Children.Add(desc);
-        
+
         var variables = SettingsManager.Instance.ReplaceTemplates;
         foreach (var item in variables)
         {
@@ -438,7 +461,6 @@ public partial class SettingsPage : Page
             var insertBtn = new Button
             {
                 Content = new FontIcon { Glyph = "\uE710", FontSize = 10 },
-                Style = (Style)Application.Current.Resources["DefaultButtonStyle"],
                 Width = 32,
                 Height = 32,
                 Margin = new Thickness(0, 0, 6, 0),
@@ -460,41 +482,42 @@ public partial class SettingsPage : Page
                 Height = 32,
                 VerticalAlignment = VerticalAlignment.Center
             };
-            
+
             var btnGrid = new Grid { HorizontalAlignment = HorizontalAlignment.Stretch };
             var rowStack = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-            rowStack.Children.Add(new TextBlock 
-            { 
-                Text = item.Pattern, 
-                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, 
-                Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AccentTextFillColorPrimaryBrush"] 
-            });
+            var patternText = new TextBlock
+            {
+                Text = item.Pattern,
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold
+            };
+            if (accentBrush != null) patternText.Foreground = accentBrush;
+            rowStack.Children.Add(patternText);
             rowStack.Children.Add(new TextBlock { Text = string.IsNullOrEmpty(item.Description) ? "" : $"— {CleanDescription(item.Description)}", FontSize = 12 });
-            
+
             var copiedText = new TextBlock
             {
                 Text = "Скопировано!",
                 FontSize = 12,
                 FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-                Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AccentTextFillColorPrimaryBrush"],
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
                 Visibility = Visibility.Collapsed
             };
-            
+            if (accentBrush != null) copiedText.Foreground = accentBrush;
+
             btnGrid.Children.Add(rowStack);
             btnGrid.Children.Add(copiedText);
             btn.Content = btnGrid;
-            
+
             btn.Click += (s, e) =>
             {
                 var dataPackage = new Windows.ApplicationModel.DataTransfer.DataPackage();
                 dataPackage.SetText(item.Pattern);
                 Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(dataPackage);
-                
+
                 rowStack.Opacity = 0;
                 copiedText.Visibility = Visibility.Visible;
-                
+
                 var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
                 timer.Tick += (s2, ev) =>
                 {
@@ -504,13 +527,13 @@ public partial class SettingsPage : Page
                 };
                 timer.Start();
             };
-            
+
             Grid.SetColumn(btn, 1);
             rowGrid.Children.Add(btn);
 
             mainStack.Children.Add(rowGrid);
         }
-        
+
         flyout.Content = mainStack;
         button.Flyout = flyout;
     }

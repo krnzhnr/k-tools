@@ -79,9 +79,41 @@
   <PropertyGroup>
     <PublishReadyToRun Condition="'$(Configuration)' == 'Debug'">False</PublishReadyToRun>
     <PublishReadyToRun Condition="'$(Configuration)' != 'Debug'">True</PublishReadyToRun>
-    <!-- ��������� Trimming ��� MSIX �������, ����� �������� ������ � COM Interop � P/Invoke -->
+    <!-- Отключение Trimming для MSIX-пакетов, чтобы избежать проблем с COM Interop и P/Invoke -->
     <PublishTrimmed>False</PublishTrimmed>
     <PublishSingleFile>False</PublishSingleFile>
-    <DebugType>embedded</DebugType>
+    <!-- Полные PDB-символы для диагностики крашей в publish-сборке (ProcDump / crash_report.txt) -->
+    <DebugType>full</DebugType>
+    <!--
+      WindowsAppSDKSelfContained — включает WinAppSDK / WinUI 3 DLL непосредственно
+      в output приложения при publish. Без этого свойства DLL загружаются из системного
+      framework package (C:\Program Files\WindowsApps\Microsoft.WindowsAppRuntime.*),
+      что приводит к STATUS_FAIL_FAST_EXCEPTION (0xC000027B) при несовпадении
+      версий или отсутствии ресурсов в unpackaged-сценарии.
+    -->
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <!-- Ограничение копирования вспомогательных ресурсов (satellite assemblies) только для русского и английского языков -->
+    <SatelliteResourceLanguages>ru;en</SatelliteResourceLanguages>
   </PropertyGroup>
+
+  <!--
+    В связи с тем, что свойство WindowsAppSDKSelfContained=true заставляет сборщик вслепую
+    копировать все локализованные ресурсы (.mui) из пакета Windows App SDK, свойство
+    SatelliteResourceLanguages игнорируется для SDK-файлов.
+    Этот Target удаляет все ненужные папки локализаций из папки публикации, оставляя только ru-RU и en-US.
+  -->
+  <Target Name="RemoveUnwantedLanguageDirectories" AfterTargets="Publish">
+    <ItemGroup>
+      <LanguageDirectoriesToDelete Include="$([System.IO.Directory]::GetDirectories('$(PublishDir)'))" />
+      <!-- Исключаем папки, которые нам нужны -->
+      <LanguageDirectoriesToDelete Remove="$(PublishDir)ru-RU" />
+      <LanguageDirectoriesToDelete Remove="$(PublishDir)en-US" />
+      <LanguageDirectoriesToDelete Remove="$(PublishDir)en-us" />
+      <!-- Папка ресурсов Microsoft.UI.Xaml обязательна для корректной работы UI -->
+      <LanguageDirectoriesToDelete Remove="$(PublishDir)Microsoft.UI.Xaml" />
+    </ItemGroup>
+
+    <Message Importance="high" Text="[K-Tools] Удаление неиспользуемых папок локализаций из каталога публикации: @(LanguageDirectoriesToDelete)" />
+    <RemoveDir Directories="@(LanguageDirectoriesToDelete)" />
+  </Target>
 </Project>

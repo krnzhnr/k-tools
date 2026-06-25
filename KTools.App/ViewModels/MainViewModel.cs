@@ -136,18 +136,6 @@ public partial class MainViewModel : ObservableObject
 
         UpdateLogsTabVisibility();
 
-        // Прогреваем кэш для тяжелой страницы настроек при первом запуске, 
-        // чтобы избежать черных вспышек Acrylic при последующих переходах.
-        try
-        {
-            _logService.Info("Выполняется предварительный прогрев кэша страницы настроек...", "MainPage");
-            _navigationService.NavigateTo(typeof(SettingsPage));
-        }
-        catch (Exception ex)
-        {
-            _logService.Error($"Не удалось выполнить предварительный прогрев настроек: {ex.Message}", "MainPage");
-        }
-
         bool hasRequired = _dependencyManager
             .AreRequiredDependenciesInstalled();
         _logService.Info(

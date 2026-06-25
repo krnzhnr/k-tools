@@ -9,7 +9,7 @@
     xmlns:viewmodels="using:KTools_App.ViewModels"
     x:DataType="viewmodels:SettingsViewModel"
     mc:Ignorable="d"
-    NavigationCacheMode="Required">
+    NavigationCacheMode="Disabled">
 
 
 
@@ -118,7 +118,7 @@
                     Padding="16,12,16,12"
                     Description="Изменение названий готовых файлов с поддержкой регулярных выражений, шаблонов дат и автонумерации"
                     Header="Параметры переименования"
-                    IsExpanded="{x:Bind ViewModel.RenameEnableRegex, Mode=OneWay}">
+                    IsExpanded="False">
                     <community:SettingsExpander.HeaderIcon>
                         <FontIcon Glyph="&#xE8AC;" />
                     </community:SettingsExpander.HeaderIcon>
@@ -205,13 +205,13 @@
                     Padding="16,12,16,12"
                     Description="Настройка пользовательских вариантов для меню быстрого копирования шаблонов"
                     Header="Шаблоны подсказок"
-                    IsExpanded="True">
+                    IsExpanded="False">
                     <community:SettingsExpander.HeaderIcon>
                         <FontIcon Glyph="&#xE8B9;" />
                     </community:SettingsExpander.HeaderIcon>
                     
                     <community:SettingsExpander.Items>
-                        <ContentControl
+                        <community:SettingsCard
                             Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                             BorderThickness="1"
@@ -256,7 +256,7 @@
                                     <StackPanel x:Name="ReplaceTemplatesContainer" Spacing="6" HorizontalAlignment="Stretch" />
                                 </StackPanel>
                             </StackPanel>
-                        </ContentControl>
+                        </community:SettingsCard>
                     </community:SettingsExpander.Items>
                 </community:SettingsExpander>
             </StackPanel>
