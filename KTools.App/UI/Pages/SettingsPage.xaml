@@ -52,55 +52,76 @@
                         IsOn="{x:Bind ViewModel.ClearListOnAdd, Mode=TwoWay}" />
                 </community:SettingsCard>
 
-                <!-- Регулировка максимального параллелизма -->
-                <community:SettingsCard
+                <!-- Регулировка максимального параллелизма (через SettingsExpander) -->
+                <community:SettingsExpander
                     Padding="16,12,16,12"
-                    Description="Максимальное число одновременно запущенных фоновых потоков обработки"
-                    Header="Максимальный параллелизм">
-                    <StackPanel
-                        Orientation="Horizontal"
-                        Spacing="12">
-                        <TextBlock
-                            x:Name="ParallelValueText"
-                            Width="24"
-                            VerticalAlignment="Center"
-                            FontWeight="SemiBold"
-                            Text="{x:Bind ViewModel.MaxParallelTasks, Mode=OneWay}" />
-                        <Slider
-                            x:Name="ParallelSlider"
-                            Width="200"
-                            VerticalAlignment="Center"
-                            Maximum="{x:Bind ViewModel.MaxParallelLimit, Mode=OneWay}"
-                            Minimum="1"
-                            Value="{x:Bind ViewModel.MaxParallelTasks, Mode=TwoWay}"
-                            SnapsTo="StepValues"
-                            StepFrequency="1"
-                            TickFrequency="1" />
-                    </StackPanel>
-                </community:SettingsCard>
+                    Description="Выполнять обработку очереди файлов в несколько фоновых потоков одновременно"
+                    Header="Параллельная обработка файлов"
+                    IsExpanded="False">
+                    <community:SettingsExpander.HeaderIcon>
+                        <FontIcon Glyph="&#xE7F4;" />
+                    </community:SettingsExpander.HeaderIcon>
+                    <ToggleSwitch
+                        x:Name="EnableParallelToggle"
+                        OffContent="Выкл"
+                        OnContent="Вкл"
+                        IsOn="{x:Bind ViewModel.EnableParallel, Mode=TwoWay}" />
 
-                <!-- Название подпапки экспорта -->
-                <community:SettingsCard
-                    Padding="16,12,16,12"
-                    Description="Имя подпапки, создаваемой по умолчанию в директории сохранения результатов"
-                    Header="Имя папки результатов">
-                    <TextBox
-                        x:Name="SubfolderTextBox"
-                        Width="200"
-                        Text="{x:Bind ViewModel.DefaultOutputSubfolder, Mode=TwoWay}" />
-                </community:SettingsCard>
+                    <community:SettingsExpander.Items>
+                        <community:SettingsCard
+                            Header="Количество одновременных потоков"
+                            Description="Задайте лимит параллельно выполняемых скриптов (не более числа логических процессоров)"
+                            IsEnabled="{x:Bind ViewModel.EnableParallel, Mode=OneWay}">
+                            <StackPanel Orientation="Horizontal" Spacing="12">
+                                <TextBlock
+                                    x:Name="ParallelValueText"
+                                    Width="24"
+                                    VerticalAlignment="Center"
+                                    FontWeight="SemiBold"
+                                    Text="{x:Bind ViewModel.MaxParallelTasks, Mode=OneWay}" />
+                                <Slider
+                                    x:Name="ParallelSlider"
+                                    Width="200"
+                                    VerticalAlignment="Center"
+                                    Maximum="{x:Bind ViewModel.MaxParallelLimit, Mode=OneWay}"
+                                    Minimum="0"
+                                    Value="{x:Bind ViewModel.MaxParallelTasks, Mode=TwoWay}"
+                                    TickFrequency="1"
+                                    TickPlacement="Outside"
+                                    SnapsTo="Ticks" />
+                            </StackPanel>
+                        </community:SettingsCard>
+                    </community:SettingsExpander.Items>
+                </community:SettingsExpander>
 
-                <!-- Автоматическое создание подпапки -->
-                <community:SettingsCard
+                <!-- Автоматическое создание подпапки (через SettingsExpander) -->
+                <community:SettingsExpander
                     Padding="16,12,16,12"
                     Description="Всегда создавать подпапку результатов в каталоге исходных файлов"
-                    Header="Создавать подпапку автоматически">
+                    Header="Создавать подпапку автоматически"
+                    IsExpanded="False">
+                    <community:SettingsExpander.HeaderIcon>
+                        <FontIcon Glyph="&#xE8B7;" />
+                    </community:SettingsExpander.HeaderIcon>
                     <ToggleSwitch
                         x:Name="AutoSubfolderToggle"
                         OffContent="Выкл"
                         OnContent="Вкл"
                         IsOn="{x:Bind ViewModel.UseAutoSubfolder, Mode=TwoWay}" />
-                </community:SettingsCard>
+
+                    <community:SettingsExpander.Items>
+                        <community:SettingsCard
+                            Header="Имя подпапки"
+                            Description="Укажите название создаваемой подпапки для результатов обработки"
+                            IsEnabled="{x:Bind ViewModel.UseAutoSubfolder, Mode=OneWay}">
+                            <TextBox
+                                x:Name="SubfolderNameTextBox"
+                                Width="250"
+                                PlaceholderText="KTools_Result"
+                                Text="{x:Bind ViewModel.DefaultOutputSubfolder, Mode=TwoWay}" />
+                        </community:SettingsCard>
+                    </community:SettingsExpander.Items>
+                </community:SettingsExpander>
 
             </StackPanel>
             
@@ -385,11 +406,12 @@
                         IsOn="{x:Bind ViewModel.IncludePreReleases, Mode=TwoWay}" />
                 </community:SettingsCard>
 
-                <!-- Ручная проверка обновлений -->
+                <!-- Ручная проверка обновлений (скрывается, если найдено обновление) -->
                 <community:SettingsCard
                     Padding="16,12,16,12"
                     Description="Запустить проверку наличия свежих обновлений приложения на GitHub"
-                    Header="Проверить наличие обновлений">
+                    Header="Проверить наличие обновлений"
+                    Visibility="{x:Bind ViewModel.IsUpdateAvailable, Mode=OneWay, Converter={StaticResource InverseBoolToVisibilityConverter}}">
                     <StackPanel Orientation="Horizontal" Spacing="12">
                         <ProgressRing
                             x:Name="UpdateProgressRing"
@@ -405,63 +427,46 @@
                             IsEnabled="{x:Bind ViewModel.IsChecking, Mode=OneWay, Converter={StaticResource InverseBoolConverter}}" />
                     </StackPanel>
                 </community:SettingsCard>
+
+                <!-- Зелёная карточка с доступным обновлением (показывается взамен проверки обновлений) -->
+                <community:SettingsCard
+                    Padding="16,12,16,12"
+                    Header="{x:Bind ViewModel.UpdateStatusText, Mode=OneWay}"
+                    Description="{x:Bind ViewModel.NewUpdateInfo.Title, Mode=OneWay}"
+                    Visibility="{x:Bind ViewModel.IsUpdateAvailable, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
+                    BorderBrush="{ThemeResource SuccessStrokeBrush}"
+                    BorderThickness="1">
+                    <community:SettingsCard.HeaderIcon>
+                        <FontIcon Glyph="&#xE930;" Foreground="{ThemeResource SuccessStrokeBrush}" />
+                    </community:SettingsCard.HeaderIcon>
+                    <Button
+                        x:Name="InstallUpdateButton"
+                        Command="{x:Bind ViewModel.DownloadAndInstallUpdateCommand}"
+                        Content="Скачать и установить"
+                        Style="{ThemeResource AccentButtonStyle}"
+                        VerticalAlignment="Center"
+                        IsEnabled="{x:Bind ViewModel.IsDownloading, Mode=OneWay, Converter={StaticResource InverseBoolConverter}}" />
+                </community:SettingsCard>
             </StackPanel>
 
-            <!-- Дополнительный блок проверки и загрузки обновлений -->
+            <!-- Прогресс скачивания (отображается только в процессе загрузки под блоком настроек обновлений) -->
             <StackPanel
-                Visibility="{x:Bind ViewModel.IsUpdateAvailable, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
-                Spacing="8">
-                <Border
-                    Padding="16"
-                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                    BorderBrush="{ThemeResource SuccessStrokeBrush}"
-                    BorderThickness="1"
-                    CornerRadius="8">
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel VerticalAlignment="Center" Spacing="4">
-                            <TextBlock
-                                FontSize="14"
-                                FontWeight="SemiBold"
-                                Text="{x:Bind ViewModel.UpdateStatusText, Mode=OneWay}" />
-                            <TextBlock
-                                FontSize="12"
-                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                Text="{x:Bind ViewModel.NewUpdateInfo.Title, Mode=OneWay}" />
-                        </StackPanel>
-                        <Button
-                            Grid.Column="1"
-                            x:Name="InstallUpdateButton"
-                            Command="{x:Bind ViewModel.DownloadAndInstallUpdateCommand}"
-                            Content="Скачать и установить"
-                            IsEnabled="{x:Bind ViewModel.IsDownloading, Mode=OneWay, Converter={StaticResource InverseBoolConverter}}"
-                            Style="{StaticResource AccentButtonStyle}"
-                            VerticalAlignment="Center" />
-                    </Grid>
-                </Border>
-
-                <!-- Прогресс скачивания -->
-                <StackPanel
-                    Visibility="{x:Bind ViewModel.IsDownloading, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
-                    Spacing="4"
-                    Margin="4,0,4,0">
-                    <ProgressBar
-                        x:Name="DownloadProgressBar"
-                        Minimum="0"
-                        Maximum="100"
-                        Value="{x:Bind ViewModel.DownloadProgress, Mode=OneWay}" />
-                    <TextBlock
-                        FontSize="11"
-                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                        HorizontalAlignment="Right">
-                        <Run Text="Скачивание... " />
-                        <Run Text="{x:Bind ViewModel.DownloadProgress, Mode=OneWay}" />
-                        <Run Text="%" />
-                    </TextBlock>
-                </StackPanel>
+                Visibility="{x:Bind ViewModel.IsDownloading, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
+                Spacing="4"
+                Margin="0,8,0,0">
+                <ProgressBar
+                    x:Name="DownloadProgressBar"
+                    Minimum="0"
+                    Maximum="100"
+                    Value="{x:Bind ViewModel.DownloadProgress, Mode=OneWay}" />
+                <TextBlock
+                    FontSize="11"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    HorizontalAlignment="Right">
+                    <Run Text="Скачивание... " />
+                    <Run Text="{x:Bind ViewModel.DownloadProgress, Mode=OneWay}" />
+                    <Run Text="%" />
+                </TextBlock>
             </StackPanel>
 
             <!-- Раздел: Сброс и обслуживание -->
@@ -487,45 +492,60 @@
             </StackPanel>
 
             <!-- Блок о программе -->
-            <Border
-                Padding="16"
-                Margin="0,20,0,0"
-                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                BorderThickness="1"
-                CornerRadius="8">
-                <Grid>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="*" />
-                    </Grid.ColumnDefinitions>
+            <community:SettingsExpander
+                Header="K-Tools C# Edition"
+                Description="© 2026. Все права защищены."
+                IsExpanded="False">
+                <community:SettingsExpander.HeaderIcon>
+                    <FontIcon Glyph="&#xE946;" />
+                </community:SettingsExpander.HeaderIcon>
 
-                    <SymbolIcon
-                        Width="40"
-                        Height="40"
-                        Margin="0,0,16,0"
-                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                        Symbol="Setting" />
+                <Button
+                    Command="{x:Bind ViewModel.VersionClickedCommand}"
+                    Content="{x:Bind ViewModel.CurrentVersionText, Mode=OneWay}"
+                    Background="Transparent"
+                    BorderThickness="0"
+                    VerticalAlignment="Center"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Padding="4,2,4,2" />
 
-                    <StackPanel
-                        Grid.Column="1"
-                        VerticalAlignment="Center"
-                        Spacing="4">
-                        <TextBlock
-                            FontSize="14"
-                            FontWeight="SemiBold"
-                            Text="K-Tools C# Edition" />
-                        <TextBlock
-                            FontSize="11"
-                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                            Text="{x:Bind ViewModel.CurrentVersionText, Mode=OneWay}" />
-                        <TextBlock
-                            FontSize="11"
-                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                            Text="Тестовая сборка" />
-                    </StackPanel>
-                </Grid>
-            </Border>
+                <community:SettingsExpander.Items>
+                    <HyperlinkButton
+                        Content="Исходный код (GitHub)"
+                        NavigateUri="https://github.com/krnzhnr/k-tools"
+                        Margin="56,8,0,8" />
+                    <HyperlinkButton
+                        Content="Сообщить о проблеме"
+                        NavigateUri="https://github.com/krnzhnr/k-tools/issues"
+                        Margin="56,8,0,8" />
+                    <HyperlinkButton
+                        Content="Лицензия MIT"
+                        NavigateUri="https://github.com/krnzhnr/k-tools/blob/main/LICENSE"
+                        Margin="56,8,0,8" />
+                </community:SettingsExpander.Items>
+            </community:SettingsExpander>
+
+            <!-- Раздел: Параметры отладки -->
+            <community:SettingsExpander
+                Header="Параметры отладки"
+                Description="Временные инструменты для тестирования и отладки приложения"
+                Visibility="{x:Bind ViewModel.IsDebugSettingsVisible, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
+                IsExpanded="True"
+                Margin="0,12,0,0">
+                <community:SettingsExpander.HeaderIcon>
+                    <FontIcon Glyph="&#xEBE8;" />
+                </community:SettingsExpander.HeaderIcon>
+
+                <community:SettingsExpander.Items>
+                    <community:SettingsCard Header="Имитировать старую версию" Description="Принудительно возвращает версию 1.0.0 при проверке обновлений для тестирования уведомлений">
+                        <ToggleSwitch
+                            x:Name="SimulateOldVersionToggle"
+                            OffContent="Выкл"
+                            OnContent="Вкл"
+                            IsOn="{x:Bind ViewModel.DebugSimulateOldVersion, Mode=TwoWay}" />
+                    </community:SettingsCard>
+                </community:SettingsExpander.Items>
+            </community:SettingsExpander>
         </StackPanel>
     </ScrollViewer>
 </Page>

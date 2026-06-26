@@ -9,7 +9,7 @@
     x:DataType="viewmodels:WorkPanelViewModel"
     mc:Ignorable="d">
 
-    <Grid Padding="36,12,36,24">
+    <Grid Padding="36,0,36,24">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" /> <!-- Баннер недостающих зависимостей -->
             <RowDefinition Height="*" />    <!-- Основная рабочая область -->
@@ -61,6 +61,9 @@
                         <SolidColorBrush x:Key="NavigationViewContentGridBorderBrush" Color="Transparent" />
                         <!-- Сбрасываем внутренние боковые отступы области контента NavigationView -->
                         <Thickness x:Key="NavigationViewContentMargin">0,0,0,0</Thickness>
+                        <!-- Сбрасываем высоту и отступы заголовка NavigationView, чтобы убрать пустое пространство -->
+                        <Thickness x:Key="NavigationViewHeaderMargin">0,0,0,0</Thickness>
+                        <GridLength x:Key="NavigationViewHeaderRowHeight">0</GridLength>
                     </NavigationView.Resources>
                     <NavigationView.MenuItems>
                         <NavigationViewItem Icon="Document" Content="Файлы" x:Name="SamplePage1Item" Tag="files" />

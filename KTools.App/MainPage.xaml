@@ -113,8 +113,45 @@
                                HorizontalAlignment="Left" />
                 </StackPanel>
 
-                <!-- Область отображения дочерних страниц -->
-                <Frame x:Name="ContentFrame" Grid.Row="1" Margin="0" />
+                <!-- Область отображения дочерних страниц и баннера обновлений -->
+                <Grid Grid.Row="1">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <!-- Плашка об обновлении на главном экране -->
+                    <InfoBar
+                        Grid.Row="0"
+                        x:Name="MainUpdateInfoBar"
+                        Severity="Success"
+                        IsOpen="{x:Bind ViewModel.IsUpdateBannerVisible, Mode=OneWay}"
+                        Visibility="{x:Bind ViewModel.IsUpdateBannerVisible, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
+                        IsClosable="True"
+                        CloseButtonClick="MainUpdateInfoBar_CloseButtonClick"
+                        Margin="36,4,36,12">
+                        <InfoBar.Content>
+                            <Grid Margin="0,0,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,4,16,4">
+                                    <TextBlock Text="{x:Bind ViewModel.UpdateStatusText, Mode=OneWay}" FontWeight="SemiBold" FontSize="14" />
+                                    <TextBlock Text="{x:Bind ViewModel.NewUpdateInfo.Title, Mode=OneWay}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                                </StackPanel>
+                                <Button
+                                    Grid.Column="1"
+                                    Command="{x:Bind ViewModel.GoToUpdateCommand}"
+                                    Content="Обновиться"
+                                    Style="{ThemeResource AccentButtonStyle}"
+                                    VerticalAlignment="Center" />
+                            </Grid>
+                        </InfoBar.Content>
+                    </InfoBar>
+
+                    <Frame x:Name="ContentFrame" Grid.Row="1" Margin="0" />
+                </Grid>
             </Grid>
         </NavigationView>
     </Grid>

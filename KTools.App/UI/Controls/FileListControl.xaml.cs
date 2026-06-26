@@ -260,6 +260,11 @@ public sealed partial class FileListControl : UserControl
     /// </summary>
     public void AddFiles(IEnumerable<string> filePaths)
     {
+        if (SettingsManager.Instance.ClearListOnAdd)
+        {
+            Clear();
+        }
+
         bool addedAny = false;
         foreach (string path in filePaths)
         {

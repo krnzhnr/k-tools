@@ -76,6 +76,11 @@ public partial class SettingsViewModel : ObservableObject
     public string CurrentVersionText { get; }
 
     /// <summary>
+    /// Путь к папке логов по умолчанию.
+    /// </summary>
+    public string DefaultLogDir { get; }
+
+    /// <summary>
     /// Флаг процесса проверки обновлений.
     /// </summary>
     [ObservableProperty]
@@ -118,6 +123,18 @@ public partial class SettingsViewModel : ObservableObject
     public partial bool OverwriteExisting { get; set; }
 
     /// <summary>
+    /// Флаг имитации старой версии (1.0.0) для проверки обновлений.
+    /// </summary>
+    [ObservableProperty]
+    public partial bool DebugSimulateOldVersion { get; set; }
+
+    /// <summary>
+    /// Видим ли раздел настроек отладки.
+    /// </summary>
+    [ObservableProperty]
+    public partial bool IsDebugSettingsVisible { get; set; }
+
+    /// <summary>
     /// Флаг очистки списка файлов перед добавлением новых.
     /// </summary>
     [ObservableProperty]
@@ -128,6 +145,12 @@ public partial class SettingsViewModel : ObservableObject
     /// </summary>
     [ObservableProperty]
     public partial int MaxParallelTasks { get; set; }
+
+    /// <summary>
+    /// Разрешить ли параллельное выполнение задач обработки.
+    /// </summary>
+    [ObservableProperty]
+    public partial bool EnableParallel { get; set; }
 
     /// <summary>
     /// Максимально допустимый лимит параллельных задач обработки, основанный на количестве ядер процессора.
@@ -228,8 +251,11 @@ public partial class SettingsViewModel : ObservableObject
         UpdateStatusText = "Обновления не проверялись";
         DefaultOutputSubfolder = "KTools_Result";
         LogDir = string.Empty;
+        RenameRegexSearch = string.Empty;
+        RenameRegexReplace = string.Empty;
 
         CurrentVersionText = $"Версия {GetAppVersion()} (WinAppSDK / WinUI 3)";
+        DefaultLogDir = System.IO.Path.Combine(PathManager.GetSettingsDirectory(), "logs");
 
         MaxParallelLimit = Environment.ProcessorCount;
         LoadCurrentSettings();
@@ -242,6 +268,7 @@ public partial class SettingsViewModel : ObservableObject
     {
         OverwriteExisting = _settingsManager.OverwriteExisting;
         ClearListOnAdd = _settingsManager.ClearListOnAdd;
+        EnableParallel = _settingsManager.EnableParallel;
         MaxParallelTasks = _settingsManager.MaxParallelTasks;
         DefaultOutputSubfolder = _settingsManager.DefaultOutputSubfolder;
         UseAutoSubfolder = _settingsManager.UseAutoSubfolder;
@@ -257,9 +284,7 @@ public partial class SettingsViewModel : ObservableObject
             : 0;
 
         ShowLogsTab = _settingsManager.ShowLogsTab;
-        LogDir = string.IsNullOrEmpty(_settingsManager.LogDir)
-            ? "Используется папка по умолчанию"
-            : _settingsManager.LogDir;
+        LogDir = _settingsManager.LogDir;
 
         AutoCheckUpdates = _settingsManager.AutoCheckUpdates;
         IncludePreReleases = _settingsManager.IncludePreReleases;
@@ -268,6 +293,7 @@ public partial class SettingsViewModel : ObservableObject
         RenameRegexReplace = _settingsManager.RenameRegexReplace;
         RenameUseRegex = _settingsManager.RenameUseRegex;
         RenameCaseSensitive = _settingsManager.RenameCaseSensitive;
+        DebugSimulateOldVersion = _settingsManager.DebugSimulateOldVersion;
     }
 
     partial void OnOverwriteExistingChanged(bool value)
@@ -282,7 +308,22 @@ public partial class SettingsViewModel : ObservableObject
 
     partial void OnMaxParallelTasksChanged(int value)
     {
-        _settingsManager.MaxParallelTasks = value;
+        // Если значение меньше 1 (например, слайдер перетащили в крайнее левое положение 0),
+        // принудительно возвращаем его к 1 для предотвращения некорректной настройки.
+        if (value < 1)
+        {
+            MaxParallelTasks = 1;
+            _settingsManager.MaxParallelTasks = 1;
+        }
+        else
+        {
+            _settingsManager.MaxParallelTasks = value;
+        }
+    }
+
+    partial void OnEnableParallelChanged(bool value)
+    {
+        _settingsManager.EnableParallel = value;
     }
 
     partial void OnDefaultOutputSubfolderChanged(string value)
@@ -329,6 +370,11 @@ public partial class SettingsViewModel : ObservableObject
         _settingsManager.IncludePreReleases = value;
     }
 
+    partial void OnDebugSimulateOldVersionChanged(bool value)
+    {
+        _settingsManager.DebugSimulateOldVersion = value;
+    }
+
     partial void OnRenameEnableRegexChanged(bool value)
     {
         _settingsManager.RenameEnableRegex = value;
@@ -360,9 +406,7 @@ public partial class SettingsViewModel : ObservableObject
     public void SetLogDirectory(string path)
     {
         _settingsManager.LogDir = path;
-        LogDir = string.IsNullOrEmpty(path)
-            ? "Используется папка по умолчанию"
-            : path;
+        LogDir = path;
     }
 
     /// <summary>
@@ -382,6 +426,7 @@ public partial class SettingsViewModel : ObservableObject
         {
             _settingsManager.OverwriteExisting = false;
             _settingsManager.ClearListOnAdd = false;
+            _settingsManager.EnableParallel = true;
             _settingsManager.MaxParallelTasks = Math.Max(
                 1,
                 Environment.ProcessorCount / 2);
@@ -398,6 +443,8 @@ public partial class SettingsViewModel : ObservableObject
             _settingsManager.RenameRegexReplace = string.Empty;
             _settingsManager.RenameUseRegex = true;
             _settingsManager.RenameCaseSensitive = false;
+            _settingsManager.DebugSimulateOldVersion = false;
+            IsDebugSettingsVisible = false;
 
             LoadCurrentSettings();
 
@@ -497,6 +544,26 @@ public partial class SettingsViewModel : ObservableObject
         catch
         {
             return "2.0.0";
+        }
+    }
+
+    private int _versionClickCount = 0;
+
+    /// <summary>
+    /// Обработчик клика по версии программы. При 7 кликах активирует меню отладки.
+    /// </summary>
+    [RelayCommand]
+    private async System.Threading.Tasks.Task VersionClickedAsync()
+    {
+        _versionClickCount++;
+        LogService.Instance.Info($"Клик по кнопке версии: {_versionClickCount}/7", "SettingsViewModel");
+        if (_versionClickCount >= 7)
+        {
+            IsDebugSettingsVisible = true;
+            _versionClickCount = 0;
+            await _dialogService.ShowMessageAsync(
+                "Режим разработчика",
+                "Режим разработчика успешно активирован! Настройки отладки будут доступны внизу страницы до перезапуска приложения.");
         }
     }
 }

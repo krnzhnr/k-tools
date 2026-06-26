@@ -443,4 +443,16 @@ public sealed partial class MainPage : Page
     {
         NavView.SelectedItem = NavItemDependencies;
     }
+
+    /// <summary>
+    /// Обработчик события закрытия InfoBar об обновлении на главном экране.
+    /// Перенаправляет вызов во ViewModel для обновления состояния.
+    /// </summary>
+    private void MainUpdateInfoBar_CloseButtonClick(InfoBar sender, object args)
+    {
+        if (ViewModel.CloseUpdateBannerCommand.CanExecute(null))
+        {
+            ViewModel.CloseUpdateBannerCommand.Execute(null);
+        }
+    }
 }

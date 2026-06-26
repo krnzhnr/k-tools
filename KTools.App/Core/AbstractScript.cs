@@ -257,6 +257,39 @@ public abstract class AbstractScript
             string stem = Path.GetFileNameWithoutExtension(outResolved);
             string ext = Path.GetExtension(outResolved);
 
+            // Обработка автоматического создания подпапки результатов
+            if (SettingsManager.Instance.UseAutoSubfolder)
+            {
+                string inputDir = Path.GetDirectoryName(inResolved) ?? "";
+                
+                // Если пользователь не выбрал кастомный путь или выбрал ту же папку, что и исходный файл
+                if (string.IsNullOrEmpty(dir) || dir.Equals(inputDir, StringComparison.OrdinalIgnoreCase))
+                {
+                    string subfolderName = SettingsManager.Instance.DefaultOutputSubfolder;
+                    if (string.IsNullOrWhiteSpace(subfolderName))
+                    {
+                        subfolderName = "KTools_Result";
+                    }
+
+                    string targetSubdir = Path.Combine(inputDir, subfolderName);
+                    try
+                    {
+                        if (!Directory.Exists(targetSubdir))
+                        {
+                            Directory.CreateDirectory(targetSubdir);
+                            LogService.Instance.Info($"Автоматически создана папка результатов: '{targetSubdir}'", "AbstractScript");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        LogService.Instance.Exception(ex, $"Не удалось автоматически создать папку результатов '{targetSubdir}': {ex.Message}", "AbstractScript");
+                    }
+
+                    dir = targetSubdir;
+                    outResolved = Path.Combine(dir, $"{stem}{ext}");
+                }
+            }
+
             // Получаем порядковый номер файла в текущей пакетной обработке
             int fileNum = 1;
             lock (_batchLock)

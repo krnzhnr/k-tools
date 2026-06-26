@@ -91,6 +91,15 @@ public sealed class SettingsManager
     }
 
     /// <summary>
+    /// Разрешить ли параллельное выполнение задач обработки.
+    /// </summary>
+    public bool EnableParallel
+    {
+        get => GetSetting("General", "EnableParallel", true);
+        set => SetSetting("General", "EnableParallel", value);
+    }
+
+    /// <summary>
     /// Очищать ли очередь перед добавлением новых файлов.
     /// </summary>
     public bool ClearListOnAdd
@@ -133,6 +142,15 @@ public sealed class SettingsManager
     {
         get => GetSetting("Updates", "IncludePreReleases", false);
         set => SetSetting("Updates", "IncludePreReleases", value);
+    }
+
+    /// <summary>
+    /// Имитировать ли старую версию при проверке обновлений.
+    /// </summary>
+    public bool DebugSimulateOldVersion
+    {
+        get => GetSetting("Debug", "DebugSimulateOldVersion", false);
+        set => SetSetting("Debug", "DebugSimulateOldVersion", value);
     }
 
     /// <summary>
@@ -430,6 +448,11 @@ public sealed class SettingsManager
                 SetSettingInternal("General", "MaxParallelTasks", Math.Max(1, Environment.ProcessorCount / 2));
                 modified = true;
             }
+            if (!HasSetting("General", "EnableParallel"))
+            {
+                SetSettingInternal("General", "EnableParallel", true);
+                modified = true;
+            }
             if (!HasSetting("General", "ClearListOnAdd"))
             {
                 SetSettingInternal("General", "ClearListOnAdd", false);
@@ -482,6 +505,11 @@ public sealed class SettingsManager
             if (!HasSetting("Updates", "IncludePreReleases"))
             {
                 SetSettingInternal("Updates", "IncludePreReleases", false);
+                modified = true;
+            }
+            if (!HasSetting("Debug", "DebugSimulateOldVersion"))
+            {
+                SetSettingInternal("Debug", "DebugSimulateOldVersion", false);
                 modified = true;
             }
 

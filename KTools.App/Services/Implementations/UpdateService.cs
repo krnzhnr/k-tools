@@ -304,8 +304,13 @@ public sealed class UpdateService : IUpdateService
     /// </summary>
     private string GetCurrentVersion()
     {
-        // ДЛЯ ТЕСТИРОВАНИЯ ОБНОВЛЕНИЙ: Раскомментируйте строчку ниже, чтобы имитировать старую версию:
-        // return "2.0.0-preview.2";
+        // Если в настройках включен режим симуляции старой версии для отладки,
+        // принудительно возвращаем 1.0.0 для срабатывания баннера обновлений.
+        if (SettingsManager.Instance.DebugSimulateOldVersion)
+        {
+            _logService.Warn("[Отладка] Активирована имитация старой версии. Возвращаем версию 1.0.0", "UpdateService");
+            return "1.0.0";
+        }
 
         try
         {

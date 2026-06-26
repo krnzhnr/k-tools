@@ -50,6 +50,24 @@ public partial class MainViewModel : ObservableObject
     public partial bool IsLogsTabVisible { get; set; }
 
     /// <summary>
+    /// Флаг видимости баннера обновлений на главном экране.
+    /// </summary>
+    [ObservableProperty]
+    public partial bool IsUpdateBannerVisible { get; set; }
+
+    /// <summary>
+    /// Текст статуса для баннера обновлений.
+    /// </summary>
+    [ObservableProperty]
+    public partial string UpdateStatusText { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Информация о доступном обновлении для баннера.
+    /// </summary>
+    [ObservableProperty]
+    public partial UpdateInfo? NewUpdateInfo { get; set; }
+
+    /// <summary>
     /// Инициализирует ViewModel главной страницы с внедрением зависимостей.
     /// </summary>
     public MainViewModel(
@@ -180,20 +198,10 @@ public partial class MainViewModel : ObservableObject
                 _settingsViewModel.IsUpdateAvailable = true;
                 _settingsViewModel.UpdateStatusText = $"Доступна новая версия: {update.Version}";
 
-                // Предлагаем пользователю обновиться
-                bool confirm = await _dialogService.ShowConfirmationAsync(
-                    "Доступно обновление",
-                    $"Доступна новая версия K-Tools: {update.Version}.\n\nХотите скачать и установить её прямо сейчас?",
-                    "Обновиться",
-                    "Позже");
-
-                if (confirm)
-                {
-                    _logService.Info("Пользователь согласился на обновление. Перенаправление на страницу настроек.", "MainViewModel");
-                    Navigate("settings");
-                    // Запускаем процесс скачивания
-                    _ = _settingsViewModel.DownloadAndInstallUpdateCommand.ExecuteAsync(null);
-                }
+                // Устанавливаем свойства для отображения баннера на главной странице
+                NewUpdateInfo = update;
+                UpdateStatusText = $"Доступна новая версия: {update.Version}";
+                IsUpdateBannerVisible = true;
             }
         }
         catch (Exception ex)
@@ -218,6 +226,7 @@ public partial class MainViewModel : ObservableObject
             HeaderTitle = "Настройки";
             HeaderSubtitle =
                 "Общие параметры и конфигурация приложения";
+            IsUpdateBannerVisible = false; // Скрываем баннер обновлений, чтобы избежать дублирования интерфейса обновлений
             _navigationService.NavigateTo(typeof(SettingsPage));
         }
         else if (tag == "home")
@@ -228,6 +237,11 @@ public partial class MainViewModel : ObservableObject
             HeaderTitle = "K-Tools";
             HeaderSubtitle =
                 "Ваш персональный набор инструментов для обработки медиа";
+            // Показываем баннер обновлений снова, если обновление доступно, но еще не загружается/установлено
+            if (_settingsViewModel.IsUpdateAvailable && !_settingsViewModel.IsDownloading)
+            {
+                IsUpdateBannerVisible = true;
+            }
             _navigationService.NavigateTo(typeof(HomePage));
         }
         else if (tag.StartsWith("script:"))
@@ -298,5 +312,27 @@ public partial class MainViewModel : ObservableObject
     public void UpdateLogsTabVisibility()
     {
         IsLogsTabVisible = _settingsManager.ShowLogsTab;
+    }
+
+    /// <summary>
+    /// Закрывает баннер обновлений на главном экране.
+    /// </summary>
+    [RelayCommand]
+    private void CloseUpdateBanner()
+    {
+        IsUpdateBannerVisible = false;
+        _logService.Info("Пользователь закрыл баннер обновлений на главной странице.", "MainViewModel");
+    }
+
+    /// <summary>
+    /// Переходит на страницу настроек и запускает процесс скачивания обновления.
+    /// </summary>
+    [RelayCommand]
+    private void GoToUpdate()
+    {
+        IsUpdateBannerVisible = false;
+        _logService.Info("Пользователь кликнул по кнопке 'Обновиться' в баннере. Перенаправление в настройки.", "MainViewModel");
+        Navigate("settings");
+        _ = _settingsViewModel.DownloadAndInstallUpdateCommand.ExecuteAsync(null);
     }
 }
