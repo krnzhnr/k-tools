@@ -1,0 +1,96 @@
+# EditorConfig for .NET / C# / WinUI 3 projects
+
+root = true
+
+# All files
+[*]
+indent_style = space
+insert_final_newline = true
+charset = utf-8
+
+# XML / XAML / JSON / Markdown
+[*.{xml,xaml,json,md}]
+indent_size = 2
+
+# C# Files
+[*.cs]
+indent_size = 4
+charset = utf-8-bom
+
+# Organize Usings
+dotnet_sort_system_directives_first = true
+dotnet_separate_import_directive_groups = true
+
+# Don't use the 'this.' qualification for fields, properties, methods, etc.
+dotnet_style_qualification_for_field = false:suggestion
+dotnet_style_qualification_for_property = false:suggestion
+dotnet_style_qualification_for_method = false:suggestion
+dotnet_style_qualification_for_event = false:suggestion
+
+# Naming conventions for C# members
+
+# Private fields use _camelCase
+dotnet_naming_rule.private_fields_with_underscore.symbols = private_fields_symbols
+dotnet_naming_rule.private_fields_with_underscore.style = private_fields_style
+dotnet_naming_rule.private_fields_with_underscore.severity = warning
+
+dotnet_naming_symbols.private_fields_symbols.applicable_kinds = field
+dotnet_naming_symbols.private_fields_symbols.applicable_accessibilities = private
+dotnet_naming_symbols.private_fields_symbols.required_modifiers = 
+
+dotnet_naming_style.private_fields_style.required_prefix = _
+dotnet_naming_style.private_fields_style.capitalization = camel_case
+
+# Public/internal members use PascalCase
+dotnet_naming_rule.public_members_pascal_case.symbols = public_members_symbols
+dotnet_naming_rule.public_members_pascal_case.style = public_members_style
+dotnet_naming_rule.public_members_pascal_case.severity = warning
+
+dotnet_naming_symbols.public_members_symbols.applicable_kinds = class, struct, interface, enum, property, method, event, delegate
+dotnet_naming_symbols.public_members_symbols.applicable_accessibilities = public, internal, protected, protected_internal
+dotnet_naming_symbols.public_members_symbols.required_modifiers = 
+
+dotnet_naming_style.public_members_style.capitalization = pascal_case
+
+# Local variables and parameters use camelCase
+dotnet_naming_rule.locals_camel_case.symbols = locals_symbols
+dotnet_naming_rule.locals_camel_case.style = locals_style
+dotnet_naming_rule.locals_camel_case.severity = warning
+
+dotnet_naming_symbols.locals_symbols.applicable_kinds = local, parameter
+dotnet_naming_symbols.locals_symbols.applicable_accessibilities = *
+
+dotnet_naming_style.locals_style.capitalization = camel_case
+
+# Constant naming: PascalCase
+dotnet_naming_rule.constants_pascal_case.symbols = constant_symbols
+dotnet_naming_rule.constants_pascal_case.style = pascal_case_style
+dotnet_naming_rule.constants_pascal_case.severity = warning
+
+dotnet_naming_symbols.constant_symbols.applicable_kinds = field
+dotnet_naming_symbols.constant_symbols.required_modifiers = const
+
+dotnet_naming_style.pascal_case_style.capitalization = pascal_case
+
+# C# Coding Conventions
+
+# StyleCop SA1101 and SA1309: Suppress "this." requirements and require underscore for private fields
+dotnet_diagnostic.SA1101.severity = none
+dotnet_diagnostic.SA1309.severity = none
+
+# File-scoped namespaces (C# 10+)
+csharp_style_namespace_declarations = file_scoped:warning
+
+# Use pattern matching
+csharp_style_pattern_matching_over_as_with_null_check = true:suggestion
+csharp_style_pattern_matching_over_is_with_cast_check = true:suggestion
+
+# Null-coalescing and propagation
+dotnet_style_coalesce_expression = true:suggestion
+dotnet_style_null_propagation = true:suggestion
+
+# Diagnostic severities (as requested)
+dotnet_diagnostic.IDE0005.severity = warning  # Remove unnecessary usings
+dotnet_diagnostic.IDE0044.severity = warning  # Make field readonly
+dotnet_diagnostic.IDE0051.severity = warning  # Remove unused private members
+dotnet_diagnostic.IDE0060.severity = warning  # Remove unused parameter
