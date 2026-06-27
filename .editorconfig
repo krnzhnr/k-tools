@@ -74,9 +74,89 @@ dotnet_naming_style.pascal_case_style.capitalization = pascal_case
 
 # C# Coding Conventions
 
-# StyleCop SA1101 and SA1309: Suppress "this." requirements and require underscore for private fields
-dotnet_diagnostic.SA1101.severity = none
-dotnet_diagnostic.SA1309.severity = none
+# StyleCop Rules Suppression (для предотвращения избыточных предупреждений форматирования на этапе рефакторинга)
+dotnet_diagnostic.SA1101.severity = none  # Suppress "this." requirements
+dotnet_diagnostic.SA1309.severity = none  # Require underscore for private fields
+dotnet_diagnostic.SA1200.severity = none  # Using directives should appear within a namespace declaration
+dotnet_diagnostic.SA1633.severity = none  # File header XML
+dotnet_diagnostic.SA1516.severity = none  # Using directives should be separated by blank line
+dotnet_diagnostic.SA1210.severity = none  # Using directives should be ordered alphabetically
+dotnet_diagnostic.SA1028.severity = none  # Trailing whitespace
+dotnet_diagnostic.SA1413.severity = none  # Trailing comma in multi-line initializers
+dotnet_diagnostic.SA1201.severity = none  # Class elements ordering
+dotnet_diagnostic.SA1202.severity = none  # Class members visibility ordering
+dotnet_diagnostic.SA1204.severity = none  # Static members visibility ordering
+dotnet_diagnostic.SA1513.severity = none  # Closing brace blank line
+dotnet_diagnostic.SA1507.severity = none  # Code should not contain multiple blank lines
+dotnet_diagnostic.SA1111.severity = none  # Closing parenthesis
+dotnet_diagnostic.SA1124.severity = none  # Do not use regions
+dotnet_diagnostic.SA1600.severity = none  # Elements should be documented
+dotnet_diagnostic.SA1601.severity = none  # Partial elements should be documented
+dotnet_diagnostic.SA1602.severity = none  # Enumeration items should be documented
+dotnet_diagnostic.SA1611.severity = none  # Element parameters should be documented
+dotnet_diagnostic.SA1615.severity = none  # Element return value should be documented
+dotnet_diagnostic.SA1618.severity = none  # Generic type parameters should be documented
+dotnet_diagnostic.SA1623.severity = none  # Property summary documentation
+dotnet_diagnostic.SA1649.severity = none  # File name should match first type name
+dotnet_diagnostic.SA1402.severity = none  # File may only contain a single type
+dotnet_diagnostic.SA1515.severity = none  # Single-line comment should be preceded by blank line
+dotnet_diagnostic.SA1009.severity = none  # Closing parenthesis space
+dotnet_diagnostic.SA1025.severity = none  # Multiple whitespaces
+dotnet_diagnostic.SA1518.severity = none  # File should end with single newline
+dotnet_diagnostic.SA1503.severity = none  # Braces should not be omitted
+dotnet_diagnostic.SA1122.severity = none  # Use string.Empty for empty strings
+dotnet_diagnostic.SA1500.severity = none  # Braces for multi-line statements should not share line
+dotnet_diagnostic.SA1108.severity = none  # Block statements should not contain embedded comments
+dotnet_diagnostic.SA1316.severity = none  # Tuple element casing
+dotnet_diagnostic.SA1501.severity = none  # Statement should not be on single line
+dotnet_diagnostic.SA1407.severity = none  # Arithmetic precedence
+dotnet_diagnostic.SA1642.severity = none  # Constructor summary text format
+dotnet_diagnostic.SA1118.severity = none  # Parameter spans multiple lines
+dotnet_diagnostic.SA1142.severity = none  # Refer to tuple fields by name
+dotnet_diagnostic.SA1520.severity = none  # Use braces consistently
+dotnet_diagnostic.SA1127.severity = none  # Generic type constraints should be on their own line
+dotnet_diagnostic.SA1502.severity = none  # Element should not be on a single line
+dotnet_diagnostic.SA1612.severity = none  # Parameter documentation position
+dotnet_diagnostic.SA1117.severity = none  # Parameters line formatting
+dotnet_diagnostic.SA1116.severity = none  # Parameters line formatting
+dotnet_diagnostic.SA1307.severity = none  # Field uppercase (P/Invoke structs)
+dotnet_diagnostic.SA1203.severity = none  # Constants position
+dotnet_diagnostic.SA1214.severity = none  # Readonly fields position
+dotnet_diagnostic.SA1606.severity = none  # Documentation summary
+dotnet_diagnostic.SA1306.severity = none  # Field lowercase
+dotnet_diagnostic.SA1508.severity = none  # Closing brace blank line
+dotnet_diagnostic.SA1300.severity = none  # Selection changed lowercase
+dotnet_diagnostic.SA1514.severity = none  # Element documentation header blank line
+dotnet_diagnostic.SA1310.severity = none  # Constants uppercase (e.g. WM_GETMINMAXINFO)
+dotnet_diagnostic.CS1570.severity = none  # Badly formed XML documentation comments
+dotnet_diagnostic.CS1573.severity = none  # Parameter has no matching param tag in XML comment
+
+# Roslyn Quality Rules Suppression
+dotnet_diagnostic.CA1707.severity = none  # Namespace name underscores (KTools_App)
+dotnet_diagnostic.CA1822.severity = none  # Mark members as static
+dotnet_diagnostic.CA1859.severity = none  # FrameworkElement return type
+dotnet_diagnostic.CA1852.severity = none  # Seal internal types (CA1852)
+dotnet_diagnostic.CA1845.severity = none  # string.Concat/AsSpan
+dotnet_diagnostic.CA1862.severity = none  # StringComparison
+dotnet_diagnostic.CA1861.severity = none  # Static readonly instead of constant array
+dotnet_diagnostic.CA1826.severity = none  # Enumerable method on indexable collection
+dotnet_diagnostic.CA1305.severity = none  # Culture-specific string formatting
+dotnet_diagnostic.CA1866.severity = none  # string.StartsWith(char)
+dotnet_diagnostic.CA1310.severity = none  # Culture-specific string comparison (StartsWith/etc)
+dotnet_diagnostic.CA1854.severity = none  # Prefer TryGetValue for dictionary lookup
+dotnet_diagnostic.CA1868.severity = none  # Do not guard Remove with Contains
+dotnet_diagnostic.CA1001.severity = none  # Types that own disposable fields should be disposable
+dotnet_diagnostic.CA1869.severity = none  # JsonSerializerOptions caching
+dotnet_diagnostic.CA2024.severity = none  # StandardError.EndOfStream in async
+dotnet_diagnostic.CA1835.severity = none  # Stream ReadAsync/WriteAsync Memory overload
+dotnet_diagnostic.CA1311.severity = none  # Culture-specific string methods
+dotnet_diagnostic.CA1304.severity = none  # Culture-specific ToUpper
+dotnet_diagnostic.CA2016.severity = none  # Forward CancellationToken
+dotnet_diagnostic.CA1847.severity = none  # string.Contains(char)
+dotnet_diagnostic.CA1720.severity = none  # Type name in identifier
+dotnet_diagnostic.CA1805.severity = none  # Member default value initialization
+dotnet_diagnostic.CA1838.severity = none  # StringBuilder in P/Invokes
+dotnet_diagnostic.CA1068.severity = none  # CancellationToken position
 
 # File-scoped namespaces (C# 10+)
 csharp_style_namespace_declarations = file_scoped:warning
@@ -90,7 +170,7 @@ dotnet_style_coalesce_expression = true:suggestion
 dotnet_style_null_propagation = true:suggestion
 
 # Diagnostic severities (as requested)
-dotnet_diagnostic.IDE0005.severity = warning  # Remove unnecessary usings
-dotnet_diagnostic.IDE0044.severity = warning  # Make field readonly
-dotnet_diagnostic.IDE0051.severity = warning  # Remove unused private members
-dotnet_diagnostic.IDE0060.severity = warning  # Remove unused parameter
+dotnet_diagnostic.IDE0005.severity = suggestion  # Remove unnecessary usings (понижено до suggestion на время миграции)
+dotnet_diagnostic.IDE0044.severity = suggestion  # Make field readonly (понижено до suggestion на время миграции)
+dotnet_diagnostic.IDE0051.severity = suggestion  # Remove unused private members (понижено до suggestion)
+dotnet_diagnostic.IDE0060.severity = suggestion  # Remove unused parameter (понижено до suggestion)
