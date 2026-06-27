@@ -98,7 +98,7 @@ public sealed class StreamManagementScript : AbstractScript
         string filePath,
         Dictionary<string, object> settings,
         string? outputPath,
-        Action<int, int, string, double?> progressCallback,
+        ScriptProgressCallback progressCallback,
         int fileIndex,
         int totalCount)
     {
@@ -279,7 +279,7 @@ public sealed class StreamManagementScript : AbstractScript
                     totalDuration: structure.Duration,
                     onProgress: progress =>
                     {
-                        progressCallback(fileIndex, totalCount, $"Обработка (FFmpeg)... {progress.Percent:F1}%", progress.Percent);
+                        progressCallback(fileIndex, totalCount, $"Обработка (FFmpeg)... {progress.Percent:F1}%", progress.Percent, progress.Fps, progress.Bitrate);
                     },
                     cancellationToken: cts.Token
                 );

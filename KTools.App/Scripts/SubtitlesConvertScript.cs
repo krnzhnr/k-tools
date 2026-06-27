@@ -103,7 +103,7 @@ public sealed class SubtitlesConvertScript : AbstractScript
         string filePath,
         Dictionary<string, object> settings,
         string? outputPath,
-        Action<int, int, string, double?> progressCallback,
+        ScriptProgressCallback progressCallback,
         int fileIndex,
         int totalCount)
     {

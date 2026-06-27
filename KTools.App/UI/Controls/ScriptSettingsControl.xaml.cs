@@ -195,7 +195,15 @@ public sealed partial class ScriptSettingsControl : UserControl
 
         string rcMode = SettingsManager.Instance.GetSetting(settingsGroup, "nvenc_rc", "vbr_hq");
         HandleRcChange(settingsGroup, rcMode);
-        HandleAutoBitrateChange(settingsGroup);
+    }
+
+    /// <summary>
+    /// Переключает режим выполнения, блокируя редактирование параметров при сохранении навигации.
+    /// </summary>
+    /// <param name="isProcessing">Указывает, запущена ли обработка в данный момент.</param>
+    public void SetProcessingMode(bool isProcessing)
+    {
+        SettingsContentControl.IsEnabled = !isProcessing;
     }
 
     /// <summary>

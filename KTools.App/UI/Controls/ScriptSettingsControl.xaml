@@ -40,12 +40,14 @@
         </NavigationView>
 
         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Margin="0">
-            <StackPanel x:Name="SettingsContainer" 
-                        Spacing="12" 
-                        Padding="0,4,0,24" 
-                        HorizontalAlignment="Stretch">
-                <!-- Динамические группы настроек будут вставляться сюда программно -->
-            </StackPanel>
+            <ContentControl x:Name="SettingsContentControl" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch">
+                <StackPanel x:Name="SettingsContainer" 
+                            Spacing="12" 
+                            Padding="0,4,0,24" 
+                            HorizontalAlignment="Stretch">
+                    <!-- Динамические группы настроек будут вставляться сюда программно -->
+                </StackPanel>
+            </ContentControl>
         </ScrollViewer>
     </Grid>
 </UserControl>

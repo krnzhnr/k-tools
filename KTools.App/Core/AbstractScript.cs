@@ -8,6 +8,24 @@ using System.Threading.Tasks;
 namespace KTools_App.Core;
 
 /// <summary>
+/// Делегат обратного вызова для уведомления о прогрессе выполнения скрипта.
+/// </summary>
+/// <param name="fileIndex">Индекс обрабатываемого файла в очереди.</param>
+/// <param name="totalCount">Общее количество файлов в очереди.</param>
+/// <param name="status">Текстовый статус выполнения.</param>
+/// <param name="percent">Процент выполнения для текущего файла.</param>
+/// <param name="fps">Текущая скорость обработки в кадрах в секунду (для видео).</param>
+/// <param name="bitrate">Текущий битрейт потока.</param>
+public delegate void ScriptProgressCallback(
+    int fileIndex,
+    int totalCount,
+    string status,
+    double? percent,
+    double? fps = null,
+    string? bitrate = null
+);
+
+/// <summary>
 /// Абстрактный базовый класс для всех скриптов обработки файлов в K-Tools.
 /// Определяет контракт метаданных, зависимостей и асинхронного выполнения.
 /// </summary>
@@ -630,7 +648,7 @@ public abstract class AbstractScript
         string filePath,
         Dictionary<string, object> settings,
         string? outputPath,
-        Action<int, int, string, double?> progressCallback,
+        ScriptProgressCallback progressCallback,
         int fileIndex,
         int totalCount);
 

@@ -117,7 +117,7 @@ public sealed class AudioDownmixScript : AbstractScript
         string filePath,
         Dictionary<string, object> settings,
         string? outputPath,
-        Action<int, int, string, double?> progressCallback,
+        ScriptProgressCallback progressCallback,
         int fileIndex,
         int totalCount)
     {
@@ -337,7 +337,9 @@ public sealed class AudioDownmixScript : AbstractScript
                         fileIndex, 
                         totalCount, 
                         msg, 
-                        progressInfo.Percent);
+                        progressInfo.Percent,
+                        progressInfo.Fps,
+                        progressInfo.Bitrate);
                 },
                 cancellationToken: cts.Token);
 

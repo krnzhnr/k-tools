@@ -66,7 +66,7 @@ public sealed class StreamReplacementScript : AbstractScript
         string filePath,
         Dictionary<string, object> settings,
         string? outputPath,
-        Action<int, int, string, double?> progressCallback,
+        ScriptProgressCallback progressCallback,
         int fileIndex,
         int totalCount)
     {
@@ -199,7 +199,7 @@ public sealed class StreamReplacementScript : AbstractScript
                     totalDuration: structure.Duration,
                     onProgress: progress =>
                     {
-                        progressCallback(fileIndex, totalCount, $"Сборка MP4 | {progress.Percent:F1}% | Скорость: {(progress.Speed.HasValue ? $"{progress.Speed.Value:F1}x" : "н/д")}", progress.Percent);
+                        progressCallback(fileIndex, totalCount, $"Сборка MP4 | {progress.Percent:F1}% | Скорость: {(progress.Speed.HasValue ? $"{progress.Speed.Value:F1}x" : "н/д")}", progress.Percent, progress.Fps, progress.Bitrate);
                     },
                     cancellationToken: cts.Token
                 );

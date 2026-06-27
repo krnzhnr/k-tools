@@ -246,8 +246,14 @@ public sealed partial class WorkPanel : Page
             // Блокируем контролы во время обработки
             bool isProcessing = ViewModel.IsProcessing;
             FileList.IsProcessing = isProcessing;
-            ScriptSettings.IsEnabled = !isProcessing;
+            ScriptSettings.SetProcessingMode(isProcessing);
             
+            if (isProcessing)
+            {
+                // Перекидываем пользователя на вкладку Файлы
+                nvSample.SelectedItem = SamplePage1Item;
+            }
+
             // Синхронизируем состояние кнопки запуска/отмены при изменении статуса обработки
             UpdateActionButtonState(isProcessing);
         }

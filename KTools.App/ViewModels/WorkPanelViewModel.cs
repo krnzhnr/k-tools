@@ -30,6 +30,8 @@ public partial class WorkPanelViewModel : ObservableObject
     private DateTime _startTime;
     private readonly Dictionary<int, double> _filesProgress = new();
     private readonly HashSet<int> _finishedIndices = new();
+    private readonly Dictionary<int, double> _activeFps = new();
+    private readonly Dictionary<int, string> _activeBitrates = new();
 
     /// <summary>
     /// Активный исполняемый скрипт обработки медиаданных.
@@ -217,10 +219,6 @@ public partial class WorkPanelViewModel : ObservableObject
         }
 
         LogText = ActiveScript.SavedLogText ?? string.Empty;
-        if (!string.IsNullOrEmpty(LogText))
-        {
-            IsLogExpanded = true;
-        }
 
         StatusText = 
             ActiveScript.SavedStatusText ?? "Ожидание запуска...";
@@ -300,6 +298,8 @@ public partial class WorkPanelViewModel : ObservableObject
         _startTime = DateTime.Now;
         _filesProgress.Clear();
         _finishedIndices.Clear();
+        _activeFps.Clear();
+        _activeBitrates.Clear();
 
         for (int i = 0; i < filesList.Count; i++)
         {
@@ -420,8 +420,8 @@ public partial class WorkPanelViewModel : ObservableObject
 
         try
         {
-            Action<int, int, string, double?> progressCallback = 
-                (currIdx, totCount, msg, percent) =>
+            ScriptProgressCallback progressCallback = 
+                (currIdx, totCount, msg, percent, fps, bitrate) =>
                 {
                     UpdateFileStatus(
                         fileItem.FilePath, 
@@ -433,7 +433,9 @@ public partial class WorkPanelViewModel : ObservableObject
                         index, 
                         total, 
                         $"Файл {index + 1} из {total} ({percent:F0}%)", 
-                        percent ?? 0.0);
+                        percent ?? 0.0,
+                        fps,
+                        bitrate);
                 };
 
             var results = await ActiveScript.ExecuteSingleAsync(
@@ -484,6 +486,7 @@ public partial class WorkPanelViewModel : ObservableObject
             {
                 item.IsProcessing = false;
             }
+            IsLogExpanded = true;
         });
 
         if (ActiveScript.IsCancelled)
@@ -516,11 +519,6 @@ public partial class WorkPanelViewModel : ObservableObject
             LogText = ActiveScript.SavedLogText;
             IsProcessing = ActiveScript.IsProcessing;
             IsStartButtonEnabled = !IsProcessing && CheckDependencies();
-            
-            if (!string.IsNullOrEmpty(LogText))
-            {
-                IsLogExpanded = true;
-            }
         });
     }
 
@@ -572,13 +570,17 @@ public partial class WorkPanelViewModel : ObservableObject
         int fileIndex, 
         int totalCount, 
         string status, 
-        double filePercent)
+        double filePercent,
+        double? fps = null,
+        string? bitrate = null)
     {
         if (ActiveScript == null) return;
 
         double overallPercent;
         int finishedCount;
         string etaStr = "-";
+        double? displayFps = null;
+        string? displayBitrate = null;
 
         lock (_progressLock)
         {
@@ -588,6 +590,19 @@ public partial class WorkPanelViewModel : ObservableObject
             if (filePercent >= 100.0)
             {
                 _finishedIndices.Add(fileIndex);
+                _activeFps.Remove(fileIndex);
+                _activeBitrates.Remove(fileIndex);
+            }
+            else
+            {
+                if (fps.HasValue)
+                {
+                    _activeFps[fileIndex] = fps.Value;
+                }
+                if (!string.IsNullOrEmpty(bitrate))
+                {
+                    _activeBitrates[fileIndex] = bitrate;
+                }
             }
 
             // 2. Рассчитываем общий процент очереди (0-100%)
@@ -624,10 +639,39 @@ public partial class WorkPanelViewModel : ObservableObject
             }
 
             finishedCount = _finishedIndices.Count;
+
+            // Находим первый активный файл для отображения его метрик
+            int? targetIndex = null;
+            foreach (var idx in _filesProgress.Keys)
+            {
+                if (!_finishedIndices.Contains(idx) && _filesProgress[idx] < 100.0)
+                {
+                    if (targetIndex == null || idx < targetIndex.Value)
+                    {
+                        targetIndex = idx;
+                    }
+                }
+            }
+
+            if (targetIndex.HasValue)
+            {
+                if (_activeFps.TryGetValue(targetIndex.Value, out double f)) displayFps = f;
+                if (_activeBitrates.TryGetValue(targetIndex.Value, out string? b)) displayBitrate = b;
+            }
+        }
+
+        string metrics = "";
+        if (displayFps.HasValue)
+        {
+            metrics += $" | {displayFps.Value:F0} FPS";
+        }
+        if (!string.IsNullOrEmpty(displayBitrate))
+        {
+            metrics += $" | {displayBitrate}";
         }
 
         // 4. Формируем чистый общий текст статуса без мерцания индивидуальных данных
-        string displayStatusText = $"Выполнение: готово {finishedCount} из {totalCount} ({overallPercent:F1}%) | Осталось: {etaStr}";
+        string displayStatusText = $"Выполнение: готово {finishedCount} из {totalCount} ({overallPercent:F1}%){metrics} | Осталось: {etaStr}";
 
         ActiveScript.SavedStatusText = displayStatusText;
         ActiveScript.SavedGlobalProgress = overallPercent;

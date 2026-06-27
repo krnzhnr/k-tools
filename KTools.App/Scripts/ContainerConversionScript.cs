@@ -75,7 +75,7 @@ public sealed class ContainerConversionScript : AbstractScript
         string filePath,
         Dictionary<string, object> settings,
         string? outputPath,
-        Action<int, int, string, double?> progressCallback,
+        ScriptProgressCallback progressCallback,
         int fileIndex,
         int totalCount)
     {
@@ -182,7 +182,7 @@ public sealed class ContainerConversionScript : AbstractScript
             {
                 string speedStr = progressInfo.Speed > 0 ? $"{progressInfo.Speed:F1}x" : "н/д";
                 string msg = $"Конвертация | {progressInfo.Percent:F1}% | Скорость: {speedStr}";
-                progressCallback(fileIndex, totalCount, msg, progressInfo.Percent);
+                progressCallback(fileIndex, totalCount, msg, progressInfo.Percent, progressInfo.Fps, progressInfo.Bitrate);
             },
             cancellationToken: cts.Token
         );

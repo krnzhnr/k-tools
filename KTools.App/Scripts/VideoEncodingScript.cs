@@ -441,7 +441,7 @@ public sealed class VideoEncodingScript : AbstractScript
         string filePath,
         Dictionary<string, object> settings,
         string? outputPath,
-        Action<int, int, string, double?> progressCallback,
+        ScriptProgressCallback progressCallback,
         int fileIndex,
         int totalCount)
     {
@@ -882,7 +882,7 @@ public sealed class VideoEncodingScript : AbstractScript
                         if (progress.Speed.HasValue) msg += $" | Скорость: {progress.Speed.Value:F1}x";
                         if (!string.IsNullOrEmpty(progress.Eta)) msg += $" | ETA: {progress.Eta}";
 
-                        progressCallback(fileIndex, totalCount, msg, progress.Percent);
+                        progressCallback(fileIndex, totalCount, msg, progress.Percent, progress.Fps, progress.Bitrate);
                     },
                     cancellationToken: cts.Token
                 );

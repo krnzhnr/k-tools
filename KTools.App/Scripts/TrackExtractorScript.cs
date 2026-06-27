@@ -61,7 +61,7 @@ public sealed class TrackExtractorScript : AbstractScript
         string filePath,
         Dictionary<string, object> settings,
         string? outputPath,
-        Action<int, int, string, double?> progressCallback,
+        ScriptProgressCallback progressCallback,
         int fileIndex,
         int totalCount)
     {
@@ -258,7 +258,7 @@ public sealed class TrackExtractorScript : AbstractScript
                     return;
                 }
                 string speedStr = p.Speed.HasValue ? $"{p.Speed.Value:F1}x" : "н/д";
-                progressCallback(fileIndex, totalCount, $"Извлечение дорожек | {p.Percent:F1}% | Скорость: {speedStr}", p.Percent);
+                progressCallback(fileIndex, totalCount, $"Извлечение дорожек | {p.Percent:F1}% | Скорость: {speedStr}", p.Percent, p.Fps, p.Bitrate);
             };
 
             tracksSuccess = await FFmpegRunner.Instance.RunAsync(
