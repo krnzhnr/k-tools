@@ -510,18 +510,27 @@
                     Padding="4,2,4,2" />
 
                 <community:SettingsExpander.Items>
-                    <HyperlinkButton
-                        Content="Исходный код (GitHub)"
-                        NavigateUri="https://github.com/krnzhnr/k-tools"
-                        Margin="56,8,0,8" />
-                    <HyperlinkButton
-                        Content="Сообщить о проблеме"
-                        NavigateUri="https://github.com/krnzhnr/k-tools/issues"
-                        Margin="56,8,0,8" />
-                    <HyperlinkButton
-                        Content="Лицензия MIT"
-                        NavigateUri="https://github.com/krnzhnr/k-tools/blob/main/LICENSE"
-                        Margin="56,8,0,8" />
+                    <community:SettingsCard>
+                        <community:SettingsCard.Header>
+                            <HyperlinkButton
+                                Content="Исходный код (GitHub)"
+                                NavigateUri="https://github.com/krnzhnr/k-tools" />
+                        </community:SettingsCard.Header>
+                    </community:SettingsCard>
+                    <community:SettingsCard>
+                        <community:SettingsCard.Header>
+                            <HyperlinkButton
+                                Content="Сообщить о проблеме"
+                                NavigateUri="https://github.com/krnzhnr/k-tools/issues" />
+                        </community:SettingsCard.Header>
+                    </community:SettingsCard>
+                    <community:SettingsCard>
+                        <community:SettingsCard.Header>
+                            <HyperlinkButton
+                                Content="Лицензия MIT"
+                                NavigateUri="https://github.com/krnzhnr/k-tools/blob/main/LICENSE" />
+                        </community:SettingsCard.Header>
+                    </community:SettingsCard>
                 </community:SettingsExpander.Items>
             </community:SettingsExpander>
 
