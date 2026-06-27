@@ -5,6 +5,7 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using KTools_App.Core;
+using KTools_App.Services.Contracts;
 
 namespace KTools_App.Infrastructure;
 
@@ -14,7 +15,7 @@ namespace KTools_App.Infrastructure;
 /// Поддерживает автоматическую очистку создаваемых eac3to лог-файлов на диске.
 /// Все комментарии и логирование выполнены строго на русском языке в соответствии с регламентом.
 /// </summary>
-public sealed class Eac3toRunner : AbstractProcessRunner
+public sealed class Eac3toRunner : AbstractProcessRunner, IEac3toRunner
 {
     private static readonly Lazy<Eac3toRunner> LazyInstance =
         new(() => new Eac3toRunner());

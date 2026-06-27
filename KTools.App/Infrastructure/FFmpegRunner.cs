@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using KTools_App.Core;
+using KTools_App.Services.Contracts;
 
 namespace KTools_App.Infrastructure;
 
@@ -16,7 +17,7 @@ namespace KTools_App.Infrastructure;
 /// анализа структуры медиафайлов и детекции графического оборудования NVIDIA NVENC.
 /// Наследует AbstractProcessRunner и реализует все требования русскоязычной локализации.
 /// </summary>
-public sealed class FFmpegRunner : AbstractProcessRunner
+public sealed class FFmpegRunner : AbstractProcessRunner, IFFmpegRunner
 {
     private static readonly Lazy<FFmpegRunner> LazyInstance =
         new(() => new FFmpegRunner());

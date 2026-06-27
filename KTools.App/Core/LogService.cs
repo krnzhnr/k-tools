@@ -3,6 +3,7 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
+using KTools_App.Services.Contracts;
 
 namespace KTools_App.Core;
 
@@ -24,13 +25,14 @@ public enum LogLevel
 /// автоматическую очистку устаревших файлов логов старше 14 дней и
 /// трансляцию новых событий логирования в графический интерфейс в реальном времени.
 /// </summary>
-public sealed class LogService
+public sealed class LogService : ILogService
 {
     private static readonly Lazy<LogService> LazyInstance =
         new(() => new LogService());
 
     private readonly object _lock = new();
     private string _currentLogFile = string.Empty;
+    private string _customLogDir = string.Empty;
 
     private LogService()
     {
@@ -53,17 +55,31 @@ public sealed class LogService
     /// </summary>
     public void InitializeLogFile()
     {
+        InitializeLogFile(null);
+    }
+
+    /// <summary>
+    /// Инициализировать путь к файлу лога с возможностью указания пользовательской директории.
+    /// </summary>
+    /// <param name="customLogDir">Пользовательский путь к директории логов.</param>
+    public void InitializeLogFile(string? customLogDir)
+    {
         lock (_lock)
         {
             try
             {
+                if (customLogDir != null)
+                {
+                    _customLogDir = customLogDir;
+                }
+
                 // Определяем папку логов (настройки пользователя или папка по умолчанию)
                 string settingsDir = PathManager.GetSettingsDirectory();
                 string defaultLogDir = Path.Combine(settingsDir, "logs");
 
-                string logDir = string.IsNullOrEmpty(SettingsManager.Instance.LogDir)
+                string logDir = string.IsNullOrEmpty(_customLogDir)
                     ? defaultLogDir
-                    : SettingsManager.Instance.LogDir;
+                    : _customLogDir;
 
                 // Попытка использовать заданную папку логов
                 try

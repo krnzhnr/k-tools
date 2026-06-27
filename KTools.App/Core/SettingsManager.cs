@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using KTools_App.Services.Contracts;
 
 namespace KTools_App.Core;
 
@@ -12,7 +13,7 @@ namespace KTools_App.Core;
 /// Сохраняет все параметры программы и настроек скриптов в локальный файл JSON.
 /// Полностью потокобезопасен и поддерживает горячую синхронизацию.
 /// </summary>
-public sealed class SettingsManager
+public sealed class SettingsManager : ISettingsManager
 {
     private static readonly Lazy<SettingsManager> LazyInstance =
         new(() => new SettingsManager());
@@ -29,6 +30,7 @@ public sealed class SettingsManager
         _cache = new Dictionary<string, Dictionary<string, object>>();
 
         LoadSettings();
+        LogService.Instance.InitializeLogFile(LogDir);
     }
 
     /// <summary>
@@ -123,7 +125,11 @@ public sealed class SettingsManager
     public string LogDir
     {
         get => GetSetting("Logging", "LogDir", string.Empty);
-        set => SetSetting("Logging", "LogDir", value);
+        set
+        {
+            SetSetting("Logging", "LogDir", value);
+            LogService.Instance.InitializeLogFile(value);
+        }
     }
 
     /// <summary>

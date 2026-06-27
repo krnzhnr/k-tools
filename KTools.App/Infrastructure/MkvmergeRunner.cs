@@ -4,8 +4,8 @@ using System.IO;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-
 using KTools_App.Core;
+using KTools_App.Services.Contracts;
 
 namespace KTools_App.Infrastructure;
 
@@ -20,7 +20,7 @@ public record MkvInputSource(string Path, List<string>? Args = null);
 /// Поддерживает гибкую передачу аргументов разметки и захват предупреждений (код 1).
 /// Все комментарии и логирование выполнены строго на русском языке.
 /// </summary>
-public sealed class MkvmergeRunner : AbstractProcessRunner
+public sealed class MkvmergeRunner : AbstractProcessRunner, IMkvmergeRunner
 {
     private static readonly Lazy<MkvmergeRunner> LazyInstance =
         new(() => new MkvmergeRunner());

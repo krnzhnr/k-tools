@@ -7,6 +7,7 @@ using System.Linq;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
+using KTools_App.Services.Contracts;
 using SharpCompress.Common;
 using SharpCompress.Compressors.Xz;
 using SharpCompress.Readers;
@@ -34,7 +35,7 @@ public enum DependencyStatus
 /// Потокобезопасный синглтон-менеджер для проверки, скачивания, верификации и удаления внешних зависимостей.
 /// Инкапсулирует логику сетевого взаимодействия и интеграции с системным декомпрессором.
 /// </summary>
-public class DependencyManager
+public class DependencyManager : IDependencyManager
 {
     private static readonly Lazy<DependencyManager> LazyInstance = 
         new(() => new DependencyManager());

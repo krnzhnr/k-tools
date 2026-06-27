@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using KTools_App.Services.Contracts;
 
 namespace KTools_App.Core;
 
@@ -9,7 +10,7 @@ namespace KTools_App.Core;
 /// Реестр всех доступных скриптов обработки файлов в приложении K-Tools.
 /// Хранит экземпляры скриптов и предоставляет методы доступа к ним.
 /// </summary>
-public sealed class ScriptRegistry
+public sealed class ScriptRegistry : IScriptRegistry
 {
     private static readonly Lazy<ScriptRegistry> LazyInstance =
         new(() => new ScriptRegistry());

@@ -5,8 +5,8 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
-
 using KTools_App.Infrastructure;
+using KTools_App.Services.Contracts;
 
 namespace KTools_App.Core;
 
@@ -16,7 +16,7 @@ namespace KTools_App.Core;
 /// Использует mkvmerge для MKV/MKA и ffprobe для остальных контейнеров.
 /// Все комментарии и логирование выполнены исключительно на русском языке.
 /// </summary>
-public sealed class MediaProbeService
+public sealed class MediaProbeService : IMediaProbeService
 {
     private static readonly Lazy<MediaProbeService> LazyInstance =
         new(() => new MediaProbeService());

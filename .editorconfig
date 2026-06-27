@@ -174,3 +174,4 @@ dotnet_diagnostic.IDE0005.severity = suggestion  # Remove unnecessary usings (п
 dotnet_diagnostic.IDE0044.severity = suggestion  # Make field readonly (понижено до suggestion на время миграции)
 dotnet_diagnostic.IDE0051.severity = suggestion  # Remove unused private members (понижено до suggestion)
 dotnet_diagnostic.IDE0060.severity = suggestion  # Remove unused parameter (понижено до suggestion)
+dotnet_diagnostic.CA1716.severity = none        # Identifiers should not match keywords (VB.NET compatibility is not needed)
