@@ -46,7 +46,7 @@ public sealed class AudioSpeedScript : AbstractScript
     /// <summary>
     /// Список внешних зависимостей, необходимых для выполнения скрипта.
     /// </summary>
-    public override string[] RequiredDependencies => new[] { "eac3to" };
+    public override string[] RequiredDependencies => new[] { "eac3to", "ffmpeg" };
 
     /// <summary>
     /// Поддерживает ли скрипт параллельную обработку файлов.
@@ -132,10 +132,6 @@ public sealed class AudioSpeedScript : AbstractScript
             return results;
         }
 
-        // Подготовка аргументов для eac3to
-        var eac3toArgs = new List<string>();
-        eac3toArgs.Add($"\"{filePath}\"");
-
         // Подготовка опций изменения скорости
         var options = new List<string>();
         string suffix = "_slowdown";
@@ -214,12 +210,88 @@ public sealed class AudioSpeedScript : AbstractScript
             tempDir = Path.GetTempPath();
         }
 
-        string shortInputPath = PathManager.GetShortPath(filePath);
+        // Проверяем, поддерживает ли eac3to формат входного файла нативно.
+        // Если нет (например, .m4a), предварительно декодируем его в WAV с помощью FFmpeg.
+        var nativeExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ".wav", ".flac", ".ac3", ".eac3", ".dts", ".dtshd", ".truehd", ".thd", ".aac"
+        };
+
+        string fileExtension = Path.GetExtension(filePath);
+        bool shouldPreDecode = !nativeExtensions.Contains(fileExtension);
+        string eac3toInputPath = filePath;
+        string? tempInputWavPath = null;
+
+        if (shouldPreDecode)
+        {
+            LogService.Instance.Info($"Формат файла '{fileExtension}' не поддерживается eac3to нативно. Выполняется предварительное декодирование в WAV...", "AudioSpeedScript");
+            progressCallback(
+                fileIndex,
+                totalCount,
+                "Декодирование во временный WAV...",
+                0.0);
+
+            tempInputWavPath = Path.Combine(tempDir, $"temp_input_{Guid.NewGuid():N}.wav");
+
+            var decodeArgs = new List<string> { "-c:a", "pcm_s24le" };
+            using var decodeCts = new CancellationTokenSource();
+
+            var decodeTask = FFmpegRunner.Instance.RunAsync(
+                inputPath: filePath,
+                outputPath: tempInputWavPath,
+                extraArgs: decodeArgs,
+                overwrite: true,
+                cancellationToken: decodeCts.Token);
+
+            while (!decodeTask.IsCompleted)
+            {
+                if (IsCancelled)
+                {
+                    decodeCts.Cancel();
+                    break;
+                }
+                await Task.Delay(200);
+            }
+
+            bool decodeSuccess = false;
+            try
+            {
+                decodeSuccess = await decodeTask;
+            }
+            catch (Exception ex)
+            {
+                LogService.Instance.Exception(ex, $"Ошибка декодирования файла '{originalName}' через FFmpeg: {ex.Message}", "AudioSpeedScript");
+            }
+
+            if (IsCancelled || !decodeSuccess || !File.Exists(tempInputWavPath))
+            {
+                CleanupFailedOutputFile(tempInputWavPath);
+                if (IsCancelled)
+                {
+                    results.Add($"⚠ Отменено: {outputName}");
+                    LogService.Instance.Info($"Декодирование файла '{originalName}' отменено пользователем.", "AudioSpeedScript");
+                }
+                else
+                {
+                    results.Add($"❌ Ошибка декодирования исходного файла для {Path.GetFileName(filePath)}");
+                    LogService.Instance.Error($"Не удалось выполнить предварительное декодирование в WAV для '{filePath}'.", "AudioSpeedScript");
+                }
+                return results;
+            }
+
+            eac3toInputPath = tempInputWavPath;
+        }
+
+        string shortInputPath = PathManager.GetShortPath(eac3toInputPath);
         string tempOutputName = $"temp_speed_{Guid.NewGuid():N}.{ext}";
         string tempOutputFilePath = Path.Combine(tempDir, tempOutputName);
 
-        // Добавляем абсолютный путь к временному файлу (гарантированно ASCII)
-        eac3toArgs.Add($"\"{tempOutputFilePath}\"");
+        // Подготовка аргументов для eac3to
+        var eac3toArgs = new List<string>
+        {
+            $"\"{shortInputPath}\"",
+            $"\"{tempOutputFilePath}\""
+        };
         eac3toArgs.AddRange(options);
 
         progressCallback(
@@ -263,6 +335,14 @@ public sealed class AudioSpeedScript : AbstractScript
                 ex,
                 $"Ошибка работы eac3to для '{originalName}': {ex.Message}",
                 "AudioSpeedScript");
+        }
+        finally
+        {
+            if (!string.IsNullOrEmpty(tempInputWavPath))
+            {
+                CleanupFailedOutputFile(tempInputWavPath);
+                LogService.Instance.DebugLog($"Временный входной WAV-файл '{tempInputWavPath}' успешно удален.", "AudioSpeedScript");
+            }
         }
 
         if (IsCancelled)
