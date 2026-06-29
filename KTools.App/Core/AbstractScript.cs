@@ -546,50 +546,93 @@ public abstract class AbstractScript
 
     /// <summary>
     /// Физически удаляет исходный файл с диска и заносит лог в результаты.
+    /// При возникновении ошибок доступа (например, файл занят другим процессом) выполняется несколько попыток повтора с задержкой.
     /// </summary>
     protected void DeleteSource(string filePath, List<string> results)
     {
-        try
+        const int maxRetries = 5;
+        const int delayMs = 500;
+
+        for (int attempt = 1; attempt <= maxRetries; attempt++)
         {
-            if (File.Exists(filePath))
+            try
             {
-                File.Delete(filePath);
-                string msg = $"🗑 Удален исходник: {Path.GetFileName(filePath)}";
-                results.Add(msg);
-                LogService.Instance.Info(msg, "AbstractScript");
+                if (File.Exists(filePath))
+                {
+                    File.Delete(filePath);
+                    string msg = $"🗑 Удален исходник: {Path.GetFileName(filePath)}";
+                    results.Add(msg);
+                    LogService.Instance.Info(msg, "AbstractScript");
+                    return;
+                }
+            }
+            catch (IOException ioEx) when (attempt < maxRetries)
+            {
+                string lockingInfo = FileLockDetector.GetLockingProcessesInfo(filePath);
+                string procSuffix = string.IsNullOrEmpty(lockingInfo) ? "процесс неизвестен" : $"заблокирован процессами: {lockingInfo}";
+                LogService.Instance.Warn($"Попытка удаления исходника {attempt}/{maxRetries} не удалась (файл занят, {procSuffix}): {ioEx.Message}. Повторная попытка через {delayMs} мс.", "AbstractScript");
+                Thread.Sleep(delayMs);
+            }
+            catch (Exception ex)
+            {
+                LogService.Instance.Exception(ex, $"Критическая ошибка при удалении исходного файла '{filePath}': {ex.Message}", "AbstractScript");
+                results.Add($"⚠ Не удалось удалить: {Path.GetFileName(filePath)}");
+                return;
             }
         }
-        catch (Exception ex)
-        {
-            LogService.Instance.Exception(ex, $"Не удалось удалить исходный файл '{filePath}': {ex.Message}", "AbstractScript");
-            results.Add($"⚠ Не удалось удалить: {Path.GetFileName(filePath)}");
-        }
+
+        string finalLockInfo = FileLockDetector.GetLockingProcessesInfo(filePath);
+        string finalProcStr = string.IsNullOrEmpty(finalLockInfo) ? "процесс неизвестен" : $"занят процессами: {finalLockInfo}";
+        string failMsg = $"⚠ Не удалось удалить: {Path.GetFileName(filePath)} после {maxRetries} попыток ({finalProcStr}).";
+        results.Add(failMsg);
+        LogService.Instance.Error($"Не удалось физически удалить исходный файл '{filePath}' после {maxRetries} попыток. Файл {finalProcStr}.", "AbstractScript");
     }
 
     /// <summary>
     /// Физически заменяет исходный файл полученным результатом с сохранением имени оригинала.
+    /// При возникновении ошибок доступа (например, файл занят другим процессом) выполняется несколько попыток повтора с задержкой.
     /// </summary>
     protected bool ReplaceSourceWithResult(string sourcePath, string resultPath, List<string> results)
     {
-        try
-        {
-            if (File.Exists(sourcePath))
-            {
-                File.Delete(sourcePath);
-            }
-            File.Move(resultPath, sourcePath);
+        const int maxRetries = 5;
+        const int delayMs = 500;
 
-            string msg = $"🔄 Подменен оригинал: {Path.GetFileName(sourcePath)}";
-            results.Add(msg);
-            LogService.Instance.Info(msg, "AbstractScript");
-            return true;
-        }
-        catch (Exception ex)
+        for (int attempt = 1; attempt <= maxRetries; attempt++)
         {
-            LogService.Instance.Exception(ex, $"Ошибка при подмене оригинального файла '{sourcePath}' результатом '{resultPath}': {ex.Message}", "AbstractScript");
-            results.Add($"❌ Ошибка подмены: {Path.GetFileName(sourcePath)}");
-            return false;
+            try
+            {
+                if (File.Exists(sourcePath))
+                {
+                    File.Delete(sourcePath);
+                }
+                File.Move(resultPath, sourcePath);
+
+                string msg = $"🔄 Подменен оригинал: {Path.GetFileName(sourcePath)}";
+                results.Add(msg);
+                LogService.Instance.Info(msg, "AbstractScript");
+                return true;
+            }
+            catch (IOException ioEx) when (attempt < maxRetries)
+            {
+                string lockingInfo = FileLockDetector.GetLockingProcessesInfo(sourcePath);
+                string procSuffix = string.IsNullOrEmpty(lockingInfo) ? "процесс неизвестен" : $"заблокирован процессами: {lockingInfo}";
+                LogService.Instance.Warn($"Попытка подмены оригинала {attempt}/{maxRetries} не удалась (файл занят, {procSuffix}): {ioEx.Message}. Повторная попытка через {delayMs} мс.", "AbstractScript");
+                Thread.Sleep(delayMs);
+            }
+            catch (Exception ex)
+            {
+                LogService.Instance.Exception(ex, $"Ошибка при подмене оригинального файла '{sourcePath}' результатом '{resultPath}': {ex.Message}", "AbstractScript");
+                results.Add($"❌ Ошибка подмены: {Path.GetFileName(sourcePath)}");
+                return false;
+            }
         }
+
+        string finalLockInfo = FileLockDetector.GetLockingProcessesInfo(sourcePath);
+        string finalProcStr = string.IsNullOrEmpty(finalLockInfo) ? "процесс неизвестен" : $"занят процессами: {finalLockInfo}";
+        string failMsg = $"❌ Ошибка подмены: {Path.GetFileName(sourcePath)} ({finalProcStr})";
+        results.Add(failMsg);
+        LogService.Instance.Error($"Не удалось подменить оригинальный файл '{sourcePath}' результатом '{resultPath}' после {maxRetries} попыток. Файл {finalProcStr}.", "AbstractScript");
+        return false;
     }
 
     /// <summary>
