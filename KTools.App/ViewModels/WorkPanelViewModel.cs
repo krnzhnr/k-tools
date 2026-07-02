@@ -265,7 +265,7 @@ public partial class WorkPanelViewModel : ObservableObject
     {
         if (ActiveScript == null || IsProcessing) return;
 
-        var filesList = Files.ToList();
+        var filesList = ActiveScript.GetProcessableFiles(Files.ToList());
         if (filesList.Count == 0)
         {
             AppendLog("❌ Ошибка: В очереди нет файлов для обработки.\r\n");

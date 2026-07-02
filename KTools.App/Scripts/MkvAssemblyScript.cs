@@ -75,6 +75,18 @@ public sealed class MkvAssemblyScript : AbstractScript
     };
 
     /// <summary>
+    /// Возвращает только видео-контейнеры из очереди файлов.
+    /// Аудио и субтитры обрабатываются как сопутствующие файлы вместе с видео.
+    /// </summary>
+    public override List<FileQueueItem> GetProcessableFiles(List<FileQueueItem> allFiles)
+    {
+        return allFiles
+            .Where(f => AppConstants.VideoContainers.Contains(
+                Path.GetExtension(f.FilePath).ToLowerInvariant()))
+            .ToList();
+    }
+
+    /// <summary>
     /// Асинхронное выполнение сборки MKV для одного файла.
     /// Если переданный файл не является видеофайлом (например, аудио или субтитры), он пропускается,
     /// так как его обработка происходит совместно с соответствующим видеофайлом.
@@ -116,6 +128,7 @@ public sealed class MkvAssemblyScript : AbstractScript
         string? audioPath = null;
         string? subsPath = null;
 
+        // 3a. Сканируем папку видеофайла на наличие сопутствующих файлов с тем же stem
         if (!string.IsNullOrEmpty(directory))
         {
             try
@@ -147,6 +160,48 @@ public sealed class MkvAssemblyScript : AbstractScript
                 LogService.Instance.Exception(ex, scanErr, "MkvAssemblyScript");
                 results.Add(scanErr);
                 return results;
+            }
+        }
+
+        // 3b. Дополнительно проверяем очередь файлов на наличие сопутствующих файлов из других директорий
+        if (audioPath == null || subsPath == null)
+        {
+            foreach (var queueItem in FilesQueue)
+            {
+                string queueFilePath = queueItem.FilePath;
+
+                // Пропускаем сам видеофайл
+                if (string.Equals(queueFilePath, filePath, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                string queueStem = Path.GetFileNameWithoutExtension(queueFilePath);
+
+                // Сопоставляем по базовому имени (stem)
+                if (!string.Equals(queueStem, stem, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                string queueExt = Path.GetExtension(queueFilePath).ToLowerInvariant();
+
+                if (audioPath == null && (AppConstants.AudioContainers.Contains(queueExt) || AppConstants.AudioStreams.Contains(queueExt)))
+                {
+                    audioPath = queueFilePath;
+                    LogService.Instance.Info($"Найден сопутствующий аудиофайл из очереди: '{Path.GetFileName(queueFilePath)}'", "MkvAssemblyScript");
+                }
+                else if (subsPath == null && AppConstants.SubtitleExtensions.Contains(queueExt))
+                {
+                    subsPath = queueFilePath;
+                    LogService.Instance.Info($"Найден сопутствующий файл субтитров из очереди: '{Path.GetFileName(queueFilePath)}'", "MkvAssemblyScript");
+                }
+
+                // Оба найдены — дальше искать не нужно
+                if (audioPath != null && subsPath != null)
+                {
+                    break;
+                }
             }
         }
 
