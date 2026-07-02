@@ -5,6 +5,7 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using KTools_App.Core;
+using KTools_App.Services.Contracts;
 
 namespace KTools_App.Infrastructure;
 
@@ -17,6 +18,20 @@ namespace KTools_App.Infrastructure;
 /// </summary>
 public abstract class AbstractProcessRunner
 {
+    /// <summary>
+    /// Сервис логирования.
+    /// </summary>
+    protected ILogService Log { get; }
+
+    /// <summary>
+    /// Инициализирует новый экземпляр AbstractProcessRunner.
+    /// </summary>
+    /// <param name="logService">Сервис логирования.</param>
+    protected AbstractProcessRunner(ILogService logService)
+    {
+        Log = logService;
+    }
+
     /// <summary>
     /// Асинхронно выполняет внешний бинарный процесс с перенаправлением вывода.
     /// Обеспечивает защиту от зависаний стандартных буферов за счет параллельного считывания потоков.
@@ -39,11 +54,11 @@ public abstract class AbstractProcessRunner
         if (!File.Exists(binaryPath))
         {
             string errorMsg = $"Критическая ошибка: отсутствует исполняемый файл утилиты '{binaryName}' по ожидаемому пути: '{binaryPath}'";
-            LogService.Instance.Error(errorMsg, GetType().Name);
+            Log.Error(errorMsg, GetType().Name);
             return new ProcessResult(false, -1, errorMsg);
         }
 
-        LogService.Instance.DebugLog($"Инициализация запуска процесса: '{binaryName}' с аргументами: '{arguments}' в рабочей директории: '{workingDir ?? "по умолчанию"}'", GetType().Name);
+        Log.DebugLog($"Инициализация запуска процесса: '{binaryName}' с аргументами: '{arguments}' в рабочей директории: '{workingDir ?? "по умолчанию"}'", GetType().Name);
 
         var startInfo = new ProcessStartInfo
         {
@@ -63,7 +78,7 @@ public abstract class AbstractProcessRunner
         try
         {
             process.Start();
-            LogService.Instance.Info(
+            Log.Info(
                 $"Запущен дочерний процесс '{binaryName}' (PID: {process.Id})",
                 GetType().Name);
         }
@@ -71,7 +86,7 @@ public abstract class AbstractProcessRunner
         {
             string failMsg =
                 $"Не удалось запустить внешний процесс '{binaryName}': {ex.Message}";
-            LogService.Instance.Exception(ex, failMsg, GetType().Name);
+            Log.Exception(ex, failMsg, GetType().Name);
             return new ProcessResult(false, -2, failMsg);
         }
 
@@ -111,7 +126,7 @@ public abstract class AbstractProcessRunner
             }
             catch (Exception ex)
             {
-                LogService.Instance.Exception(ex,
+                Log.Exception(ex,
                     $"Ошибка обработки стандартного вывода '{binaryName}'",
                     GetType().Name);
             }
@@ -153,7 +168,7 @@ public abstract class AbstractProcessRunner
             }
             catch (Exception ex)
             {
-                LogService.Instance.Exception(ex,
+                Log.Exception(ex,
                     $"Ошибка обработки вывода ошибок '{binaryName}'",
                     GetType().Name);
             }
@@ -168,7 +183,7 @@ public abstract class AbstractProcessRunner
         }
         catch (OperationCanceledException)
         {
-            LogService.Instance.Warn(
+            Log.Warn(
                 $"Получен внешний сигнал отмены. Принудительное прерывание " +
                 $"процесса '{binaryName}' (PID: {process.Id})...",
                 GetType().Name);
@@ -177,7 +192,7 @@ public abstract class AbstractProcessRunner
                 if (!process.HasExited)
                 {
                     process.Kill(true); // Принудительно завершаем процесс
-                    LogService.Instance.Info(
+                    Log.Info(
                         $"Процесс '{binaryName}' (PID: {process.Id}) был " +
                         $"успешно остановлен принудительно",
                         GetType().Name);
@@ -185,7 +200,7 @@ public abstract class AbstractProcessRunner
             }
             catch (Exception ex)
             {
-                LogService.Instance.Error(
+                Log.Error(
                     $"Ошибка при попытке принудительного прерывания " +
                     $"процесса '{binaryName}': {ex.Message}",
                     GetType().Name);
@@ -197,7 +212,7 @@ public abstract class AbstractProcessRunner
         int exitCode = process.ExitCode;
         bool success = exitCode == 0;
 
-        LogService.Instance.Info($"Внешний процесс '{binaryName}' завершил работу с кодом выхода: {exitCode}", GetType().Name);
+        Log.Info($"Внешний процесс '{binaryName}' завершил работу с кодом выхода: {exitCode}", GetType().Name);
         return new ProcessResult(success, exitCode, success ? "Выполнено успешно" : $"Процесс завершился с ошибкой. Код возврата: {exitCode}");
     }
 }

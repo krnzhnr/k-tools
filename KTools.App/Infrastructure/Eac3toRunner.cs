@@ -18,9 +18,16 @@ namespace KTools_App.Infrastructure;
 public sealed class Eac3toRunner : AbstractProcessRunner, IEac3toRunner
 {
     private static readonly Lazy<Eac3toRunner> LazyInstance =
-        new(() => new Eac3toRunner());
+        new(() => new Eac3toRunner(LogService.Instance));
 
-    private Eac3toRunner() { }
+    /// <summary>
+    /// Инициализирует новый экземпляр Eac3toRunner с внедрением зависимостей.
+    /// </summary>
+    /// <param name="logService">Сервис логирования.</param>
+    public Eac3toRunner(ILogService logService)
+        : base(logService)
+    {
+    }
 
     /// <summary>
     /// Возвращает единственный экземпляр класса Eac3toRunner.
@@ -86,11 +93,11 @@ public sealed class Eac3toRunner : AbstractProcessRunner, IEac3toRunner
 
         if (!result.IsSuccess)
         {
-            LogService.Instance.Error($"Ошибка выполнения eac3to (Код: {result.ExitCode}).\nSTDOUT:\n{stdoutText}\nSTDERR:\n{stderrText}", "Eac3toRunner");
+            Log.Error($"Ошибка выполнения eac3to (Код: {result.ExitCode}).\nSTDOUT:\n{stdoutText}\nSTDERR:\n{stderrText}", "Eac3toRunner");
             return false;
         }
 
-        LogService.Instance.DebugLog($"Вывод eac3to:\n{stdoutText}", "Eac3toRunner");
+        Log.DebugLog($"Вывод eac3to:\n{stdoutText}", "Eac3toRunner");
         return true;
     }
 
@@ -120,17 +127,17 @@ public sealed class Eac3toRunner : AbstractProcessRunner, IEac3toRunner
                     }
 
                     File.Delete(file);
-                    LogService.Instance.DebugLog($"🗑 Удален лог eac3to: '{Path.GetFileName(file)}'", "Eac3toRunner");
+                    Log.DebugLog($"🗑 Удален лог eac3to: '{Path.GetFileName(file)}'", "Eac3toRunner");
                 }
                 catch (Exception ex)
                 {
-                    LogService.Instance.Warn($"Не удалось удалить лог eac3to '{Path.GetFileName(file)}': {ex.Message}", "Eac3toRunner");
+                    Log.Warn($"Не удалось удалить лог eac3to '{Path.GetFileName(file)}': {ex.Message}", "Eac3toRunner");
                 }
             }
         }
         catch (Exception ex)
         {
-            LogService.Instance.Error($"Ошибка при очистке логов eac3to в папке '{directory}': {ex.Message}", "Eac3toRunner");
+            Log.Error($"Ошибка при очистке логов eac3to в папке '{directory}': {ex.Message}", "Eac3toRunner");
         }
     }
 }

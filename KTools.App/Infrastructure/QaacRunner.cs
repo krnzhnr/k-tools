@@ -7,6 +7,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using KTools_App.Core;
+using KTools_App.Services.Contracts;
 
 namespace KTools_App.Infrastructure;
 
@@ -19,9 +20,18 @@ namespace KTools_App.Infrastructure;
 public sealed class QaacRunner
 {
     private static readonly Lazy<QaacRunner> LazyInstance =
-        new(() => new QaacRunner());
+        new(() => new QaacRunner(Core.LogService.Instance));
 
-    private QaacRunner() { }
+    private readonly ILogService _logService;
+
+    /// <summary>
+    /// Инициализирует новый экземпляр QaacRunner с внедрением зависимостей.
+    /// </summary>
+    /// <param name="logService">Сервис логирования.</param>
+    public QaacRunner(ILogService logService)
+    {
+        _logService = logService;
+    }
 
     /// <summary>
     /// Возвращает единственный экземпляр класса QaacRunner.
@@ -46,7 +56,7 @@ public sealed class QaacRunner
 
         if (!File.Exists(qaacPath))
         {
-            LogService.Instance.Error(
+            _logService.Error(
                 $"Критическая ошибка: отсутствует кодировщик qaac64.exe по пути: '{qaacPath}'", 
                 "QaacRunner");
             return false;
@@ -54,13 +64,13 @@ public sealed class QaacRunner
 
         if (!File.Exists(ffmpegPath))
         {
-            LogService.Instance.Error(
+            _logService.Error(
                 $"Критическая ошибка: отсутствует декодер ffmpeg.exe по пути: '{ffmpegPath}'", 
                 "QaacRunner");
             return false;
         }
 
-        LogService.Instance.Info(
+        _logService.Info(
             $"Начало кодирования QAAC (TVBR: {tvbr}) для файла: '{Path.GetFileName(inputPath)}'", 
             "QaacRunner");
 
@@ -97,20 +107,20 @@ public sealed class QaacRunner
                 {
                     File.Copy(dllFile, Path.Combine(tempDir, Path.GetFileName(dllFile)), true);
                 }
-                LogService.Instance.DebugLog(
+                _logService.DebugLog(
                     $"Изолированное окружение QAAC подготовлено во временной папке: '{tempDir}'", 
                     "QaacRunner");
             }
             else
             {
-                LogService.Instance.Warn(
+                _logService.Warn(
                     "Не найдена папка QTfiles64 с библиотеками Apple Application Support. Возможен сбой запуска.", 
                     "QaacRunner");
             }
         }
         catch (Exception ex)
         {
-            LogService.Instance.Exception(
+            _logService.Exception(
                 ex, 
                 $"Не удалось создать изолированное временное окружение для QAAC: {ex.Message}", 
                 "QaacRunner");
@@ -141,7 +151,7 @@ public sealed class QaacRunner
 
         string qaacArgs = string.Join(" ", qaacArgsList);
 
-        LogService.Instance.DebugLog(
+        _logService.DebugLog(
             $"Запуск конвейера: ffmpeg {ffmpegArgs} | qaac64 {qaacArgs}", 
             "QaacRunner");
 
@@ -180,13 +190,13 @@ public sealed class QaacRunner
             ffmpegProc.Start();
             qaacProc.Start();
             
-            LogService.Instance.DebugLog(
+            _logService.DebugLog(
                 $"Запущены процессы конвейера. FFmpeg PID: {ffmpegProc.Id}, QAAC PID: {qaacProc.Id}", 
                 "QaacRunner");
         }
         catch (Exception ex)
         {
-            LogService.Instance.Exception(
+            _logService.Exception(
                 ex, 
                 $"Не удалось запустить процессы конвейера QAAC: {ex.Message}", 
                 "QaacRunner");
@@ -243,7 +253,7 @@ public sealed class QaacRunner
             }
             catch (Exception ex)
             {
-                LogService.Instance.Exception(ex, "Ошибка чтения stderr FFmpeg в QaacRunner", "QaacRunner");
+                _logService.Exception(ex, "Ошибка чтения stderr FFmpeg в QaacRunner", "QaacRunner");
             }
         });
 
@@ -307,7 +317,7 @@ public sealed class QaacRunner
             }
             catch (Exception ex)
             {
-                LogService.Instance.Exception(ex, "Ошибка чтения stderr QAAC в QaacRunner", "QaacRunner");
+                _logService.Exception(ex, "Ошибка чтения stderr QAAC в QaacRunner", "QaacRunner");
             }
         });
 
@@ -332,7 +342,7 @@ public sealed class QaacRunner
             }
             catch (Exception ex)
             {
-                LogService.Instance.Error(
+                _logService.Error(
                     $"Ошибка конвейерной передачи данных FFmpeg -> QAAC: {ex.Message}", 
                     "QaacRunner");
             }
@@ -356,7 +366,7 @@ public sealed class QaacRunner
         }
         catch (OperationCanceledException)
         {
-            LogService.Instance.Warn(
+            _logService.Warn(
                 "Конвейер QAAC прерван пользователем. Принудительная остановка процессов...", 
                 "QaacRunner");
             try { ffmpegProc.Kill(true); } catch { }
@@ -368,11 +378,11 @@ public sealed class QaacRunner
                 try
                 {
                     File.Delete(outputPath);
-                    LogService.Instance.DebugLog($"Удален неполный выходной файл при отмене конвейера QAAC: '{Path.GetFileName(outputPath)}'", "QaacRunner");
+                    _logService.DebugLog($"Удален неполный выходной файл при отмене конвейера QAAC: '{Path.GetFileName(outputPath)}'", "QaacRunner");
                 }
                 catch (Exception deleteEx)
                 {
-                    LogService.Instance.Exception(deleteEx, $"Не удалось удалить неполный выходной файл '{outputPath}' при отмене конвейера QAAC: {deleteEx.Message}", "QaacRunner");
+                    _logService.Exception(deleteEx, $"Не удалось удалить неполный выходной файл '{outputPath}' при отмене конвейера QAAC: {deleteEx.Message}", "QaacRunner");
                 }
             }
 
@@ -387,7 +397,7 @@ public sealed class QaacRunner
         {
             string ffErr = string.Join(Environment.NewLine, ffmpegStderrLines);
             string qaacErr = string.Join(Environment.NewLine, qaacStderrLines);
-            LogService.Instance.Error(
+            _logService.Error(
                 $"Сбой конвейера QAAC.\nFFmpeg Code: {ffmpegProc.ExitCode}, Err: {ffErr}\nQAAC Code: {qaacProc.ExitCode}, Err: {qaacErr}", 
                 "QaacRunner");
 
@@ -397,17 +407,17 @@ public sealed class QaacRunner
                 try
                 {
                     File.Delete(outputPath);
-                    LogService.Instance.DebugLog($"Удален поврежденный выходной файл после ошибки конвейера QAAC: '{Path.GetFileName(outputPath)}'", "QaacRunner");
+                    _logService.DebugLog($"Удален поврежденный выходной файл после ошибки конвейера QAAC: '{Path.GetFileName(outputPath)}'", "QaacRunner");
                 }
                 catch (Exception deleteEx)
                 {
-                    LogService.Instance.Exception(deleteEx, $"Не удалось удалить поврежденный выходной файл '{outputPath}' после ошибки конвейера QAAC: {deleteEx.Message}", "QaacRunner");
+                    _logService.Exception(deleteEx, $"Не удалось удалить поврежденный выходной файл '{outputPath}' после ошибки конвейера QAAC: {deleteEx.Message}", "QaacRunner");
                 }
             }
         }
         else
         {
-            LogService.Instance.Info(
+            _logService.Info(
                 $"Конвейер QAAC успешно завершил работу: '{Path.GetFileName(outputPath)}'", 
                 "QaacRunner");
         }
@@ -454,14 +464,14 @@ public sealed class QaacRunner
             if (Directory.Exists(tempDir))
             {
                 Directory.Delete(tempDir, true);
-                LogService.Instance.DebugLog(
+                _logService.DebugLog(
                     $"Изолированное временное окружение QAAC удалено: '{tempDir}'", 
                     "QaacRunner");
             }
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warn(
+            _logService.Warn(
                 $"Не удалось удалить временную папку QAAC '{tempDir}': {ex.Message}", 
                 "QaacRunner");
         }

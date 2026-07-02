@@ -23,9 +23,16 @@ public record MkvInputSource(string Path, List<string>? Args = null);
 public sealed class MkvmergeRunner : AbstractProcessRunner, IMkvmergeRunner
 {
     private static readonly Lazy<MkvmergeRunner> LazyInstance =
-        new(() => new MkvmergeRunner());
+        new(() => new MkvmergeRunner(LogService.Instance));
 
-    private MkvmergeRunner() { }
+    /// <summary>
+    /// Инициализирует новый экземпляр MkvmergeRunner с внедрением зависимостей.
+    /// </summary>
+    /// <param name="logService">Сервис логирования.</param>
+    public MkvmergeRunner(ILogService logService)
+        : base(logService)
+    {
+    }
 
     /// <summary>
     /// Возвращает единственный экземпляр класса MkvmergeRunner.
@@ -52,7 +59,7 @@ public sealed class MkvmergeRunner : AbstractProcessRunner, IMkvmergeRunner
     {
         if (inputs == null || inputs.Count == 0)
         {
-            LogService.Instance.Error("Не переданы входные файлы для сборки в mkvmerge", "MkvmergeRunner");
+            Log.Error("Не переданы входные файлы для сборки в mkvmerge", "MkvmergeRunner");
             return false;
         }
 
@@ -91,7 +98,7 @@ public sealed class MkvmergeRunner : AbstractProcessRunner, IMkvmergeRunner
         var stdoutLines = new List<string>();
         var stderrLines = new List<string>();
 
-        LogService.Instance.Info($"Начало сборки MKV: '{Path.GetFileName(outputPath)}'. Количество входов: {inputs.Count}", "MkvmergeRunner");
+        Log.Info($"Начало сборки MKV: '{Path.GetFileName(outputPath)}'. Количество входов: {inputs.Count}", "MkvmergeRunner");
 
         var result = await RunProcessAsync(
             "mkvmerge",
@@ -128,17 +135,17 @@ public sealed class MkvmergeRunner : AbstractProcessRunner, IMkvmergeRunner
         // mkvmerge возвращает: 0 - успех, 1 - завершено с предупреждениями, 2 - ошибка
         if (result.ExitCode == 0)
         {
-            LogService.Instance.Info($"mkvmerge успешно завершил сборку файла '{Path.GetFileName(outputPath)}'", "MkvmergeRunner");
+            Log.Info($"mkvmerge успешно завершил сборку файла '{Path.GetFileName(outputPath)}'", "MkvmergeRunner");
             return true;
         }
         else if (result.ExitCode == 1)
         {
-            LogService.Instance.Warn($"mkvmerge завершил сборку файла '{Path.GetFileName(outputPath)}' с предупреждениями:\n{stdoutText}", "MkvmergeRunner");
+            Log.Warn($"mkvmerge завершил сборку файла '{Path.GetFileName(outputPath)}' с предупреждениями:\n{stdoutText}", "MkvmergeRunner");
             return true;
         }
         else
         {
-            LogService.Instance.Error($"Ошибка выполнения mkvmerge (Код: {result.ExitCode}).\nSTDOUT:\n{stdoutText}\nSTDERR:\n{stderrText}", "MkvmergeRunner");
+            Log.Error($"Ошибка выполнения mkvmerge (Код: {result.ExitCode}).\nSTDOUT:\n{stdoutText}\nSTDERR:\n{stderrText}", "MkvmergeRunner");
             
             // Физически удаляем поврежденный выходной файл при сбое выполнения сборки MKV
             if (File.Exists(outputPath))
@@ -146,11 +153,11 @@ public sealed class MkvmergeRunner : AbstractProcessRunner, IMkvmergeRunner
                 try
                 {
                     File.Delete(outputPath);
-                    LogService.Instance.DebugLog($"Удален поврежденный выходной файл после сбоя mkvmerge: '{Path.GetFileName(outputPath)}'", "MkvmergeRunner");
+                    Log.DebugLog($"Удален поврежденный выходной файл после сбоя mkvmerge: '{Path.GetFileName(outputPath)}'", "MkvmergeRunner");
                 }
                 catch (Exception deleteEx)
                 {
-                    LogService.Instance.Exception(deleteEx, $"Не удалось удалить поврежденный выходной файл '{outputPath}' после сбоя mkvmerge: {deleteEx.Message}", "MkvmergeRunner");
+                    Log.Exception(deleteEx, $"Не удалось удалить поврежденный выходной файл '{outputPath}' после сбоя mkvmerge: {deleteEx.Message}", "MkvmergeRunner");
                 }
             }
             
@@ -183,14 +190,14 @@ public sealed class MkvmergeRunner : AbstractProcessRunner, IMkvmergeRunner
         if (result.ExitCode > 1)
         {
             string errText = string.Join(" ", errorLines);
-            LogService.Instance.Error($"Ошибка вызова mkvmerge --identify для файла '{filePath}': {errText}", "MkvmergeRunner");
+            Log.Error($"Ошибка вызова mkvmerge --identify для файла '{filePath}': {errText}", "MkvmergeRunner");
             return null;
         }
 
         string fullOutput = string.Join("", outputLines);
         if (string.IsNullOrWhiteSpace(fullOutput))
         {
-            LogService.Instance.Error($"mkvmerge --identify вернул пустой вывод для '{filePath}'", "MkvmergeRunner");
+            Log.Error($"mkvmerge --identify вернул пустой вывод для '{filePath}'", "MkvmergeRunner");
             return null;
         }
 
@@ -200,7 +207,7 @@ public sealed class MkvmergeRunner : AbstractProcessRunner, IMkvmergeRunner
         }
         catch (JsonException ex)
         {
-            LogService.Instance.Exception(ex, $"Ошибка парсинга JSON от mkvmerge для '{filePath}'", "MkvmergeRunner");
+            Log.Exception(ex, $"Ошибка парсинга JSON от mkvmerge для '{filePath}'", "MkvmergeRunner");
             return null;
         }
     }

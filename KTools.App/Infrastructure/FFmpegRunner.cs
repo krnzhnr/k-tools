@@ -20,9 +20,16 @@ namespace KTools_App.Infrastructure;
 public sealed class FFmpegRunner : AbstractProcessRunner, IFFmpegRunner
 {
     private static readonly Lazy<FFmpegRunner> LazyInstance =
-        new(() => new FFmpegRunner());
+        new(() => new FFmpegRunner(LogService.Instance));
 
-    private FFmpegRunner() { }
+    /// <summary>
+    /// Инициализирует новый экземпляр FFmpegRunner с внедрением зависимостей.
+    /// </summary>
+    /// <param name="logService">Сервис логирования.</param>
+    public FFmpegRunner(ILogService logService)
+        : base(logService)
+    {
+    }
 
     /// <summary>
     /// Возвращает единственный экземпляр класса FFmpegRunner.
@@ -117,7 +124,7 @@ public sealed class FFmpegRunner : AbstractProcessRunner, IFFmpegRunner
         if (!result.IsSuccess)
         {
             string lastErrors = string.Join(Environment.NewLine, stderrLines);
-            LogService.Instance.Error($"Ошибка выполнения FFmpeg (Код: {result.ExitCode}). Последние строки stderr:\n{lastErrors}", "FFmpegRunner");
+            Log.Error($"Ошибка выполнения FFmpeg (Код: {result.ExitCode}). Последние строки stderr:\n{lastErrors}", "FFmpegRunner");
             
             // Физически удаляем поврежденный выходной файл при сбое выполнения процесса
             if (!string.IsNullOrEmpty(outputPath) && File.Exists(outputPath))
@@ -125,11 +132,11 @@ public sealed class FFmpegRunner : AbstractProcessRunner, IFFmpegRunner
                 try
                 {
                     File.Delete(outputPath);
-                    LogService.Instance.DebugLog($"Удален поврежденный выходной файл после сбоя FFmpeg: '{Path.GetFileName(outputPath)}'", "FFmpegRunner");
+                    Log.DebugLog($"Удален поврежденный выходной файл после сбоя FFmpeg: '{Path.GetFileName(outputPath)}'", "FFmpegRunner");
                 }
                 catch (Exception deleteEx)
                 {
-                    LogService.Instance.Exception(deleteEx, $"Не удалось удалить поврежденный выходной файл '{outputPath}' после сбоя FFmpeg: {deleteEx.Message}", "FFmpegRunner");
+                    Log.Exception(deleteEx, $"Не удалось удалить поврежденный выходной файл '{outputPath}' после сбоя FFmpeg: {deleteEx.Message}", "FFmpegRunner");
                 }
             }
             
@@ -162,14 +169,14 @@ public sealed class FFmpegRunner : AbstractProcessRunner, IFFmpegRunner
         if (!result.IsSuccess)
         {
             string errText = string.Join(" ", errorLines);
-            LogService.Instance.Error($"Ошибка вызова ffprobe для файла '{filePath}': {errText}", "FFmpegRunner");
+            Log.Error($"Ошибка вызова ffprobe для файла '{filePath}': {errText}", "FFmpegRunner");
             return null;
         }
 
         string fullOutput = string.Join("", outputLines);
         if (string.IsNullOrWhiteSpace(fullOutput))
         {
-            LogService.Instance.Error($"ffprobe вернул пустой вывод для файла '{filePath}'", "FFmpegRunner");
+            Log.Error($"ffprobe вернул пустой вывод для файла '{filePath}'", "FFmpegRunner");
             return null;
         }
 
@@ -179,7 +186,7 @@ public sealed class FFmpegRunner : AbstractProcessRunner, IFFmpegRunner
         }
         catch (JsonException ex)
         {
-            LogService.Instance.Exception(ex, $"Ошибка парсинга JSON от ffprobe для файла '{filePath}'", "FFmpegRunner");
+            Log.Exception(ex, $"Ошибка парсинга JSON от ffprobe для файла '{filePath}'", "FFmpegRunner");
             return null;
         }
     }
@@ -237,7 +244,7 @@ public sealed class FFmpegRunner : AbstractProcessRunner, IFFmpegRunner
 
         if (!result.IsSuccess || !ffmpegSupports)
         {
-            LogService.Instance.Warn("Аппаратный энкодер 'hevc_nvenc' не поддерживается сборкой FFmpeg", "FFmpegRunner");
+            Log.Warn("Аппаратный энкодер 'hevc_nvenc' не поддерживается сборкой FFmpeg", "FFmpegRunner");
             return false;
         }
 
@@ -272,11 +279,11 @@ public sealed class FFmpegRunner : AbstractProcessRunner, IFFmpegRunner
 
         if (hasNvidia)
         {
-            LogService.Instance.Info("Обнаружено аппаратное обеспечение NVIDIA с поддержкой NVENC", "FFmpegRunner");
+            Log.Info("Обнаружено аппаратное обеспечение NVIDIA с поддержкой NVENC", "FFmpegRunner");
             return true;
         }
 
-        LogService.Instance.Warn("Аппаратная видеокарта NVIDIA не обнаружена в системе через утилиту nvidia-smi", "FFmpegRunner");
+        Log.Warn("Аппаратная видеокарта NVIDIA не обнаружена в системе через утилиту nvidia-smi", "FFmpegRunner");
         return false;
     }
 }

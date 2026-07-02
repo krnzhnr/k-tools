@@ -174,10 +174,12 @@ public partial class App : Application
         services.AddSingleton(ScriptRegistry.Instance); // Временная регистрация для обратной совместимости с ViewModels (до выполнения шага 2.5)
 
         // Infrastructure-сервисы (Runner'ы)
-        services.AddSingleton<IFFmpegRunner>(FFmpegRunner.Instance);
-        services.AddSingleton<IEac3toRunner>(Eac3toRunner.Instance);
+        services.AddSingleton<IFFmpegRunner, FFmpegRunner>();
+        services.AddSingleton<IEac3toRunner, Eac3toRunner>();
         services.AddSingleton<IMediaProbeService>(MediaProbeService.Instance);
-        services.AddSingleton<IMkvmergeRunner>(MkvmergeRunner.Instance);
+        services.AddSingleton<IMkvmergeRunner, MkvmergeRunner>();
+        services.AddSingleton<DeeRunner>();
+        services.AddSingleton<QaacRunner>();
 
         // 2. Регистрация служб приложения
         services.AddSingleton<INavigationService, NavigationService>();

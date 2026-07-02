@@ -7,6 +7,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using KTools_App.Core;
+using KTools_App.Services.Contracts;
 
 namespace KTools_App.Infrastructure;
 
@@ -45,7 +46,7 @@ public sealed class DeeRunner : AbstractProcessRunner
             if (result > 0)
             {
                 string shortPath = sb.ToString();
-                LogService.Instance.DebugLog($"Путь преобразован в формат 8.3: '{path}' -> '{shortPath}'", "DeeRunner");
+                Core.LogService.Instance.DebugLog($"Путь преобразован в формат 8.3: '{path}' -> '{shortPath}'", "DeeRunner");
                 return shortPath;
             }
 
@@ -56,25 +57,36 @@ public sealed class DeeRunner : AbstractProcessRunner
                 if (result > 0)
                 {
                     string shortPath = sb.ToString();
-                    LogService.Instance.DebugLog($"Путь преобразован в формат 8.3 с увеличенным буфером: '{path}' -> '{shortPath}'", "DeeRunner");
+                    Core.LogService.Instance.DebugLog($"Путь преобразован в формат 8.3 с увеличенным буфером: '{path}' -> '{shortPath}'", "DeeRunner");
                     return shortPath;
                 }
             }
 
-            LogService.Instance.Warn($"Не удалось получить короткий путь для '{path}'. Код ошибки: {Marshal.GetLastWin32Error()}", "DeeRunner");
+            Core.LogService.Instance.Warn($"Не удалось получить короткий путь для '{path}'. Код ошибки: {Marshal.GetLastWin32Error()}", "DeeRunner");
         }
         catch (Exception ex)
         {
-            LogService.Instance.Exception(ex, $"Исключение при получении короткого пути для '{path}'", "DeeRunner");
+            Core.LogService.Instance.Exception(ex, $"Исключение при получении короткого пути для '{path}'", "DeeRunner");
         }
 
         return path;
     }
 
     private static readonly Lazy<DeeRunner> LazyInstance =
-        new(() => new DeeRunner());
+        new(() => new DeeRunner(Core.LogService.Instance, FFmpegRunner.Instance));
 
-    private DeeRunner() { }
+    private readonly IFFmpegRunner _ffmpegRunner;
+
+    /// <summary>
+    /// Инициализирует новый экземпляр DeeRunner с внедрением зависимостей.
+    /// </summary>
+    /// <param name="logService">Сервис логирования.</param>
+    /// <param name="ffmpegRunner">Исполнитель FFmpeg.</param>
+    public DeeRunner(ILogService logService, IFFmpegRunner ffmpegRunner)
+        : base(logService)
+    {
+        _ffmpegRunner = ffmpegRunner;
+    }
 
     /// <summary>
     /// Возвращает единственный экземпляр класса DeeRunner.
@@ -104,7 +116,7 @@ public sealed class DeeRunner : AbstractProcessRunner
         Action<double>? onProgress = null,
         CancellationToken cancellationToken = default)
     {
-        LogService.Instance.Info($"Начало кодирования Dolby ({outputFormat.ToUpper()}) для файла: '{Path.GetFileName(inputPath)}'", "DeeRunner");
+        Log.Info($"Начало кодирования Dolby ({outputFormat.ToUpper()}) для файла: '{Path.GetFileName(inputPath)}'", "DeeRunner");
 
         // Создаем изолированную временную директорию для работы
         string tempDir = Path.Combine(PathManager.GetSettingsDirectory(), "temp_dee_" + Guid.NewGuid().ToString("N"));
@@ -114,7 +126,7 @@ public sealed class DeeRunner : AbstractProcessRunner
         }
         catch (Exception ex)
         {
-            LogService.Instance.Error($"Не удалось создать временную директорию для DEE: {ex.Message}", "DeeRunner");
+            Log.Error($"Не удалось создать временную директорию для DEE: {ex.Message}", "DeeRunner");
             return false;
         }
 
@@ -135,7 +147,7 @@ public sealed class DeeRunner : AbstractProcessRunner
                 targetChannels = 2; // По умолчанию стерео
             }
 
-            LogService.Instance.Info($"Раскодирование входного файла во временный WAV ({targetChannels} каналов)...", "DeeRunner");
+            Log.Info($"Раскодирование входного файла во временный WAV ({targetChannels} каналов)...", "DeeRunner");
 
             var ffmpegArgs = new List<string>
             {
@@ -143,7 +155,7 @@ public sealed class DeeRunner : AbstractProcessRunner
                 "-y"
             };
 
-            bool decodeSuccess = await FFmpegRunner.Instance.RunAsync(
+            bool decodeSuccess = await _ffmpegRunner.RunAsync(
                 inputPath,
                 tempWavPath,
                 extraArgs: ffmpegArgs,
@@ -153,7 +165,7 @@ public sealed class DeeRunner : AbstractProcessRunner
 
             if (!decodeSuccess || !File.Exists(tempWavPath))
             {
-                LogService.Instance.Error("Не удалось раскодировать исходный файл во временный WAV", "DeeRunner");
+                Log.Error("Не удалось раскодировать исходный файл во временный WAV", "DeeRunner");
                 return false;
             }
 
@@ -176,7 +188,7 @@ public sealed class DeeRunner : AbstractProcessRunner
             );
 
             await File.WriteAllTextAsync(tempXmlPath, xmlContent, cancellationToken);
-            LogService.Instance.DebugLog("XML-конфигурация для Dolby Encoding Engine сгенерирована", "DeeRunner");
+            Log.DebugLog("XML-конфигурация для Dolby Encoding Engine сгенерирована", "DeeRunner");
 
             // Шаг 3. Запуск dee.exe с сгенерированным XML
             string shortXmlPath = GetShortPath(tempXmlPath);
@@ -189,7 +201,7 @@ public sealed class DeeRunner : AbstractProcessRunner
                 arguments,
                 onOutputLine: line =>
                 {
-                    LogService.Instance.DebugLog($"[DEE STDOUT] {line}", "DeeRunner");
+                    Log.DebugLog($"[DEE STDOUT] {line}", "DeeRunner");
 
                     if (line.Contains("Step: measuring"))
                     {
@@ -239,17 +251,17 @@ public sealed class DeeRunner : AbstractProcessRunner
                         }
                         catch (Exception ex)
                         {
-                            LogService.Instance.Exception(ex, "Ошибка расчета прогресса DEE", "DeeRunner");
+                            Log.Exception(ex, "Ошибка расчета прогресса DEE", "DeeRunner");
                         }
                     }
                 },
-                onErrorLine: line => LogService.Instance.DebugLog($"[DEE STDERR] {line}", "DeeRunner"),
+                onErrorLine: line => Log.DebugLog($"[DEE STDERR] {line}", "DeeRunner"),
                 cancellationToken: cancellationToken
             );
 
             if (!result.IsSuccess)
             {
-                LogService.Instance.Error($"Ошибка при работе Dolby Encoding Engine (Код: {result.ExitCode})", "DeeRunner");
+                Log.Error($"Ошибка при работе Dolby Encoding Engine (Код: {result.ExitCode})", "DeeRunner");
                 return false;
             }
 
@@ -271,16 +283,16 @@ public sealed class DeeRunner : AbstractProcessRunner
                     File.Delete(outputPath);
                 }
                 File.Move(generatedFile, outputPath);
-                LogService.Instance.Info($"Кодирование Dolby успешно завершено: '{Path.GetFileName(outputPath)}'", "DeeRunner");
+                Log.Info($"Кодирование Dolby успешно завершено: '{Path.GetFileName(outputPath)}'", "DeeRunner");
                 return true;
             }
 
-            LogService.Instance.Error("Завершено без ошибок, но выходной файл не был найден на диске", "DeeRunner");
+            Log.Error("Завершено без ошибок, но выходной файл не был найден на диске", "DeeRunner");
             return false;
         }
         catch (Exception ex)
         {
-            LogService.Instance.Exception(ex, "Критический сбой при обработке Dolby аудио", "DeeRunner");
+            Log.Exception(ex, "Критический сбой при обработке Dolby аудио", "DeeRunner");
             return false;
         }
         finally
@@ -295,7 +307,7 @@ public sealed class DeeRunner : AbstractProcessRunner
             }
             catch (Exception ex)
             {
-                LogService.Instance.DebugLog($"Не удалось удалить временную папку DEE: {ex.Message}", "DeeRunner");
+                Log.DebugLog($"Не удалось удалить временную папку DEE: {ex.Message}", "DeeRunner");
             }
         }
     }
@@ -304,7 +316,7 @@ public sealed class DeeRunner : AbstractProcessRunner
     {
         try
         {
-            var info = await FFmpegRunner.Instance.GetVideoInfoAsync(filePath);
+            var info = await _ffmpegRunner.GetVideoInfoAsync(filePath);
             if (info != null && info.RootElement.TryGetProperty("streams", out var streamsProp))
             {
                 foreach (var stream in streamsProp.EnumerateArray())
