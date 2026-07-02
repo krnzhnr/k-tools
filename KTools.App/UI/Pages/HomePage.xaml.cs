@@ -63,14 +63,7 @@ public sealed partial class HomePage : Page
     {
         if (sender is Border border && border.Tag is ScriptInfo scriptInfo)
         {
-            var registry = App.Services.GetRequiredService<ScriptRegistry>();
-            var script = registry.GetScriptByName(scriptInfo.Name);
-
-            if (script != null)
-            {
-                var navigationService = App.Services.GetRequiredService<INavigationService>();
-                navigationService.NavigateTo(typeof(WorkPanel), script);
-            }
+            ViewModel.NavigateToScriptCommand.Execute(scriptInfo.Name);
         }
     }
 }

@@ -2,8 +2,10 @@
 using System.Collections.Generic;
 using System.Linq;
 using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
 using KTools_App.Core;
 using KTools_App.Services.Contracts;
+using KTools_App.UI.Pages;
 
 namespace KTools_App.ViewModels;
 
@@ -35,12 +37,15 @@ public partial class HomeViewModel : ObservableObject
     /// </summary>
     public List<ScriptInfo> SubtitleScripts { get; }
 
+    private readonly IScriptRegistry _scriptRegistry;
+
     /// <summary>
     /// Инициализирует ViewModel домашней страницы.
     /// </summary>
-    public HomeViewModel(INavigationService navigationService)
+    public HomeViewModel(INavigationService navigationService, IScriptRegistry scriptRegistry)
     {
         _navigationService = navigationService;
+        _scriptRegistry = scriptRegistry;
 
         var scripts = new List<ScriptInfo>
         {
@@ -160,5 +165,18 @@ public partial class HomeViewModel : ObservableObject
         SubtitleScripts = scripts
             .Where(s => s.Category == "Субтитры")
             .ToList();
+    }
+
+    /// <summary>
+    /// Выполняет переход к экрану выполнения скрипта через службу навигации.
+    /// </summary>
+    [RelayCommand]
+    private void NavigateToScript(string scriptName)
+    {
+        var script = _scriptRegistry.GetScriptByName(scriptName);
+        if (script != null)
+        {
+            _navigationService.NavigateTo(typeof(WorkPanel), script);
+        }
     }
 }

@@ -164,10 +164,14 @@ public partial class App : Application
 
         // 1. Регистрация синглтонов ядра (переходная регистрация через существующие .Instance)
         services.AddSingleton<ILogService>(LogService.Instance);
+        services.AddSingleton(LogService.Instance); // Временная регистрация для обратной совместимости с ViewModels (до выполнения шага 2.5)
         services.AddSingleton<ISettingsManager>(SettingsManager.Instance);
+        services.AddSingleton(SettingsManager.Instance); // Временная регистрация для обратной совместимости с ViewModels (до выполнения шага 2.5)
         services.AddSingleton<IDependencyManager>(DependencyManager.Instance);
+        services.AddSingleton(DependencyManager.Instance); // Временная регистрация для обратной совместимости с ViewModels (до выполнения шага 2.5)
         services.AddSingleton<IPathManager, PathManagerService>();
         services.AddSingleton<IScriptRegistry>(ScriptRegistry.Instance);
+        services.AddSingleton(ScriptRegistry.Instance); // Временная регистрация для обратной совместимости с ViewModels (до выполнения шага 2.5)
 
         // Infrastructure-сервисы (Runner'ы)
         services.AddSingleton<IFFmpegRunner>(FFmpegRunner.Instance);
