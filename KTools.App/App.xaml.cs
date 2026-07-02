@@ -3,6 +3,7 @@ using System;
 using Microsoft.UI.Xaml;
 using Microsoft.Extensions.DependencyInjection;
 using KTools_App.Core;
+using KTools_App.Infrastructure;
 using KTools_App.Services.Contracts;
 using KTools_App.Services.Implementations;
 using KTools_App.ViewModels;
@@ -161,11 +162,18 @@ public partial class App : Application
     {
         var services = new ServiceCollection();
 
-        // 1. Регистрация синглтонов ядра (существующие Lazy<T>)
-        services.AddSingleton(LogService.Instance);
-        services.AddSingleton(DependencyManager.Instance);
-        services.AddSingleton(SettingsManager.Instance);
-        services.AddSingleton(ScriptRegistry.Instance);
+        // 1. Регистрация синглтонов ядра (переходная регистрация через существующие .Instance)
+        services.AddSingleton<ILogService>(LogService.Instance);
+        services.AddSingleton<ISettingsManager>(SettingsManager.Instance);
+        services.AddSingleton<IDependencyManager>(DependencyManager.Instance);
+        services.AddSingleton<IPathManager, PathManagerService>();
+        services.AddSingleton<IScriptRegistry>(ScriptRegistry.Instance);
+
+        // Infrastructure-сервисы (Runner'ы)
+        services.AddSingleton<IFFmpegRunner>(FFmpegRunner.Instance);
+        services.AddSingleton<IEac3toRunner>(Eac3toRunner.Instance);
+        services.AddSingleton<IMediaProbeService>(MediaProbeService.Instance);
+        services.AddSingleton<IMkvmergeRunner>(MkvmergeRunner.Instance);
 
         // 2. Регистрация служб приложения
         services.AddSingleton<INavigationService, NavigationService>();
