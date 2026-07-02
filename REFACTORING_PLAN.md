@@ -9,7 +9,7 @@
 | Категория | Суть проблемы | Масштаб |
 |-----------|---------------|---------|
 | Архитектура (DIP) | Статические синглтоны `.Instance` вместо DI | 50+ вхождений в 18+ файлах |
-| Service Locator | `App.Services.GetRequiredService<T>()` в Code-Behind | 10 вхождений в 6 страницах |
+| Service Locator | `App.Services.GetRequiredService<T>()` для не-ViewModel сервисов в Code-Behind | 4 вхождения в 2 страницах |
 | Потокобезопасность | `GetAwaiter().GetResult()` на UI-потоке | 1 критическое место (`VideoEncodingScript.cs:37`) |
 | HttpClient | Ручное создание `new HttpClient()` | 2 файла (`DependencyManager`, `UpdateService`) |
 | XAML-привязки | `{Binding}` вместо `{x:Bind}` | 6 мест в 2 файлах |
@@ -32,18 +32,21 @@
 8. `MkvmergeRunner.Instance`
 
 **Полный перечень Service Locator вызовов:**
-| Файл | Строка | Вызов |
-|------|--------|-------|
-| `MainPage.xaml.cs` | 37 | `App.Services.GetRequiredService<MainViewModel>()` |
-| `MainPage.xaml.cs` | 38 | `App.Services.GetRequiredService<INavigationService>()` |
-| `MainPage.xaml.cs` | 65 | `App.Services.GetService<IDialogService>()` |
-| `DependencySetupPage.xaml.cs` | 36 | `App.Services.GetRequiredService<DependencySetupViewModel>()` |
-| `HomePage.xaml.cs` | 29 | `App.Services.GetRequiredService<HomeViewModel>()` |
-| `HomePage.xaml.cs` | 66 | `App.Services.GetRequiredService<ScriptRegistry>()` |
-| `HomePage.xaml.cs` | 71 | `App.Services.GetRequiredService<INavigationService>()` |
-| `LogPage.xaml.cs` | 27 | `App.Services.GetRequiredService<LogViewModel>()` |
-| `SettingsPage.xaml.cs` | 29 | `App.Services.GetRequiredService<SettingsViewModel>()` |
-| `WorkPanel.xaml.cs` | 55 | `App.Services.GetRequiredService<WorkPanelViewModel>()` |
+
+> **Нативный подход WinUI 3:** Вызовы `GetRequiredService<TViewModel>()` для получения ViewModel страницы являются **допустимым** паттерном, т.к. XAML-компилятор и `Frame.Navigate` требуют конструктор без параметров. Бизнес-логика (обращения к другим сервисам) должна быть перенесена во ViewModels.
+
+| Файл | Строка | Вызов | Статус |
+|------|--------|-------|--------|
+| `MainPage.xaml.cs` | 37 | `App.Services.GetRequiredService<MainViewModel>()` | ✅ Допустимый (ViewModel) |
+| `MainPage.xaml.cs` | 38 | `App.Services.GetRequiredService<INavigationService>()` | ⚠️ Перенести в MainViewModel |
+| `MainPage.xaml.cs` | 65 | `App.Services.GetService<IDialogService>()` | ⚠️ Перенести в MainViewModel |
+| `DependencySetupPage.xaml.cs` | 36 | `App.Services.GetRequiredService<DependencySetupViewModel>()` | ✅ Допустимый (ViewModel) |
+| `HomePage.xaml.cs` | 29 | `App.Services.GetRequiredService<HomeViewModel>()` | ✅ Допустимый (ViewModel) |
+| `HomePage.xaml.cs` | 66 | `App.Services.GetRequiredService<ScriptRegistry>()` | ❌ Удалён (перенесён в HomeViewModel) |
+| `HomePage.xaml.cs` | 71 | `App.Services.GetRequiredService<INavigationService>()` | ❌ Удалён (перенесён в HomeViewModel) |
+| `LogPage.xaml.cs` | 27 | `App.Services.GetRequiredService<LogViewModel>()` | ✅ Допустимый (ViewModel) |
+| `SettingsPage.xaml.cs` | 29 | `App.Services.GetRequiredService<SettingsViewModel>()` | ✅ Допустимый (ViewModel) |
+| `WorkPanel.xaml.cs` | 55 | `App.Services.GetRequiredService<WorkPanelViewModel>()` | ✅ Допустимый (ViewModel) |
 
 **Принцип Zero-Breakage:** каждый шаг спроектирован так, чтобы после его выполнения проект **гарантированно компилировался и запускался**. Порядок строго инкрементальный: сначала фундамент, затем сервисы, затем потребители.
 
@@ -139,14 +142,17 @@ dotnet build -c Debug -p:Platform=x64
 
 ## Этап 2: Изоляция зависимостей и удаление Service Locator / Синглтонов
 
-> **Цель:** Перевести проект на инверсию зависимостей (DIP) через конструкторное внедрение. Убрать все обращения к `.Instance` и `App.Services.GetRequiredService<T>()`. После этого этапа каждый класс будет зависеть только от интерфейсов, полученных через конструктор.
+> **Цель:** Перевести проект на инверсию зависимостей (DIP) через конструкторное внедрение. Убрать все обращения к `.Instance` и перенести бизнес-логику из Code-Behind во ViewModels. После этого этапа каждый класс будет зависеть только от интерфейсов, полученных через конструктор.
+>
+> **Допустимое исключение (нативный подход WinUI 3):** В Code-Behind страниц допускается **единственный** вызов `App.Services.GetRequiredService<TViewModel>()` для получения ViewModel данной страницы. Это стандартный паттерн из MVVM Toolkit, поскольку XAML-компилятор и `Frame.Navigate` требуют параметрлесный конструктор. Все остальные зависимости страницы внедряются строго через конструктор ViewModel.
 
 **Стратегия безопасного перехода (The Strangler Fig Pattern):**
 1. Создаём интерфейсы — ничего не ломается.
 2. Реализуем интерфейсы в существующих классах — ничего не ломается.
 3. Регистрируем реализации в DI (через существующие `.Instance`) — ничего не ломается.
-4. Поочерёдно переводим потребителей с `.Instance` на конструкторное внедрение — каждое переключение атомарно.
-5. В конце удаляем свойства `.Instance` и статику.
+4. Переносим бизнес-логику из Code-Behind во ViewModels, сохраняя нативную навигацию `Frame.Navigate`.
+5. Поочерёдно переводим потребителей с `.Instance` на конструкторное внедрение — каждое переключение атомарно.
+6. В конце удаляем свойства `.Instance` и статику.
 
 > **⚠️ КРИТИЧЕСКАЯ ЗАВИСИМОСТЬ — Циклическая связь `LogService ↔ SettingsManager`:**
 > `SettingsManager` вызывает `LogService.Instance` в методах `SetSetting()`/`SaveSettings()`.
@@ -289,59 +295,53 @@ services.AddSingleton<IMkvmergeRunner>(MkvmergeRunner.Instance);
 
 ---
 
-### Шаг 2.4 — Внедрение кастомной фабрики страниц (удаление Service Locator)
+### Шаг 2.4 — Нативная интеграция DI для страниц (перенос логики в ViewModels) - ЗАВЕРШЕН
+
+> **⚠️ ВАЖНО — Изменение подхода (по результатам Deep Research аудита):**
+> Первоначальный план предполагал создание кастомной `PageFactory` с ручной инстанциацией страниц (`Frame.Content = new Page(...)`) и конструкторами с DI-параметрами. Этот подход **отвергнут** как нарушающий нативную модель навигации WinUI 3:
+> - **Ломается встроенная история переходов** (`BackStack`, `CanGoBack`).
+> - **Отключаются системные анимации переходов** (требуется вручную реализовывать `NavigationTransitionInfo`).
+> - **Нарушается `NavigationCacheMode`** (кэширование страниц).
+> - **Несовместимость с XAML-компилятором**, который требует параметрлесный конструктор.
+>
+> Вместо этого принят **Подход №1 из отчёта Deep Research** (рекомендуемый Microsoft):
+> страницы сохраняют конструктор по умолчанию и получают ViewModel из DI-контейнера.
+> Вся бизнес-логика из code-behind перемещается во ViewModels, которые используют полноценный Constructor DI.
+> Навигация осуществляется стандартным `Frame.Navigate(typeof(Page), parameter)`.
 
 **Действие:**
-1. Создать кастомную фабрику страниц для разрешения страниц через DI:
+1. **Страницы** сохраняют параметрлесный конструктор для совместимости с XAML и `Frame.Navigate`:
    ```csharp
-   /// <summary>
-   /// Фабрика для создания страниц через DI-контейнер.
-   /// Устраняет паттерн Service Locator из Code-Behind страниц.
-   /// </summary>
-   public sealed class PageFactory
+   public sealed partial class MyPage : Page
    {
-       private readonly IServiceProvider _serviceProvider;
+       public MyViewModel ViewModel { get; }
 
-       public PageFactory(IServiceProvider serviceProvider)
+       public MyPage()
        {
-           _serviceProvider = serviceProvider;
-       }
-
-       public Page CreatePage<TPage>() where TPage : Page
-       {
-           return _serviceProvider.GetRequiredService<TPage>();
+           ViewModel = App.Services.GetRequiredService<MyViewModel>();
+           this.InitializeComponent();
        }
    }
    ```
+   > Допускается единственный вызов `App.Services.GetRequiredService<TViewModel>()` в конструкторе страницы
+   > для получения **только** её ViewModel. Это стандартный паттерн из MVVM Toolkit.
+   > Обращения к любым другим сервисам (`IScriptRegistry`, `INavigationService` и др.) в code-behind **запрещены** —
+   > эти зависимости должны быть внедрены во ViewModel.
 
-2. Изменить конструкторы **всех 6 страниц** для приёма зависимостей через параметры:
+2. **Перенести всю бизнес-логику** из Code-Behind страниц во ViewModels:
+   - Вызовы `App.Services.GetRequiredService<INavigationService>()` → заменить на `INavigationService` в конструкторе ViewModel.
+   - Вызовы `App.Services.GetRequiredService<ScriptRegistry>()` → заменить на `IScriptRegistry` в конструкторе ViewModel.
+   - Обработчики событий, содержащие логику → заменить на `[RelayCommand]` во ViewModel, вызываемые через `{x:Bind}`.
 
-   | Страница | Параметры конструктора |
-   |----------|----------------------|
-   | `MainPage` | `MainViewModel`, `INavigationService`, `IDialogService` |
-   | `HomePage` | `HomeViewModel`, `IScriptRegistry`, `INavigationService` |
-   | `SettingsPage` | `SettingsViewModel` |
-   | `WorkPanel` | `WorkPanelViewModel` |
-   | `LogPage` | `LogViewModel` |
-   | `DependencySetupPage` | `DependencySetupViewModel` |
-
-3. Удалить **все 10** вызовов `App.Services.GetRequiredService<T>()` и `App.Services.GetService<T>()` из Code-Behind файлов.
-
-4. Обновить `NavigationService` для использования `IServiceProvider` или `PageFactory` при навигации.
+3. **Навигация** остаётся нативной — `Frame.Navigate(typeof(Page), parameter)`.
+   `NavigationService` использует стандартный `Frame.Navigate`, не создавая экземпляры страниц вручную.
 
 **Файлы:**
-- `[NEW]` `KTools.App/Services/PageFactory.cs`
-- `[MODIFY]` `KTools.App/App.xaml.cs` — регистрация `PageFactory` и обновление регистрации страниц
-- `[MODIFY]` `KTools.App/MainPage.xaml.cs` — конструктор принимает зависимости
-- `[MODIFY]` `KTools.App/UI/Pages/HomePage.xaml.cs` — конструктор принимает зависимости
-- `[MODIFY]` `KTools.App/UI/Pages/SettingsPage.xaml.cs` — конструктор принимает `SettingsViewModel`
-- `[MODIFY]` `KTools.App/UI/Pages/WorkPanel.xaml.cs` — конструктор принимает `WorkPanelViewModel`
-- `[MODIFY]` `KTools.App/UI/Pages/LogPage.xaml.cs` — конструктор принимает `LogViewModel`
-- `[MODIFY]` `KTools.App/UI/Pages/DependencySetupPage.xaml.cs` — конструктор принимает ViewModel
-- `[MODIFY]` `KTools.App/Services/Implementations/NavigationService.cs` — использовать `PageFactory` или `IServiceProvider`
+- `[MODIFY]` `KTools.App/UI/Pages/HomePage.xaml.cs` — удалить лишние сервисы из code-behind, оставить только `HomeViewModel`
+- `[MODIFY]` `KTools.App/ViewModels/HomeViewModel.cs` — принять `IScriptRegistry`, `INavigationService` через конструктор
 
 **Критерий приёмки:**
-Grep по `App\.Services\.GetRequiredService` и `App\.Services\.GetService` в каталоге `KTools.App/` возвращает **0 результатов** (кроме определения самого `Services` в `App.xaml.cs`). Все страницы получают зависимости через конструктор. Навигация между страницами работает корректно. Выполнить `dotnet build -c Debug -p:Platform=x64` — проект собирается без ошибок.
+Grep по `App\.Services\.GetRequiredService` и `App\.Services\.GetService` в Code-Behind файлах (`*.xaml.cs`) возвращает **только** вызовы для получения ViewModel данной страницы (по одному на страницу). Логика навигации и получения данных находится во ViewModels. Навигация через `Frame.Navigate` работает со стандартными анимациями и BackStack. Выполнить `dotnet build -c Debug -p:Platform=x64` — проект собирается без ошибок.
 
 ---
 
@@ -500,7 +500,7 @@ Grep по `\.Instance` в каталоге `KTools.App/` возвращает **
 dotnet build -c Debug -p:Platform=x64
 ```
 
-**Ожидаемый результат:** 0 ошибок. Проект полностью переведён на DI. Все зависимости внедряются через конструкторы. Паттерн Service Locator удалён. Все 8 синглтонов `.Instance` удалены. Циклическая зависимость разорвана. Проект запускается, вся функциональность сохранена.
+**Ожидаемый результат:** 0 ошибок. Проект полностью переведён на DI. Все зависимости сервисов и ViewModels внедряются через конструкторы. Вызовы `App.Services` в Code-Behind ограничены получением ViewModel (нативный подход WinUI 3). Все 8 синглтонов `.Instance` удалены. Циклическая зависимость разорвана. Проект запускается, вся функциональность сохранена.
 
 ---
 
@@ -997,7 +997,7 @@ dotnet test KTools.App.Tests -c Debug -p:Platform=x64
 | Этап | Название | Шагов | Ключевой результат |
 |------|----------|-------|--------------------|
 | 1 | Инфраструктура и качество кода | 4 | Анализаторы подключены, мёртвый код удалён |
-| 2 | Изоляция зависимостей (DI) | 6 | 0 синглтонов `.Instance` (8 шт.), 0 Service Locator (10 вхождений) |
+| 2 | Изоляция зависимостей (DI) | 6 | 0 синглтонов `.Instance` (8 шт.), Service Locator ограничен ViewModel-паттерном WinUI 3 |
 | 3 | Декомпозиция логики (SOLID) | 4 | SRP соблюдён, Code-Behind ≤ 200 строк, DRY-дублирование устранено |
 | 4 | Оптимизация UI и XAML | 2 | 0 блокировок UI, 0 `{Binding}` (6 вхождений заменены) |
 | 5 | Глобализация и доступность | 4 | Все строки в `.resw`, все элементы доступны |
