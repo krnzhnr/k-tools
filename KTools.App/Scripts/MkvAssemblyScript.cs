@@ -1,4 +1,4 @@
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -250,7 +250,7 @@ public sealed class MkvAssemblyScript : AbstractScript
             mkvInputs.Add(new MkvInputSource(audioPath, new List<string>
             {
                 "--audio-tracks", "0",
-                "--language", "0:und",
+                "--language", "0:rus",
                 "--default-track", "0:yes",
                 "--forced-display-flag", "0:yes"
             }));
