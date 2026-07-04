@@ -1,11 +1,12 @@
-
+﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 18
 VisualStudioVersion = 18.6.11822.322
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "KTools.App", "KTools.App\KTools.App.csproj", "{8BB7FEA6-25B0-4914-A44A-A3686E56E380}"
 EndProject
-
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "KTools.App.Tests", "KTools.App.Tests\KTools.App.Tests.csproj", "{18A01C04-4716-4130-BA70-7D60E7B10D6B}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -31,7 +32,18 @@ Global
 		{8BB7FEA6-25B0-4914-A44A-A3686E56E380}.Release|x64.Build.0 = Release|x64
 		{8BB7FEA6-25B0-4914-A44A-A3686E56E380}.Release|x86.ActiveCfg = Release|x86
 		{8BB7FEA6-25B0-4914-A44A-A3686E56E380}.Release|x86.Build.0 = Release|x86
-
+		{18A01C04-4716-4130-BA70-7D60E7B10D6B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{18A01C04-4716-4130-BA70-7D60E7B10D6B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{18A01C04-4716-4130-BA70-7D60E7B10D6B}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{18A01C04-4716-4130-BA70-7D60E7B10D6B}.Debug|x64.Build.0 = Debug|Any CPU
+		{18A01C04-4716-4130-BA70-7D60E7B10D6B}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{18A01C04-4716-4130-BA70-7D60E7B10D6B}.Debug|x86.Build.0 = Debug|Any CPU
+		{18A01C04-4716-4130-BA70-7D60E7B10D6B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{18A01C04-4716-4130-BA70-7D60E7B10D6B}.Release|Any CPU.Build.0 = Release|Any CPU
+		{18A01C04-4716-4130-BA70-7D60E7B10D6B}.Release|x64.ActiveCfg = Release|Any CPU
+		{18A01C04-4716-4130-BA70-7D60E7B10D6B}.Release|x64.Build.0 = Release|Any CPU
+		{18A01C04-4716-4130-BA70-7D60E7B10D6B}.Release|x86.ActiveCfg = Release|Any CPU
+		{18A01C04-4716-4130-BA70-7D60E7B10D6B}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

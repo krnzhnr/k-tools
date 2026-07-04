@@ -90,7 +90,7 @@ public static class FFmpegOutputParser
             // Извлечение FPS
             double? fps = null;
             var fpsMatch = FpsRegex.Match(line);
-            if (fpsMatch.Success && double.TryParse(fpsMatch.Groups[1].Value, out double fpsVal))
+            if (fpsMatch.Success && double.TryParse(fpsMatch.Groups[1].Value, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double fpsVal))
             {
                 fps = fpsVal;
             }
@@ -110,7 +110,7 @@ public static class FFmpegOutputParser
             // Извлечение скорости
             double? speed = null;
             var speedMatch = SpeedRegex.Match(line);
-            if (speedMatch.Success && double.TryParse(speedMatch.Groups[1].Value, out double speedVal))
+            if (speedMatch.Success && double.TryParse(speedMatch.Groups[1].Value, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double speedVal))
             {
                 speed = speedVal;
             }
