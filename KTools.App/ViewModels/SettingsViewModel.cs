@@ -185,6 +185,12 @@ public partial class SettingsViewModel : ThreadSafeViewModel
     public partial int SelectedBackdropIndex { get; set; }
 
     /// <summary>
+    /// Индекс выбранного языка интерфейса (0 - Русский, 1 - English).
+    /// </summary>
+    [ObservableProperty]
+    public partial int SelectedLanguageIndex { get; set; }
+
+    /// <summary>
     /// Флаг отображения вкладки логов в основном меню навигации.
     /// </summary>
     [ObservableProperty]
@@ -289,6 +295,11 @@ public partial class SettingsViewModel : ThreadSafeViewModel
             ? 1
             : 0;
 
+        SelectedLanguageIndex = _settingsManager.Language
+            .Equals("en-US", StringComparison.OrdinalIgnoreCase)
+            ? 1
+            : 0;
+
         ShowLogsTab = _settingsManager.ShowLogsTab;
         LogDir = _settingsManager.LogDir;
 
@@ -357,6 +368,21 @@ public partial class SettingsViewModel : ThreadSafeViewModel
         string newBackdrop = value == 1 ? "Acrylic" : "Mica";
         _settingsManager.BackdropType = newBackdrop;
         WeakReferenceMessenger.Default.Send(new BackdropChangedMessage(newBackdrop));
+    }
+
+    partial void OnSelectedLanguageIndexChanged(int value)
+    {
+        string newLang = value == 1 ? "en-US" : "ru-RU";
+        if (!_settingsManager.Language.Equals(newLang, StringComparison.OrdinalIgnoreCase))
+        {
+            _settingsManager.Language = newLang;
+            var localizationService = Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetRequiredService<ILocalizationService>(App.Services);
+            localizationService.CurrentLanguage = newLang;
+            
+            _ = _dialogService.ShowMessageAsync(
+                "Смена языка / Language Change",
+                "Для полного применения изменений языка интерфейса, пожалуйста, перезапустите приложение.\n\nPlease restart the application to fully apply the language changes.");
+        }
     }
 
     partial void OnShowLogsTabChanged(bool value)
@@ -440,6 +466,7 @@ public partial class SettingsViewModel : ThreadSafeViewModel
             _settingsManager.UseAutoSubfolder = false;
             _settingsManager.Theme = "Dark";
             _settingsManager.BackdropType = "Mica";
+            _settingsManager.Language = "ru-RU";
             _settingsManager.ShowLogsTab = false;
             _settingsManager.LogDir = string.Empty;
             _settingsManager.AutoCheckUpdates = true;

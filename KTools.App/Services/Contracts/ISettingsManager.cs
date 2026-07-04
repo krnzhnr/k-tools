@@ -30,6 +30,11 @@ public interface ISettingsManager
     string Theme { get; set; }
 
     /// <summary>
+    /// Язык интерфейса приложения (например, "ru-RU" или "en-US").
+    /// </summary>
+    string Language { get; set; }
+
+    /// <summary>
     /// Тип фона окон приложения (Mica или Acrylic).
     /// </summary>
     string BackdropType { get; set; }

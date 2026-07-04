@@ -74,6 +74,15 @@ public sealed class SettingsManager : ISettingsManager
     }
 
     /// <summary>
+    /// Язык интерфейса приложения (например, "ru-RU" или "en-US").
+    /// </summary>
+    public string Language
+    {
+        get => GetSetting("General", "Language", "ru-RU");
+        set => SetSetting("General", "Language", value);
+    }
+
+    /// <summary>
     /// Тип фона окон приложения (Mica или Acrylic).
     /// </summary>
     public string BackdropType

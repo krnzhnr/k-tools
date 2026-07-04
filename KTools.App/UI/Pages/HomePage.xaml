@@ -72,7 +72,7 @@
 
             <!-- Группа: Видео -->
             <StackPanel Spacing="12">
-                <TextBlock Text="Видео" 
+                <TextBlock x:Uid="HomePage_Category_Video"
                            FontFamily="Segoe UI" 
                            FontSize="16" 
                            FontWeight="Bold"
@@ -90,7 +90,7 @@
 
             <!-- Группа: Аудио -->
             <StackPanel Spacing="12">
-                <TextBlock Text="Аудио" 
+                <TextBlock x:Uid="HomePage_Category_Audio"
                            FontFamily="Segoe UI" 
                            FontSize="16" 
                            FontWeight="Bold"
@@ -108,7 +108,7 @@
 
             <!-- Группа: Контейнеры -->
             <StackPanel Spacing="12">
-                <TextBlock Text="Контейнеры" 
+                <TextBlock x:Uid="HomePage_Category_Containers"
                            FontFamily="Segoe UI" 
                            FontSize="16" 
                            FontWeight="Bold"
@@ -126,7 +126,7 @@
 
             <!-- Группа: Субтитры -->
             <StackPanel Spacing="12">
-                <TextBlock Text="Субтитры" 
+                <TextBlock x:Uid="HomePage_Category_Subtitles"
                            FontFamily="Segoe UI" 
                            FontSize="16" 
                            FontWeight="Bold"

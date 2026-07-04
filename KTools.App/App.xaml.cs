@@ -206,6 +206,7 @@ public partial class App : Application
         services.AddTransient<Scripts.SubtitlesConvertScript>();
 
         // 2. Регистрация служб приложения
+        services.AddSingleton<ILocalizationService, LocalizationService>();
         services.AddSingleton<INavigationService, NavigationService>();
         services.AddSingleton<IDialogService, DialogService>();
         services.AddSingleton<IWindowHandleProvider, WindowHandleProvider>();
@@ -261,6 +262,18 @@ public partial class App : Application
                 $"Конфигурация приложения успешно "
                 + $"инициализирована. Папка: {settingsDir}",
                 "SettingsManager");
+
+            // Инициализация языка интерфейса на основе настроек
+            try
+            {
+                var settingsManager = Services.GetRequiredService<ISettingsManager>();
+                var localizationService = Services.GetRequiredService<ILocalizationService>();
+                localizationService.CurrentLanguage = settingsManager.Language;
+            }
+            catch (Exception ex)
+            {
+                _logService.Exception(ex, "Ошибка при инициализации языка интерфейса при запуске", "App");
+            }
 
             // При первом запуске автоматически инициализируем
             // все настройки по умолчанию
