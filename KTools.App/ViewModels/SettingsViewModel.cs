@@ -64,7 +64,7 @@ public sealed class BackdropChangedMessage
 /// Модель представления страницы настроек приложения.
 /// Управляет всеми пользовательскими конфигурациями и синхронизирует их с SettingsManager.
 /// </summary>
-public partial class SettingsViewModel : ObservableObject
+public partial class SettingsViewModel : ThreadSafeViewModel
 {
     private readonly ISettingsManager _settingsManager;
     private readonly IDialogService _dialogService;

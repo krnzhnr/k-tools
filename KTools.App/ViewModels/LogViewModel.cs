@@ -17,7 +17,7 @@ namespace KTools_App.ViewModels;
 /// Обеспечивает загрузку истории логов, динамическое обновление в реальном времени,
 /// а также команды копирования, очистки и открытия каталога логов.
 /// </summary>
-public partial class LogViewModel : ObservableObject
+public partial class LogViewModel : ThreadSafeViewModel
 {
     private readonly ILogService _logService;
     private readonly ISettingsManager _settingsManager;

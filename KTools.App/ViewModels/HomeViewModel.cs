@@ -13,7 +13,7 @@ namespace KTools_App.ViewModels;
 /// Модель представления домашней страницы со списком скриптов обработки медиа.
 /// Группирует скрипты по категориям для отображения в виде карточек.
 /// </summary>
-public partial class HomeViewModel : ObservableObject
+public partial class HomeViewModel : ThreadSafeViewModel
 {
     private readonly INavigationService _navigationService;
 

@@ -19,7 +19,7 @@ namespace KTools_App.ViewModels;
 /// Модель представления универсальной рабочей панели для выполнения скриптов обработки медиа.
 /// Полностью изолирована от UI-элементов, управляет ходом асинхронного выполнения CLI-процессов.
 /// </summary>
-public partial class WorkPanelViewModel : ObservableObject
+public partial class WorkPanelViewModel : ThreadSafeViewModel
 {
     private readonly INavigationService _navigationService;
     private readonly IDialogService _dialogService;

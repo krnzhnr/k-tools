@@ -4,6 +4,7 @@ using System.ComponentModel;
 using System.IO;
 using System.Runtime.CompilerServices;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 
@@ -39,6 +40,7 @@ public enum FileProcessingState
 /// </summary>
 public sealed class FileQueueItem : INotifyPropertyChanged
 {
+    private readonly DispatcherQueue? _dispatcherQueue;
     private double _progress;
     private string _status = "Ожидание";
     private FileProcessingState _state = FileProcessingState.Pending;
@@ -47,6 +49,7 @@ public sealed class FileQueueItem : INotifyPropertyChanged
 
     public FileQueueItem(string filePath)
     {
+        _dispatcherQueue = DispatcherQueue.GetForCurrentThread();
         FilePath = filePath;
         FileName = Path.GetFileName(filePath);
         
@@ -243,7 +246,18 @@ public sealed class FileQueueItem : INotifyPropertyChanged
 
     private void OnPropertyChanged([CallerMemberName] string? prop = null)
     {
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(prop));
+        var handler = PropertyChanged;
+        if (handler != null)
+        {
+            if (_dispatcherQueue != null && !_dispatcherQueue.HasThreadAccess)
+            {
+                _dispatcherQueue.TryEnqueue(() => handler.Invoke(this, new PropertyChangedEventArgs(prop)));
+            }
+            else
+            {
+                handler.Invoke(this, new PropertyChangedEventArgs(prop));
+            }
+        }
     }
 }
 

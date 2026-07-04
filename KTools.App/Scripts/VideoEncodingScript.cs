@@ -22,6 +22,8 @@ public sealed class VideoEncodingScript : AbstractScript
 {
     private static bool _isNvencChecked;
     private static bool _isNvencSupported;
+    private static Task<bool>? _nvencCheckTask;
+    private static readonly object _nvencLock = new();
     private string? _finalOutputFileForCleanup;
     private readonly IFFmpegRunner _ffmpegRunner;
     private readonly IMediaProbeService _mediaProbeService;
@@ -35,28 +37,40 @@ public sealed class VideoEncodingScript : AbstractScript
     {
         _ffmpegRunner = ffmpegRunner ?? throw new ArgumentNullException(nameof(ffmpegRunner));
         _mediaProbeService = mediaProbeService ?? throw new ArgumentNullException(nameof(mediaProbeService));
+
+        lock (_nvencLock)
+        {
+            if (!_isNvencChecked && _nvencCheckTask == null)
+            {
+                _nvencCheckTask = Task.Run(async () =>
+                {
+                    try
+                    {
+                        bool result = await _ffmpegRunner.CheckNvencSupportAsync();
+                        _isNvencSupported = result;
+                        _isNvencChecked = true;
+                        _logService.Info($"Фоновая проверка поддержки NVENC завершена. Результат: {result}", "VideoEncodingScript");
+                        return result;
+                    }
+                    catch (Exception ex)
+                    {
+                        _logService.Exception(ex, "Ошибка при фоновой проверке поддержки NVENC в VideoEncodingScript", "VideoEncodingScript");
+                        _isNvencSupported = false;
+                        _isNvencChecked = true;
+                        return false;
+                    }
+                });
+            }
+        }
     }
 
     /// <summary>
-    /// Проверяет поддержку NVENC в фоновом/синхронном режиме с кэшированием результата.
+    /// Проверяет поддержку NVENC в фоновом режиме с возвратом кэшированного результата.
     /// </summary>
     private bool IsNvencSupported
     {
         get
         {
-            if (!_isNvencChecked)
-            {
-                try
-                {
-                    _isNvencSupported = Task.Run(() => _ffmpegRunner.CheckNvencSupportAsync()).GetAwaiter().GetResult();
-                }
-                catch (Exception ex)
-                {
-                    _logService.Exception(ex, "Ошибка при проверке поддержки NVENC в VideoEncodingScript", "VideoEncodingScript");
-                    _isNvencSupported = false;
-                }
-                _isNvencChecked = true;
-            }
             return _isNvencSupported;
         }
     }

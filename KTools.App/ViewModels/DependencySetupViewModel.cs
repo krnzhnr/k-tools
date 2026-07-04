@@ -18,7 +18,7 @@ namespace KTools_App.ViewModels;
 /// Модель представления для страницы настройки и установки зависимостей (DependencySetupPage).
 /// Управляет жизненным циклом внешних бинарных компонентов и координирует вызовы DependencyManager.
 /// </summary>
-public partial class DependencySetupViewModel : ObservableObject
+public partial class DependencySetupViewModel : ThreadSafeViewModel
 {
     private readonly IDependencyManager _dependencyManager;
     private readonly INavigationService _navigationService;

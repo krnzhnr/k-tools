@@ -6,6 +6,7 @@ using System.Windows.Input;
 using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Dispatching;
 using CommunityToolkit.Mvvm.Input;
 using KTools_App.Core;
 using KTools_App.Services.Contracts;
@@ -19,6 +20,7 @@ namespace KTools_App.Models;
 /// </summary>
 public class DependencyVM : INotifyPropertyChanged
 {
+    private readonly DispatcherQueue? _dispatcherQueue;
     private DependencyStatus _status;
     private int _progress;
     private string _speed = string.Empty;
@@ -167,6 +169,7 @@ public class DependencyVM : INotifyPropertyChanged
     /// <summary>Инициализирует новый экземпляр ViewModel для зависимости.</summary>
     public DependencyVM(DependencyInfo info, IDependencyManager dependencyManager)
     {
+        _dispatcherQueue = DispatcherQueue.GetForCurrentThread();
         Info = info;
         _dependencyManager = dependencyManager ?? throw new ArgumentNullException(nameof(dependencyManager));
         _status = _dependencyManager.GetStatus(info.Key);
@@ -185,6 +188,17 @@ public class DependencyVM : INotifyPropertyChanged
 
     protected virtual void OnPropertyChanged([CallerMemberName] string? propertyName = null)
     {
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+        var handler = PropertyChanged;
+        if (handler != null)
+        {
+            if (_dispatcherQueue != null && !_dispatcherQueue.HasThreadAccess)
+            {
+                _dispatcherQueue.TryEnqueue(() => handler.Invoke(this, new PropertyChangedEventArgs(propertyName)));
+            }
+            else
+            {
+                handler.Invoke(this, new PropertyChangedEventArgs(propertyName));
+            }
+        }
     }
 }

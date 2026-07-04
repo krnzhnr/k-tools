@@ -15,7 +15,7 @@ namespace KTools_App.ViewModels;
 /// Модель представления главной страницы приложения (MainPage).
 /// Управляет навигацией между экранами, заголовками и видимостью вкладки логов.
 /// </summary>
-public partial class MainViewModel : ObservableObject
+public partial class MainViewModel : ThreadSafeViewModel
 {
     private readonly INavigationService _navigationService;
     private readonly IScriptRegistry _scriptRegistry;

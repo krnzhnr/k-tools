@@ -499,7 +499,7 @@ public sealed class SubtitlePreviewLine : ObservableObject
 /// <summary>
 /// Модель представления для окна предпросмотра субтитров.
 /// </summary>
-public sealed partial class SubtitlePreviewViewModel : ObservableObject
+public sealed partial class SubtitlePreviewViewModel : ThreadSafeViewModel
 {
     private readonly IAssParser _assParser;
     private readonly ISettingsManager _settingsManager;
