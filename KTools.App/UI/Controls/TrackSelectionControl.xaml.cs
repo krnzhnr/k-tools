@@ -14,7 +14,9 @@ using Windows.UI.Text;
 
 using KTools_App.Core;
 using KTools_App.Scripts;
+using KTools_App.ViewModels;
 using CommunityToolkit.WinUI.Controls;
+using CommunityToolkit.Mvvm.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace KTools_App.UI.Controls;
@@ -89,6 +91,8 @@ public sealed class TrackNodeItem
 /// </summary>
 public sealed partial class TrackSelectionControl : UserControl
 {
+    public TrackSelectionViewModel ViewModel { get; } = App.Services.GetRequiredService<TrackSelectionViewModel>();
+
     private ILogService _logService => App.Services.GetRequiredService<ILogService>();
 
     private readonly Microsoft.UI.Dispatching.DispatcherQueue _dispatcherQueue = 
@@ -96,7 +100,6 @@ public sealed partial class TrackSelectionControl : UserControl
     private ObservableCollection<FileQueueItem>? _files;
     private readonly HashSet<FileQueueItem> _subscribedItems = new();
 
-    /// <summary>
     private AbstractScript? _activeScript;
 
     /// <summary>
@@ -110,28 +113,11 @@ public sealed partial class TrackSelectionControl : UserControl
             if (_activeScript != value)
             {
                 _activeScript = value;
+                ViewModel.ActiveScript = value;
                 UpdateHeaderAndDescription();
             }
         }
     }
-
-    // Структуры для хранения уникальных технических параметров (опций) для фильтрации
-    private readonly Dictionary<string, Dictionary<string, HashSet<string>>> _dynamicOptions = new()
-    {
-        { "video", new() { { "language", new() }, { "codec", new() }, { "resolution", new() }, { "name", new() } } },
-        { "audio", new() { { "language", new() }, { "codec", new() }, { "channels", new() }, { "name", new() } } },
-        { "subtitles", new() { { "language", new() }, { "codec", new() }, { "name", new() } } },
-        { "attachments", new() { { "extension", new() }, { "name", new() } } }
-    };
-
-    // Выбранные в данный момент правила фильтрации по категориям и свойствам
-    private readonly Dictionary<string, Dictionary<string, HashSet<string>>> _activeRules = new()
-    {
-        { "video", new() { { "language", new() }, { "codec", new() }, { "resolution", new() }, { "name", new() } } },
-        { "audio", new() { { "language", new() }, { "codec", new() }, { "channels", new() }, { "name", new() } } },
-        { "subtitles", new() { { "language", new() }, { "codec", new() }, { "name", new() } } },
-        { "attachments", new() { { "extension", new() }, { "name", new() } } }
-    };
 
     private bool _isUpdatingSelectAll;
     private bool _isResettingFilters;
@@ -186,6 +172,7 @@ public sealed partial class TrackSelectionControl : UserControl
         {
             _files.CollectionChanged -= OnFilesCollectionChanged;
             _files.CollectionChanged += OnFilesCollectionChanged;
+            ViewModel.Files = _files;
             
             // Восстанавливаем индивидуальные подписки на файлы
             UnsubscribeFromItems();
@@ -209,6 +196,7 @@ public sealed partial class TrackSelectionControl : UserControl
             UnsubscribeFromItems();
         }
         _files = files;
+        ViewModel.Files = files;
         if (_files != null)
         {
             _files.CollectionChanged += OnFilesCollectionChanged;
@@ -606,7 +594,7 @@ public sealed partial class TrackSelectionControl : UserControl
                 _isUpdatingSelection = false;
 
                 // Собираем динамические опции для фильтрации и строим UI фильтров
-                CollectDynamicOptions();
+                ViewModel.CollectDynamicOptions();
 
                 // Показываем панель фильтров
                 FiltersBorder.Visibility = Visibility.Visible;
@@ -638,99 +626,7 @@ public sealed partial class TrackSelectionControl : UserControl
         });
     }
 
-    /// <summary>
-    /// Собирает уникальные технические свойства дорожек и вложений для генерации фильтров.
-    /// </summary>
-    private void CollectDynamicOptions()
-    {
-        try
-        {
-            // Очищаем старые свойства
-            foreach (var cat in _dynamicOptions.Values)
-            {
-                foreach (var prop in cat.Values)
-                {
-                    prop.Clear();
-                }
-            }
 
-            if (_files == null) return;
-
-            foreach (var fileItem in _files)
-            {
-                if (fileItem.MediaInfo == null) continue;
-
-                var structure = fileItem.MediaInfo;
-
-                // Видео
-                foreach (var track in structure.GetVideoTracks())
-                {
-                    string lang = !string.IsNullOrEmpty(track.Language) && track.Language != "und" ? track.Language.ToUpperInvariant() : "Неизвестный";
-                    string codec = !string.IsNullOrEmpty(track.Codec) ? track.Codec.ToUpperInvariant() : "Неизвестный";
-                    
-                    _dynamicOptions["video"]["language"].Add(lang);
-                    _dynamicOptions["video"]["codec"].Add(codec);
-                    if (!string.IsNullOrEmpty(track.Resolution))
-                    {
-                        _dynamicOptions["video"]["resolution"].Add(track.Resolution);
-                    }
-                    if (!string.IsNullOrEmpty(track.Name))
-                    {
-                        _dynamicOptions["video"]["name"].Add(track.Name);
-                    }
-                }
-
-                // Аудио
-                foreach (var track in structure.GetAudioTracks())
-                {
-                    string lang = !string.IsNullOrEmpty(track.Language) && track.Language != "und" ? track.Language.ToUpperInvariant() : "Неизвестный";
-                    string codec = !string.IsNullOrEmpty(track.Codec) ? track.Codec.ToUpperInvariant() : "Неизвестный";
-                    string ch = track.Channels > 0 ? $"{track.Channels} ch" : "Неизвестно";
-
-                    _dynamicOptions["audio"]["language"].Add(lang);
-                    _dynamicOptions["audio"]["codec"].Add(codec);
-                    _dynamicOptions["audio"]["channels"].Add(ch);
-                    if (!string.IsNullOrEmpty(track.Name))
-                    {
-                        _dynamicOptions["audio"]["name"].Add(track.Name);
-                    }
-                }
-
-                // Субтитры
-                foreach (var track in structure.GetSubtitleTracks())
-                {
-                    string lang = !string.IsNullOrEmpty(track.Language) && track.Language != "und" ? track.Language.ToUpperInvariant() : "Неизвестный";
-                    string codec = !string.IsNullOrEmpty(track.Codec) ? track.Codec.ToUpperInvariant() : "Неизвестный";
-
-                    _dynamicOptions["subtitles"]["language"].Add(lang);
-                    _dynamicOptions["subtitles"]["codec"].Add(codec);
-                    if (!string.IsNullOrEmpty(track.Name))
-                    {
-                        _dynamicOptions["subtitles"]["name"].Add(track.Name);
-                    }
-                }
-
-                // Вложения (шрифты)
-                foreach (var font in structure.GetFontAttachments())
-                {
-                    string ext = Path.GetExtension(font.FileName).ToLowerInvariant();
-                    string name = Path.GetFileNameWithoutExtension(font.FileName);
-
-                    _dynamicOptions["attachments"]["extension"].Add(ext);
-                    if (!string.IsNullOrEmpty(name))
-                    {
-                        _dynamicOptions["attachments"]["name"].Add(name);
-                    }
-                }
-            }
-
-            _logService.Info("Сбор уникальных свойств медиадорожек для фильтрации успешно завершен", "TrackSelectionControl");
-        }
-        catch (Exception ex)
-        {
-            _logService.Exception(ex, "Ошибка при сборе уникальных свойств дорожек для фильтрации", "TrackSelectionControl");
-        }
-    }
 
     /// <summary>
     /// Обновляет видимость кнопок фильтров и заполняет их Flyouts
@@ -845,7 +741,7 @@ public sealed partial class TrackSelectionControl : UserControl
     {
         container.Children.Clear();
 
-        if (!_dynamicOptions.TryGetValue(category, out var catDict) ||
+        if (!ViewModel.DynamicOptions.TryGetValue(category, out var catDict) ||
             !catDict.TryGetValue(propKey, out var values) ||
             values.Count == 0)
         {
@@ -870,7 +766,7 @@ public sealed partial class TrackSelectionControl : UserControl
             };
 
             // Восстанавливаем состояние выбора из активных правил
-            if (_activeRules.TryGetValue(category, out var activeCat) &&
+            if (ViewModel.ActiveRules.TryGetValue(category, out var activeCat) &&
                 activeCat.TryGetValue(propKey, out var activeVals) &&
                 activeVals.Contains(val))
             {
@@ -899,7 +795,7 @@ public sealed partial class TrackSelectionControl : UserControl
     {
         try
         {
-            if (!_activeRules.TryGetValue(category, out var rules)) return;
+            if (!ViewModel.ActiveRules.TryGetValue(category, out var rules)) return;
 
             // 1. Фильтр по языку
             if (rules.TryGetValue("language", out var langRules) &&
@@ -1015,7 +911,7 @@ public sealed partial class TrackSelectionControl : UserControl
 
         try
         {
-            if (_activeRules.TryGetValue(category, out var catDict) &&
+            if (ViewModel.ActiveRules.TryGetValue(category, out var catDict) &&
                 catDict.TryGetValue(propKey, out var activeVals))
             {
                 if (isChecked)
@@ -1131,16 +1027,7 @@ public sealed partial class TrackSelectionControl : UserControl
                         continue;
                     }
 
-                    if (!_activeRules.TryGetValue(category, out var rules))
-                    {
-                        continue;
-                    }
-
-                    bool hasAnyActiveRules = rules.Values.Any(
-                        vals => vals.Count > 0);
-                    bool matches = hasAnyActiveRules && CheckNodeAgainstRules(
-                        item,
-                        rules);
+                    bool matches = ViewModel.MatchesFilterRules(item);
 
                     if (matches)
                     {
@@ -1210,63 +1097,7 @@ public sealed partial class TrackSelectionControl : UserControl
         }
     }
 
-    /// <summary>
-    /// Проверяет, соответствует ли узел дорожки активным правилам фильтрации.
-    /// </summary>
-    private bool CheckNodeAgainstRules(TrackNodeItem item, Dictionary<string, HashSet<string>> rules)
-    {
-        foreach (var rule in rules)
-        {
-            string propKey = rule.Key;
-            var selectedVals = rule.Value;
 
-            if (selectedVals.Count == 0) continue;
-
-            string trackVal = string.Empty;
-            if (item.IsFont && item.Attachment != null)
-            {
-                if (propKey == "extension")
-                {
-                    trackVal = Path.GetExtension(item.Attachment.FileName).ToLowerInvariant();
-                }
-                else if (propKey == "name")
-                {
-                    trackVal = Path.GetFileNameWithoutExtension(item.Attachment.FileName);
-                }
-            }
-            else if (item.Track != null)
-            {
-                var t = item.Track;
-                if (propKey == "language")
-                {
-                    trackVal = !string.IsNullOrEmpty(t.Language) && t.Language != "und" ? t.Language.ToUpperInvariant() : "Неизвестный";
-                }
-                else if (propKey == "codec")
-                {
-                    trackVal = !string.IsNullOrEmpty(t.Codec) ? t.Codec.ToUpperInvariant() : "Неизвестный";
-                }
-                else if (propKey == "resolution")
-                {
-                    trackVal = t.Resolution;
-                }
-                else if (propKey == "channels")
-                {
-                    trackVal = t.Channels > 0 ? $"{t.Channels} ch" : string.Empty;
-                }
-                else if (propKey == "name")
-                {
-                    trackVal = t.Name;
-                }
-            }
-
-            if (selectedVals.Contains(trackVal))
-            {
-                return true; // UNION (ИЛИ) логика: подходит под любое из активных правил в группе
-            }
-        }
-
-        return false;
-    }
 
     /// <summary>
     /// Возвращает текстовый идентификатор текущей активной вкладки категорий.
@@ -1531,6 +1362,9 @@ public sealed partial class TrackSelectionControl : UserControl
                 {
                     ActiveScript.SelectedAttachmentIds[kvp.Key] = kvp.Value;
                 }
+
+                CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Send(
+                    new KTools_App.ViewModels.Messages.TrackSelectedMessage(currentTracks, currentAttachments));
             }
         }
         catch (Exception ex)
@@ -1564,14 +1398,7 @@ public sealed partial class TrackSelectionControl : UserControl
                 $"{isChecked}",
                 "TrackSelectionControl");
 
-            // Очищаем активные фильтры для текущей вкладки и сбрасываем их чекбоксы
-            if (_activeRules.TryGetValue(currentCategory, out var rules))
-            {
-                foreach (var activeVals in rules.Values)
-                {
-                    activeVals.Clear();
-                }
-            }
+            ViewModel.ClearRules(currentCategory);
 
             ResetCategoryFilterCheckboxes(currentCategory);
 

@@ -5,6 +5,7 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:local="using:KTools_App.UI.Controls"
     mc:Ignorable="d">
 
     <Grid Padding="0,16,0,0">
@@ -115,7 +116,7 @@
                                   Visibility="Collapsed"
                                   Padding="0">
                             <ListView.ItemTemplate>
-                                <DataTemplate>
+                                <DataTemplate x:DataType="local:ReplacementFileItem">
                                     <Grid Padding="4" HorizontalAlignment="Stretch">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*" />
@@ -128,7 +129,7 @@
 
                                         <!-- Имя файла -->
                                         <TextBlock Grid.Column="0" 
-                                                   Text="{Binding FileName}" 
+                                                   Text="{x:Bind FileName, Mode=OneTime}" 
                                                    FontWeight="SemiBold"
                                                    FontSize="12"
                                                    TextTrimming="CharacterEllipsis" />
@@ -136,7 +137,7 @@
                                         <!-- Подпись о типе/размере -->
                                         <TextBlock Grid.Column="0" 
                                                    Grid.Row="1"
-                                                   Text="{Binding InfoText}" 
+                                                   Text="{x:Bind InfoText, Mode=OneTime}" 
                                                    FontSize="10"
                                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
 
@@ -144,7 +145,7 @@
                                         <Button Grid.Column="1" 
                                                 Grid.RowSpan="2"
                                                 Click="DeleteReplacementFile_Click"
-                                                DataContext="{Binding}"
+                                                DataContext="{x:Bind}"
                                                 Background="Transparent"
                                                 BorderThickness="0"
                                                 Width="28"

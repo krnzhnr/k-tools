@@ -209,6 +209,8 @@ public partial class App : Application
         services.AddSingleton<SettingsViewModel>();
         services.AddTransient<LogViewModel>();
         services.AddTransient<DependencySetupViewModel>();
+        services.AddTransient<TrackSelectionViewModel>();
+        services.AddTransient<ScriptSettingsViewModel>();
 
         return services.BuildServiceProvider();
     }

@@ -203,17 +203,17 @@
                           SelectionChanged="TracksTreeView_SelectionChanged"
                           VerticalAlignment="Stretch">
                     <TreeView.ItemTemplate>
-                        <DataTemplate>
+                        <DataTemplate x:DataType="TreeViewNode">
                             <StackPanel Orientation="Horizontal" 
                                         Spacing="10" 
                                         Padding="0,4"
-                                        Margin="{Binding Content.NodeMargin}">
-                                <FontIcon Glyph="{Binding Content.IconGlyph}" 
+                                        Margin="{x:Bind ((local:TrackNodeItem)Content).NodeMargin, Mode=OneTime}">
+                                <FontIcon Glyph="{x:Bind ((local:TrackNodeItem)Content).IconGlyph, Mode=OneTime}" 
                                           FontSize="16" 
                                           Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" 
                                           VerticalAlignment="Center" />
-                                <TextBlock Text="{Binding Content.Text}" 
-                                           FontWeight="{Binding Content.Weight}"
+                                <TextBlock Text="{x:Bind ((local:TrackNodeItem)Content).Text, Mode=OneTime}" 
+                                           FontWeight="{x:Bind ((local:TrackNodeItem)Content).Weight, Mode=OneTime}"
                                            VerticalAlignment="Center" 
                                            FontSize="13" 
                                            Foreground="{ThemeResource TextFillColorPrimaryBrush}" />

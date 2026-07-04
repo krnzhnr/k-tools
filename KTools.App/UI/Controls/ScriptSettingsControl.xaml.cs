@@ -9,6 +9,7 @@ using CommunityToolkit.WinUI.Controls;
 using KTools_App.Core;
 
 using KTools_App.Services.Contracts;
+using KTools_App.ViewModels;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace KTools_App.UI.Controls;
@@ -26,6 +27,7 @@ public sealed partial class ScriptSettingsControl : UserControl
     private StackPanel? _previewPanel;
     private bool _isPreviewExpanded;
 
+    public ScriptSettingsViewModel ViewModel { get; } = App.Services.GetRequiredService<ScriptSettingsViewModel>();
     private ISettingsManager _settingsManager => App.Services.GetRequiredService<ISettingsManager>();
 
     private class GroupVisual
@@ -68,6 +70,7 @@ public sealed partial class ScriptSettingsControl : UserControl
             _activeScript.FilesQueue.CollectionChanged -= OnFilesQueueCollectionChanged;
         }
         _activeScript = script;
+        ViewModel.InitializeScript(script);
         _activeScript.FilesQueue.CollectionChanged += OnFilesQueueCollectionChanged;
         _isPreviewExpanded = false;
 

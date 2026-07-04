@@ -371,9 +371,7 @@ public sealed partial class WorkPanel : Page
                 }
                 else
                 {
-                    _tracksControl.GetSelectedTracksAndAttachments(out var selectedTracks, out var selectedAttachments);
-                    settings["selected_tracks_per_file"] = selectedTracks;
-                    settings["selected_attachments_per_file"] = selectedAttachments;
+                    // Выбор дорожек передается во ViewModel автоматически через WeakReferenceMessenger
                 }
             }
 

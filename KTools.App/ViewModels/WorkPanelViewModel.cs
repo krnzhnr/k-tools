@@ -34,6 +34,8 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
     private readonly HashSet<int> _finishedIndices = new();
     private readonly Dictionary<int, double> _activeFps = new();
     private readonly Dictionary<int, string> _activeBitrates = new();
+    private Dictionary<string, List<int>> _selectedTracks = new();
+    private Dictionary<string, List<int>> _selectedAttachments = new();
 
     /// <summary>
     /// Активный исполняемый скрипт обработки медиаданных.
@@ -133,6 +135,13 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
         _logService = logService ?? throw new ArgumentNullException(nameof(logService));
         _dependencyManager = dependencyManager ?? throw new ArgumentNullException(nameof(dependencyManager));
         _mediaProbeService = mediaProbeService ?? throw new ArgumentNullException(nameof(mediaProbeService));
+
+        // Регистрация подписки на сообщение изменения выбора дорожек
+        CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Register<Messages.TrackSelectedMessage>(this, (r, m) =>
+        {
+            _selectedTracks = m.SelectedTracks;
+            _selectedAttachments = m.SelectedAttachments;
+        });
     }
 
     /// <summary>
@@ -281,6 +290,15 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
         PrepareExecutionState(filesList);
 
         var activeSettings = settings ?? new Dictionary<string, object>();
+        if (!activeSettings.ContainsKey("selected_tracks_per_file") && _selectedTracks.Count > 0)
+        {
+            activeSettings["selected_tracks_per_file"] = _selectedTracks;
+        }
+        if (!activeSettings.ContainsKey("selected_attachments_per_file") && _selectedAttachments.Count > 0)
+        {
+            activeSettings["selected_attachments_per_file"] = _selectedAttachments;
+        }
+
         string? outPath = string.IsNullOrEmpty(OutputPath) 
             ? null 
             : OutputPath;
