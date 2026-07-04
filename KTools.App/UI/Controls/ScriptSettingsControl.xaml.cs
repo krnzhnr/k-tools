@@ -26,6 +26,7 @@ public sealed partial class ScriptSettingsControl : UserControl
     private AbstractScript? _activeScript;
     private StackPanel? _previewPanel;
     private bool _isPreviewExpanded;
+    private string _previousNvencPreset = "p7";
 
     public ScriptSettingsViewModel ViewModel { get; } = App.Services.GetRequiredService<ScriptSettingsViewModel>();
     private ISettingsManager _settingsManager => App.Services.GetRequiredService<ISettingsManager>();
@@ -960,6 +961,11 @@ public sealed partial class ScriptSettingsControl : UserControl
             {
                 if (isLossless)
                 {
+                    string currentVal = comboBox.SelectedItem as string ?? "p7";
+                    if (currentVal != "p1")
+                    {
+                        _previousNvencPreset = currentVal;
+                    }
                     comboBox.SelectedItem = "p1";
                     comboBox.IsEnabled = false;
                     _settingsManager.SetSetting(settingsGroup, "nvenc_preset", "p1");
@@ -967,6 +973,8 @@ public sealed partial class ScriptSettingsControl : UserControl
                 else
                 {
                     comboBox.IsEnabled = true;
+                    comboBox.SelectedItem = _previousNvencPreset;
+                    _settingsManager.SetSetting(settingsGroup, "nvenc_preset", _previousNvencPreset);
                 }
             }
         }
