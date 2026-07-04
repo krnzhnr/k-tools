@@ -63,13 +63,6 @@ public sealed partial class MainPage : Page
     /// </summary>
     private void NavView_Loaded(object sender, RoutedEventArgs e)
     {
-        // Инициализируем XamlRoot в DialogService перед выполнением Initialize
-        if (App.Services.GetService<IDialogService>() is DialogService dialogService)
-        {
-            dialogService.XamlRoot = this.XamlRoot;
-            _logService.DebugLog("Инициализирован XamlRoot для IDialogService в MainPage.", "MainPage");
-        }
-
         if (NavView.SettingsItem is NavigationViewItem settingsItem)
         {
             settingsItem.Content = "Настройки";

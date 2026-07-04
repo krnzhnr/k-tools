@@ -29,6 +29,7 @@ public sealed partial class ScriptSettingsControl : UserControl
 
     public ScriptSettingsViewModel ViewModel { get; } = App.Services.GetRequiredService<ScriptSettingsViewModel>();
     private ISettingsManager _settingsManager => App.Services.GetRequiredService<ISettingsManager>();
+    private IDialogService _dialogService => App.Services.GetRequiredService<IDialogService>();
 
     private class GroupVisual
     {
@@ -360,26 +361,18 @@ public sealed partial class ScriptSettingsControl : UserControl
 
                     if (field.RequiresWarning)
                     {
-                        var xamlRoot = this.XamlRoot ?? checkBox.XamlRoot;
-                        if (xamlRoot != null)
-                        {
-                            var dialog = new ContentDialog
-                            {
-                                Title = field.WarningTitle ?? "Предупреждение",
-                                Content = field.WarningText ?? "Вы действительно хотите отключить этот параметр?",
-                                PrimaryButtonText = "Я понимаю",
-                                CloseButtonText = "Отмена",
-                                XamlRoot = xamlRoot
-                            };
+                        var confirmed = await _dialogService.ShowConfirmationAsync(
+                            field.WarningTitle ?? "Предупреждение",
+                            field.WarningText ?? "Вы действительно хотите отключить этот параметр?",
+                            "Я понимаю",
+                            "Отмена");
 
-                            var result = await dialog.ShowAsync();
-                            if (result != ContentDialogResult.Primary)
-                            {
-                                _isInternalCheckBoxUpdate = true;
-                                checkBox.IsChecked = true;
-                                _isInternalCheckBoxUpdate = false;
-                                return;
-                            }
+                        if (!confirmed)
+                        {
+                            _isInternalCheckBoxUpdate = true;
+                            checkBox.IsChecked = true;
+                            _isInternalCheckBoxUpdate = false;
+                            return;
                         }
                     }
 

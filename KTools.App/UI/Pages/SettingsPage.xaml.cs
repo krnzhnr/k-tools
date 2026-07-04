@@ -18,6 +18,7 @@ namespace KTools_App.UI.Pages;
 public partial class SettingsPage : Page
 {
     private ISettingsManager _settingsManager => App.Services.GetRequiredService<ISettingsManager>();
+    private IDialogService _dialogService => App.Services.GetRequiredService<IDialogService>();
 
     /// <summary>
     /// Предоставляет доступ к модели представления страницы настроек.
@@ -78,14 +79,9 @@ public partial class SettingsPage : Page
         }
         catch (Exception ex)
         {
-            var dialog = new ContentDialog
-            {
-                Title = "Ошибка выбора директории",
-                Content = $"Не удалось открыть окно выбора папки: {ex.Message}",
-                CloseButtonText = "ОК",
-                XamlRoot = this.XamlRoot
-            };
-            await dialog.ShowAsync();
+            await _dialogService.ShowMessageAsync(
+                "Ошибка выбора директории",
+                $"Не удалось открыть окно выбора папки: {ex.Message}");
         }
     }
 

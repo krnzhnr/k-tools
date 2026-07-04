@@ -15,23 +15,24 @@ public sealed class DialogService : IDialogService
     private Microsoft.UI.Xaml.XamlRoot? _xamlRoot;
 
     /// <summary>
-    /// Устанавливает корневой элемент XAML для привязки ContentDialog.
-    /// Должен быть установлен после загрузки корневой страницы.
+    /// Устанавливает или динамически возвращает корневой элемент XAML для привязки ContentDialog.
+    /// Если свойство не задано явно, пытается получить его из главного окна приложения.
     /// </summary>
     public Microsoft.UI.Xaml.XamlRoot? XamlRoot
     {
-        get => _xamlRoot;
+        get => _xamlRoot ?? (App.CurrentMainWindow?.Content as Microsoft.UI.Xaml.FrameworkElement)?.XamlRoot;
         set => _xamlRoot = value;
     }
 
     /// <inheritdoc />
     public async Task ShowMessageAsync(string title, string content)
     {
-        if (_xamlRoot == null)
+        var xamlRoot = XamlRoot;
+        if (xamlRoot == null)
         {
             throw new InvalidOperationException(
                 "XamlRoot не инициализирован. "
-                + "Установите свойство XamlRoot перед вызовом ShowMessageAsync.");
+                + "Убедитесь, что главное окно создано или установите свойство XamlRoot перед вызовом ShowMessageAsync.");
         }
 
         var dialog = new ContentDialog
@@ -39,7 +40,7 @@ public sealed class DialogService : IDialogService
             Title = title,
             Content = content,
             CloseButtonText = "ОК",
-            XamlRoot = _xamlRoot
+            XamlRoot = xamlRoot
         };
 
         await dialog.ShowAsync();
@@ -52,11 +53,12 @@ public sealed class DialogService : IDialogService
         string confirmText = "ОК",
         string cancelText = "Отмена")
     {
-        if (_xamlRoot == null)
+        var xamlRoot = XamlRoot;
+        if (xamlRoot == null)
         {
             throw new InvalidOperationException(
                 "XamlRoot не инициализирован. "
-                + "Установите свойство XamlRoot перед вызовом ShowConfirmationAsync.");
+                + "Убедитесь, что главное окно создано или установите свойство XamlRoot перед вызовом ShowConfirmationAsync.");
         }
 
         var dialog = new ContentDialog
@@ -65,7 +67,7 @@ public sealed class DialogService : IDialogService
             Content = content,
             PrimaryButtonText = confirmText,
             CloseButtonText = cancelText,
-            XamlRoot = _xamlRoot
+            XamlRoot = xamlRoot
         };
 
         var result = await dialog.ShowAsync();
