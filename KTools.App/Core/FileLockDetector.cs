@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using KTools_App.Services.Contracts;
 
 namespace KTools_App.Core;
 
@@ -64,7 +65,7 @@ public static class FileLockDetector
     /// </summary>
     /// <param name="filePath">Абсолютный путь к файлу.</param>
     /// <returns>Строковое перечисление процессов, блокирующих файл, или пустая строка.</returns>
-    public static string GetLockingProcessesInfo(string filePath)
+    public static string GetLockingProcessesInfo(string filePath, ILogService logService)
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -77,7 +78,7 @@ public static class FileLockDetector
             int res = RmStartSession(out uint handle, 0, sessionKey);
             if (res != 0)
             {
-                LogService.Instance.Warn($"Не удалось запустить сессию Restart Manager. Код ошибки: {res}", "FileLockDetector");
+                logService.Warn($"Не удалось запустить сессию Restart Manager. Код ошибки: {res}", "FileLockDetector");
                 return string.Empty;
             }
 
@@ -87,7 +88,7 @@ public static class FileLockDetector
                 res = RmRegisterResources(handle, (uint)resources.Length, resources, 0, null, 0, null);
                 if (res != 0)
                 {
-                    LogService.Instance.Warn($"Не удалось зарегистрировать ресурс '{filePath}' в Restart Manager. Код ошибки: {res}", "FileLockDetector");
+                    logService.Warn($"Не удалось зарегистрировать ресурс '{filePath}' в Restart Manager. Код ошибки: {res}", "FileLockDetector");
                     return string.Empty;
                 }
 
@@ -137,7 +138,7 @@ public static class FileLockDetector
         }
         catch (Exception ex)
         {
-            LogService.Instance.Exception(ex, $"Непредвиденная ошибка при определении блокирующего процесса для '{filePath}': {ex.Message}", "FileLockDetector");
+            logService.Exception(ex, $"Непредвиденная ошибка при определении блокирующего процесса для '{filePath}': {ex.Message}", "FileLockDetector");
         }
 
         return string.Empty;

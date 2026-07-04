@@ -10,6 +10,8 @@ using Windows.UI;
 using Windows.UI.Text;
 using KTools_App.Infrastructure;
 using KTools_App.ViewModels;
+using KTools_App.Services.Contracts;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace KTools_App.UI.Pages;
 
@@ -18,6 +20,7 @@ namespace KTools_App.UI.Pages;
 /// </summary>
 public sealed partial class SubtitlePreviewPage : Page
 {
+    private IAssParser _assParser => App.Services.GetRequiredService<IAssParser>();
     /// <summary>
     /// Предоставляет доступ к элементу заголовка окна для интеграции с TitleBar.
     /// </summary>
@@ -309,7 +312,7 @@ public sealed partial class SubtitlePreviewPage : Page
             else
             {
                 // Проверяем, является ли часть строки полным CAPS LOCK
-                bool isCaps = AssParser.Instance.IsFullCaps(part);
+                bool isCaps = _assParser.IsFullCaps(part);
                 bool shouldStripCaps = isCaps && ViewModel.StripCaps;
 
                 // Разделяем на теги форматирования и обычный текст

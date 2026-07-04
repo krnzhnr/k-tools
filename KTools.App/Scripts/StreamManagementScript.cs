@@ -1,3 +1,4 @@
+using KTools_App.Services.Contracts;
 // -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
@@ -18,6 +19,18 @@ namespace KTools_App.Scripts;
 /// </summary>
 public sealed class StreamManagementScript : AbstractScript
 {
+    private readonly IMediaProbeService _mediaProbeService;
+    private readonly IFFmpegRunner _ffmpegRunner;
+    private readonly IMkvmergeRunner _mkvmergeRunner;
+
+    public StreamManagementScript(ILogService logService, ISettingsManager settingsManager, IPathManager pathManager, IMediaProbeService mediaProbeService, IFFmpegRunner ffmpegRunner, IMkvmergeRunner mkvmergeRunner)
+        : base(logService, settingsManager, pathManager)
+    {
+        _mediaProbeService = mediaProbeService ?? throw new ArgumentNullException(nameof(mediaProbeService));
+        _ffmpegRunner = ffmpegRunner ?? throw new ArgumentNullException(nameof(ffmpegRunner));
+        _mkvmergeRunner = mkvmergeRunner ?? throw new ArgumentNullException(nameof(mkvmergeRunner));
+    }
+
     /// <summary>
     /// Русское название скрипта.
     /// </summary>
@@ -105,7 +118,7 @@ public sealed class StreamManagementScript : AbstractScript
         ResetCancellation();
         var results = new List<string>();
 
-        LogService.Instance.Info($"Начало управления потоками для файла '{Path.GetFileName(filePath)}'", "StreamManagementScript");
+        _logService.Info($"Начало управления потоками для файла '{Path.GetFileName(filePath)}'", "StreamManagementScript");
 
         // 1. Считываем выбранные пользователем дорожки для текущего файла
         var tracksPerFile = GetSettingValue<Dictionary<string, List<int>>?>(settings, "selected_tracks_per_file", null);
@@ -115,7 +128,7 @@ public sealed class StreamManagementScript : AbstractScript
         if (selectedTrackIds == null || selectedTrackIds.Count == 0)
         {
             string skipMsg = $"踩 ПРОПУСК (нет выбранных дорожек): {Path.GetFileName(filePath)}";
-            LogService.Instance.Info(skipMsg, "StreamManagementScript");
+            _logService.Info(skipMsg, "StreamManagementScript");
             progressCallback(fileIndex, totalCount, $"Пропуск (нет выбора): {Path.GetFileName(filePath)}", 100.0);
             results.Add(skipMsg);
             return results;
@@ -125,12 +138,12 @@ public sealed class StreamManagementScript : AbstractScript
         MediaStructure? structure;
         try
         {
-            structure = await MediaProbeService.Instance.ProbeAsync(filePath);
+            structure = await _mediaProbeService.ProbeAsync(filePath);
         }
         catch (Exception ex)
         {
             string probeErr = $"❌ Ошибка анализа метаданных файла: {ex.Message}";
-            LogService.Instance.Exception(ex, $"Исключение при анализе метаданных для '{filePath}': {ex.Message}", "StreamManagementScript");
+            _logService.Exception(ex, $"Исключение при анализе метаданных для '{filePath}': {ex.Message}", "StreamManagementScript");
             progressCallback(fileIndex, totalCount, "Ошибка ffprobe", 0.0);
             results.Add(probeErr);
             return results;
@@ -139,7 +152,7 @@ public sealed class StreamManagementScript : AbstractScript
         if (structure == null)
         {
             string err = $"❌ ОШИБКА анализа: {Path.GetFileName(filePath)}";
-            LogService.Instance.Error(err, "StreamManagementScript");
+            _logService.Error(err, "StreamManagementScript");
             progressCallback(fileIndex, totalCount, "Ошибка ffprobe", 0.0);
             results.Add(err);
             return results;
@@ -160,7 +173,7 @@ public sealed class StreamManagementScript : AbstractScript
         }
 
         var keptTracks = structure.Tracks.Where(t => keepIds.Contains(t.TrackId)).ToList();
-        LogService.Instance.Info($"Определено к сохранению {keptTracks.Count} из {allTrackIds.Count} дорожек.", "StreamManagementScript");
+        _logService.Info($"Определено к сохранению {keptTracks.Count} из {allTrackIds.Count} дорожек.", "StreamManagementScript");
 
         // 4. Подготавливаем параметры запуска
         string ext = Path.GetExtension(filePath).ToLowerInvariant();
@@ -239,11 +252,11 @@ public sealed class StreamManagementScript : AbstractScript
         string finalOutputFile = GetSafeOutputPath(filePath, targetFile);
 
         // Проверка флага перезаписи существующего файла
-        bool overwrite = SettingsManager.Instance.GetSetting("General", "OverwriteExisting", false);
+        bool overwrite = _settingsManager.GetSetting("General", "OverwriteExisting", false);
         if (File.Exists(finalOutputFile) && !overwrite)
         {
             string skipExist = $"⏭ ПРОПУСК (файл существует): {Path.GetFileName(finalOutputFile)}";
-            LogService.Instance.Info(skipExist, "StreamManagementScript");
+            _logService.Info(skipExist, "StreamManagementScript");
             progressCallback(fileIndex, totalCount, $"Пропуск (существует): {Path.GetFileName(finalOutputFile)}", 100.0);
             results.Add(skipExist);
             return results;
@@ -270,8 +283,8 @@ public sealed class StreamManagementScript : AbstractScript
         {
             if (useFfmpeg)
             {
-                LogService.Instance.Info($"Запуск FFmpeg для фильтрации дорожек '{Path.GetFileName(filePath)}' в '{Path.GetFileName(finalOutputFile)}'", "StreamManagementScript");
-                success = await FFmpegRunner.Instance.RunAsync(
+                _logService.Info($"Запуск FFmpeg для фильтрации дорожек '{Path.GetFileName(filePath)}' в '{Path.GetFileName(finalOutputFile)}'", "StreamManagementScript");
+                success = await _ffmpegRunner.RunAsync(
                     inputPath: filePath,
                     outputPath: finalOutputFile,
                     extraArgs: ffmpegArgs,
@@ -286,7 +299,7 @@ public sealed class StreamManagementScript : AbstractScript
             }
             else
             {
-                LogService.Instance.Info($"Запуск mkvmerge для фильтрации дорожек '{Path.GetFileName(filePath)}' в '{Path.GetFileName(finalOutputFile)}'", "StreamManagementScript");
+                _logService.Info($"Запуск mkvmerge для фильтрации дорожек '{Path.GetFileName(filePath)}' в '{Path.GetFileName(finalOutputFile)}'", "StreamManagementScript");
                 var mkvmergeArgs = BuildTrackArgs(structure.Tracks, keepIds);
 
                 var mkvInputs = new List<MkvInputSource>
@@ -296,7 +309,7 @@ public sealed class StreamManagementScript : AbstractScript
 
                 progressCallback(fileIndex, totalCount, "Фильтрация (mkvmerge)...", 30.0);
 
-                success = await MkvmergeRunner.Instance.RunAsync(
+                success = await _mkvmergeRunner.RunAsync(
                     outputPath: finalOutputFile,
                     inputs: mkvInputs,
                     cancellationToken: cts.Token
@@ -306,7 +319,7 @@ public sealed class StreamManagementScript : AbstractScript
         catch (Exception ex)
         {
             string runErr = $"❌ Критическая ошибка при обработке потоков для '{stem}': {ex.Message}";
-            LogService.Instance.Exception(ex, $"Исключение в процессе фильтрации для '{filePath}': {ex.Message}", "StreamManagementScript");
+            _logService.Exception(ex, $"Исключение в процессе фильтрации для '{filePath}': {ex.Message}", "StreamManagementScript");
             results.Add(runErr);
         }
         finally
@@ -320,7 +333,7 @@ public sealed class StreamManagementScript : AbstractScript
         {
             CleanupIfCancelled(finalOutputFile);
             string cancelMsg = $"⚠ Обработка отменена пользователем: {Path.GetFileName(finalOutputFile)}";
-            LogService.Instance.Info(cancelMsg, "StreamManagementScript");
+            _logService.Info(cancelMsg, "StreamManagementScript");
             results.Add(cancelMsg);
             return results;
         }
@@ -331,7 +344,7 @@ public sealed class StreamManagementScript : AbstractScript
             {
                 progressCallback(fileIndex, totalCount, "Завершено!", 100.0);
                 string successMsg = $"✅ ОБРАБОТАНО: {Path.GetFileName(finalOutputFile)}";
-                LogService.Instance.Info(successMsg, "StreamManagementScript");
+                _logService.Info(successMsg, "StreamManagementScript");
                 results.Add(successMsg);
 
                 bool overwriteSource = GetSettingValue(settings, "overwrite_source", false);
@@ -350,7 +363,7 @@ public sealed class StreamManagementScript : AbstractScript
             {
                 CleanupFailedOutputFile(finalOutputFile);
                 string failMsg = $"❌ ОШИБКА обработки файла: {Path.GetFileName(filePath)}";
-                LogService.Instance.Error(failMsg, "StreamManagementScript");
+                _logService.Error(failMsg, "StreamManagementScript");
                 results.Add(failMsg);
             }
         }
@@ -359,7 +372,7 @@ public sealed class StreamManagementScript : AbstractScript
             CleanupFailedOutputFile(finalOutputFile);
             string errorMsg = $"❌ Ошибка выполнения скрипта для {Path.GetFileName(filePath)}: {ex.Message}";
             results.Add(errorMsg);
-            LogService.Instance.Exception(ex, $"Ошибка при выполнении фильтрации потоков для '{stem}': {ex.Message}", "StreamManagementScript");
+            _logService.Exception(ex, $"Ошибка при выполнении фильтрации потоков для '{stem}': {ex.Message}", "StreamManagementScript");
         }
 
         return results;

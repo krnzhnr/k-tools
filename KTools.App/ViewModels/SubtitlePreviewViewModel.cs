@@ -1,6 +1,10 @@
 // -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
+using Microsoft.Extensions.DependencyInjection;
+using KTools_App.Services.Contracts;
+using KTools_App.Core;
+using KTools_App.Infrastructure;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
@@ -52,6 +56,7 @@ public sealed class FilterItemViewModel : ObservableObject
 /// </summary>
 public sealed class SubtitlePreviewLine : ObservableObject
 {
+    private readonly IAssParser _assParser;
     private readonly SubtitleFilterState _filterState;
     private bool _isChecked;
     private string _status = "ОК";
@@ -143,8 +148,10 @@ public sealed class SubtitlePreviewLine : ObservableObject
         int index,
         AssDialogue dialogue,
         string filePath,
-        SubtitleFilterState filterState)
+        SubtitleFilterState filterState,
+        IAssParser assParser)
     {
+        _assParser = assParser ?? throw new ArgumentNullException(nameof(assParser));
         Index = index;
         Start = dialogue.Start;
         End = dialogue.End;
@@ -156,7 +163,7 @@ public sealed class SubtitlePreviewLine : ObservableObject
         OriginalText = dialogue.Text ?? string.Empty;
         _filterState = filterState;
 
-        CleanText = AssParser.Instance.StripTags(OriginalText);
+        CleanText = _assParser.StripTags(OriginalText);
         IsOriginallyEmpty = string.IsNullOrWhiteSpace(CleanText);
 
         UpdateState(false);
@@ -308,7 +315,7 @@ public sealed class SubtitlePreviewLine : ObservableObject
         {
             if (_textWithoutCaps == null)
             {
-                _textWithoutCaps = AssParser.Instance.StripCaps(OriginalText);
+                _textWithoutCaps = _assParser.StripCaps(OriginalText);
             }
             textAfterFilters = _textWithoutCaps;
         }
@@ -319,7 +326,7 @@ public sealed class SubtitlePreviewLine : ObservableObject
             {
                 if (_textWithoutBoth == null)
                 {
-                    _textWithoutBoth = AssParser.Instance.StripTags(textAfterFilters);
+                    _textWithoutBoth = _assParser.StripTags(textAfterFilters);
                 }
                 textAfterFilters = _textWithoutBoth;
             }
@@ -340,7 +347,7 @@ public sealed class SubtitlePreviewLine : ObservableObject
             {
                 if (_textWithoutBoth == null)
                 {
-                    _textWithoutBoth = AssParser.Instance.StripTags(textAfterFilters);
+                    _textWithoutBoth = _assParser.StripTags(textAfterFilters);
                 }
                 isEmpty = string.IsNullOrWhiteSpace(_textWithoutBoth);
             }
@@ -494,6 +501,9 @@ public sealed class SubtitlePreviewLine : ObservableObject
 /// </summary>
 public sealed partial class SubtitlePreviewViewModel : ObservableObject
 {
+    private readonly IAssParser _assParser;
+    private readonly ISettingsManager _settingsManager;
+    private readonly ILogService _logService;
     private readonly SubtitleFilterState _filterState;
     private readonly ObservableCollection<SubtitlePreviewLine> _filteredLines = new();
     private bool _isBulkUpdating;
@@ -575,10 +585,18 @@ public sealed partial class SubtitlePreviewViewModel : ObservableObject
     public partial string EffectsSearchText { get; set; } = string.Empty;
 
     /// <summary>
-    /// Инициализирует новый экземпляр SubtitlePreviewViewModel.
+    /// Инициализирует новый экземпляр SubtitlePreviewViewModel с поддержкой DI.
     /// </summary>
-    public SubtitlePreviewViewModel(SubtitleFilterState filterState, string? settingsGroupName = null)
+    public SubtitlePreviewViewModel(
+        SubtitleFilterState filterState, 
+        string? settingsGroupName = null,
+        IAssParser? assParser = null,
+        ISettingsManager? settingsManager = null,
+        ILogService? logService = null)
     {
+        _assParser = assParser ?? App.Services.GetRequiredService<IAssParser>();
+        _settingsManager = settingsManager ?? App.Services.GetRequiredService<ISettingsManager>();
+        _logService = logService ?? App.Services.GetRequiredService<ILogService>();
         _filterState = filterState;
         _settingsGroupName = settingsGroupName;
         StripFormatting = _filterState.StripFormatting;
@@ -596,11 +614,11 @@ public sealed partial class SubtitlePreviewViewModel : ObservableObject
             {
                 if (e.PropertyName == nameof(StripFormatting))
                 {
-                    SettingsManager.Instance.SetSetting(_settingsGroupName, "strip_formatting", StripFormatting);
+                    _settingsManager.SetSetting(_settingsGroupName, "strip_formatting", StripFormatting);
                 }
                 else if (e.PropertyName == nameof(StripCaps))
                 {
-                    SettingsManager.Instance.SetSetting(_settingsGroupName, "strip_caps", StripCaps);
+                    _settingsManager.SetSetting(_settingsGroupName, "strip_caps", StripCaps);
                 }
             }
         }
@@ -707,11 +725,11 @@ public sealed partial class SubtitlePreviewViewModel : ObservableObject
                 if (!File.Exists(path)) continue;
                 try
                 {
-                    var assData = AssParser.Instance.Parse(path);
+                    var assData = _assParser.Parse(path);
                     for (int i = 0; i < assData.Dialogues.Count; i++)
                     {
                         var dialogue = assData.Dialogues[i];
-                        var line = new SubtitlePreviewLine(i, dialogue, path, _filterState);
+                        var line = new SubtitlePreviewLine(i, dialogue, path, _filterState, _assParser);
                         tempLines.Add(line);
 
                         if (!string.IsNullOrEmpty(dialogue.Actor)) uniqueActors.Add(dialogue.Actor);
@@ -721,7 +739,7 @@ public sealed partial class SubtitlePreviewViewModel : ObservableObject
                 }
                 catch (Exception ex)
                 {
-                    LogService.Instance.Exception(
+                    _logService.Exception(
                         ex,
                         $"Ошибка парсинга файла при подготовке предпросмотра: '{path}'",
                         "SubtitlePreviewViewModel");

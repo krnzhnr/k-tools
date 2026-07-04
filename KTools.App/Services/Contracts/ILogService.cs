@@ -15,6 +15,11 @@ public interface ILogService
     void InitializeLogFile();
 
     /// <summary>
+    /// Инициализировать файл лога в кастомной директории.
+    /// </summary>
+    void InitializeLogFile(string? customLogDir);
+
+    /// <summary>
     /// Записать событие с указанным уровнем детализации.
     /// </summary>
     /// <param name="level">Уровень критичности.</param>

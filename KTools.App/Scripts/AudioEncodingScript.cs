@@ -1,3 +1,4 @@
+using KTools_App.Services.Contracts;
 // -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
@@ -20,6 +21,16 @@ namespace KTools_App.Scripts;
 /// </summary>
 public sealed class AudioEncodingScript : AbstractScript
 {
+    private readonly IFFmpegRunner _ffmpegRunner;
+    private readonly QaacRunner _qaacRunner;
+
+    public AudioEncodingScript(ILogService logService, ISettingsManager settingsManager, IPathManager pathManager, IFFmpegRunner ffmpegRunner, QaacRunner qaacRunner)
+        : base(logService, settingsManager, pathManager)
+    {
+        _ffmpegRunner = ffmpegRunner ?? throw new ArgumentNullException(nameof(ffmpegRunner));
+        _qaacRunner = qaacRunner ?? throw new ArgumentNullException(nameof(qaacRunner));
+    }
+
     // Карта соответствия форматов, их расширений и кодеков FFmpeg
     private static readonly Dictionary<string, (string ext, string codec)> AudioFormats = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -198,7 +209,7 @@ public sealed class AudioEncodingScript : AbstractScript
         string originalName = Path.GetFileName(filePath);
         string inputExt = Path.GetExtension(filePath).ToLowerInvariant();
 
-        LogService.Instance.Info(
+        _logService.Info(
             $"Начало кодирования аудио для '{originalName}'. " +
             $"Целевой формат: {targetFormat}",
             "AudioEncodingScript");
@@ -211,7 +222,7 @@ public sealed class AudioEncodingScript : AbstractScript
             !LossyFormats.Contains(targetFormat))
         {
             string skipMsg = $"⏭ ПРОПУСК (уже в формате {targetFormat}): {originalName}";
-            LogService.Instance.Info(skipMsg, "AudioEncodingScript");
+            _logService.Info(skipMsg, "AudioEncodingScript");
             progressCallback(
                 fileIndex,
                 totalCount,
@@ -232,13 +243,13 @@ public sealed class AudioEncodingScript : AbstractScript
         string outputFileName = Path.GetFileName(outputFilePath);
 
         // 5. Проверяем флаг перезаписи существующего файла
-        bool overwrite = SettingsManager.Instance.GetSetting(
+        bool overwrite = _settingsManager.GetSetting(
             "General", "OverwriteExisting", false);
 
         if (File.Exists(outputFilePath) && !overwrite)
         {
             string skipMsg = $"⏭ ПРОПУСК (существует): {outputFileName}";
-            LogService.Instance.Info(skipMsg, "AudioEncodingScript");
+            _logService.Info(skipMsg, "AudioEncodingScript");
             progressCallback(
                 fileIndex,
                 totalCount,
@@ -252,7 +263,7 @@ public sealed class AudioEncodingScript : AbstractScript
         double duration = 0.0;
         try
         {
-            var info = await FFmpegRunner.Instance.GetVideoInfoAsync(filePath);
+            var info = await _ffmpegRunner.GetVideoInfoAsync(filePath);
             if (info != null && info.RootElement.TryGetProperty("format", out var formatProp))
             {
                 if (formatProp.TryGetProperty("duration", out var durProp))
@@ -275,13 +286,13 @@ public sealed class AudioEncodingScript : AbstractScript
         }
         catch (Exception ex)
         {
-            LogService.Instance.Exception(
+            _logService.Exception(
                 ex,
                 $"Не удалось прочесть метаданные длительности для '{originalName}': {ex.Message}",
                 "AudioEncodingScript");
         }
 
-        LogService.Instance.DebugLog(
+        _logService.DebugLog(
             $"Длительность медиафайла '{originalName}': {duration:F2} сек.",
             "AudioEncodingScript");
 
@@ -296,11 +307,11 @@ public sealed class AudioEncodingScript : AbstractScript
             bool adts = !useM4a;
 
             progressCallback(fileIndex, totalCount, "Запуск QAAC...", 0.0);
-            LogService.Instance.Info(
+            _logService.Info(
                 $"Запуск кодирования QAAC для '{originalName}' -> '{outputFileName}'",
                 "AudioEncodingScript");
 
-            var qaacTask = QaacRunner.Instance.RunAsync(
+            var qaacTask = _qaacRunner.RunAsync(
                 inputPath: filePath,
                 outputPath: outputFilePath,
                 tvbr: tvbr,
@@ -318,7 +329,7 @@ public sealed class AudioEncodingScript : AbstractScript
             {
                 if (IsCancelled)
                 {
-                    LogService.Instance.Warn(
+                    _logService.Warn(
                         $"Отмена кодирования QAAC пользователем для '{originalName}'",
                         "AudioEncodingScript");
                     cts.Cancel();
@@ -333,7 +344,7 @@ public sealed class AudioEncodingScript : AbstractScript
             }
             catch (Exception ex)
             {
-                LogService.Instance.Exception(
+                _logService.Exception(
                     ex,
                     $"Ошибка кодирования QAAC для '{originalName}': {ex.Message}",
                     "AudioEncodingScript");
@@ -379,11 +390,11 @@ public sealed class AudioEncodingScript : AbstractScript
             }
 
             progressCallback(fileIndex, totalCount, "Запуск FFmpeg...", 0.0);
-            LogService.Instance.Info(
+            _logService.Info(
                 $"Запуск FFmpeg для кодирования '{originalName}' -> '{outputFileName}'",
                 "AudioEncodingScript");
 
-            var ffmpegTask = FFmpegRunner.Instance.RunAsync(
+            var ffmpegTask = _ffmpegRunner.RunAsync(
                 inputPath: filePath,
                 outputPath: outputFilePath,
                 extraArgs: extraArgs,
@@ -401,7 +412,7 @@ public sealed class AudioEncodingScript : AbstractScript
             {
                 if (IsCancelled)
                 {
-                    LogService.Instance.Warn(
+                    _logService.Warn(
                         $"Отмена кодирования FFmpeg пользователем для '{originalName}'",
                         "AudioEncodingScript");
                     cts.Cancel();
@@ -416,7 +427,7 @@ public sealed class AudioEncodingScript : AbstractScript
             }
             catch (Exception ex)
             {
-                LogService.Instance.Exception(
+                _logService.Exception(
                     ex,
                     $"Ошибка кодирования FFmpeg для '{originalName}': {ex.Message}",
                     "AudioEncodingScript");
@@ -426,7 +437,7 @@ public sealed class AudioEncodingScript : AbstractScript
         // 8. Обрабатываем результаты
         if (success)
         {
-            LogService.Instance.Info(
+            _logService.Info(
                 $"Кодирование аудио завершено успешно. Выходной файл: '{outputFileName}'",
                 "AudioEncodingScript");
             progressCallback(fileIndex, totalCount, "Успешно завершено!", 100.0);
@@ -447,7 +458,7 @@ public sealed class AudioEncodingScript : AbstractScript
             }
             else
             {
-                LogService.Instance.Error(
+                _logService.Error(
                     $"Сбой при кодировании файла '{originalName}'",
                     "AudioEncodingScript");
                 progressCallback(fileIndex, totalCount, "Ошибка обработки!", 0.0);
@@ -489,9 +500,9 @@ public sealed class AudioEncodingScript : AbstractScript
 
     public override string GetOutputExtension(string inputPath)
     {
-        string settingsGroup = SettingsManager.Instance.GetSafeGroupName(Name);
-        string targetFormat = SettingsManager.Instance.GetSetting(settingsGroup, "target_format", "QAAC");
-        bool useM4a = SettingsManager.Instance.GetSetting(settingsGroup, "use_m4a_container", true);
+        string settingsGroup = _settingsManager.GetSafeGroupName(Name);
+        string targetFormat = _settingsManager.GetSetting(settingsGroup, "target_format", "QAAC");
+        bool useM4a = _settingsManager.GetSetting(settingsGroup, "use_m4a_container", true);
 
         var (targetExt, _) = ResolveExtension(targetFormat, useM4a);
         return targetExt;

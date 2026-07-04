@@ -1,29 +1,34 @@
 // -*- coding: utf-8 -*-
 using System;
 using System.IO;
+using KTools_App.Services.Contracts;
 
 namespace KTools_App.Core;
 
 /// <summary>
 /// Класс для управления путями приложения (поиск внешних утилит и рабочих директорий).
 /// </summary>
-public static class PathManager
+public sealed class PathManager : IPathManager
 {
-    private static readonly string BaseDir;
+    private readonly string _baseDir;
+    private readonly ILogService _logService;
 
-    static PathManager()
+    /// <summary>
+    /// Инициализирует новый экземпляр класса <see cref="PathManager"/> с внедрением зависимостей.
+    /// </summary>
+    public PathManager(ILogService logService)
     {
-        // Инициализация базового пути приложения с фиксацией в логе (эмуляция логгера)
-        BaseDir = AppContext.BaseDirectory;
+        _logService = logService ?? throw new ArgumentNullException(nameof(logService));
+        _baseDir = AppContext.BaseDirectory;
     }
 
     /// <summary>
     /// Получить базовую директорию сборки приложения.
     /// </summary>
     /// <returns>Абсолютный путь к директории сборки.</returns>
-    public static string GetBaseDirectory()
+    public string GetBaseDirectory()
     {
-        return BaseDir;
+        return _baseDir;
     }
 
     /// <summary>
@@ -34,10 +39,10 @@ public static class PathManager
     /// Это обеспечивает работу скачивания и распаковки зависимостей в MSIX приложениях.
     /// </summary>
     /// <returns>Абсолютный путь к локальной папке bin утилит.</returns>
-    public static string GetBinDirectory()
+    public string GetBinDirectory()
     {
         // Железобетонная проверка: если приложение запущено из защищенной системной папки, это MSIX
-        bool isMsix = BaseDir.Contains("WindowsApps", StringComparison.OrdinalIgnoreCase);
+        bool isMsix = _baseDir.Contains("WindowsApps", StringComparison.OrdinalIgnoreCase);
 
         if (isMsix)
         {
@@ -47,7 +52,7 @@ public static class PathManager
         }
 
         // Для запуска из Visual Studio: используем папку сборки
-        return Path.Combine(BaseDir, "bin");
+        return Path.Combine(_baseDir, "bin");
     }
 
     /// <summary>
@@ -58,9 +63,9 @@ public static class PathManager
     /// Для MSIX приложений: всегда использует LOCALAPPDATA (так как Program Files доступен только для чтения).
     /// </summary>
     /// <returns>Абсолютный путь к папке настроек.</returns>
-    public static string GetSettingsDirectory()
+    public string GetSettingsDirectory()
     {
-        bool isMsix = BaseDir.Contains("WindowsApps", StringComparison.OrdinalIgnoreCase);
+        bool isMsix = _baseDir.Contains("WindowsApps", StringComparison.OrdinalIgnoreCase);
 
         if (isMsix)
         {
@@ -74,12 +79,12 @@ public static class PathManager
         }
 
         // 1. Проверяем доступность папки приложения на запись (Portable/VS)
-        string testFile = Path.Combine(BaseDir, ".write_test");
+        string testFile = Path.Combine(_baseDir, ".write_test");
         try
         {
             File.WriteAllText(testFile, "test");
             File.Delete(testFile);
-            return BaseDir;
+            return _baseDir;
         }
         catch (Exception)
         {
@@ -100,7 +105,7 @@ public static class PathManager
     /// </summary>
     /// <param name="binaryName">Имя бинарного файла утилиты.</param>
     /// <returns>Полный абсолютный путь к файлу утилиты на диске.</returns>
-    public static string GetBinaryPath(string binaryName)
+    public string GetBinaryPath(string binaryName)
     {
         if (OperatingSystem.IsWindows() && !binaryName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
         {
@@ -144,7 +149,7 @@ public static class PathManager
     /// </summary>
     /// <param name="path">Исходный длинный путь к файлу или папке.</param>
     /// <returns>Короткий путь в формате 8.3, либо исходный путь, если преобразование невозможно.</returns>
-    public static string GetShortPath(string path)
+    public string GetShortPath(string path)
     {
         if (string.IsNullOrEmpty(path))
         {
@@ -163,7 +168,7 @@ public static class PathManager
             if (result > 0)
             {
                 string shortPath = sb.ToString();
-                LogService.Instance.DebugLog($"Путь успешно преобразован в формат 8.3: '{path}' -> '{shortPath}'", "PathManager");
+                _logService.DebugLog($"Путь успешно преобразован в формат 8.3: '{path}' -> '{shortPath}'", "PathManager");
                 return shortPath;
             }
 
@@ -174,16 +179,16 @@ public static class PathManager
                 if (result > 0)
                 {
                     string shortPath = sb.ToString();
-                    LogService.Instance.DebugLog($"Путь успешно преобразован в формат 8.3 с расширением буфера: '{path}' -> '{shortPath}'", "PathManager");
+                    _logService.DebugLog($"Путь успешно преобразован в формат 8.3 с расширением буфера: '{path}' -> '{shortPath}'", "PathManager");
                     return shortPath;
                 }
             }
 
-            LogService.Instance.Warn($"Не удалось преобразовать путь '{path}' в формат 8.3. Код системной ошибки: {System.Runtime.InteropServices.Marshal.GetLastWin32Error()}", "PathManager");
+            _logService.Warn($"Не удалось преобразовать путь '{path}' в формат 8.3. Код системной ошибки: {System.Runtime.InteropServices.Marshal.GetLastWin32Error()}", "PathManager");
         }
         catch (Exception ex)
         {
-            LogService.Instance.Exception(ex, $"Непредвиденное исключение при попытке получить короткий путь для '{path}'", "PathManager");
+            _logService.Exception(ex, $"Непредвиденное исключение при попытке получить короткий путь для '{path}'", "PathManager");
         }
 
         return path;
@@ -195,7 +200,7 @@ public static class PathManager
     /// <summary>
     /// Получить имя подпапки для группировки бинарных утилит в папке bin/.
     /// </summary>
-    private static string GetSubfolderName(string binaryName)
+    private string GetSubfolderName(string binaryName)
     {
         string name = binaryName.Replace(".exe", "", StringComparison.OrdinalIgnoreCase).ToLowerInvariant();
         return name switch

@@ -1,5 +1,6 @@
 // -*- coding: utf-8 -*-
 using System;
+using KTools_App.Services.Contracts;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -25,6 +26,8 @@ namespace KTools_App.UI.Pages;
 /// </summary>
 public sealed partial class WorkPanel : Page
 {
+    private ISettingsManager _settingsManager => App.Services.GetRequiredService<ISettingsManager>();
+
     private AbstractScript? _script;
 
     // Контейнеры контента для горизонтального NavigationView
@@ -333,7 +336,7 @@ public sealed partial class WorkPanel : Page
         }
         catch (Exception ex)
         {
-            LogService.Instance.Error($"Не удалось открыть окно выбора папки: {ex.Message}", "WorkPanel");
+            App.Services.GetRequiredService<ILogService>().Error($"Не удалось открыть окно выбора папки: {ex.Message}", "WorkPanel");
         }
     }
 
@@ -409,12 +412,12 @@ public sealed partial class WorkPanel : Page
         var settings = new Dictionary<string, object>();
         if (_script == null) return settings;
 
-        string settingsGroup = SettingsManager.Instance.GetSafeGroupName(_script.Name);
+        string settingsGroup = _settingsManager.GetSafeGroupName(_script.Name);
         foreach (var field in _script.GetFullSettingsSchema())
         {
             if (field.Type == SettingType.Subtitle) continue;
 
-            object val = SettingsManager.Instance.GetSetting(settingsGroup, field.Key, field.DefaultValue);
+            object val = _settingsManager.GetSetting(settingsGroup, field.Key, field.DefaultValue);
             settings[field.Key] = val;
         }
 
@@ -462,7 +465,7 @@ public sealed partial class WorkPanel : Page
         var filePaths = FileList.Files.Select(f => f.FilePath).ToList();
         if (filePaths.Count == 0)
         {
-            LogService.Instance.Warn("Попытка открыть предпросмотр без добавленных файлов субтитров.", "WorkPanel");
+            App.Services.GetRequiredService<ILogService>().Warn("Попытка открыть предпросмотр без добавленных файлов субтитров.", "WorkPanel");
             return;
         }
 
@@ -471,9 +474,10 @@ public sealed partial class WorkPanel : Page
         try
         {
             // Синхронизируем FilterState с текущими настройками из SettingsManager перед открытием
-            string settingsGroup = SettingsManager.Instance.GetSafeGroupName(subScript.Name);
-            subScript.FilterState.StripFormatting = SettingsManager.Instance.GetSetting(settingsGroup, "strip_formatting", true);
-            subScript.FilterState.StripCaps = SettingsManager.Instance.GetSetting(settingsGroup, "strip_caps", false);
+            var settingsManager = App.Services.GetRequiredService<ISettingsManager>();
+            string settingsGroup = settingsManager.GetSafeGroupName(subScript.Name);
+            subScript.FilterState.StripFormatting = settingsManager.GetSetting(settingsGroup, "strip_formatting", true);
+            subScript.FilterState.StripCaps = settingsManager.GetSetting(settingsGroup, "strip_caps", false);
 
             var viewModel = new SubtitlePreviewViewModel(subScript.FilterState, settingsGroup);
             await viewModel.LoadDataAsync(filePaths);
@@ -495,7 +499,7 @@ public sealed partial class WorkPanel : Page
         }
         catch (Exception ex)
         {
-            LogService.Instance.Exception(
+            App.Services.GetRequiredService<ILogService>().Exception(
                 ex,
                 $"Критический сбой при инициализации или открытии окна предпросмотра субтитров: {ex.Message}",
                 "WorkPanel");

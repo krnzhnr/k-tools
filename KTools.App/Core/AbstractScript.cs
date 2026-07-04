@@ -1,6 +1,7 @@
 // -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
+using KTools_App.Services.Contracts;
 using System.Collections.ObjectModel;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -159,12 +160,20 @@ public abstract class AbstractScript
         _isCancelled = false;
     }
 
+    protected ILogService _logService { get; }
+    protected ISettingsManager _settingsManager { get; }
+    protected IPathManager _pathManager { get; }
+
     /// <summary>
-    /// Инициализирует новый экземпляр класса <see cref="AbstractScript"/>
+    /// Инициализирует новый экземпляр класса <see cref="AbstractScript"/> с внедрением зависимостей
     /// и настраивает автоматическое удаление сохраненного выбора при удалении файлов из очереди.
     /// </summary>
-    protected AbstractScript()
+    protected AbstractScript(ILogService logService, ISettingsManager settingsManager, IPathManager pathManager)
     {
+        _logService = logService ?? throw new ArgumentNullException(nameof(logService));
+        _settingsManager = settingsManager ?? throw new ArgumentNullException(nameof(settingsManager));
+        _pathManager = pathManager ?? throw new ArgumentNullException(nameof(pathManager));
+
         FilesQueue.CollectionChanged += (sender, e) =>
         {
             if (e.Action == System.Collections.Specialized.NotifyCollectionChangedAction.Remove && e.OldItems != null)
@@ -173,7 +182,7 @@ public abstract class AbstractScript
                 {
                     SelectedTrackIds.Remove(item.FilePath);
                     SelectedAttachmentIds.Remove(item.FilePath);
-                    LogService.Instance.DebugLog(
+                    _logService.DebugLog(
                         $"Очищен сохраненный выбор дорожек для удаленного файла: '{item.FileName}'", 
                         "AbstractScript");
                 }
@@ -182,7 +191,7 @@ public abstract class AbstractScript
             {
                 SelectedTrackIds.Clear();
                 SelectedAttachmentIds.Clear();
-                LogService.Instance.DebugLog(
+                _logService.DebugLog(
                     "Очищен весь сохраненный выбор дорожек в связи со сбросом очереди файлов", 
                     "AbstractScript");
             }
@@ -276,14 +285,14 @@ public abstract class AbstractScript
             string ext = Path.GetExtension(outResolved);
 
             // Обработка автоматического создания подпапки результатов
-            if (SettingsManager.Instance.UseAutoSubfolder)
+            if (_settingsManager.UseAutoSubfolder)
             {
                 string inputDir = Path.GetDirectoryName(inResolved) ?? "";
                 
                 // Если пользователь не выбрал кастомный путь или выбрал ту же папку, что и исходный файл
                 if (string.IsNullOrEmpty(dir) || dir.Equals(inputDir, StringComparison.OrdinalIgnoreCase))
                 {
-                    string subfolderName = SettingsManager.Instance.DefaultOutputSubfolder;
+                    string subfolderName = _settingsManager.DefaultOutputSubfolder;
                     if (string.IsNullOrWhiteSpace(subfolderName))
                     {
                         subfolderName = "KTools_Result";
@@ -295,12 +304,12 @@ public abstract class AbstractScript
                         if (!Directory.Exists(targetSubdir))
                         {
                             Directory.CreateDirectory(targetSubdir);
-                            LogService.Instance.Info($"Автоматически создана папка результатов: '{targetSubdir}'", "AbstractScript");
+                            _logService.Info($"Автоматически создана папка результатов: '{targetSubdir}'", "AbstractScript");
                         }
                     }
                     catch (Exception ex)
                     {
-                        LogService.Instance.Exception(ex, $"Не удалось автоматически создать папку результатов '{targetSubdir}': {ex.Message}", "AbstractScript");
+                        _logService.Exception(ex, $"Не удалось автоматически создать папку результатов '{targetSubdir}': {ex.Message}", "AbstractScript");
                     }
 
                     dir = targetSubdir;
@@ -323,25 +332,25 @@ public abstract class AbstractScript
             string pattern = "";
             string replacement = "";
 
-            string settingsGroup = SettingsManager.Instance.GetSafeGroupName(Name);
-            bool localOverride = SettingsManager.Instance.GetSetting(settingsGroup, "LocalRenameOverride", false);
+            string settingsGroup = _settingsManager.GetSafeGroupName(Name);
+            bool localOverride = _settingsManager.GetSetting(settingsGroup, "LocalRenameOverride", false);
 
             if (localOverride)
             {
-                pattern = SettingsManager.Instance.GetSetting(settingsGroup, "LocalRenameSearch", string.Empty);
-                replacement = SettingsManager.Instance.GetSetting(settingsGroup, "LocalRenameReplace", string.Empty);
-                useRegex = SettingsManager.Instance.GetSetting(settingsGroup, "LocalRenameUseRegex", true);
-                caseSensitive = SettingsManager.Instance.GetSetting(settingsGroup, "LocalRenameCaseSensitive", false);
+                pattern = _settingsManager.GetSetting(settingsGroup, "LocalRenameSearch", string.Empty);
+                replacement = _settingsManager.GetSetting(settingsGroup, "LocalRenameReplace", string.Empty);
+                useRegex = _settingsManager.GetSetting(settingsGroup, "LocalRenameUseRegex", true);
+                caseSensitive = _settingsManager.GetSetting(settingsGroup, "LocalRenameCaseSensitive", false);
                 renameEnabled = !string.IsNullOrEmpty(pattern);
             }
             else
             {
                 // Используем глобальные настройки
-                renameEnabled = SettingsManager.Instance.RenameEnableRegex;
-                pattern = SettingsManager.Instance.RenameRegexSearch;
-                replacement = SettingsManager.Instance.RenameRegexReplace;
-                useRegex = SettingsManager.Instance.RenameUseRegex;
-                caseSensitive = SettingsManager.Instance.RenameCaseSensitive;
+                renameEnabled = _settingsManager.RenameEnableRegex;
+                pattern = _settingsManager.RenameRegexSearch;
+                replacement = _settingsManager.RenameRegexReplace;
+                useRegex = _settingsManager.RenameUseRegex;
+                caseSensitive = _settingsManager.RenameCaseSensitive;
             }
 
             if (renameEnabled && !string.IsNullOrEmpty(pattern))
@@ -374,12 +383,12 @@ public abstract class AbstractScript
                     if (oldStem != stem)
                     {
                         outResolved = Path.Combine(dir, $"{stem}{ext}");
-                        LogService.Instance.Info($"Применено переименование PowerRename: '{oldStem}' -> '{stem}'", "AbstractScript");
+                        _logService.Info($"Применено переименование PowerRename: '{oldStem}' -> '{stem}'", "AbstractScript");
                     }
                 }
                 catch (Exception ex)
                 {
-                    LogService.Instance.Exception(ex, $"Ошибка применения переименования '{pattern}' -> '{replacement}': {ex.Message}", "AbstractScript");
+                    _logService.Exception(ex, $"Ошибка применения переименования '{pattern}' -> '{replacement}': {ex.Message}", "AbstractScript");
                 }
             }
 
@@ -387,7 +396,7 @@ public abstract class AbstractScript
             if (inResolved.Equals(outResolved, StringComparison.OrdinalIgnoreCase))
             {
                 outResolved = Path.Combine(dir, $"{stem}_processed{ext}");
-                LogService.Instance.Info($"Защита исходника: добавлено '_processed' к имени файла: '{outResolved}'", "AbstractScript");
+                _logService.Info($"Защита исходника: добавлено '_processed' к имени файла: '{outResolved}'", "AbstractScript");
             }
 
             // 2. Защита от коллизий имен при пакетной обработке
@@ -411,7 +420,7 @@ public abstract class AbstractScript
         }
         catch (Exception ex)
         {
-            LogService.Instance.Exception(ex, $"Ошибка при получении безопасного выходного пути для '{inputPath}': {ex.Message}", "AbstractScript");
+            _logService.Exception(ex, $"Ошибка при получении безопасного выходного пути для '{inputPath}': {ex.Message}", "AbstractScript");
             return outputPath;
         }
     }
@@ -444,24 +453,24 @@ public abstract class AbstractScript
             string pattern = "";
             string replacement = "";
 
-            string settingsGroup = SettingsManager.Instance.GetSafeGroupName(Name);
-            bool localOverride = SettingsManager.Instance.GetSetting(settingsGroup, "LocalRenameOverride", false);
+            string settingsGroup = _settingsManager.GetSafeGroupName(Name);
+            bool localOverride = _settingsManager.GetSetting(settingsGroup, "LocalRenameOverride", false);
 
             if (localOverride)
             {
-                pattern = SettingsManager.Instance.GetSetting(settingsGroup, "LocalRenameSearch", string.Empty);
-                replacement = SettingsManager.Instance.GetSetting(settingsGroup, "LocalRenameReplace", string.Empty);
-                useRegex = SettingsManager.Instance.GetSetting(settingsGroup, "LocalRenameUseRegex", true);
-                caseSensitive = SettingsManager.Instance.GetSetting(settingsGroup, "LocalRenameCaseSensitive", false);
+                pattern = _settingsManager.GetSetting(settingsGroup, "LocalRenameSearch", string.Empty);
+                replacement = _settingsManager.GetSetting(settingsGroup, "LocalRenameReplace", string.Empty);
+                useRegex = _settingsManager.GetSetting(settingsGroup, "LocalRenameUseRegex", true);
+                caseSensitive = _settingsManager.GetSetting(settingsGroup, "LocalRenameCaseSensitive", false);
                 renameEnabled = !string.IsNullOrEmpty(pattern);
             }
             else
             {
-                renameEnabled = SettingsManager.Instance.RenameEnableRegex;
-                pattern = SettingsManager.Instance.RenameRegexSearch;
-                replacement = SettingsManager.Instance.RenameRegexReplace;
-                useRegex = SettingsManager.Instance.RenameUseRegex;
-                caseSensitive = SettingsManager.Instance.RenameCaseSensitive;
+                renameEnabled = _settingsManager.RenameEnableRegex;
+                pattern = _settingsManager.RenameRegexSearch;
+                replacement = _settingsManager.RenameRegexReplace;
+                useRegex = _settingsManager.RenameUseRegex;
+                caseSensitive = _settingsManager.RenameCaseSensitive;
             }
 
             if (renameEnabled && !string.IsNullOrEmpty(pattern))
@@ -562,30 +571,30 @@ public abstract class AbstractScript
                     File.Delete(filePath);
                     string msg = $"🗑 Удален исходник: {Path.GetFileName(filePath)}";
                     results.Add(msg);
-                    LogService.Instance.Info(msg, "AbstractScript");
+                    _logService.Info(msg, "AbstractScript");
                     return;
                 }
             }
             catch (IOException ioEx) when (attempt < maxRetries)
             {
-                string lockingInfo = FileLockDetector.GetLockingProcessesInfo(filePath);
+                string lockingInfo = FileLockDetector.GetLockingProcessesInfo(filePath, _logService);
                 string procSuffix = string.IsNullOrEmpty(lockingInfo) ? "процесс неизвестен" : $"заблокирован процессами: {lockingInfo}";
-                LogService.Instance.Warn($"Попытка удаления исходника {attempt}/{maxRetries} не удалась (файл занят, {procSuffix}): {ioEx.Message}. Повторная попытка через {delayMs} мс.", "AbstractScript");
+                _logService.Warn($"Попытка удаления исходника {attempt}/{maxRetries} не удалась (файл занят, {procSuffix}): {ioEx.Message}. Повторная попытка через {delayMs} мс.", "AbstractScript");
                 Thread.Sleep(delayMs);
             }
             catch (Exception ex)
             {
-                LogService.Instance.Exception(ex, $"Критическая ошибка при удалении исходного файла '{filePath}': {ex.Message}", "AbstractScript");
+                _logService.Exception(ex, $"Критическая ошибка при удалении исходного файла '{filePath}': {ex.Message}", "AbstractScript");
                 results.Add($"⚠ Не удалось удалить: {Path.GetFileName(filePath)}");
                 return;
             }
         }
 
-        string finalLockInfo = FileLockDetector.GetLockingProcessesInfo(filePath);
+        string finalLockInfo = FileLockDetector.GetLockingProcessesInfo(filePath, _logService);
         string finalProcStr = string.IsNullOrEmpty(finalLockInfo) ? "процесс неизвестен" : $"занят процессами: {finalLockInfo}";
         string failMsg = $"⚠ Не удалось удалить: {Path.GetFileName(filePath)} после {maxRetries} попыток ({finalProcStr}).";
         results.Add(failMsg);
-        LogService.Instance.Error($"Не удалось физически удалить исходный файл '{filePath}' после {maxRetries} попыток. Файл {finalProcStr}.", "AbstractScript");
+        _logService.Error($"Не удалось физически удалить исходный файл '{filePath}' после {maxRetries} попыток. Файл {finalProcStr}.", "AbstractScript");
     }
 
     /// <summary>
@@ -609,29 +618,29 @@ public abstract class AbstractScript
 
                 string msg = $"🔄 Подменен оригинал: {Path.GetFileName(sourcePath)}";
                 results.Add(msg);
-                LogService.Instance.Info(msg, "AbstractScript");
+                _logService.Info(msg, "AbstractScript");
                 return true;
             }
             catch (IOException ioEx) when (attempt < maxRetries)
             {
-                string lockingInfo = FileLockDetector.GetLockingProcessesInfo(sourcePath);
+                string lockingInfo = FileLockDetector.GetLockingProcessesInfo(sourcePath, _logService);
                 string procSuffix = string.IsNullOrEmpty(lockingInfo) ? "процесс неизвестен" : $"заблокирован процессами: {lockingInfo}";
-                LogService.Instance.Warn($"Попытка подмены оригинала {attempt}/{maxRetries} не удалась (файл занят, {procSuffix}): {ioEx.Message}. Повторная попытка через {delayMs} мс.", "AbstractScript");
+                _logService.Warn($"Попытка подмены оригинала {attempt}/{maxRetries} не удалась (файл занят, {procSuffix}): {ioEx.Message}. Повторная попытка через {delayMs} мс.", "AbstractScript");
                 Thread.Sleep(delayMs);
             }
             catch (Exception ex)
             {
-                LogService.Instance.Exception(ex, $"Ошибка при подмене оригинального файла '{sourcePath}' результатом '{resultPath}': {ex.Message}", "AbstractScript");
+                _logService.Exception(ex, $"Ошибка при подмене оригинального файла '{sourcePath}' результатом '{resultPath}': {ex.Message}", "AbstractScript");
                 results.Add($"❌ Ошибка подмены: {Path.GetFileName(sourcePath)}");
                 return false;
             }
         }
 
-        string finalLockInfo = FileLockDetector.GetLockingProcessesInfo(sourcePath);
+        string finalLockInfo = FileLockDetector.GetLockingProcessesInfo(sourcePath, _logService);
         string finalProcStr = string.IsNullOrEmpty(finalLockInfo) ? "процесс неизвестен" : $"занят процессами: {finalLockInfo}";
         string failMsg = $"❌ Ошибка подмены: {Path.GetFileName(sourcePath)} ({finalProcStr})";
         results.Add(failMsg);
-        LogService.Instance.Error($"Не удалось подменить оригинальный файл '{sourcePath}' результатом '{resultPath}' после {maxRetries} попыток. Файл {finalProcStr}.", "AbstractScript");
+        _logService.Error($"Не удалось подменить оригинальный файл '{sourcePath}' результатом '{resultPath}' после {maxRetries} попыток. Файл {finalProcStr}.", "AbstractScript");
         return false;
     }
 
@@ -647,12 +656,12 @@ public abstract class AbstractScript
             if (File.Exists(filePath))
             {
                 File.Delete(filePath);
-                LogService.Instance.DebugLog($"Удален неполный выходной файл: '{Path.GetFileName(filePath)}'", "AbstractScript");
+                _logService.DebugLog($"Удален неполный выходной файл: '{Path.GetFileName(filePath)}'", "AbstractScript");
             }
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warn($"Не удалось удалить временный файл '{filePath}' при отмене: {ex.Message}", "AbstractScript");
+            _logService.Warn($"Не удалось удалить временный файл '{filePath}' при отмене: {ex.Message}", "AbstractScript");
         }
     }
 
@@ -668,12 +677,12 @@ public abstract class AbstractScript
             if (File.Exists(filePath))
             {
                 File.Delete(filePath);
-                LogService.Instance.DebugLog($"Удален поврежденный выходной файл после сбоя или ошибки: '{Path.GetFileName(filePath)}'", "AbstractScript");
+                _logService.DebugLog($"Удален поврежденный выходной файл после сбоя или ошибки: '{Path.GetFileName(filePath)}'", "AbstractScript");
             }
         }
         catch (Exception ex)
         {
-            LogService.Instance.Exception(ex, $"Не удалось очистить поврежденный выходной файл '{filePath}' после сбоя: {ex.Message}", "AbstractScript");
+            _logService.Exception(ex, $"Не удалось очистить поврежденный выходной файл '{filePath}' после сбоя: {ex.Message}", "AbstractScript");
         }
     }
 

@@ -2,6 +2,7 @@ using System;
 using System.Text.RegularExpressions;
 
 using KTools_App.Core;
+using KTools_App.Services.Contracts;
 
 namespace KTools_App.Infrastructure;
 
@@ -60,7 +61,7 @@ public static class FFmpegOutputParser
     /// <param name="line">Строка текстового вывода FFmpeg.</param>
     /// <param name="totalDuration">Общая длительность обрабатываемого аудио/видео файла в секундах.</param>
     /// <returns>Экземпляр ProgressInfo при успешном парсинге, иначе null.</returns>
-    public static ProgressInfo? ParseLine(string line, double totalDuration)
+    public static ProgressInfo? ParseLine(string line, double totalDuration, ILogService logService)
     {
         if (string.IsNullOrWhiteSpace(line)) return null;
 
@@ -133,7 +134,7 @@ public static class FFmpegOutputParser
         catch (Exception ex)
         {
             // Молчаливый пропуск при ошибках парсинга некорректных строк
-            LogService.Instance.DebugLog($"Не удалось распарсить строку прогресса: {ex.Message}", "FFmpegOutputParser");
+            logService.DebugLog($"Не удалось распарсить строку прогресса: {ex.Message}", "FFmpegOutputParser");
             return null;
         }
     }

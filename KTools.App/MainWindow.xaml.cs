@@ -1,6 +1,7 @@
 using System;
 using System.Runtime.InteropServices;
 using Microsoft.UI.Xaml;
+using KTools_App.Services.Contracts;
 using Windows.Graphics;
 using CommunityToolkit.Mvvm.Messaging;
 using KTools_App.Core;
@@ -65,9 +66,14 @@ public sealed partial class MainWindow : Window
         IntPtr lParam);
 
     private SubclassProc? _subclassProcDelegate;
+    private readonly ILogService _logService;
+    private readonly ISettingsManager _settingsManager;
 
-    public MainWindow()
+    public MainWindow(ILogService logService, ISettingsManager settingsManager)
     {
+        _logService = logService ?? throw new ArgumentNullException(nameof(logService));
+        _settingsManager = settingsManager ?? throw new ArgumentNullException(nameof(settingsManager));
+
         try
         {
             InitializeComponent();
@@ -82,7 +88,7 @@ public sealed partial class MainWindow : Window
             }
             catch (Exception ex)
             {
-                LogService.Instance.Warn(
+                _logService.Warn(
                     $"Не удалось установить иконку приложения: {ex.Message}",
                     "MainWindow");
             }
@@ -104,7 +110,7 @@ public sealed partial class MainWindow : Window
                     bool result = SetWindowSubclass(hwnd, _subclassProcDelegate, 1, IntPtr.Zero);
                     if (!result)
                     {
-                        LogService.Instance.Warn(
+                        _logService.Warn(
                             "SetWindowSubclass вернул false - обработчик размера не установлен.",
                             "MainWindow");
                     }
@@ -113,7 +119,7 @@ public sealed partial class MainWindow : Window
             catch (Exception ex)
             {
                 // Если SetWindowSubclass не работает, логируем, но не падаем
-                LogService.Instance.Warn(
+                _logService.Warn(
                     $"Не удалось установить обработчик минимального размера окна: {ex.Message}. " +
                     "Будет использован размер по умолчанию.",
                     "MainWindow");
@@ -151,20 +157,20 @@ public sealed partial class MainWindow : Window
             // Подписка на событие закрытия окна для гарантированного завершения процесса приложения
             Closed += (sender, args) =>
             {
-                LogService.Instance.Info(
+                _logService.Info(
                     "Главное окно закрыто пользователем. Запуск процедуры полного завершения процесса приложения.", 
                     "MainWindow");
                 
                 try
                 {
                     Application.Current.Exit();
-                    LogService.Instance.Info(
+                    _logService.Info(
                         "Запрос на выход из приложения успешно отправлен через Application.Current.Exit().", 
                         "MainWindow");
                 }
                 catch (Exception ex)
                 {
-                    LogService.Instance.Exception(
+                    _logService.Exception(
                         ex, 
                         "Возникло исключение при попытке принудительного завершения работы приложения.", 
                         "MainWindow");
@@ -173,7 +179,7 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            LogService.Instance.Exception(
+            _logService.Exception(
                 ex,
                 "Критическая ошибка при инициализации главного окна.",
                 "MainWindow");
@@ -188,18 +194,18 @@ public sealed partial class MainWindow : Window
     {
         try
         {
-            string theme = SettingsManager.Instance.Theme;
+            string theme = _settingsManager.Theme;
             if (Content is FrameworkElement rootElement)
             {
                 rootElement.RequestedTheme = theme.Equals("Light", StringComparison.OrdinalIgnoreCase)
                     ? ElementTheme.Light
                     : ElementTheme.Dark;
-                LogService.Instance.Info($"Успешно применена сохраненная тема оформления: '{theme}'", "MainWindow");
+                _logService.Info($"Успешно применена сохраненная тема оформления: '{theme}'", "MainWindow");
             }
         }
         catch (Exception ex)
         {
-            LogService.Instance.Error($"Не удалось применить сохраненную тему оформления при старте: {ex.Message}", "MainWindow");
+            _logService.Error($"Не удалось применить сохраненную тему оформления при старте: {ex.Message}", "MainWindow");
         }
     }
 
@@ -210,12 +216,12 @@ public sealed partial class MainWindow : Window
     {
         try
         {
-            string backdrop = SettingsManager.Instance.BackdropType;
+            string backdrop = _settingsManager.BackdropType;
             ApplyBackdrop(backdrop);
         }
         catch (Exception ex)
         {
-            LogService.Instance.Error($"Не удалось применить сохраненный тип фона при старте: {ex.Message}", "MainWindow");
+            _logService.Error($"Не удалось применить сохраненный тип фона при старте: {ex.Message}", "MainWindow");
         }
     }
 
@@ -234,11 +240,11 @@ public sealed partial class MainWindow : Window
             {
                 SystemBackdrop = new Microsoft.UI.Xaml.Media.MicaBackdrop();
             }
-            LogService.Instance.Info($"Успешно применен тип фона окна: '{backdropType}'", "MainWindow");
+            _logService.Info($"Успешно применен тип фона окна: '{backdropType}'", "MainWindow");
         }
         catch (Exception ex)
         {
-            LogService.Instance.Error($"Не удалось применить тип фона окна '{backdropType}': {ex.Message}", "MainWindow");
+            _logService.Error($"Не удалось применить тип фона окна '{backdropType}': {ex.Message}", "MainWindow");
         }
     }
 
@@ -267,7 +273,7 @@ public sealed partial class MainWindow : Window
             }
             catch (Exception ex)
             {
-                Core.LogService.Instance.Exception(
+                _logService.Exception(
                     ex,
                     "Ошибка при обработке сообщения WM_GETMINMAXINFO",
                     "MainWindow");

@@ -58,14 +58,16 @@ public sealed class UpdateService : IUpdateService
 {
     private static readonly HttpClient HttpClientInstance = new();
     private const string GitHubApiUrl = "https://api.github.com/repos/krnzhnr/k-tools/releases";
-    private readonly LogService _logService;
+    private readonly ILogService _logService;
+    private readonly ISettingsManager _settingsManager;
 
     /// <summary>
-    /// Инициализирует новый экземпляр класса UpdateService с внедрением логгера.
+    /// Инициализирует новый экземпляр класса UpdateService с внедрением логгера и настроек.
     /// </summary>
-    public UpdateService(LogService logService)
+    public UpdateService(ILogService logService, ISettingsManager settingsManager)
     {
-        _logService = logService;
+        _logService = logService ?? throw new ArgumentNullException(nameof(logService));
+        _settingsManager = settingsManager ?? throw new ArgumentNullException(nameof(settingsManager));
         
         // Настраиваем заголовки по умолчанию для HttpClient.
         // GitHub API требует наличие User-Agent для всех запросов.
@@ -306,7 +308,7 @@ public sealed class UpdateService : IUpdateService
     {
         // Если в настройках включен режим симуляции старой версии для отладки,
         // принудительно возвращаем 1.0.0 для срабатывания баннера обновлений.
-        if (SettingsManager.Instance.DebugSimulateOldVersion)
+        if (_settingsManager.DebugSimulateOldVersion)
         {
             _logService.Warn("[Отладка] Активирована имитация старой версии. Возвращаем версию 1.0.0", "UpdateService");
             return "1.0.0";

@@ -1,3 +1,4 @@
+using KTools_App.Services.Contracts;
 // -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
@@ -54,6 +55,11 @@ public sealed class MetadataCleanupScript : AbstractScript
         new SettingField("DeleteOriginal", "Удалить исходный файл", SettingType.Checkbox, false, "Общие")
     };
 
+    public MetadataCleanupScript(ILogService logService, ISettingsManager settingsManager, IPathManager pathManager)
+        : base(logService, settingsManager, pathManager)
+    {
+    }
+
     /// <summary>
     /// Асинхронное выполнение очистки метаданных для одного файла.
     /// </summary>
@@ -85,7 +91,7 @@ public sealed class MetadataCleanupScript : AbstractScript
         string outputFilePath = Path.Combine(targetDir, outputName);
 
         // Проверяем, существует ли файл
-        bool overwrite = SettingsManager.Instance.GetSetting("General", "OverwriteExisting", false);
+        bool overwrite = _settingsManager.GetSetting("General", "OverwriteExisting", false);
         if (File.Exists(outputFilePath) && !overwrite)
         {
             progressCallback(fileIndex, totalCount, $"Пропуск (существует): {outputName}", 100.0);
@@ -94,7 +100,7 @@ public sealed class MetadataCleanupScript : AbstractScript
         }
 
         // Поиск бинарника FFmpeg
-        string ffmpegPath = PathManager.GetBinaryPath("ffmpeg");
+        string ffmpegPath = _pathManager.GetBinaryPath("ffmpeg");
         bool hasFfmpeg = File.Exists(ffmpegPath);
 
         if (!hasFfmpeg)

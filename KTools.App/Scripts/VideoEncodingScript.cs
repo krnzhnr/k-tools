@@ -1,3 +1,4 @@
+using KTools_App.Services.Contracts;
 // -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
@@ -22,11 +23,24 @@ public sealed class VideoEncodingScript : AbstractScript
     private static bool _isNvencChecked;
     private static bool _isNvencSupported;
     private string? _finalOutputFileForCleanup;
+    private readonly IFFmpegRunner _ffmpegRunner;
+    private readonly IMediaProbeService _mediaProbeService;
+
+    public VideoEncodingScript(
+        ILogService logService, 
+        ISettingsManager settingsManager, IPathManager pathManager,
+        IFFmpegRunner ffmpegRunner,
+        IMediaProbeService mediaProbeService)
+        : base(logService, settingsManager, pathManager)
+    {
+        _ffmpegRunner = ffmpegRunner ?? throw new ArgumentNullException(nameof(ffmpegRunner));
+        _mediaProbeService = mediaProbeService ?? throw new ArgumentNullException(nameof(mediaProbeService));
+    }
 
     /// <summary>
     /// Проверяет поддержку NVENC в фоновом/синхронном режиме с кэшированием результата.
     /// </summary>
-    private static bool IsNvencSupported
+    private bool IsNvencSupported
     {
         get
         {
@@ -34,11 +48,11 @@ public sealed class VideoEncodingScript : AbstractScript
             {
                 try
                 {
-                    _isNvencSupported = Task.Run(() => FFmpegRunner.Instance.CheckNvencSupportAsync()).GetAwaiter().GetResult();
+                    _isNvencSupported = Task.Run(() => _ffmpegRunner.CheckNvencSupportAsync()).GetAwaiter().GetResult();
                 }
                 catch (Exception ex)
                 {
-                    LogService.Instance.Exception(ex, "Ошибка при проверке поддержки NVENC в VideoEncodingScript", "VideoEncodingScript");
+                    _logService.Exception(ex, "Ошибка при проверке поддержки NVENC в VideoEncodingScript", "VideoEncodingScript");
                     _isNvencSupported = false;
                 }
                 _isNvencChecked = true;
@@ -448,18 +462,18 @@ public sealed class VideoEncodingScript : AbstractScript
         ResetCancellation();
         var results = new List<string>();
 
-        LogService.Instance.Info($"Начало кодирования видео для файла '{Path.GetFileName(filePath)}'", "VideoEncodingScript");
+        _logService.Info($"Начало кодирования видео для файла '{Path.GetFileName(filePath)}'", "VideoEncodingScript");
 
         // 1. Анализируем структуру исходного файла
         MediaStructure? structure;
         try
         {
-            structure = await MediaProbeService.Instance.ProbeAsync(filePath);
+            structure = await _mediaProbeService.ProbeAsync(filePath);
         }
         catch (Exception ex)
         {
             string probeErr = $"❌ Ошибка анализа метаданных файла: {ex.Message}";
-            LogService.Instance.Exception(ex, $"Исключение при зондировании '{filePath}': {ex.Message}", "VideoEncodingScript");
+            _logService.Exception(ex, $"Исключение при зондировании '{filePath}': {ex.Message}", "VideoEncodingScript");
             progressCallback(fileIndex, totalCount, "Ошибка ffprobe", 0.0);
             results.Add(probeErr);
             return results;
@@ -468,7 +482,7 @@ public sealed class VideoEncodingScript : AbstractScript
         if (structure == null)
         {
             string err = $"❌ ОШИБКА анализа: {Path.GetFileName(filePath)}";
-            LogService.Instance.Error(err, "VideoEncodingScript");
+            _logService.Error(err, "VideoEncodingScript");
             progressCallback(fileIndex, totalCount, "Ошибка ffprobe", 0.0);
             results.Add(err);
             return results;
@@ -483,7 +497,7 @@ public sealed class VideoEncodingScript : AbstractScript
         catch (Exception ex)
         {
             string dirErr = $"❌ Ошибка создания временной папки: {ex.Message}";
-            LogService.Instance.Exception(ex, dirErr, "VideoEncodingScript");
+            _logService.Exception(ex, dirErr, "VideoEncodingScript");
             results.Add(dirErr);
             return results;
         }
@@ -511,13 +525,13 @@ public sealed class VideoEncodingScript : AbstractScript
                         : font.AttachmentId;
 
                     string outFontPath = Path.Combine(tempFontsDir, font.FileName);
-                    bool fSuccess = await FFmpegRunner.Instance.ExtractAttachmentAsync(filePath, ffmpegAttachmentIndex, outFontPath);
+                    bool fSuccess = await _ffmpegRunner.ExtractAttachmentAsync(filePath, ffmpegAttachmentIndex, outFontPath);
                     if (fSuccess)
                     {
                         fontCount++;
                     }
                 }
-                LogService.Instance.Info($"Извлечено встроенных шрифтов во временную папку: {fontCount}", "VideoEncodingScript");
+                _logService.Info($"Извлечено встроенных шрифтов во временную папку: {fontCount}", "VideoEncodingScript");
             }
 
             // 4. Поиск и извлечение субтитров для вшивания (burn-in)
@@ -558,8 +572,8 @@ public sealed class VideoEncodingScript : AbstractScript
                 int relSubIdx = subTracks.ToList().IndexOf(targetSubTrack);
                 tempSubFile = Path.Combine(tempDir, $"subs_{DateTime.Now.Ticks}.ass");
 
-                LogService.Instance.Info($"Извлечение субтитров #{targetSubTrack.TrackId} (относительный индекс {relSubIdx}) во временный файл", "VideoEncodingScript");
-                bool extSubSuccess = await FFmpegRunner.Instance.ExtractSubtitleAsync(filePath, relSubIdx, tempSubFile, relative: true);
+                _logService.Info($"Извлечение субтитров #{targetSubTrack.TrackId} (относительный индекс {relSubIdx}) во временный файл", "VideoEncodingScript");
+                bool extSubSuccess = await _ffmpegRunner.ExtractSubtitleAsync(filePath, relSubIdx, tempSubFile, relative: true);
 
                 if (extSubSuccess && File.Exists(tempSubFile))
                 {
@@ -591,14 +605,14 @@ public sealed class VideoEncodingScript : AbstractScript
                         if (removedCount > 0)
                         {
                             File.WriteAllLines(tempSubFile, cleanLines, new System.Text.UTF8Encoding(false));
-                            LogService.Instance.Info($"Очистка субтитров: удалено {removedCount} строк оформления", "VideoEncodingScript");
+                            _logService.Info($"Очистка субтитров: удалено {removedCount} строк оформления", "VideoEncodingScript");
                         }
                     }
                 }
                 else
                 {
                     tempSubFile = null;
-                    LogService.Instance.Warn("Не удалось извлечь субтитры для вшивания, кодирование продолжится без них", "VideoEncodingScript");
+                    _logService.Warn("Не удалось извлечь субтитры для вшивания, кодирование продолжится без них", "VideoEncodingScript");
                 }
             }
 
@@ -639,7 +653,7 @@ public sealed class VideoEncodingScript : AbstractScript
             int relAudioIdx = bestAudio != null ? audioTracks.ToList().IndexOf(bestAudio) : 0;
             if (bestAudio != null)
             {
-                LogService.Instance.Info($"Выбран аудиопоток #{bestAudio.TrackId} (относительный индекс {relAudioIdx}, язык '{bestAudio.Language}')", "VideoEncodingScript");
+                _logService.Info($"Выбран аудиопоток #{bestAudio.TrackId} (относительный индекс {relAudioIdx}, язык '{bestAudio.Language}')", "VideoEncodingScript");
             }
 
             // 6. Вычисляем выходные пути
@@ -654,11 +668,11 @@ public sealed class VideoEncodingScript : AbstractScript
             // Объявляем finalOutputFile на уровне выше, чтобы она была доступна в catch блоке
             _finalOutputFileForCleanup = finalOutputFile;
 
-            bool overwrite = SettingsManager.Instance.GetSetting("General", "OverwriteExisting", false);
+            bool overwrite = _settingsManager.GetSetting("General", "OverwriteExisting", false);
             if (File.Exists(finalOutputFile) && !overwrite)
             {
                 string skipExist = $"⏭ ПРОПУСК (файл существует): {Path.GetFileName(finalOutputFile)}";
-                LogService.Instance.Info(skipExist, "VideoEncodingScript");
+                _logService.Info(skipExist, "VideoEncodingScript");
                 progressCallback(fileIndex, totalCount, $"Пропущен (существует): {Path.GetFileName(finalOutputFile)}", 100.0);
                 results.Add(skipExist);
                 return results;
@@ -848,7 +862,7 @@ public sealed class VideoEncodingScript : AbstractScript
             }
 
             // 8. Запуск процесса кодирования
-            LogService.Instance.Info($"Запуск FFmpeg для кодирования видео '{Path.GetFileName(filePath)}' в '{Path.GetFileName(finalOutputFile)}'", "VideoEncodingScript");
+            _logService.Info($"Запуск FFmpeg для кодирования видео '{Path.GetFileName(filePath)}' в '{Path.GetFileName(finalOutputFile)}'", "VideoEncodingScript");
             progressCallback(fileIndex, totalCount, "Кодирование видео...", 0.0);
 
             using var cts = new CancellationTokenSource();
@@ -867,7 +881,7 @@ public sealed class VideoEncodingScript : AbstractScript
             bool success = false;
             try
             {
-                success = await FFmpegRunner.Instance.RunAsync(
+                success = await _ffmpegRunner.RunAsync(
                     inputPath: filePath,
                     outputPath: finalOutputFile,
                     extraArgs: ffmpegArgs,
@@ -898,7 +912,7 @@ public sealed class VideoEncodingScript : AbstractScript
             {
                 CleanupFailedOutputFile(finalOutputFile);
                 string cancelMsg = $"⚠ Обработка отменена пользователем: {Path.GetFileName(finalOutputFile)}";
-                LogService.Instance.Info(cancelMsg, "VideoEncodingScript");
+                _logService.Info(cancelMsg, "VideoEncodingScript");
                 results.Add(cancelMsg);
                 return results;
             }
@@ -907,7 +921,7 @@ public sealed class VideoEncodingScript : AbstractScript
             {
                 progressCallback(fileIndex, totalCount, "Завершено!", 100.0);
                 string successMsg = $"✅ ОБРАБОТАНО: {Path.GetFileName(finalOutputFile)}";
-                LogService.Instance.Info(successMsg, "VideoEncodingScript");
+                _logService.Info(successMsg, "VideoEncodingScript");
                 results.Add(successMsg);
 
                 bool overwriteSource = GetSettingValue(settings, "overwrite_source", false);
@@ -920,7 +934,7 @@ public sealed class VideoEncodingScript : AbstractScript
             {
                 CleanupFailedOutputFile(finalOutputFile);
                 string failMsg = $"❌ ОШИБКА кодирования файла: {Path.GetFileName(filePath)}";
-                LogService.Instance.Error(failMsg, "VideoEncodingScript");
+                _logService.Error(failMsg, "VideoEncodingScript");
                 results.Add(failMsg);
             }
         }
@@ -931,7 +945,7 @@ public sealed class VideoEncodingScript : AbstractScript
                 CleanupFailedOutputFile(_finalOutputFileForCleanup);
             }
             string runErr = $"❌ Критическая ошибка при кодировании видео для '{Path.GetFileName(filePath)}': {ex.Message}";
-            LogService.Instance.Exception(ex, $"Исключение в процессе кодирования '{filePath}': {ex.Message}", "VideoEncodingScript");
+            _logService.Exception(ex, $"Исключение в процессе кодирования '{filePath}': {ex.Message}", "VideoEncodingScript");
             results.Add(runErr);
         }
         finally
@@ -946,7 +960,7 @@ public sealed class VideoEncodingScript : AbstractScript
             }
             catch (Exception ex)
             {
-                LogService.Instance.Warn($"Не удалось удалить временную папку '{tempDir}': {ex.Message}", "VideoEncodingScript");
+                _logService.Warn($"Не удалось удалить временную папку '{tempDir}': {ex.Message}", "VideoEncodingScript");
             }
         }
 

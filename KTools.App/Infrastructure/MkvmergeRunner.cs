@@ -22,22 +22,18 @@ public record MkvInputSource(string Path, List<string>? Args = null);
 /// </summary>
 public sealed class MkvmergeRunner : AbstractProcessRunner, IMkvmergeRunner
 {
-    private static readonly Lazy<MkvmergeRunner> LazyInstance =
-        new(() => new MkvmergeRunner(LogService.Instance));
+
 
     /// <summary>
     /// Инициализирует новый экземпляр MkvmergeRunner с внедрением зависимостей.
     /// </summary>
     /// <param name="logService">Сервис логирования.</param>
-    public MkvmergeRunner(ILogService logService)
-        : base(logService)
+    public MkvmergeRunner(ILogService logService, IPathManager pathManager)
+        : base(logService, pathManager)
     {
     }
 
-    /// <summary>
-    /// Возвращает единственный экземпляр класса MkvmergeRunner.
-    /// </summary>
-    public static MkvmergeRunner Instance => LazyInstance.Value;
+
 
     /// <summary>
     /// Запустить процесс сборки контейнера MKV через mkvmerge.

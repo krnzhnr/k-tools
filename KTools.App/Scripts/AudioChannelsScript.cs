@@ -1,3 +1,4 @@
+using KTools_App.Services.Contracts;
 // -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
@@ -16,6 +17,18 @@ namespace KTools_App.Scripts;
 /// </summary>
 public sealed class AudioChannelsScript : AbstractScript
 {
+    private readonly IDependencyManager _dependencyManager;
+    private readonly IFFmpegRunner _ffmpegRunner;
+    private readonly IEac3toRunner _eac3toRunner;
+
+    public AudioChannelsScript(ILogService logService, ISettingsManager settingsManager, IPathManager pathManager, IDependencyManager dependencyManager, IFFmpegRunner ffmpegRunner, IEac3toRunner eac3toRunner)
+        : base(logService, settingsManager, pathManager)
+    {
+        _dependencyManager = dependencyManager ?? throw new ArgumentNullException(nameof(dependencyManager));
+        _ffmpegRunner = ffmpegRunner ?? throw new ArgumentNullException(nameof(ffmpegRunner));
+        _eac3toRunner = eac3toRunner ?? throw new ArgumentNullException(nameof(eac3toRunner));
+    }
+
     /// <summary>
     /// Русское название скрипта.
     /// </summary>
@@ -101,13 +114,13 @@ public sealed class AudioChannelsScript : AbstractScript
         string originalName = Path.GetFileNameWithoutExtension(filePath);
 
         // Динамическая проверка необходимых зависимостей
-        if (!DependencyManager.Instance.IsInstalled("eac3to") ||
-            !DependencyManager.Instance.IsInstalled("ffmpeg"))
+        if (!_dependencyManager.IsInstalled("eac3to") ||
+            !_dependencyManager.IsInstalled("ffmpeg"))
         {
             string errMsg = "❌ Ошибка: Для работы скрипта необходимы " +
                             "установленные утилиты 'eac3to' и 'ffmpeg'.";
             results.Add(errMsg);
-            LogService.Instance.Error(errMsg, "AudioChannelsScript");
+            _logService.Error(errMsg, "AudioChannelsScript");
             return results;
         }
 
@@ -141,12 +154,12 @@ public sealed class AudioChannelsScript : AbstractScript
             if (!Directory.Exists(tempDir))
             {
                 Directory.CreateDirectory(tempDir);
-                LogService.Instance.DebugLog($"Создана временная папка для eac3to: '{tempDir}'", "AudioChannelsScript");
+                _logService.DebugLog($"Создана временная папка для eac3to: '{tempDir}'", "AudioChannelsScript");
             }
         }
         catch (Exception ex)
         {
-            LogService.Instance.Exception(ex, $"Не удалось создать временную директорию '{tempDir}', откат на стандартный путь", "AudioChannelsScript");
+            _logService.Exception(ex, $"Не удалось создать временную директорию '{tempDir}', откат на стандартный путь", "AudioChannelsScript");
             tempDir = Path.GetTempPath();
         }
 
@@ -164,7 +177,7 @@ public sealed class AudioChannelsScript : AbstractScript
 
         if (shouldPreDecode)
         {
-            LogService.Instance.Info($"Формат файла '{fileExtension}' не поддерживается eac3to нативно. Выполняется предварительное декодирование в WAV...", "AudioChannelsScript");
+            _logService.Info($"Формат файла '{fileExtension}' не поддерживается eac3to нативно. Выполняется предварительное декодирование в WAV...", "AudioChannelsScript");
             progressCallback(
                 fileIndex,
                 totalCount,
@@ -176,7 +189,7 @@ public sealed class AudioChannelsScript : AbstractScript
             var decodeArgs = new List<string> { "-c:a", "pcm_s24le" };
             using var decodeCts = new CancellationTokenSource();
 
-            var decodeTask = FFmpegRunner.Instance.RunAsync(
+            var decodeTask = _ffmpegRunner.RunAsync(
                 inputPath: filePath,
                 outputPath: tempInputWavPath,
                 extraArgs: decodeArgs,
@@ -200,7 +213,7 @@ public sealed class AudioChannelsScript : AbstractScript
             }
             catch (Exception ex)
             {
-                LogService.Instance.Exception(ex, $"Ошибка декодирования файла '{originalName}' через FFmpeg: {ex.Message}", "AudioChannelsScript");
+                _logService.Exception(ex, $"Ошибка декодирования файла '{originalName}' через FFmpeg: {ex.Message}", "AudioChannelsScript");
             }
 
             if (IsCancelled || !decodeSuccess || !File.Exists(tempInputWavPath))
@@ -210,12 +223,12 @@ public sealed class AudioChannelsScript : AbstractScript
                 if (IsCancelled)
                 {
                     results.Add($"⚠ Отменено: {originalName}");
-                    LogService.Instance.Info($"Декодирование файла '{originalName}' отменено пользователем.", "AudioChannelsScript");
+                    _logService.Info($"Декодирование файла '{originalName}' отменено пользователем.", "AudioChannelsScript");
                 }
                 else
                 {
                     results.Add($"❌ Ошибка декодирования исходного файла для {Path.GetFileName(filePath)}");
-                    LogService.Instance.Error($"Не удалось выполнить предварительное декодирование в WAV для '{filePath}'.", "AudioChannelsScript");
+                    _logService.Error($"Не удалось выполнить предварительное декодирование в WAV для '{filePath}'.", "AudioChannelsScript");
                 }
                 return results;
             }
@@ -223,7 +236,7 @@ public sealed class AudioChannelsScript : AbstractScript
             eac3toInputPath = tempInputWavPath;
         }
 
-        string shortInputPath = PathManager.GetShortPath(eac3toInputPath);
+        string shortInputPath = _pathManager.GetShortPath(eac3toInputPath);
         string tempBaseName = $"temp_split_{Guid.NewGuid():N}";
         string tempOutputFilePath = Path.Combine(tempDir, $"{tempBaseName}.wavs");
 
@@ -241,7 +254,7 @@ public sealed class AudioChannelsScript : AbstractScript
             0.0);
 
         using var cts = new CancellationTokenSource();
-        var eac3toTask = Eac3toRunner.Instance.RunAsync(
+        var eac3toTask = _eac3toRunner.RunAsync(
             eac3toArgs,
             workingDir: tempDir,
             cancellationToken: cts.Token);
@@ -263,7 +276,7 @@ public sealed class AudioChannelsScript : AbstractScript
         }
         catch (Exception ex)
         {
-            LogService.Instance.Exception(
+            _logService.Exception(
                 ex,
                 $"Ошибка работы eac3to для '{originalName}': {ex.Message}",
                 "AudioChannelsScript");
@@ -273,7 +286,7 @@ public sealed class AudioChannelsScript : AbstractScript
             if (!string.IsNullOrEmpty(tempInputWavPath))
             {
                 CleanupFailedOutputFile(tempInputWavPath);
-                LogService.Instance.DebugLog($"Временный входной WAV-файл '{tempInputWavPath}' успешно удален.", "AudioChannelsScript");
+                _logService.DebugLog($"Временный входной WAV-файл '{tempInputWavPath}' успешно удален.", "AudioChannelsScript");
             }
         }
 
@@ -282,7 +295,7 @@ public sealed class AudioChannelsScript : AbstractScript
             CleanupTempOutputs(tempDir, tempBaseName);
             CleanupAllOutputs(basePath);
             results.Add($"⚠ Отменено: {originalName}");
-            LogService.Instance.Info(
+            _logService.Info(
                 $"Разделение каналов для '{originalName}' отменено.",
                 "AudioChannelsScript");
             return results;
@@ -295,7 +308,7 @@ public sealed class AudioChannelsScript : AbstractScript
             string errorMsg = $"❌ Ошибка eac3to при разделении " +
                               $"{Path.GetFileName(filePath)}";
             results.Add(errorMsg);
-            LogService.Instance.Error(
+            _logService.Error(
                 $"Ошибка разделения каналов в eac3to для '{filePath}'.",
                 "AudioChannelsScript");
             return results;
@@ -320,7 +333,7 @@ public sealed class AudioChannelsScript : AbstractScript
                             File.Delete(finalPath);
                         }
                         MoveFileSafe(tempFile, finalPath);
-                        LogService.Instance.DebugLog($"Временный моно-канал перемещен: '{tempFile}' -> '{finalPath}'", "AudioChannelsScript");
+                        _logService.DebugLog($"Временный моно-канал перемещен: '{tempFile}' -> '{finalPath}'", "AudioChannelsScript");
                     }
                 }
             }
@@ -330,7 +343,7 @@ public sealed class AudioChannelsScript : AbstractScript
                 CleanupAllOutputs(basePath);
                 string errorMsg = $"❌ Ошибка перемещения моно-каналов для {Path.GetFileName(filePath)}";
                 results.Add(errorMsg);
-                LogService.Instance.Exception(ex, $"Не удалось переименовать временные моно-файлы после eac3to для '{originalName}'", "AudioChannelsScript");
+                _logService.Exception(ex, $"Не удалось переименовать временные моно-файлы после eac3to для '{originalName}'", "AudioChannelsScript");
                 return results;
             }
 
@@ -419,7 +432,7 @@ public sealed class AudioChannelsScript : AbstractScript
                     results.Add($"  • Создан канал: {file}");
                 }
 
-                LogService.Instance.Info(
+                _logService.Info(
                     $"Успешно завершено разделение каналов для '{originalName}'. " +
                     $"Создано файлов: {createdFiles.Count}",
                     "AudioChannelsScript");
@@ -441,7 +454,7 @@ public sealed class AudioChannelsScript : AbstractScript
             CleanupAllOutputs(basePath);
             string errorMsg = $"❌ Ошибка выполнения скрипта для {Path.GetFileName(filePath)}: {ex.Message}";
             results.Add(errorMsg);
-            LogService.Instance.Exception(ex, $"Ошибка обработки каналов для '{originalName}': {ex.Message}", "AudioChannelsScript");
+            _logService.Exception(ex, $"Ошибка обработки каналов для '{originalName}': {ex.Message}", "AudioChannelsScript");
         }
 
         return results;
@@ -461,7 +474,7 @@ public sealed class AudioChannelsScript : AbstractScript
             return false;
         }
 
-        LogService.Instance.Info(
+        _logService.Info(
             $"Склеивание моно-каналов '{Path.GetFileName(fileLeft)}' и " +
             $"'{Path.GetFileName(fileRight)}' в стереопару...",
             "AudioChannelsScript");
@@ -473,7 +486,7 @@ public sealed class AudioChannelsScript : AbstractScript
             "-c:a", "pcm_s24le"
         };
 
-        bool success = await FFmpegRunner.Instance.RunAsync(
+        bool success = await _ffmpegRunner.RunAsync(
             inputPath: fileLeft,
             outputPath: fileOutput,
             extraArgs: extraArgs,
@@ -486,7 +499,7 @@ public sealed class AudioChannelsScript : AbstractScript
             {
                 File.Delete(fileLeft);
                 File.Delete(fileRight);
-                LogService.Instance.Info(
+                _logService.Info(
                     $"Успешно склеены каналы в '{Path.GetFileName(fileOutput)}'. " +
                     $"Исходные моно-файлы удалены.",
                     "AudioChannelsScript");
@@ -494,7 +507,7 @@ public sealed class AudioChannelsScript : AbstractScript
             }
             catch (Exception ex)
             {
-                LogService.Instance.Exception(
+                _logService.Exception(
                     ex,
                     $"Ошибка при удалении моно-файлов после склеивания: " +
                     $"{ex.Message}",
@@ -503,7 +516,7 @@ public sealed class AudioChannelsScript : AbstractScript
         }
         else
         {
-            LogService.Instance.Error(
+            _logService.Error(
                 $"Не удалось склеить каналы в '{Path.GetFileName(fileOutput)}'.",
                 "AudioChannelsScript");
         }
@@ -529,14 +542,14 @@ public sealed class AudioChannelsScript : AbstractScript
                 if (File.Exists(path))
                 {
                     File.Delete(path);
-                    LogService.Instance.DebugLog(
+                    _logService.DebugLog(
                         $"Удален выходной/временный файл: '{Path.GetFileName(path)}'",
                         "AudioChannelsScript");
                 }
             }
             catch (Exception ex)
             {
-                LogService.Instance.Warn(
+                _logService.Warn(
                     $"Не удалось удалить файл '{Path.GetFileName(path)}' " +
                     $"при очистке: {ex.Message}",
                     "AudioChannelsScript");
@@ -559,7 +572,7 @@ public sealed class AudioChannelsScript : AbstractScript
                     if (File.Exists(file))
                     {
                         File.Delete(file);
-                        LogService.Instance.DebugLog(
+                        _logService.DebugLog(
                             $"Удален неиспользованный временный моно-файл: '{Path.GetFileName(file)}'",
                             "AudioChannelsScript");
                     }
@@ -568,7 +581,7 @@ public sealed class AudioChannelsScript : AbstractScript
         }
         catch (Exception ex)
         {
-            LogService.Instance.Warn(
+            _logService.Warn(
                 $"Не удалось выполнить очистку временных моно-файлов для '{tempBaseName}': {ex.Message}",
                 "AudioChannelsScript");
         }

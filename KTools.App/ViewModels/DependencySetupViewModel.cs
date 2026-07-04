@@ -20,9 +20,10 @@ namespace KTools_App.ViewModels;
 /// </summary>
 public partial class DependencySetupViewModel : ObservableObject
 {
-    private readonly DependencyManager _dependencyManager;
+    private readonly IDependencyManager _dependencyManager;
     private readonly INavigationService _navigationService;
-    private readonly LogService _logService;
+    private readonly ILogService _logService;
+    private readonly IPathManager _pathManager;
 
     /// <summary>
     /// Коллекция обязательных зависимостей приложения.
@@ -58,13 +59,15 @@ public partial class DependencySetupViewModel : ObservableObject
     /// Инициализирует новый экземпляр DependencySetupViewModel.
     /// </summary>
     public DependencySetupViewModel(
-        DependencyManager dependencyManager,
+        IDependencyManager dependencyManager,
         INavigationService navigationService,
-        LogService logService)
+        ILogService logService,
+        IPathManager pathManager)
     {
-        _dependencyManager = dependencyManager;
-        _navigationService = navigationService;
-        _logService = logService;
+        _dependencyManager = dependencyManager ?? throw new ArgumentNullException(nameof(dependencyManager));
+        _navigationService = navigationService ?? throw new ArgumentNullException(nameof(navigationService));
+        _logService = logService ?? throw new ArgumentNullException(nameof(logService));
+        _pathManager = pathManager ?? throw new ArgumentNullException(nameof(pathManager));
 
         LoadDependencies();
 
@@ -96,7 +99,7 @@ public partial class DependencySetupViewModel : ObservableObject
         var registry = _dependencyManager.GetRegistry();
         foreach (var dep in registry)
         {
-            var vm = new DependencyVM(dep);
+            var vm = new DependencyVM(dep, _dependencyManager);
             if (dep.IsRequired)
             {
                 RequiredDependencies.Add(vm);
@@ -260,7 +263,7 @@ public partial class DependencySetupViewModel : ObservableObject
     [RelayCommand]
     private void OpenFolder()
     {
-        string binDir = PathManager.GetBinDirectory();
+        string binDir = _pathManager.GetBinDirectory();
         try
         {
             if (!Directory.Exists(binDir))

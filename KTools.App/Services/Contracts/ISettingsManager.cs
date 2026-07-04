@@ -80,6 +80,16 @@ public interface ISettingsManager
     bool RenameEnableRegex { get; set; }
 
     /// <summary>
+    /// Использовать ли регулярные выражения при глобальном переименовании.
+    /// </summary>
+    bool RenameUseRegex { get; set; }
+
+    /// <summary>
+    /// Учитывать ли регистр при глобальном переименовании.
+    /// </summary>
+    bool RenameCaseSensitive { get; set; }
+
+    /// <summary>
     /// Шаблон поиска (регулярное выражение) для переименования выходных файлов.
     /// </summary>
     string RenameRegexSearch { get; set; }
@@ -118,4 +128,9 @@ public interface ISettingsManager
     /// Нормализовать имя скрипта для использования в качестве имени секции (группы) JSON.
     /// </summary>
     string GetSafeGroupName(string scriptName);
+
+    /// <summary>
+    /// Сохранить текущее состояние настроек на диск.
+    /// </summary>
+    void SaveSettings();
 }

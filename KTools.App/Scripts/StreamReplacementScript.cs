@@ -1,3 +1,4 @@
+using KTools_App.Services.Contracts;
 // -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
@@ -34,6 +35,18 @@ public sealed class ReplacementInfo
 /// </summary>
 public sealed class StreamReplacementScript : AbstractScript
 {
+    private readonly IMediaProbeService _mediaProbeService;
+    private readonly IFFmpegRunner _ffmpegRunner;
+    private readonly IMkvmergeRunner _mkvmergeRunner;
+
+    public StreamReplacementScript(ILogService logService, ISettingsManager settingsManager, IPathManager pathManager, IMediaProbeService mediaProbeService, IFFmpegRunner ffmpegRunner, IMkvmergeRunner mkvmergeRunner)
+        : base(logService, settingsManager, pathManager)
+    {
+        _mediaProbeService = mediaProbeService ?? throw new ArgumentNullException(nameof(mediaProbeService));
+        _ffmpegRunner = ffmpegRunner ?? throw new ArgumentNullException(nameof(ffmpegRunner));
+        _mkvmergeRunner = mkvmergeRunner ?? throw new ArgumentNullException(nameof(mkvmergeRunner));
+    }
+
     public override string Name => AppConstants.ScriptMetadata.StreamReplName;
     public override string Description => AppConstants.ScriptMetadata.StreamReplDesc;
     public override string Category => AppConstants.ScriptCategory.Containers;
@@ -73,14 +86,14 @@ public sealed class StreamReplacementScript : AbstractScript
         ResetCancellation();
         var results = new List<string>();
 
-        LogService.Instance.Info($"Начало подмены дорожек для файла '{Path.GetFileName(filePath)}'", "StreamReplacementScript");
+        _logService.Info($"Начало подмены дорожек для файла '{Path.GetFileName(filePath)}'", "StreamReplacementScript");
 
         // 1. Считываем назначения замен из настроек
         var rawReplacements = GetSettingValue<Dictionary<string, object>?>(settings, "replacements", null);
         if (rawReplacements == null || rawReplacements.Count == 0)
         {
             string err = "❌ Ошибка: не назначено ни одной замены для подмены дорожек.";
-            LogService.Instance.Error(err, "StreamReplacementScript");
+            _logService.Error(err, "StreamReplacementScript");
             progressCallback(fileIndex, totalCount, "Ошибка: нет замен", 0.0);
             results.Add(err);
             return results;
@@ -116,7 +129,7 @@ public sealed class StreamReplacementScript : AbstractScript
         if (replacements.Count == 0)
         {
             string err = "❌ Ошибка: не удалось разобрать назначения замен.";
-            LogService.Instance.Error(err, "StreamReplacementScript");
+            _logService.Error(err, "StreamReplacementScript");
             progressCallback(fileIndex, totalCount, "Ошибка: нет замен", 0.0);
             results.Add(err);
             return results;
@@ -126,12 +139,12 @@ public sealed class StreamReplacementScript : AbstractScript
         MediaStructure? structure;
         try
         {
-            structure = await MediaProbeService.Instance.ProbeAsync(filePath);
+            structure = await _mediaProbeService.ProbeAsync(filePath);
         }
         catch (Exception ex)
         {
             string probeErr = $"❌ Ошибка анализа метаданных файла: {ex.Message}";
-            LogService.Instance.Exception(ex, $"Исключение при анализе метаданных для '{filePath}': {ex.Message}", "StreamReplacementScript");
+            _logService.Exception(ex, $"Исключение при анализе метаданных для '{filePath}': {ex.Message}", "StreamReplacementScript");
             progressCallback(fileIndex, totalCount, "Ошибка ffprobe", 0.0);
             results.Add(probeErr);
             return results;
@@ -140,7 +153,7 @@ public sealed class StreamReplacementScript : AbstractScript
         if (structure == null)
         {
             string err = $"❌ ОШИБКА анализа: {Path.GetFileName(filePath)}";
-            LogService.Instance.Error(err, "StreamReplacementScript");
+            _logService.Error(err, "StreamReplacementScript");
             progressCallback(fileIndex, totalCount, "Ошибка ffprobe", 0.0);
             results.Add(err);
             return results;
@@ -157,11 +170,11 @@ public sealed class StreamReplacementScript : AbstractScript
         string targetFile = Path.Combine(targetDir, $"{stem}{ext}");
         string finalOutputFile = GetSafeOutputPath(filePath, targetFile);
 
-        bool overwrite = SettingsManager.Instance.GetSetting("General", "OverwriteExisting", false);
+        bool overwrite = _settingsManager.GetSetting("General", "OverwriteExisting", false);
         if (File.Exists(finalOutputFile) && !overwrite)
         {
             string skipExist = $"⏭ ПРОПУСК (файл существует): {Path.GetFileName(finalOutputFile)}";
-            LogService.Instance.Info(skipExist, "StreamReplacementScript");
+            _logService.Info(skipExist, "StreamReplacementScript");
             progressCallback(fileIndex, totalCount, $"Пропущен (существует): {Path.GetFileName(finalOutputFile)}", 100.0);
             results.Add(skipExist);
             return results;
@@ -187,11 +200,11 @@ public sealed class StreamReplacementScript : AbstractScript
         {
             if (isMp4)
             {
-                LogService.Instance.Info($"Запуск FFmpeg для подмены дорожек в MP4 '{Path.GetFileName(filePath)}'", "StreamReplacementScript");
+                _logService.Info($"Запуск FFmpeg для подмены дорожек в MP4 '{Path.GetFileName(filePath)}'", "StreamReplacementScript");
                 
                 var ffmpegArgs = PrepareMp4Args(structure.Tracks, replacements);
                 
-                success = await FFmpegRunner.Instance.RunAsync(
+                success = await _ffmpegRunner.RunAsync(
                     inputPath: filePath,
                     outputPath: finalOutputFile,
                     extraArgs: ffmpegArgs,
@@ -206,11 +219,11 @@ public sealed class StreamReplacementScript : AbstractScript
             }
             else
             {
-                LogService.Instance.Info($"Запуск mkvmerge для подмены дорожек в MKV '{Path.GetFileName(filePath)}'", "StreamReplacementScript");
+                _logService.Info($"Запуск mkvmerge для подмены дорожек в MKV '{Path.GetFileName(filePath)}'", "StreamReplacementScript");
                 
                 var mkvInputs = PrepareMkvInputs(filePath, structure.Tracks, replacements, out var extraArgs);
 
-                success = await MkvmergeRunner.Instance.RunAsync(
+                success = await _mkvmergeRunner.RunAsync(
                     outputPath: finalOutputFile,
                     inputs: mkvInputs,
                     extraArgs: extraArgs,
@@ -225,7 +238,7 @@ public sealed class StreamReplacementScript : AbstractScript
         catch (Exception ex)
         {
             string runErr = $"❌ Критическая ошибка при сборке для '{stem}': {ex.Message}";
-            LogService.Instance.Exception(ex, $"Исключение в процессе сборки для '{filePath}': {ex.Message}", "StreamReplacementScript");
+            _logService.Exception(ex, $"Исключение в процессе сборки для '{filePath}': {ex.Message}", "StreamReplacementScript");
             results.Add(runErr);
         }
         finally
@@ -239,7 +252,7 @@ public sealed class StreamReplacementScript : AbstractScript
         {
             CleanupIfCancelled(finalOutputFile);
             string cancelMsg = $"⚠ Обработка отменена пользователем: {Path.GetFileName(finalOutputFile)}";
-            LogService.Instance.Info(cancelMsg, "StreamReplacementScript");
+            _logService.Info(cancelMsg, "StreamReplacementScript");
             results.Add(cancelMsg);
             return results;
         }
@@ -250,7 +263,7 @@ public sealed class StreamReplacementScript : AbstractScript
             {
                 progressCallback(fileIndex, totalCount, "Завершено!", 100.0);
                 string successMsg = $"✅ ОБРАБОТАНО: {Path.GetFileName(finalOutputFile)}";
-                LogService.Instance.Info(successMsg, "StreamReplacementScript");
+                _logService.Info(successMsg, "StreamReplacementScript");
                 results.Add(successMsg);
 
                 bool overwriteSource = GetSettingValue(settings, "overwrite_source", false);
@@ -269,7 +282,7 @@ public sealed class StreamReplacementScript : AbstractScript
             {
                 CleanupFailedOutputFile(finalOutputFile);
                 string failMsg = $"❌ ОШИБКА сборки файла: {Path.GetFileName(filePath)}";
-                LogService.Instance.Error(failMsg, "StreamReplacementScript");
+                _logService.Error(failMsg, "StreamReplacementScript");
                 results.Add(failMsg);
             }
         }
@@ -278,7 +291,7 @@ public sealed class StreamReplacementScript : AbstractScript
             CleanupFailedOutputFile(finalOutputFile);
             string errorMsg = $"❌ Ошибка выполнения скрипта для {Path.GetFileName(filePath)}: {ex.Message}";
             results.Add(errorMsg);
-            LogService.Instance.Exception(ex, $"Ошибка при выполнении подмены дорожек для '{stem}': {ex.Message}", "StreamReplacementScript");
+            _logService.Exception(ex, $"Ошибка при выполнении подмены дорожек для '{stem}': {ex.Message}", "StreamReplacementScript");
         }
 
         return results;
@@ -299,7 +312,7 @@ public sealed class StreamReplacementScript : AbstractScript
             int sid = stream.TrackId;
             if (replacements.TryGetValue(sid, out var rep))
             {
-                LogService.Instance.Info($"MP4: Замена оригинального потока #{sid} на '{Path.GetFileName(rep.Path)}' (ID {rep.SrcId})", "StreamReplacementScript");
+                _logService.Info($"MP4: Замена оригинального потока #{sid} на '{Path.GetFileName(rep.Path)}' (ID {rep.SrcId})", "StreamReplacementScript");
                 extraInputs.Add(rep.Path);
                 extraArgs.Add("-map");
                 extraArgs.Add($"{inputIdx}:{rep.SrcId}");
@@ -383,7 +396,7 @@ public sealed class StreamReplacementScript : AbstractScript
             var originalTrack = allTracks.FirstOrDefault(t => t.TrackId == originalTrackId);
             if (originalTrack != null)
             {
-                LogService.Instance.Info($"MKV: Замена оригинального трека #{originalTrackId} на '{Path.GetFileName(rep.Path)}' (ID {rep.SrcId})", "StreamReplacementScript");
+                _logService.Info($"MKV: Замена оригинального трека #{originalTrackId} на '{Path.GetFileName(rep.Path)}' (ID {rep.SrcId})", "StreamReplacementScript");
                 
                 var replacementArgs = BuildReplacementArgs(originalTrack, rep.SrcId);
                 inputs.Add(new MkvInputSource(rep.Path, replacementArgs));

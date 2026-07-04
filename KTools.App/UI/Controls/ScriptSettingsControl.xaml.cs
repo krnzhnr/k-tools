@@ -8,6 +8,9 @@ using Microsoft.UI.Xaml.Media;
 using CommunityToolkit.WinUI.Controls;
 using KTools_App.Core;
 
+using KTools_App.Services.Contracts;
+using Microsoft.Extensions.DependencyInjection;
+
 namespace KTools_App.UI.Controls;
 
 /// <summary>
@@ -22,6 +25,8 @@ public sealed partial class ScriptSettingsControl : UserControl
     private AbstractScript? _activeScript;
     private StackPanel? _previewPanel;
     private bool _isPreviewExpanded;
+
+    private ISettingsManager _settingsManager => App.Services.GetRequiredService<ISettingsManager>();
 
     private class GroupVisual
     {
@@ -91,7 +96,7 @@ public sealed partial class ScriptSettingsControl : UserControl
             return;
         }
 
-        string settingsGroup = SettingsManager.Instance
+        string settingsGroup = _settingsManager
             .GetSafeGroupName(script.Name);
 
         // Группируем поля по иерархии: { "ГлавнаяГруппа": { "Подгруппа": [Поля] } }
@@ -190,10 +195,10 @@ public sealed partial class ScriptSettingsControl : UserControl
 
         UpdateVisibility(settingsGroup);
 
-        bool isLossless = SettingsManager.Instance.GetSetting(settingsGroup, "lossless", false);
+        bool isLossless = _settingsManager.GetSetting(settingsGroup, "lossless", false);
         HandleLosslessChange(settingsGroup, isLossless);
 
-        string rcMode = SettingsManager.Instance.GetSetting(settingsGroup, "nvenc_rc", "vbr_hq");
+        string rcMode = _settingsManager.GetSetting(settingsGroup, "nvenc_rc", "vbr_hq");
         HandleRcChange(settingsGroup, rcMode);
     }
 
@@ -320,7 +325,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                 var checkBox = new CheckBox
                 {
                     Content = checkContent,
-                    IsChecked = SettingsManager.Instance.GetSetting(
+                    IsChecked = _settingsManager.GetSetting(
                         settingsGroup,
                         field.Key,
                         field.DefaultValue is bool b && b),
@@ -330,7 +335,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                 checkBox.Checked += (s, e) =>
                 {
                     if (_isInternalCheckBoxUpdate) return;
-                    SettingsManager.Instance.SetSetting(
+                    _settingsManager.SetSetting(
                         settingsGroup, field.Key, true);
                     UpdateVisibility(settingsGroup);
 
@@ -375,7 +380,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                         }
                     }
 
-                    SettingsManager.Instance.SetSetting(
+                    _settingsManager.SetSetting(
                         settingsGroup, field.Key, false);
                     UpdateVisibility(settingsGroup);
 
@@ -448,7 +453,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                 case SettingType.Text:
                     var textBox = new TextBox
                     {
-                        Text = SettingsManager.Instance.GetSetting(
+                        Text = _settingsManager.GetSetting(
                             settingsGroup,
                             field.Key,
                             field.DefaultValue?.ToString() ?? string.Empty),
@@ -459,7 +464,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                     };
                     textBox.TextChanged += (s, e) =>
                     {
-                        SettingsManager.Instance.SetSetting(
+                        _settingsManager.SetSetting(
                             settingsGroup, field.Key, textBox.Text);
                         if (isRenameField)
                         {
@@ -468,7 +473,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                     };
                     textBox.LostFocus += (s, e) =>
                     {
-                        SettingsManager.Instance.SetSetting(
+                        _settingsManager.SetSetting(
                             settingsGroup, field.Key, textBox.Text);
                         UpdateVisibility(settingsGroup);
                         if (isRenameField)
@@ -529,7 +534,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                 case SettingType.Int:
                     var numberBox = new NumberBox
                     {
-                        Value = SettingsManager.Instance.GetSetting(
+                        Value = _settingsManager.GetSetting(
                             settingsGroup,
                             field.Key,
                             field.DefaultValue is int vInt ? vInt : 0),
@@ -545,7 +550,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                     {
                         if (!double.IsNaN(numberBox.Value))
                         {
-                            SettingsManager.Instance.SetSetting(
+                            _settingsManager.SetSetting(
                                 settingsGroup,
                                 field.Key,
                                 (int)numberBox.Value);
@@ -580,7 +585,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                     
                     string defaultValStr = field.DefaultValue?
                         .ToString() ?? string.Empty;
-                    string currentSelection = SettingsManager.Instance
+                    string currentSelection = _settingsManager
                         .GetSetting(
                             settingsGroup,
                             field.Key,
@@ -591,7 +596,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                         if (comboBox.SelectedItem != null)
                         {
                             string selectedVal = comboBox.SelectedItem.ToString() ?? string.Empty;
-                            SettingsManager.Instance.SetSetting(
+                            _settingsManager.SetSetting(
                                 settingsGroup,
                                 field.Key,
                                 selectedVal);
@@ -677,7 +682,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                 bool isCondVisible = true;
                 foreach (var cond in item.Field.VisibilityConditions)
                 {
-                    string condValue = SettingsManager.Instance.GetSetting(
+                    string condValue = _settingsManager.GetSetting(
                         settingsGroup,
                         cond.Key,
                         string.Empty);
@@ -714,7 +719,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                 continue;
             }
 
-            string controlValue = SettingsManager.Instance.GetSetting(
+            string controlValue = _settingsManager.GetSetting(
                 settingsGroup,
                 item.Field.VisibleIfKey,
                 string.Empty);
@@ -812,7 +817,7 @@ public sealed partial class ScriptSettingsControl : UserControl
 
         // Извлекаем текущий список из кэша настроек или берем значение по умолчанию
         var defaultList = field.DefaultValue as List<Dictionary<string, object>> ?? new List<Dictionary<string, object>>();
-        var currentList = SettingsManager.Instance.GetSetting(settingsGroup, field.Key, defaultList);
+        var currentList = _settingsManager.GetSetting(settingsGroup, field.Key, defaultList);
 
         // Локальная функция для сохранения списка в SettingsManager
         void SaveList()
@@ -831,7 +836,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                     });
                 }
             }
-            SettingsManager.Instance.SetSetting(settingsGroup, field.Key, listToSave);
+            _settingsManager.SetSetting(settingsGroup, field.Key, listToSave);
         }
 
         // Вспомогательная локальная функция добавления строки ключевого слова в UI
@@ -961,7 +966,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                 {
                     comboBox.SelectedItem = "p1";
                     comboBox.IsEnabled = false;
-                    SettingsManager.Instance.SetSetting(settingsGroup, "nvenc_preset", "p1");
+                    _settingsManager.SetSetting(settingsGroup, "nvenc_preset", "p1");
                 }
                 else
                 {
@@ -988,7 +993,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                 checkBox.IsChecked = true;
                 _isInternalCheckBoxUpdate = false;
 
-                SettingsManager.Instance.SetSetting(settingsGroup, "auto_bitrate", true);
+                _settingsManager.SetSetting(settingsGroup, "auto_bitrate", true);
                 checkBox.IsEnabled = false;
             }
             else
@@ -1004,7 +1009,7 @@ public sealed partial class ScriptSettingsControl : UserControl
     /// </summary>
     private void HandleAutoBitrateChange(string settingsGroup)
     {
-        bool isAuto = SettingsManager.Instance.GetSetting(settingsGroup, "auto_bitrate", true);
+        bool isAuto = _settingsManager.GetSetting(settingsGroup, "auto_bitrate", true);
         string[] dependentKeys = { "min_bitrate", "max_bitrate", "bufsize" };
 
         foreach (var key in dependentKeys)
@@ -1034,8 +1039,8 @@ public sealed partial class ScriptSettingsControl : UserControl
     /// </summary>
     private void RecalculateBitrates(string settingsGroup, int? targetBitrate = null)
     {
-        int vBr = targetBitrate ?? SettingsManager.Instance.GetSetting(settingsGroup, "v_bitrate", 4000);
-        string rc = SettingsManager.Instance.GetSetting(settingsGroup, "nvenc_rc", "vbr_hq");
+        int vBr = targetBitrate ?? _settingsManager.GetSetting(settingsGroup, "v_bitrate", 4000);
+        string rc = _settingsManager.GetSetting(settingsGroup, "nvenc_rc", "vbr_hq");
 
         int minBr;
         int maxBr;
@@ -1055,9 +1060,9 @@ public sealed partial class ScriptSettingsControl : UserControl
         }
 
         // Сохраняем значения в SettingsManager
-        SettingsManager.Instance.SetSetting(settingsGroup, "min_bitrate", minBr);
-        SettingsManager.Instance.SetSetting(settingsGroup, "max_bitrate", maxBr);
-        SettingsManager.Instance.SetSetting(settingsGroup, "bufsize", bufSize);
+        _settingsManager.SetSetting(settingsGroup, "min_bitrate", minBr);
+        _settingsManager.SetSetting(settingsGroup, "max_bitrate", maxBr);
+        _settingsManager.SetSetting(settingsGroup, "bufsize", bufSize);
 
         // Обновляем визуальные значения в полях NumberBox на форме
         UpdateNumberBoxValue("min_bitrate", minBr);
@@ -1089,7 +1094,7 @@ public sealed partial class ScriptSettingsControl : UserControl
     {
         if (key == "v_bitrate")
         {
-            bool isAuto = SettingsManager.Instance.GetSetting(settingsGroup, "auto_bitrate", true);
+            bool isAuto = _settingsManager.GetSetting(settingsGroup, "auto_bitrate", true);
             if (isAuto)
             {
                 RecalculateBitrates(settingsGroup, newValue);
@@ -1097,45 +1102,45 @@ public sealed partial class ScriptSettingsControl : UserControl
             else
             {
                 // При ручном вводе корректируем min и max, если они вышли за новые границы целевого битрейта
-                int minBr = SettingsManager.Instance.GetSetting(settingsGroup, "min_bitrate", newValue);
-                int maxBr = SettingsManager.Instance.GetSetting(settingsGroup, "max_bitrate", newValue);
+                int minBr = _settingsManager.GetSetting(settingsGroup, "min_bitrate", newValue);
+                int maxBr = _settingsManager.GetSetting(settingsGroup, "max_bitrate", newValue);
 
                 if (minBr > newValue)
                 {
-                    SettingsManager.Instance.SetSetting(settingsGroup, "min_bitrate", newValue);
+                    _settingsManager.SetSetting(settingsGroup, "min_bitrate", newValue);
                     UpdateNumberBoxValue("min_bitrate", newValue);
                 }
                 if (maxBr < newValue)
                 {
-                    SettingsManager.Instance.SetSetting(settingsGroup, "max_bitrate", newValue);
+                    _settingsManager.SetSetting(settingsGroup, "max_bitrate", newValue);
                     UpdateNumberBoxValue("max_bitrate", newValue);
                 }
             }
         }
         else if (key == "min_bitrate")
         {
-            bool isAuto = SettingsManager.Instance.GetSetting(settingsGroup, "auto_bitrate", true);
+            bool isAuto = _settingsManager.GetSetting(settingsGroup, "auto_bitrate", true);
             if (!isAuto)
             {
-                int vBr = SettingsManager.Instance.GetSetting(settingsGroup, "v_bitrate", 4000);
+                int vBr = _settingsManager.GetSetting(settingsGroup, "v_bitrate", 4000);
                 if (newValue > vBr)
                 {
                     // Минимальный битрейт не может быть больше целевого
-                    SettingsManager.Instance.SetSetting(settingsGroup, "min_bitrate", vBr);
+                    _settingsManager.SetSetting(settingsGroup, "min_bitrate", vBr);
                     UpdateNumberBoxValue("min_bitrate", vBr);
                 }
             }
         }
         else if (key == "max_bitrate")
         {
-            bool isAuto = SettingsManager.Instance.GetSetting(settingsGroup, "auto_bitrate", true);
+            bool isAuto = _settingsManager.GetSetting(settingsGroup, "auto_bitrate", true);
             if (!isAuto)
             {
-                int vBr = SettingsManager.Instance.GetSetting(settingsGroup, "v_bitrate", 4000);
+                int vBr = _settingsManager.GetSetting(settingsGroup, "v_bitrate", 4000);
                 if (newValue < vBr)
                 {
                     // Максимальный битрейт не может быть меньше целевого
-                    SettingsManager.Instance.SetSetting(settingsGroup, "max_bitrate", vBr);
+                    _settingsManager.SetSetting(settingsGroup, "max_bitrate", vBr);
                     UpdateNumberBoxValue("max_bitrate", vBr);
                 }
             }
@@ -1166,7 +1171,7 @@ public sealed partial class ScriptSettingsControl : UserControl
         mainStack.Children.Add(title);
         mainStack.Children.Add(desc);
         
-        var variables = SettingsManager.Instance.SearchTemplates;
+        var variables = _settingsManager.SearchTemplates;
         
         foreach (var item in variables)
         {
@@ -1283,7 +1288,7 @@ public sealed partial class ScriptSettingsControl : UserControl
         mainStack.Children.Add(title);
         mainStack.Children.Add(desc);
         
-        var variables = SettingsManager.Instance.ReplaceTemplates;
+        var variables = _settingsManager.ReplaceTemplates;
         
         foreach (var item in variables)
         {
@@ -1416,20 +1421,20 @@ public sealed partial class ScriptSettingsControl : UserControl
             return;
         }
 
-        string settingsGroup = SettingsManager.Instance.GetSafeGroupName(_activeScript.Name);
+        string settingsGroup = _settingsManager.GetSafeGroupName(_activeScript.Name);
         bool renameEnabled = false;
         string pattern = "";
 
-        bool localOverride = SettingsManager.Instance.GetSetting(settingsGroup, "LocalRenameOverride", false);
+        bool localOverride = _settingsManager.GetSetting(settingsGroup, "LocalRenameOverride", false);
         if (localOverride)
         {
-            pattern = SettingsManager.Instance.GetSetting(settingsGroup, "LocalRenameSearch", string.Empty);
+            pattern = _settingsManager.GetSetting(settingsGroup, "LocalRenameSearch", string.Empty);
             renameEnabled = !string.IsNullOrEmpty(pattern);
         }
         else
         {
-            renameEnabled = SettingsManager.Instance.RenameEnableRegex;
-            pattern = SettingsManager.Instance.RenameRegexSearch;
+            renameEnabled = _settingsManager.RenameEnableRegex;
+            pattern = _settingsManager.RenameRegexSearch;
         }
 
         if (!renameEnabled || string.IsNullOrEmpty(pattern))

@@ -1,8 +1,10 @@
 // -*- coding: utf-8 -*-
 using System;
+using KTools_App.Services.Contracts;
 using Microsoft.UI.Xaml;
 using KTools_App.Core;
 using KTools_App.ViewModels;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace KTools_App.UI.Pages;
 
@@ -31,7 +33,7 @@ public sealed class SubtitlePreviewWindow : Window
         // Применение сохраненной темы оформления
         try
         {
-            string theme = SettingsManager.Instance.Theme;
+            string theme = App.Services.GetRequiredService<ISettingsManager>().Theme;
             if (Content is FrameworkElement rootElement)
             {
                 rootElement.RequestedTheme = theme.Equals("Light", StringComparison.OrdinalIgnoreCase)
@@ -41,13 +43,13 @@ public sealed class SubtitlePreviewWindow : Window
         }
         catch (Exception ex)
         {
-            LogService.Instance.Error($"Не удалось применить тему к окну предпросмотра: {ex.Message}", "SubtitlePreviewWindow");
+            App.Services.GetRequiredService<ILogService>().Error($"Не удалось применить тему к окну предпросмотра: {ex.Message}", "SubtitlePreviewWindow");
         }
 
         // Применение эффекта фона (Mica или Acrylic)
         try
         {
-            string backdrop = SettingsManager.Instance.BackdropType;
+            string backdrop = App.Services.GetRequiredService<ISettingsManager>().BackdropType;
             if (backdrop.Equals("Acrylic", StringComparison.OrdinalIgnoreCase))
             {
                 SystemBackdrop = new Microsoft.UI.Xaml.Media.DesktopAcrylicBackdrop();
@@ -59,7 +61,7 @@ public sealed class SubtitlePreviewWindow : Window
         }
         catch (Exception ex)
         {
-            LogService.Instance.Error($"Не удалось применить эффект фона к окну предпросмотра: {ex.Message}", "SubtitlePreviewWindow");
+            App.Services.GetRequiredService<ILogService>().Error($"Не удалось применить эффект фона к окну предпросмотра: {ex.Message}", "SubtitlePreviewWindow");
         }
 
         // Настройка размеров и центрирования окна

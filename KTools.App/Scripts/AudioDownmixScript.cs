@@ -1,3 +1,4 @@
+using KTools_App.Services.Contracts;
 // -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
@@ -16,6 +17,20 @@ namespace KTools_App.Scripts;
 /// </summary>
 public sealed class AudioDownmixScript : AbstractScript
 {
+    private readonly IDependencyManager _dependencyManager;
+    private readonly IMediaProbeService _mediaProbeService;
+    private readonly IFFmpegRunner _ffmpegRunner;
+    private readonly DeeRunner _deeRunner;
+
+    public AudioDownmixScript(ILogService logService, ISettingsManager settingsManager, IPathManager pathManager, IDependencyManager dependencyManager, IMediaProbeService mediaProbeService, IFFmpegRunner ffmpegRunner, DeeRunner deeRunner)
+        : base(logService, settingsManager, pathManager)
+    {
+        _dependencyManager = dependencyManager ?? throw new ArgumentNullException(nameof(dependencyManager));
+        _mediaProbeService = mediaProbeService ?? throw new ArgumentNullException(nameof(mediaProbeService));
+        _ffmpegRunner = ffmpegRunner ?? throw new ArgumentNullException(nameof(ffmpegRunner));
+        _deeRunner = deeRunner ?? throw new ArgumentNullException(nameof(deeRunner));
+    }
+
     /// <summary>
     /// Русское название скрипта.
     /// </summary>
@@ -162,7 +177,7 @@ public sealed class AudioDownmixScript : AbstractScript
             }
 
             // Динамическая проверка зависимости dee
-            if (!DependencyManager.Instance.IsInstalled("dee"))
+            if (!_dependencyManager.IsInstalled("dee"))
             {
                 string errMsg = "❌ Ошибка: Для работы в режиме DEE " +
                                 "необходима установленная утилита 'dee'.";
@@ -197,7 +212,7 @@ public sealed class AudioDownmixScript : AbstractScript
         outputFilePath = GetSafeOutputPath(filePath, outputFilePath);
 
         // Проверяем, существует ли файл и нужно ли его перезаписать
-        bool overwrite = SettingsManager.Instance.GetSetting(
+        bool overwrite = _settingsManager.GetSetting(
             "General", 
             "OverwriteExisting", 
             false);
@@ -214,7 +229,7 @@ public sealed class AudioDownmixScript : AbstractScript
         double duration = 0.0;
         try
         {
-            var structure = await MediaProbeService.Instance.ProbeAsync(
+            var structure = await _mediaProbeService.ProbeAsync(
                 filePath);
             if (structure != null)
             {
@@ -223,7 +238,7 @@ public sealed class AudioDownmixScript : AbstractScript
         }
         catch (Exception ex)
         {
-            LogService.Instance.Exception(
+            _logService.Exception(
                 ex,
                 $"Не удалось прочесть длительность для '{originalName}'",
                 "AudioDownmixScript");
@@ -245,7 +260,7 @@ public sealed class AudioDownmixScript : AbstractScript
                 : "dd";
 
             // Следим за отменой
-            var deeTask = DeeRunner.Instance.RunAsync(
+            var deeTask = _deeRunner.RunAsync(
                 inputPath: filePath,
                 outputPath: outputFilePath,
                 bitrate: bitrate,
@@ -278,7 +293,7 @@ public sealed class AudioDownmixScript : AbstractScript
             }
             catch (Exception ex)
             {
-                LogService.Instance.Exception(
+                _logService.Exception(
                     ex,
                     $"Ошибка работы DEE для '{originalName}': {ex.Message}",
                     "AudioDownmixScript");
@@ -320,7 +335,7 @@ public sealed class AudioDownmixScript : AbstractScript
                 extraArgs.Add($"{bitrate}k");
             }
 
-            var ffmpegTask = FFmpegRunner.Instance.RunAsync(
+            var ffmpegTask = _ffmpegRunner.RunAsync(
                 inputPath: filePath,
                 outputPath: outputFilePath,
                 extraArgs: extraArgs,
@@ -359,7 +374,7 @@ public sealed class AudioDownmixScript : AbstractScript
             }
             catch (Exception ex)
             {
-                LogService.Instance.Exception(
+                _logService.Exception(
                     ex,
                     $"Ошибка работы FFmpeg для '{originalName}': {ex.Message}",
                     "AudioDownmixScript");
@@ -400,7 +415,7 @@ public sealed class AudioDownmixScript : AbstractScript
             CleanupFailedOutputFile(outputFilePath);
             string errorMsg = $"❌ Ошибка выполнения скрипта для {Path.GetFileName(filePath)}: {ex.Message}";
             results.Add(errorMsg);
-            LogService.Instance.Exception(ex, $"Ошибка при выполнении даунмикса для '{originalName}': {ex.Message}", "AudioDownmixScript");
+            _logService.Exception(ex, $"Ошибка при выполнении даунмикса для '{originalName}': {ex.Message}", "AudioDownmixScript");
         }
 
         return results;

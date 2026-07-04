@@ -1,3 +1,4 @@
+using KTools_App.Services.Contracts;
 // -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
@@ -15,6 +16,18 @@ namespace KTools_App.Scripts;
 /// </summary>
 public sealed class AudioSpeedScript : AbstractScript
 {
+    private readonly IDependencyManager _dependencyManager;
+    private readonly IFFmpegRunner _ffmpegRunner;
+    private readonly IEac3toRunner _eac3toRunner;
+
+    public AudioSpeedScript(ILogService logService, ISettingsManager settingsManager, IPathManager pathManager, IDependencyManager dependencyManager, IFFmpegRunner ffmpegRunner, IEac3toRunner eac3toRunner)
+        : base(logService, settingsManager, pathManager)
+    {
+        _dependencyManager = dependencyManager ?? throw new ArgumentNullException(nameof(dependencyManager));
+        _ffmpegRunner = ffmpegRunner ?? throw new ArgumentNullException(nameof(ffmpegRunner));
+        _eac3toRunner = eac3toRunner ?? throw new ArgumentNullException(nameof(eac3toRunner));
+    }
+
     /// <summary>
     /// Русское название скрипта.
     /// </summary>
@@ -123,12 +136,12 @@ public sealed class AudioSpeedScript : AbstractScript
         string originalName = Path.GetFileNameWithoutExtension(filePath);
 
         // Динамическая проверка зависимости eac3to
-        if (!DependencyManager.Instance.IsInstalled("eac3to"))
+        if (!_dependencyManager.IsInstalled("eac3to"))
         {
             string errMsg = "❌ Ошибка: Необходимая утилита 'eac3to' " +
                             "не установлена в системе.";
             results.Add(errMsg);
-            LogService.Instance.Error(errMsg, "AudioSpeedScript");
+            _logService.Error(errMsg, "AudioSpeedScript");
             return results;
         }
 
@@ -170,7 +183,7 @@ public sealed class AudioSpeedScript : AbstractScript
         outputFilePath = GetSafeOutputPath(filePath, outputFilePath);
 
         // Проверка флага перезаписи существующего файла
-        bool overwrite = SettingsManager.Instance.GetSetting(
+        bool overwrite = _settingsManager.GetSetting(
             "General",
             "OverwriteExisting",
             false);
@@ -180,7 +193,7 @@ public sealed class AudioSpeedScript : AbstractScript
             string msg = $"Пропуск (существует): {outputName}";
             progressCallback(fileIndex, totalCount, msg, 100.0);
             results.Add($"⏭ ПРОПУСК (файл существует): {outputName}");
-            LogService.Instance.Info(
+            _logService.Info(
                 $"Файл результата '{outputFilePath}' уже существует, " +
                 $"обработка пропущена.",
                 "AudioSpeedScript");
@@ -201,12 +214,12 @@ public sealed class AudioSpeedScript : AbstractScript
             if (!Directory.Exists(tempDir))
             {
                 Directory.CreateDirectory(tempDir);
-                LogService.Instance.DebugLog($"Создана временная папка для eac3to: '{tempDir}'", "AudioSpeedScript");
+                _logService.DebugLog($"Создана временная папка для eac3to: '{tempDir}'", "AudioSpeedScript");
             }
         }
         catch (Exception ex)
         {
-            LogService.Instance.Exception(ex, $"Не удалось создать временную директорию '{tempDir}', откат на стандартный путь", "AudioSpeedScript");
+            _logService.Exception(ex, $"Не удалось создать временную директорию '{tempDir}', откат на стандартный путь", "AudioSpeedScript");
             tempDir = Path.GetTempPath();
         }
 
@@ -224,7 +237,7 @@ public sealed class AudioSpeedScript : AbstractScript
 
         if (shouldPreDecode)
         {
-            LogService.Instance.Info($"Формат файла '{fileExtension}' не поддерживается eac3to нативно. Выполняется предварительное декодирование в WAV...", "AudioSpeedScript");
+            _logService.Info($"Формат файла '{fileExtension}' не поддерживается eac3to нативно. Выполняется предварительное декодирование в WAV...", "AudioSpeedScript");
             progressCallback(
                 fileIndex,
                 totalCount,
@@ -236,7 +249,7 @@ public sealed class AudioSpeedScript : AbstractScript
             var decodeArgs = new List<string> { "-c:a", "pcm_s24le" };
             using var decodeCts = new CancellationTokenSource();
 
-            var decodeTask = FFmpegRunner.Instance.RunAsync(
+            var decodeTask = _ffmpegRunner.RunAsync(
                 inputPath: filePath,
                 outputPath: tempInputWavPath,
                 extraArgs: decodeArgs,
@@ -260,7 +273,7 @@ public sealed class AudioSpeedScript : AbstractScript
             }
             catch (Exception ex)
             {
-                LogService.Instance.Exception(ex, $"Ошибка декодирования файла '{originalName}' через FFmpeg: {ex.Message}", "AudioSpeedScript");
+                _logService.Exception(ex, $"Ошибка декодирования файла '{originalName}' через FFmpeg: {ex.Message}", "AudioSpeedScript");
             }
 
             if (IsCancelled || !decodeSuccess || !File.Exists(tempInputWavPath))
@@ -269,12 +282,12 @@ public sealed class AudioSpeedScript : AbstractScript
                 if (IsCancelled)
                 {
                     results.Add($"⚠ Отменено: {outputName}");
-                    LogService.Instance.Info($"Декодирование файла '{originalName}' отменено пользователем.", "AudioSpeedScript");
+                    _logService.Info($"Декодирование файла '{originalName}' отменено пользователем.", "AudioSpeedScript");
                 }
                 else
                 {
                     results.Add($"❌ Ошибка декодирования исходного файла для {Path.GetFileName(filePath)}");
-                    LogService.Instance.Error($"Не удалось выполнить предварительное декодирование в WAV для '{filePath}'.", "AudioSpeedScript");
+                    _logService.Error($"Не удалось выполнить предварительное декодирование в WAV для '{filePath}'.", "AudioSpeedScript");
                 }
                 return results;
             }
@@ -282,7 +295,7 @@ public sealed class AudioSpeedScript : AbstractScript
             eac3toInputPath = tempInputWavPath;
         }
 
-        string shortInputPath = PathManager.GetShortPath(eac3toInputPath);
+        string shortInputPath = _pathManager.GetShortPath(eac3toInputPath);
         string tempOutputName = $"temp_speed_{Guid.NewGuid():N}.{ext}";
         string tempOutputFilePath = Path.Combine(tempDir, tempOutputName);
 
@@ -301,7 +314,7 @@ public sealed class AudioSpeedScript : AbstractScript
             0.0);
 
         using var cts = new CancellationTokenSource();
-        var eac3toTask = Eac3toRunner.Instance.RunAsync(
+        var eac3toTask = _eac3toRunner.RunAsync(
             eac3toArgs,
             workingDir: tempDir,
             onProgress: pct =>
@@ -331,7 +344,7 @@ public sealed class AudioSpeedScript : AbstractScript
         }
         catch (Exception ex)
         {
-            LogService.Instance.Exception(
+            _logService.Exception(
                 ex,
                 $"Ошибка работы eac3to для '{originalName}': {ex.Message}",
                 "AudioSpeedScript");
@@ -341,7 +354,7 @@ public sealed class AudioSpeedScript : AbstractScript
             if (!string.IsNullOrEmpty(tempInputWavPath))
             {
                 CleanupFailedOutputFile(tempInputWavPath);
-                LogService.Instance.DebugLog($"Временный входной WAV-файл '{tempInputWavPath}' успешно удален.", "AudioSpeedScript");
+                _logService.DebugLog($"Временный входной WAV-файл '{tempInputWavPath}' успешно удален.", "AudioSpeedScript");
             }
         }
 
@@ -350,7 +363,7 @@ public sealed class AudioSpeedScript : AbstractScript
             CleanupFailedOutputFile(tempOutputFilePath);
             CleanupFailedOutputFile(outputFilePath);
             results.Add($"⚠ Отменено: {outputName}");
-            LogService.Instance.Info(
+            _logService.Info(
                 $"Обработка файла '{originalName}' отменена пользователем.",
                 "AudioSpeedScript");
             return results;
@@ -363,11 +376,11 @@ public sealed class AudioSpeedScript : AbstractScript
                 if (File.Exists(outputFilePath))
                 {
                     File.Delete(outputFilePath);
-                    LogService.Instance.DebugLog($"Удален существующий файл результата перед заменой: '{outputFilePath}'", "AudioSpeedScript");
+                    _logService.DebugLog($"Удален существующий файл результата перед заменой: '{outputFilePath}'", "AudioSpeedScript");
                 }
 
                 MoveFileSafe(tempOutputFilePath, outputFilePath);
-                LogService.Instance.DebugLog($"Временный файл успешно перемещен: '{tempOutputFilePath}' -> '{outputFilePath}'", "AudioSpeedScript");
+                _logService.DebugLog($"Временный файл успешно перемещен: '{tempOutputFilePath}' -> '{outputFilePath}'", "AudioSpeedScript");
 
                 progressCallback(
                     fileIndex,
@@ -375,7 +388,7 @@ public sealed class AudioSpeedScript : AbstractScript
                     "Успешно завершено!",
                     100.0);
                 results.Add($"✅ Скорость изменена: {outputName}");
-                LogService.Instance.Info(
+                _logService.Info(
                     $"Успешно завершено изменение скорости для '{originalName}'. " +
                     $"Результат сохранен в '{outputName}'",
                     "AudioSpeedScript");
@@ -389,7 +402,7 @@ public sealed class AudioSpeedScript : AbstractScript
             {
                 string moveErr = $"❌ Ошибка при сохранении итогового файла: {ex.Message}";
                 results.Add(moveErr);
-                LogService.Instance.Exception(ex, $"Не удалось переместить временный файл '{tempOutputFilePath}' в '{outputFilePath}'", "AudioSpeedScript");
+                _logService.Exception(ex, $"Не удалось переместить временный файл '{tempOutputFilePath}' в '{outputFilePath}'", "AudioSpeedScript");
                 CleanupFailedOutputFile(tempOutputFilePath);
                 CleanupFailedOutputFile(outputFilePath);
             }
@@ -403,7 +416,7 @@ public sealed class AudioSpeedScript : AbstractScript
             string errorMsg = $"❌ Ошибка обработки для " +
                               $"{Path.GetFileName(filePath)}";
             results.Add(errorMsg);
-            LogService.Instance.Error(
+            _logService.Error(
                 $"Ошибка выполнения eac3to при обработке файла " +
                 $"'{filePath}'. Выходной файл не создан.",
                 "AudioSpeedScript");

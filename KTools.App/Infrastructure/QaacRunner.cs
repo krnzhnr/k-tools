@@ -19,24 +19,23 @@ namespace KTools_App.Infrastructure;
 /// </summary>
 public sealed class QaacRunner
 {
-    private static readonly Lazy<QaacRunner> LazyInstance =
-        new(() => new QaacRunner(Core.LogService.Instance));
+
 
     private readonly ILogService _logService;
+    private readonly IPathManager _pathManager;
 
     /// <summary>
     /// Инициализирует новый экземпляр QaacRunner с внедрением зависимостей.
     /// </summary>
     /// <param name="logService">Сервис логирования.</param>
-    public QaacRunner(ILogService logService)
+    /// <param name="pathManager">Менеджер путей.</param>
+    public QaacRunner(ILogService logService, IPathManager pathManager)
     {
-        _logService = logService;
+        _logService = logService ?? throw new ArgumentNullException(nameof(logService));
+        _pathManager = pathManager ?? throw new ArgumentNullException(nameof(pathManager));
     }
 
-    /// <summary>
-    /// Возвращает единственный экземпляр класса QaacRunner.
-    /// </summary>
-    public static QaacRunner Instance => LazyInstance.Value;
+
 
     /// <summary>
     /// Запустить кодирование AAC через потоковый конвейер FFmpeg | QAAC64.
@@ -51,8 +50,8 @@ public sealed class QaacRunner
         Action<ProgressInfo>? onProgress = null,
         CancellationToken cancellationToken = default)
     {
-        string qaacPath = PathManager.GetBinaryPath("qaac64");
-        string ffmpegPath = PathManager.GetBinaryPath("ffmpeg");
+        string qaacPath = _pathManager.GetBinaryPath("qaac64");
+        string ffmpegPath = _pathManager.GetBinaryPath("ffmpeg");
 
         if (!File.Exists(qaacPath))
         {

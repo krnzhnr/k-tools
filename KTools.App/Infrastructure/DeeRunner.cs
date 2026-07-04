@@ -27,7 +27,7 @@ public sealed class DeeRunner : AbstractProcessRunner
     /// </summary>
     /// <param name="path">Исходный длинный путь.</param>
     /// <returns>Короткий путь или исходный путь при невозможности конвертации.</returns>
-    private static string GetShortPath(string path)
+    private static string GetShortPath(string path, ILogService logService)
     {
         if (string.IsNullOrEmpty(path))
         {
@@ -46,7 +46,7 @@ public sealed class DeeRunner : AbstractProcessRunner
             if (result > 0)
             {
                 string shortPath = sb.ToString();
-                Core.LogService.Instance.DebugLog($"Путь преобразован в формат 8.3: '{path}' -> '{shortPath}'", "DeeRunner");
+                logService.DebugLog($"Путь преобразован в формат 8.3: '{path}' -> '{shortPath}'", "DeeRunner");
                 return shortPath;
             }
 
@@ -57,23 +57,22 @@ public sealed class DeeRunner : AbstractProcessRunner
                 if (result > 0)
                 {
                     string shortPath = sb.ToString();
-                    Core.LogService.Instance.DebugLog($"Путь преобразован в формат 8.3 с увеличенным буфером: '{path}' -> '{shortPath}'", "DeeRunner");
+                    logService.DebugLog($"Путь преобразован в формат 8.3 с увеличенным буфером: '{path}' -> '{shortPath}'", "DeeRunner");
                     return shortPath;
                 }
             }
 
-            Core.LogService.Instance.Warn($"Не удалось получить короткий путь для '{path}'. Код ошибки: {Marshal.GetLastWin32Error()}", "DeeRunner");
+            logService.Warn($"Не удалось получить короткий путь для '{path}'. Код ошибки: {Marshal.GetLastWin32Error()}", "DeeRunner");
         }
         catch (Exception ex)
         {
-            Core.LogService.Instance.Exception(ex, $"Исключение при получении короткого пути для '{path}'", "DeeRunner");
+            logService.Exception(ex, $"Исключение при получении короткого пути для '{path}'", "DeeRunner");
         }
 
         return path;
     }
 
-    private static readonly Lazy<DeeRunner> LazyInstance =
-        new(() => new DeeRunner(Core.LogService.Instance, FFmpegRunner.Instance));
+
 
     private readonly IFFmpegRunner _ffmpegRunner;
 
@@ -82,16 +81,13 @@ public sealed class DeeRunner : AbstractProcessRunner
     /// </summary>
     /// <param name="logService">Сервис логирования.</param>
     /// <param name="ffmpegRunner">Исполнитель FFmpeg.</param>
-    public DeeRunner(ILogService logService, IFFmpegRunner ffmpegRunner)
-        : base(logService)
+    public DeeRunner(ILogService logService, IFFmpegRunner ffmpegRunner, IPathManager pathManager)
+        : base(logService, pathManager)
     {
         _ffmpegRunner = ffmpegRunner;
     }
 
-    /// <summary>
-    /// Возвращает единственный экземпляр класса DeeRunner.
-    /// </summary>
-    public static DeeRunner Instance => LazyInstance.Value;
+
 
     /// <summary>
     /// Запустить кодирование Dolby Digital (DD) или Dolby Digital Plus (DDP) через dee.exe.
@@ -191,7 +187,7 @@ public sealed class DeeRunner : AbstractProcessRunner
             Log.DebugLog("XML-конфигурация для Dolby Encoding Engine сгенерирована", "DeeRunner");
 
             // Шаг 3. Запуск dee.exe с сгенерированным XML
-            string shortXmlPath = GetShortPath(tempXmlPath);
+            string shortXmlPath = GetShortPath(tempXmlPath, Log);
             string arguments = $"--xml \"{shortXmlPath}\"";
 
             string currentStep = "init";
@@ -355,10 +351,10 @@ public sealed class DeeRunner : AbstractProcessRunner
             _ => "off"
         };
 
-        string shortTempDir = GetShortPath(tempDir);
-        string shortWavDir = GetShortPath(Path.GetDirectoryName(wavPath) ?? string.Empty);
+        string shortTempDir = GetShortPath(tempDir, Log);
+        string shortWavDir = GetShortPath(Path.GetDirectoryName(wavPath) ?? string.Empty, Log);
         string shortWavName = Path.GetFileName(wavPath);
-        string shortOutDir = GetShortPath(Path.GetDirectoryName(outPath) ?? string.Empty);
+        string shortOutDir = GetShortPath(Path.GetDirectoryName(outPath) ?? string.Empty, Log);
         string shortOutName = Path.GetFileNameWithoutExtension(wavPath) + (encoderMode == "dd" ? ".ac3" : ".ec3");
 
         return $@"<?xml version=""1.0""?>

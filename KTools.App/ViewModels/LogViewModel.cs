@@ -8,6 +8,7 @@ using CommunityToolkit.Mvvm.Input;
 using Windows.ApplicationModel.DataTransfer;
 using KTools_App.Core;
 using KTools_App.Models;
+using KTools_App.Services.Contracts;
 
 namespace KTools_App.ViewModels;
 
@@ -18,8 +19,9 @@ namespace KTools_App.ViewModels;
 /// </summary>
 public partial class LogViewModel : ObservableObject
 {
-    private readonly LogService _logService;
-    private readonly SettingsManager _settingsManager;
+    private readonly ILogService _logService;
+    private readonly ISettingsManager _settingsManager;
+    private readonly IPathManager _pathManager;
 
     /// <summary>
     /// Предоставляет коллекцию записей логов для привязки к элементу управления ListView.
@@ -29,10 +31,14 @@ public partial class LogViewModel : ObservableObject
     /// <summary>
     /// Инициализирует новый экземпляр LogViewModel с внедрением зависимостей.
     /// </summary>
-    public LogViewModel(LogService logService, SettingsManager settingsManager)
+    public LogViewModel(
+        ILogService logService,
+        ISettingsManager settingsManager,
+        IPathManager pathManager)
     {
-        _logService = logService;
-        _settingsManager = settingsManager;
+        _logService = logService ?? throw new ArgumentNullException(nameof(logService));
+        _settingsManager = settingsManager ?? throw new ArgumentNullException(nameof(settingsManager));
+        _pathManager = pathManager ?? throw new ArgumentNullException(nameof(pathManager));
     }
 
     /// <summary>
@@ -165,7 +171,7 @@ public partial class LogViewModel : ObservableObject
     {
         try
         {
-            string settingsDir = PathManager.GetSettingsDirectory();
+            string settingsDir = _pathManager.GetSettingsDirectory();
             string defaultLogDir = Path.Combine(settingsDir, "logs");
             string logDir = string.IsNullOrEmpty(_settingsManager.LogDir)
                 ? defaultLogDir

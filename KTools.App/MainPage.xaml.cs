@@ -21,6 +21,7 @@ namespace KTools_App;
 public sealed partial class MainPage : Page
 {
     private readonly INavigationService _navigationService;
+    private readonly ILogService _logService;
     private string? _pendingScriptTag;
     private bool _isSyncingNavigation;
 
@@ -36,6 +37,7 @@ public sealed partial class MainPage : Page
     {
         ViewModel = App.Services.GetRequiredService<MainViewModel>();
         _navigationService = App.Services.GetRequiredService<INavigationService>();
+        _logService = App.Services.GetRequiredService<ILogService>();
 
         InitializeComponent();
 
@@ -65,7 +67,7 @@ public sealed partial class MainPage : Page
         if (App.Services.GetService<IDialogService>() is DialogService dialogService)
         {
             dialogService.XamlRoot = this.XamlRoot;
-            LogService.Instance.DebugLog("Инициализирован XamlRoot для IDialogService в MainPage.", "MainPage");
+            _logService.DebugLog("Инициализирован XamlRoot для IDialogService в MainPage.", "MainPage");
         }
 
         if (NavView.SettingsItem is NavigationViewItem settingsItem)
@@ -75,7 +77,7 @@ public sealed partial class MainPage : Page
             Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(
                 settingsItem, autoName);
             ToolTipService.SetToolTip(settingsItem, "Настройки");
-            LogService.Instance.Info(
+            _logService.Info(
                 "Выполнена локализация кнопки настроек на русский язык",
                 "MainPage");
         }
@@ -87,7 +89,7 @@ public sealed partial class MainPage : Page
 
         // Устанавливаем начальное состояние видимости разделителя на основе состояния панели
         HomeSeparator.Visibility = NavView.IsPaneOpen ? Visibility.Collapsed : Visibility.Visible;
-        LogService.Instance.Info(
+        _logService.Info(
             $"[MainPage] Инициализация видимости разделителя: {(NavView.IsPaneOpen ? "Скрыт" : "Показан")}",
             "MainPage");
     }
@@ -129,7 +131,7 @@ public sealed partial class MainPage : Page
         object? sender, 
         string pageTypeName)
     {
-        LogService.Instance.Info(
+        _logService.Info(
             $"[MainPage] Получено событие навигации на страницу: '{pageTypeName}'",
             "MainPage");
 
@@ -143,7 +145,7 @@ public sealed partial class MainPage : Page
             _ => null
         };
 
-        LogService.Instance.Info(
+        _logService.Info(
             $"[MainPage] Вычисленный тег навигации для '{pageTypeName}': '{targetTag ?? "null"}'",
             "MainPage");
 
@@ -165,21 +167,21 @@ public sealed partial class MainPage : Page
             if (script != null)
             {
                 string? tag = ViewModel.GetTagForScriptName(script.Name);
-                LogService.Instance.Info(
+                _logService.Info(
                     $"[MainPage] Активный скрипт в WorkPanel: '{script.Name}', тег: '{tag ?? "null"}'",
                     "MainPage");
                 return tag;
             }
             else
             {
-                LogService.Instance.Warn(
+                _logService.Warn(
                     "[MainPage] В WorkPanel отсутствует активный скрипт!",
                     "MainPage");
             }
         }
         else
         {
-            LogService.Instance.Warn(
+            _logService.Warn(
                 $"[MainPage] Контент фрейма не является WorkPanel! Тип: '{ContentFrame.Content?.GetType().Name ?? "null"}'",
                 "MainPage");
         }
@@ -267,7 +269,7 @@ public sealed partial class MainPage : Page
         if (targetTag != null)
         {
             SyncNavigationSelection(targetTag);
-            LogService.Instance.Info(
+            _logService.Info(
                 $"[MainPage] По сообщению синхронизировано выделение для " +
                 $"тега '{targetTag}'",
                 "MainPage");
@@ -385,7 +387,7 @@ public sealed partial class MainPage : Page
                     _isSyncingNavigation = false;
                 }
 
-                LogService.Instance.Info(
+                _logService.Info(
                     $"[MainPage] При открытии панели раскрыта родительская " +
                     $"категория: '{parentItem.Content}' для тега " +
                     $"'{_pendingScriptTag}'",
@@ -411,7 +413,7 @@ public sealed partial class MainPage : Page
     private void NavView_PaneOpening(NavigationView sender, object args)
     {
         HomeSeparator.Visibility = Visibility.Collapsed;
-        LogService.Instance.Info(
+        _logService.Info(
             "[MainPage] Панель начинает открываться. Разделитель скрыт мгновенно.",
             "MainPage");
     }
@@ -423,7 +425,7 @@ public sealed partial class MainPage : Page
     private void NavView_PaneClosing(NavigationView sender, object args)
     {
         HomeSeparator.Visibility = Visibility.Visible;
-        LogService.Instance.Info(
+        _logService.Info(
             "[MainPage] Панель начинает закрываться. Разделитель показан мгновенно.",
             "MainPage");
     }

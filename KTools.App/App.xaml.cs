@@ -21,8 +21,10 @@ public partial class App : Application
     /// Глобальный провайдер служб (DI-контейнер).
     /// Используется для получения зависимостей во Views.
     /// </summary>
-    public static IServiceProvider Services { get; private set; }
+    internal static IServiceProvider Services { get; private set; }
         = null!;
+
+    private static ILogService? _logService;
 
     /// <summary>
     /// Глобальная ссылка на главное окно приложения.
@@ -44,6 +46,7 @@ public partial class App : Application
 
         InitializeComponent();
         Services = ConfigureServices();
+        _logService = Services.GetRequiredService<ILogService>();
 
         // === Глобальные перехватчики исключений для диагностики крашей в publish-сборке ===
 
@@ -52,7 +55,7 @@ public partial class App : Application
         {
             string report = FormatCrashReport("WinUI3 UnhandledException", e.Exception);
             WriteCrashReport(report);
-            LogService.Instance.Fatal(report, "App.UnhandledException");
+            _logService.Fatal(report, "App.UnhandledException");
             e.Handled = true; // Попытка не дать процессу упасть до записи
         };
 
@@ -66,7 +69,7 @@ public partial class App : Application
             WriteCrashReport(report);
             try
             {
-                LogService.Instance.Fatal(report, "AppDomain.UnhandledException");
+                _logService.Fatal(report, "AppDomain.UnhandledException");
             }
             catch
             {
@@ -79,7 +82,7 @@ public partial class App : Application
         {
             string report = FormatCrashReport("TaskScheduler.UnobservedTaskException", e.Exception);
             WriteCrashReport(report);
-            LogService.Instance.Error(report, "TaskScheduler.UnobservedException");
+            _logService.Error(report, "TaskScheduler.UnobservedException");
             e.SetObserved();
         };
     }
@@ -162,30 +165,42 @@ public partial class App : Application
     {
         var services = new ServiceCollection();
 
-        // 1. Регистрация синглтонов ядра (переходная регистрация через существующие .Instance)
-        services.AddSingleton<ILogService>(LogService.Instance);
-        services.AddSingleton(LogService.Instance); // Временная регистрация для обратной совместимости с ViewModels (до выполнения шага 2.5)
-        services.AddSingleton<ISettingsManager>(SettingsManager.Instance);
-        services.AddSingleton(SettingsManager.Instance); // Временная регистрация для обратной совместимости с ViewModels (до выполнения шага 2.5)
-        services.AddSingleton<IDependencyManager>(DependencyManager.Instance);
-        services.AddSingleton(DependencyManager.Instance); // Временная регистрация для обратной совместимости с ViewModels (до выполнения шага 2.5)
-        services.AddSingleton<IPathManager, PathManagerService>();
-        services.AddSingleton<IScriptRegistry>(ScriptRegistry.Instance);
-        services.AddSingleton(ScriptRegistry.Instance); // Временная регистрация для обратной совместимости с ViewModels (до выполнения шага 2.5)
+        // 1. Регистрация служб ядра через чистый DI
+        services.AddSingleton<ILogService, LogService>();
+        services.AddSingleton<IPathManager, PathManager>();
+        services.AddSingleton<ISettingsManager, SettingsManager>();
+        services.AddSingleton<IDependencyManager, DependencyManager>();
+        services.AddSingleton<IScriptRegistry, ScriptRegistry>();
 
         // Infrastructure-сервисы (Runner'ы)
         services.AddSingleton<IFFmpegRunner, FFmpegRunner>();
         services.AddSingleton<IEac3toRunner, Eac3toRunner>();
-        services.AddSingleton<IMediaProbeService>(MediaProbeService.Instance);
+        services.AddSingleton<IMediaProbeService, MediaProbeService>();
         services.AddSingleton<IMkvmergeRunner, MkvmergeRunner>();
         services.AddSingleton<DeeRunner>();
         services.AddSingleton<QaacRunner>();
+        services.AddSingleton<IAssParser, AssParser>();
+
+        // Регистрация 12 скриптов обработки медиа
+        services.AddTransient<Scripts.MetadataCleanupScript>();
+        services.AddTransient<Scripts.VideoEncodingScript>();
+        services.AddTransient<Scripts.ContainerConversionScript>();
+        services.AddTransient<Scripts.AudioEncodingScript>();
+        services.AddTransient<Scripts.AudioDownmixScript>();
+        services.AddTransient<Scripts.AudioSpeedScript>();
+        services.AddTransient<Scripts.AudioChannelsScript>();
+        services.AddTransient<Scripts.MkvAssemblyScript>();
+        services.AddTransient<Scripts.StreamManagementScript>();
+        services.AddTransient<Scripts.StreamReplacementScript>();
+        services.AddTransient<Scripts.TrackExtractorScript>();
+        services.AddTransient<Scripts.SubtitlesConvertScript>();
 
         // 2. Регистрация служб приложения
         services.AddSingleton<INavigationService, NavigationService>();
         services.AddSingleton<IDialogService, DialogService>();
         services.AddSingleton<IWindowHandleProvider, WindowHandleProvider>();
         services.AddSingleton<IUpdateService, UpdateService>();
+        services.AddSingleton<MainWindow>();
 
         // 3. Регистрация ViewModels
         services.AddSingleton<MainViewModel>();
@@ -219,32 +234,32 @@ public partial class App : Application
             }
             catch (Exception ex)
             {
-                LogService.Instance.Exception(
+                _logService.Exception(
                     ex,
                     "Не удалось определить, запущено ли приложение с правами администратора",
                     "App");
             }
 
-            LogService.Instance.Info(
+            _logService.Info(
                 $"=== Запуск приложения K-Tools C# Edition (Права администратора: {(isAdmin ? "Да" : "Нет")}) ===",
                 "App");
 
-            string settingsDir = PathManager.GetSettingsDirectory();
-            LogService.Instance.Info(
+            string settingsDir = Services.GetRequiredService<IPathManager>().GetSettingsDirectory();
+            _logService.Info(
                 $"Конфигурация приложения успешно "
                 + $"инициализирована. Папка: {settingsDir}",
                 "SettingsManager");
 
             // При первом запуске автоматически инициализируем
             // все настройки по умолчанию
-            LogService.Instance.DebugLog(
+            _logService.DebugLog(
                 "Выполняется автоматическая инициализация "
                 + "настроек по умолчанию...",
                 "App");
-            _ = ScriptRegistry.Instance.Scripts;
+            _ = Services.GetRequiredService<IScriptRegistry>().Scripts;
 
             // Создаём и активируем главное окно
-            var window = new MainWindow();
+            var window = Services.GetRequiredService<MainWindow>();
             CurrentMainWindow = window;
 
             // Инициализируем провайдер дескриптора окна
@@ -259,7 +274,7 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
-            LogService.Instance.Exception(
+            _logService.Exception(
                 ex,
                 "Критическая ошибка при инициализации приложения.",
                 "App");

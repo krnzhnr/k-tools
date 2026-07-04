@@ -1,5 +1,6 @@
 // -*- coding: utf-8 -*-
 using System;
+using KTools_App.Services.Contracts;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.Extensions.DependencyInjection;
@@ -16,6 +17,8 @@ namespace KTools_App.UI.Pages;
 /// </summary>
 public partial class SettingsPage : Page
 {
+    private ISettingsManager _settingsManager => App.Services.GetRequiredService<ISettingsManager>();
+
     /// <summary>
     /// Предоставляет доступ к модели представления страницы настроек.
     /// </summary>
@@ -156,7 +159,7 @@ public partial class SettingsPage : Page
             }
             catch (Exception ex)
             {
-                LogService.Instance.Exception(ex, "Ошибка при копировании переменной в буфер обмена", "SettingsPage");
+                App.Services.GetRequiredService<ILogService>().Exception(ex, "Ошибка при копировании переменной в буфер обмена", "SettingsPage");
             }
         }
     }
@@ -188,7 +191,7 @@ public partial class SettingsPage : Page
     private void LoadTemplatesUI()
     {
         SearchTemplatesContainer.Children.Clear();
-        var searchList = SettingsManager.Instance.SearchTemplates;
+        var searchList = _settingsManager.SearchTemplates;
         foreach (var item in searchList)
         {
             item.Description = CleanDescription(item.Description);
@@ -196,7 +199,7 @@ public partial class SettingsPage : Page
         }
 
         ReplaceTemplatesContainer.Children.Clear();
-        var replaceList = SettingsManager.Instance.ReplaceTemplates;
+        var replaceList = _settingsManager.ReplaceTemplates;
         foreach (var item in replaceList)
         {
             item.Description = CleanDescription(item.Description);
@@ -224,7 +227,7 @@ public partial class SettingsPage : Page
         patternBox.TextChanged += (s, e) =>
         {
             item.Pattern = patternBox.Text;
-            SettingsManager.Instance.SaveSettings();
+            _settingsManager.SaveSettings();
             UpdateHelpFlyouts();
         };
         patternBox.KeyDown += OnTextBoxEnterKeyDown;
@@ -242,7 +245,7 @@ public partial class SettingsPage : Page
         descBox.TextChanged += (s, e) =>
         {
             item.Description = CleanDescription(descBox.Text);
-            SettingsManager.Instance.SaveSettings();
+            _settingsManager.SaveSettings();
             UpdateHelpFlyouts();
         };
         descBox.KeyDown += OnTextBoxEnterKeyDown;
@@ -262,15 +265,15 @@ public partial class SettingsPage : Page
         {
             if (isSearch)
             {
-                var list = SettingsManager.Instance.SearchTemplates;
+                var list = _settingsManager.SearchTemplates;
                 list.Remove(item);
-                SettingsManager.Instance.SearchTemplates = list;
+                _settingsManager.SearchTemplates = list;
             }
             else
             {
-                var list = SettingsManager.Instance.ReplaceTemplates;
+                var list = _settingsManager.ReplaceTemplates;
                 list.Remove(item);
-                SettingsManager.Instance.ReplaceTemplates = list;
+                _settingsManager.ReplaceTemplates = list;
             }
             LoadTemplatesUI();
         };
@@ -282,17 +285,17 @@ public partial class SettingsPage : Page
 
     private void AddSearchTemplate_Click(object sender, RoutedEventArgs e)
     {
-        var list = SettingsManager.Instance.SearchTemplates;
+        var list = _settingsManager.SearchTemplates;
         list.Add(new TemplateItem { Pattern = "", Description = "" });
-        SettingsManager.Instance.SearchTemplates = list;
+        _settingsManager.SearchTemplates = list;
         LoadTemplatesUI();
     }
 
     private void AddReplaceTemplate_Click(object sender, RoutedEventArgs e)
     {
-        var list = SettingsManager.Instance.ReplaceTemplates;
+        var list = _settingsManager.ReplaceTemplates;
         list.Add(new TemplateItem { Pattern = "", Description = "" });
-        SettingsManager.Instance.ReplaceTemplates = list;
+        _settingsManager.ReplaceTemplates = list;
         LoadTemplatesUI();
     }
 
@@ -331,7 +334,7 @@ public partial class SettingsPage : Page
         mainStack.Children.Add(title);
         mainStack.Children.Add(desc);
 
-        var variables = SettingsManager.Instance.SearchTemplates;
+        var variables = _settingsManager.SearchTemplates;
         foreach (var item in variables)
         {
             if (string.IsNullOrEmpty(item.Pattern)) continue;
@@ -449,7 +452,7 @@ public partial class SettingsPage : Page
         mainStack.Children.Add(title);
         mainStack.Children.Add(desc);
 
-        var variables = SettingsManager.Instance.ReplaceTemplates;
+        var variables = _settingsManager.ReplaceTemplates;
         foreach (var item in variables)
         {
             if (string.IsNullOrEmpty(item.Pattern)) continue;

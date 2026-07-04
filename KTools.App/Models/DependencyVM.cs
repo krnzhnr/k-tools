@@ -8,6 +8,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Media;
 using CommunityToolkit.Mvvm.Input;
 using KTools_App.Core;
+using KTools_App.Services.Contracts;
 
 namespace KTools_App.Models;
 
@@ -161,20 +162,23 @@ public class DependencyVM : INotifyPropertyChanged
     /// <summary>Команда удаления данной зависимости.</summary>
     public ICommand RemoveCommand { get; }
 
+    private readonly IDependencyManager _dependencyManager;
+
     /// <summary>Инициализирует новый экземпляр ViewModel для зависимости.</summary>
-    public DependencyVM(DependencyInfo info)
+    public DependencyVM(DependencyInfo info, IDependencyManager dependencyManager)
     {
         Info = info;
-        _status = DependencyManager.Instance.GetStatus(info.Key);
+        _dependencyManager = dependencyManager ?? throw new ArgumentNullException(nameof(dependencyManager));
+        _status = _dependencyManager.GetStatus(info.Key);
 
         InstallCommand = new AsyncRelayCommand(async () => 
-            await DependencyManager.Instance.InstallDependencyAsync(Info.Key));
+            await _dependencyManager.InstallDependencyAsync(Info.Key));
 
         CancelCommand = new RelayCommand(() => 
-            DependencyManager.Instance.CancelInstallation(Info.Key));
+            _dependencyManager.CancelInstallation(Info.Key));
 
         RemoveCommand = new RelayCommand(() => 
-            DependencyManager.Instance.RemoveDependency(Info.Key));
+            _dependencyManager.RemoveDependency(Info.Key));
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;

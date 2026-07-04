@@ -4,6 +4,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Navigation;
 using Microsoft.Extensions.DependencyInjection;
 using KTools_App.Core;
+using KTools_App.Services.Contracts;
 using KTools_App.ViewModels;
 
 namespace KTools_App.UI.Pages;
@@ -41,7 +42,7 @@ public sealed partial class LogPage : Page
         // Подписываемся на новые логи
         LogService.LogReceived += OnLogReceived;
 
-        LogService.Instance.DebugLog("Открыта высокопроизводительная вкладка логов с поддержкой виртуализации списка", "LogPage");
+        App.Services.GetRequiredService<ILogService>().DebugLog("Открыта высокопроизводительная вкладка логов с поддержкой виртуализации списка", "LogPage");
 
         // Прокручиваем список в самый конец после рендеринга элементов
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
@@ -58,7 +59,7 @@ public sealed partial class LogPage : Page
         base.OnNavigatedFrom(e);
 
         LogService.LogReceived -= OnLogReceived;
-        LogService.Instance.DebugLog("Пользователь покинул вкладку мониторинга логов", "LogPage");
+        App.Services.GetRequiredService<ILogService>().DebugLog("Пользователь покинул вкладку мониторинга логов", "LogPage");
     }
 
     /// <summary>

@@ -1,3 +1,4 @@
+using KTools_App.Services.Contracts;
 ﻿// -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
@@ -18,6 +19,14 @@ namespace KTools_App.Scripts;
 /// </summary>
 public sealed class MkvAssemblyScript : AbstractScript
 {
+    private readonly IMkvmergeRunner _mkvmergeRunner;
+
+    public MkvAssemblyScript(ILogService logService, ISettingsManager settingsManager, IPathManager pathManager, IMkvmergeRunner mkvmergeRunner)
+        : base(logService, settingsManager, pathManager)
+    {
+        _mkvmergeRunner = mkvmergeRunner ?? throw new ArgumentNullException(nameof(mkvmergeRunner));
+    }
+
     /// <summary>
     /// Русское название скрипта.
     /// </summary>
@@ -109,7 +118,7 @@ public sealed class MkvAssemblyScript : AbstractScript
         if (!AppConstants.VideoContainers.Contains(ext))
         {
             string skipMsg = $"[Сборка MKV] Пропуск сопутствующего файла (обрабатывается вместе с видео): '{Path.GetFileName(filePath)}'";
-            LogService.Instance.Info(skipMsg, "MkvAssemblyScript");
+            _logService.Info(skipMsg, "MkvAssemblyScript");
             progressCallback(fileIndex, totalCount, $"Пропуск (сопутствующий файл): {Path.GetFileName(filePath)}", 100.0);
             results.Add($"⏭ ПРОПУСК (сопутствующий файл): {Path.GetFileName(filePath)}");
             return results;
@@ -118,7 +127,7 @@ public sealed class MkvAssemblyScript : AbstractScript
         string stem = Path.GetFileNameWithoutExtension(filePath);
         string directory = Path.GetDirectoryName(filePath) ?? string.Empty;
 
-        LogService.Instance.Info($"Начало сборки MKV-контейнера для видеофайла '{Path.GetFileName(filePath)}'", "MkvAssemblyScript");
+        _logService.Info($"Начало сборки MKV-контейнера для видеофайла '{Path.GetFileName(filePath)}'", "MkvAssemblyScript");
 
         // 2. Извлекаем пользовательские настройки
         string subsTitle = GetSettingValue(settings, "subs_title", "[Надписи]");
@@ -145,19 +154,19 @@ public sealed class MkvAssemblyScript : AbstractScript
                     if (audioPath == null && (AppConstants.AudioContainers.Contains(siblingExt) || AppConstants.AudioStreams.Contains(siblingExt)))
                     {
                         audioPath = sibling;
-                        LogService.Instance.Info($"Найден сопутствующий аудиофайл: '{Path.GetFileName(sibling)}'", "MkvAssemblyScript");
+                        _logService.Info($"Найден сопутствующий аудиофайл: '{Path.GetFileName(sibling)}'", "MkvAssemblyScript");
                     }
                     else if (subsPath == null && AppConstants.SubtitleExtensions.Contains(siblingExt))
                     {
                         subsPath = sibling;
-                        LogService.Instance.Info($"Найден сопутствующий файл субтитров: '{Path.GetFileName(sibling)}'", "MkvAssemblyScript");
+                        _logService.Info($"Найден сопутствующий файл субтитров: '{Path.GetFileName(sibling)}'", "MkvAssemblyScript");
                     }
                 }
             }
             catch (Exception ex)
             {
                 string scanErr = $"❌ Ошибка сканирования папки на наличие сопутствующих файлов: {ex.Message}";
-                LogService.Instance.Exception(ex, scanErr, "MkvAssemblyScript");
+                _logService.Exception(ex, scanErr, "MkvAssemblyScript");
                 results.Add(scanErr);
                 return results;
             }
@@ -189,12 +198,12 @@ public sealed class MkvAssemblyScript : AbstractScript
                 if (audioPath == null && (AppConstants.AudioContainers.Contains(queueExt) || AppConstants.AudioStreams.Contains(queueExt)))
                 {
                     audioPath = queueFilePath;
-                    LogService.Instance.Info($"Найден сопутствующий аудиофайл из очереди: '{Path.GetFileName(queueFilePath)}'", "MkvAssemblyScript");
+                    _logService.Info($"Найден сопутствующий аудиофайл из очереди: '{Path.GetFileName(queueFilePath)}'", "MkvAssemblyScript");
                 }
                 else if (subsPath == null && AppConstants.SubtitleExtensions.Contains(queueExt))
                 {
                     subsPath = queueFilePath;
-                    LogService.Instance.Info($"Найден сопутствующий файл субтитров из очереди: '{Path.GetFileName(queueFilePath)}'", "MkvAssemblyScript");
+                    _logService.Info($"Найден сопутствующий файл субтитров из очереди: '{Path.GetFileName(queueFilePath)}'", "MkvAssemblyScript");
                 }
 
                 // Оба найдены — дальше искать не нужно
@@ -214,11 +223,11 @@ public sealed class MkvAssemblyScript : AbstractScript
         string finalOutputFile = GetSafeOutputPath(filePath, targetFile);
 
         // 5. Проверка существования выходного файла при отключенной перезаписи
-        bool overwrite = SettingsManager.Instance.GetSetting("General", "OverwriteExisting", false);
+        bool overwrite = _settingsManager.GetSetting("General", "OverwriteExisting", false);
         if (File.Exists(finalOutputFile) && !overwrite)
         {
             string skipExist = $"⏭ ПРОПУСК (файл существует): {Path.GetFileName(finalOutputFile)}";
-            LogService.Instance.Info(skipExist, "MkvAssemblyScript");
+            _logService.Info(skipExist, "MkvAssemblyScript");
             progressCallback(fileIndex, totalCount, $"Пропуск (существует): {Path.GetFileName(finalOutputFile)}", 100.0);
             results.Add(skipExist);
             return results;
@@ -288,7 +297,7 @@ public sealed class MkvAssemblyScript : AbstractScript
         bool success = false;
         try
         {
-            success = await MkvmergeRunner.Instance.RunAsync(
+            success = await _mkvmergeRunner.RunAsync(
                 finalOutputFile,
                 mkvInputs,
                 title: stem,
@@ -303,7 +312,7 @@ public sealed class MkvAssemblyScript : AbstractScript
         catch (Exception ex)
         {
             string runErr = $"❌ Критическая ошибка при сборке MKV для '{stem}': {ex.Message}";
-            LogService.Instance.Exception(ex, runErr, "MkvAssemblyScript");
+            _logService.Exception(ex, runErr, "MkvAssemblyScript");
             results.Add(runErr);
         }
         finally
@@ -317,7 +326,7 @@ public sealed class MkvAssemblyScript : AbstractScript
         {
             CleanupIfCancelled(finalOutputFile);
             string cancelMsg = $"⚠ Сборка отменена пользователем: {Path.GetFileName(finalOutputFile)}";
-            LogService.Instance.Info(cancelMsg, "MkvAssemblyScript");
+            _logService.Info(cancelMsg, "MkvAssemblyScript");
             results.Add(cancelMsg);
             return results;
         }
@@ -328,14 +337,14 @@ public sealed class MkvAssemblyScript : AbstractScript
             {
                 progressCallback(fileIndex, totalCount, "Сборка завершена!", 100.0);
                 string successMsg = $"✅ Собран контейнер MKV: {Path.GetFileName(finalOutputFile)}";
-                LogService.Instance.Info(successMsg, "MkvAssemblyScript");
+                _logService.Info(successMsg, "MkvAssemblyScript");
                 results.Add(successMsg);
             }
             else
             {
                 CleanupFailedOutputFile(finalOutputFile);
                 string failMsg = $"❌ Ошибка сборки MKV-файла: {Path.GetFileName(finalOutputFile)}";
-                LogService.Instance.Error(failMsg, "MkvAssemblyScript");
+                _logService.Error(failMsg, "MkvAssemblyScript");
                 results.Add(failMsg);
             }
         }
@@ -344,7 +353,7 @@ public sealed class MkvAssemblyScript : AbstractScript
             CleanupFailedOutputFile(finalOutputFile);
             string errorMsg = $"❌ Ошибка выполнения скрипта для {Path.GetFileName(filePath)}: {ex.Message}";
             results.Add(errorMsg);
-            LogService.Instance.Exception(ex, $"Ошибка при выполнении сборки MKV для '{stem}': {ex.Message}", "MkvAssemblyScript");
+            _logService.Exception(ex, $"Ошибка при выполнении сборки MKV для '{stem}': {ex.Message}", "MkvAssemblyScript");
         }
 
         return results;

@@ -1,3 +1,4 @@
+using KTools_App.Services.Contracts;
 // -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
@@ -18,6 +19,14 @@ namespace KTools_App.Scripts;
 /// </summary>
 public sealed class ContainerConversionScript : AbstractScript
 {
+    private readonly IFFmpegRunner _ffmpegRunner;
+
+    public ContainerConversionScript(ILogService logService, ISettingsManager settingsManager, IPathManager pathManager, IFFmpegRunner ffmpegRunner)
+        : base(logService, settingsManager, pathManager)
+    {
+        _ffmpegRunner = ffmpegRunner ?? throw new ArgumentNullException(nameof(ffmpegRunner));
+    }
+
     private static readonly Dictionary<string, string> FormatMap = new(StringComparer.OrdinalIgnoreCase)
     {
         { "MP4", ".mp4" },
@@ -94,12 +103,12 @@ public sealed class ContainerConversionScript : AbstractScript
         string originalName = Path.GetFileName(filePath);
         string inputExt = Path.GetExtension(filePath).ToLowerInvariant();
 
-        LogService.Instance.Info($"Запущена конвертация контейнера для файла: '{originalName}'. Целевой формат: {targetKey}", "ContainerConversionScript");
+        _logService.Info($"Запущена конвертация контейнера для файла: '{originalName}'. Целевой формат: {targetKey}", "ContainerConversionScript");
 
         // 1. Проверяем, совпадает ли исходный формат с целевым
         if (inputExt.Equals(targetExt, StringComparison.OrdinalIgnoreCase))
         {
-            LogService.Instance.Info($"Файл '{originalName}' уже находится в формате {targetKey}. Конвертация пропущена.", "ContainerConversionScript");
+            _logService.Info($"Файл '{originalName}' уже находится в формате {targetKey}. Конвертация пропущена.", "ContainerConversionScript");
             progressCallback(fileIndex, totalCount, $"Пропуск (уже {targetKey}): {originalName}", 100.0);
             results.Add($"Ref: {filePath}");
             results.Add($"⏭ ПРОПУСК (уже {targetKey}): {originalName}");
@@ -108,15 +117,15 @@ public sealed class ContainerConversionScript : AbstractScript
 
         // 2. Получаем метаданные структуры файла через ffprobe
         progressCallback(fileIndex, totalCount, "Анализ структуры медиафайла...", 0.0);
-        LogService.Instance.DebugLog($"Запрос метаданных ffprobe для: '{originalName}'", "ContainerConversionScript");
-        var info = await FFmpegRunner.Instance.GetVideoInfoAsync(filePath);
+        _logService.DebugLog($"Запрос метаданных ffprobe для: '{originalName}'", "ContainerConversionScript");
+        var info = await _ffmpegRunner.GetVideoInfoAsync(filePath);
 
         // 3. Выполняем детальную проверку совместимости видео/аудио кодеков с новым контейнером
         var (compatible, reason) = CheckCompatibility(filePath, targetExt, info);
         if (!compatible)
         {
             string msg = $"⚠ ПРОПУСК (требуется перекодирование): {originalName}. {reason} Для перекодирования используйте инструмент «{AppConstants.ScriptMetadata.VideoProcessorName}».";
-            LogService.Instance.Warn($"Файл '{originalName}' несовместим с контейнером {targetKey}: {reason}", "ContainerConversionScript");
+            _logService.Warn($"Файл '{originalName}' несовместим с контейнером {targetKey}: {reason}", "ContainerConversionScript");
             progressCallback(fileIndex, totalCount, "Пропуск: требуется перекодирование", 100.0);
             results.Add(msg);
             return results;
@@ -133,10 +142,10 @@ public sealed class ContainerConversionScript : AbstractScript
         string outputFileName = Path.GetFileName(outputFilePath);
 
         // 5. Проверяем существование файла и флаг перезаписи
-        bool overwrite = SettingsManager.Instance.GetSetting("General", "OverwriteExisting", false);
+        bool overwrite = _settingsManager.GetSetting("General", "OverwriteExisting", false);
         if (File.Exists(outputFilePath) && !overwrite)
         {
-            LogService.Instance.Info($"Выходной файл '{outputFileName}' уже существует. Конвертация пропущена.", "ContainerConversionScript");
+            _logService.Info($"Выходной файл '{outputFileName}' уже существует. Конвертация пропущена.", "ContainerConversionScript");
             progressCallback(fileIndex, totalCount, $"Пропуск (существует): {outputFileName}", 100.0);
             results.Add($"⏭ ПРОПУСК (файл существует): {outputFileName}");
             return results;
@@ -163,16 +172,16 @@ public sealed class ContainerConversionScript : AbstractScript
                 }
             }
         }
-        LogService.Instance.DebugLog($"Длительность медиафайла '{originalName}': {duration:F2} сек.", "ContainerConversionScript");
+        _logService.DebugLog($"Длительность медиафайла '{originalName}': {duration:F2} сек.", "ContainerConversionScript");
 
         // 7. Запускаем FFmpeg с копированием видео и аудио потоков
         progressCallback(fileIndex, totalCount, "Запуск FFmpeg...", 0.0);
-        LogService.Instance.DebugLog($"Инициализация процесса FFmpeg для ремуксинга '{originalName}' -> '{outputFileName}'", "ContainerConversionScript");
+        _logService.DebugLog($"Инициализация процесса FFmpeg для ремуксинга '{originalName}' -> '{outputFileName}'", "ContainerConversionScript");
 
         var extraArgs = new List<string> { "-c", "copy" };
         var cts = new CancellationTokenSource();
 
-        var ffmpegTask = FFmpegRunner.Instance.RunAsync(
+        var ffmpegTask = _ffmpegRunner.RunAsync(
             inputPath: filePath,
             outputPath: outputFilePath,
             extraArgs: extraArgs,
@@ -192,7 +201,7 @@ public sealed class ContainerConversionScript : AbstractScript
         {
             if (IsCancelled)
             {
-                LogService.Instance.Warn($"Пользователь инициировал отмену конвертации для '{originalName}'", "ContainerConversionScript");
+                _logService.Warn($"Пользователь инициировал отмену конвертации для '{originalName}'", "ContainerConversionScript");
                 cts.Cancel();
                 break;
             }
@@ -206,13 +215,13 @@ public sealed class ContainerConversionScript : AbstractScript
         }
         catch (Exception ex)
         {
-            LogService.Instance.Exception(ex, $"Сбой при запуске/работе FFmpeg для файла '{originalName}': {ex.Message}", "ContainerConversionScript");
+            _logService.Exception(ex, $"Сбой при запуске/работе FFmpeg для файла '{originalName}': {ex.Message}", "ContainerConversionScript");
         }
 
         // 8. Обрабатываем итог выполнения
         if (success)
         {
-            LogService.Instance.Info($"Конвертация контейнера успешно завершена. Выходной файл: '{outputFileName}'", "ContainerConversionScript");
+            _logService.Info($"Конвертация контейнера успешно завершена. Выходной файл: '{outputFileName}'", "ContainerConversionScript");
             progressCallback(fileIndex, totalCount, "Успешно завершено!", 100.0);
             results.Add($"✅ Конвертирован: {outputFileName}");
 
@@ -231,7 +240,7 @@ public sealed class ContainerConversionScript : AbstractScript
             }
             else
             {
-                LogService.Instance.Error($"Не удалось выполнить смену контейнера для файла '{originalName}'", "ContainerConversionScript");
+                _logService.Error($"Не удалось выполнить смену контейнера для файла '{originalName}'", "ContainerConversionScript");
                 progressCallback(fileIndex, totalCount, "Ошибка обработки!", 0.0);
                 results.Add($"❌ ОШИБКА: {originalName}");
             }
@@ -248,7 +257,7 @@ public sealed class ContainerConversionScript : AbstractScript
     {
         if (info == null)
         {
-            LogService.Instance.Warn($"Отсутствуют данные анализа структуры (ffprobe null) для '{Path.GetFileName(filePath)}'. Совместимость принята по умолчанию.", "ContainerConversionScript");
+            _logService.Warn($"Отсутствуют данные анализа структуры (ffprobe null) для '{Path.GetFileName(filePath)}'. Совместимость принята по умолчанию.", "ContainerConversionScript");
             return (true, "");
         }
 
@@ -294,11 +303,11 @@ public sealed class ContainerConversionScript : AbstractScript
         }
         catch (Exception ex)
         {
-            LogService.Instance.Exception(ex, $"Не удалось разобрать потоки медиафайла для детекции совместимости: {ex.Message}", "ContainerConversionScript");
+            _logService.Exception(ex, $"Не удалось разобрать потоки медиафайла для детекции совместимости: {ex.Message}", "ContainerConversionScript");
             return (true, ""); // При сбоях парсинга полагаемся на FFmpeg
         }
 
-        LogService.Instance.DebugLog($"Анализ совместимости. Видеокодек: '{videoCodec}', Аудиокодек: '{audioCodec}', Целевой контейнер: '{targetExt}'", "ContainerConversionScript");
+        _logService.DebugLog($"Анализ совместимости. Видеокодек: '{videoCodec}', Аудиокодек: '{audioCodec}', Целевой контейнер: '{targetExt}'", "ContainerConversionScript");
 
         // Формат MKV поддерживает абсолютно любые видео и аудио кодеки
         if (targetExt == ".mkv")
@@ -369,8 +378,8 @@ public sealed class ContainerConversionScript : AbstractScript
 
     public override string GetOutputExtension(string inputPath)
     {
-        string settingsGroup = SettingsManager.Instance.GetSafeGroupName(Name);
-        string targetKey = SettingsManager.Instance.GetSetting(settingsGroup, "target_format", "MP4");
+        string settingsGroup = _settingsManager.GetSafeGroupName(Name);
+        string targetKey = _settingsManager.GetSetting(settingsGroup, "target_format", "MP4");
         if (FormatMap.TryGetValue(targetKey, out string? targetExt))
         {
             return targetExt;

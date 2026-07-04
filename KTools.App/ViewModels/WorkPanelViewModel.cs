@@ -23,8 +23,10 @@ public partial class WorkPanelViewModel : ObservableObject
 {
     private readonly INavigationService _navigationService;
     private readonly IDialogService _dialogService;
-    private readonly SettingsManager _settingsManager;
-    private readonly LogService _logService;
+    private readonly ISettingsManager _settingsManager;
+    private readonly ILogService _logService;
+    private readonly IDependencyManager _dependencyManager;
+    private readonly IMediaProbeService _mediaProbeService;
 
     private ObservableCollection<FileQueueItem> _files = new();
     private DateTime _startTime;
@@ -120,13 +122,17 @@ public partial class WorkPanelViewModel : ObservableObject
     public WorkPanelViewModel(
         INavigationService navigationService,
         IDialogService dialogService,
-        SettingsManager settingsManager,
-        LogService logService)
+        ISettingsManager settingsManager,
+        ILogService logService,
+        IDependencyManager dependencyManager,
+        IMediaProbeService mediaProbeService)
     {
-        _navigationService = navigationService;
-        _dialogService = dialogService;
-        _settingsManager = settingsManager;
-        _logService = logService;
+        _navigationService = navigationService ?? throw new ArgumentNullException(nameof(navigationService));
+        _dialogService = dialogService ?? throw new ArgumentNullException(nameof(dialogService));
+        _settingsManager = settingsManager ?? throw new ArgumentNullException(nameof(settingsManager));
+        _logService = logService ?? throw new ArgumentNullException(nameof(logService));
+        _dependencyManager = dependencyManager ?? throw new ArgumentNullException(nameof(dependencyManager));
+        _mediaProbeService = mediaProbeService ?? throw new ArgumentNullException(nameof(mediaProbeService));
     }
 
     /// <summary>
@@ -173,7 +179,7 @@ public partial class WorkPanelViewModel : ObservableObject
 
         foreach (var depKey in ActiveScript.RequiredDependencies)
         {
-            if (!DependencyManager.Instance.IsInstalled(depKey))
+            if (!_dependencyManager.IsInstalled(depKey))
             {
                 allInstalled = false;
                 missingDeps.Add(depKey.ToUpperInvariant());
@@ -710,7 +716,7 @@ public partial class WorkPanelViewModel : ObservableObject
         {
             try
             {
-                var structure = await MediaProbeService.Instance
+                var structure = await _mediaProbeService
                     .ProbeAsync(item.FilePath);
                 if (structure != null)
                 {

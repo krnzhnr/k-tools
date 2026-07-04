@@ -22,14 +22,17 @@ public abstract class AbstractProcessRunner
     /// Сервис логирования.
     /// </summary>
     protected ILogService Log { get; }
+    protected IPathManager PathManager { get; }
 
     /// <summary>
     /// Инициализирует новый экземпляр AbstractProcessRunner.
     /// </summary>
     /// <param name="logService">Сервис логирования.</param>
-    protected AbstractProcessRunner(ILogService logService)
+    /// <param name="pathManager">Менеджер путей.</param>
+    protected AbstractProcessRunner(ILogService logService, IPathManager pathManager)
     {
-        Log = logService;
+        Log = logService ?? throw new ArgumentNullException(nameof(logService));
+        PathManager = pathManager ?? throw new ArgumentNullException(nameof(pathManager));
     }
 
     /// <summary>

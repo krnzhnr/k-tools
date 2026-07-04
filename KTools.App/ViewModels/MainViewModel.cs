@@ -18,10 +18,10 @@ namespace KTools_App.ViewModels;
 public partial class MainViewModel : ObservableObject
 {
     private readonly INavigationService _navigationService;
-    private readonly ScriptRegistry _scriptRegistry;
-    private readonly DependencyManager _dependencyManager;
-    private readonly SettingsManager _settingsManager;
-    private readonly LogService _logService;
+    private readonly IScriptRegistry _scriptRegistry;
+    private readonly IDependencyManager _dependencyManager;
+    private readonly ISettingsManager _settingsManager;
+    private readonly ILogService _logService;
     private readonly SettingsViewModel _settingsViewModel;
     private readonly IDialogService _dialogService;
     private readonly IUpdateService _updateService;
@@ -72,10 +72,10 @@ public partial class MainViewModel : ObservableObject
     /// </summary>
     public MainViewModel(
         INavigationService navigationService,
-        ScriptRegistry scriptRegistry,
-        DependencyManager dependencyManager,
-        SettingsManager settingsManager,
-        LogService logService,
+        IScriptRegistry scriptRegistry,
+        IDependencyManager dependencyManager,
+        ISettingsManager settingsManager,
+        ILogService logService,
         SettingsViewModel settingsViewModel,
         IDialogService dialogService,
         IUpdateService updateService)

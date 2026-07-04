@@ -75,10 +75,9 @@ public sealed class AssData
 /// Парсер файлов субтитров в форматах ASS/SSA и SRT.
 /// Извлекает диалоги, актёров и деликатно удаляет теги форматирования.
 /// </summary>
-public sealed class AssParser
+public sealed class AssParser : IAssParser
 {
-    private static readonly Lazy<AssParser> LazyInstance =
-        new(() => new AssParser());
+
 
     // Регулярное выражение для удаления ASS-тегов форматирования.
     private static readonly Regex TagPattern = new(
@@ -108,12 +107,9 @@ public sealed class AssParser
 
     private const string DialoguePrefix = "Dialogue:";
 
-    private AssParser() { }
+    public AssParser() { }
 
-    /// <summary>
-    /// Возвращает единственный экземпляр класса AssParser.
-    /// </summary>
-    public static AssParser Instance => LazyInstance.Value;
+
 
     /// <summary>
     /// Распарсить файл субтитров (ASS/SSA или SRT).

@@ -15,28 +15,27 @@ namespace KTools_App.Core;
 /// </summary>
 public sealed class SettingsManager : ISettingsManager
 {
-    private static readonly Lazy<SettingsManager> LazyInstance =
-        new(() => new SettingsManager());
-
+    private readonly ILogService _logService;
+    private readonly IPathManager _pathManager;
     private readonly object _lock = new();
     private readonly string _settingsFilePath;
     private Dictionary<string, Dictionary<string, object>> _cache;
 
-    private SettingsManager()
+    /// <summary>
+    /// Инициализирует новый экземпляр класса SettingsManager с внедрением зависимостей.
+    /// </summary>
+    public SettingsManager(ILogService logService, IPathManager pathManager)
     {
+        _logService = logService ?? throw new ArgumentNullException(nameof(logService));
+        _pathManager = pathManager ?? throw new ArgumentNullException(nameof(pathManager));
         // Создаем путь к файлу настроек в безопасной директории
-        string settingsDir = PathManager.GetSettingsDirectory();
+        string settingsDir = _pathManager.GetSettingsDirectory();
         _settingsFilePath = Path.Combine(settingsDir, "settings.json");
         _cache = new Dictionary<string, Dictionary<string, object>>();
 
         LoadSettings();
-        LogService.Instance.InitializeLogFile(LogDir);
+        _logService.InitializeLogFile(LogDir);
     }
-
-    /// <summary>
-    /// Возвращает единственный экземпляр класса SettingsManager.
-    /// </summary>
-    public static SettingsManager Instance => LazyInstance.Value;
 
     /// <summary>
     /// Перезаписывать ли существующие файлы.
@@ -128,7 +127,7 @@ public sealed class SettingsManager : ISettingsManager
         set
         {
             SetSetting("Logging", "LogDir", value);
-            LogService.Instance.InitializeLogFile(value);
+            _logService.InitializeLogFile(value);
         }
     }
 
@@ -307,11 +306,11 @@ public sealed class SettingsManager : ISettingsManager
                 }
 
                 File.WriteAllText(_settingsFilePath, json);
-                LogService.Instance.DebugLog("Конфигурация успешно сохранена на диск", "SettingsManager");
+                _logService.DebugLog("Конфигурация успешно сохранена на диск", "SettingsManager");
             }
             catch (Exception ex)
             {
-                LogService.Instance.Error($"Ошибка сохранения конфигурации на диск: {ex.Message}", "SettingsManager");
+                _logService.Error($"Ошибка сохранения конфигурации на диск: {ex.Message}", "SettingsManager");
             }
         }
     }
@@ -409,7 +408,7 @@ public sealed class SettingsManager : ISettingsManager
                 groupDict[key] = value;
             }
 
-            LogService.Instance.Info($"Изменён параметр [{group}/{key}] -> '{value}'", "SettingsManager");
+            _logService.Info($"Изменён параметр [{group}/{key}] -> '{value}'", "SettingsManager");
             SaveSettings();
         }
     }
@@ -540,7 +539,7 @@ public sealed class SettingsManager : ISettingsManager
 
             if (modified)
             {
-                LogService.Instance.Warn("Выполнена инициализация настроек по умолчанию", "SettingsManager");
+                _logService.Warn("Выполнена инициализация настроек по умолчанию", "SettingsManager");
                 SaveSettings();
             }
         }

@@ -1,4 +1,5 @@
 using System;
+using KTools_App.Services.Contracts;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
@@ -15,6 +16,7 @@ using Windows.Storage;
 
 using KTools_App.Core;
 using KTools_App.Scripts;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace KTools_App.UI.Controls;
 
@@ -135,6 +137,10 @@ public sealed class MuxingRowItem : INotifyPropertyChanged
 /// </summary>
 public sealed partial class FileListControl : UserControl
 {
+    private ILogService _logService => App.Services.GetRequiredService<ILogService>();
+    private ISettingsManager _settingsManager => App.Services.GetRequiredService<ISettingsManager>();
+    private IMediaProbeService _mediaProbeService => App.Services.GetRequiredService<IMediaProbeService>();
+
     private readonly Microsoft.UI.Dispatching.DispatcherQueue _dispatcherQueue = 
         Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
     private ObservableCollection<FileQueueItem> _files = new();
@@ -260,7 +266,7 @@ public sealed partial class FileListControl : UserControl
     /// </summary>
     public void AddFiles(IEnumerable<string> filePaths)
     {
-        if (SettingsManager.Instance.ClearListOnAdd)
+        if (_settingsManager.ClearListOnAdd)
         {
             Clear();
         }
@@ -311,14 +317,14 @@ public sealed partial class FileListControl : UserControl
         {
             try
             {
-                var structure = await MediaProbeService.Instance.ProbeAsync(item.FilePath);
+                var structure = await _mediaProbeService.ProbeAsync(item.FilePath);
                 if (structure != null)
                 {
                     _dispatcherQueue.TryEnqueue(() =>
                     {
                         item.MediaInfo = structure;
                     });
-                    LogService.Instance.Info(
+                    _logService.Info(
                         $"Фоновый анализ завершен для '{item.FileName}'. " +
                         $"Дорожек: {structure.Tracks.Count}, " +
                         $"вложений: {structure.Attachments.Count}",
@@ -327,7 +333,7 @@ public sealed partial class FileListControl : UserControl
             }
             catch (Exception ex)
             {
-                LogService.Instance.Exception(
+                _logService.Exception(
                     ex,
                     $"Ошибка при попытке фонового анализа структуры файла '{item.FileName}'",
                     "FileListControl");
@@ -435,7 +441,7 @@ public sealed partial class FileListControl : UserControl
 
     private async void AddFilesButton_Click(object sender, RoutedEventArgs e)
     {
-        LogService.Instance.Info(
+        _logService.Info(
             "[FileListControl] Открытие диалога выбора файлов с повышенными привилегиями через Microsoft.Windows.Storage.Pickers",
             "FileListControl");
 
@@ -468,7 +474,7 @@ public sealed partial class FileListControl : UserControl
             var files = await picker.PickMultipleFilesAsync();
             if (files != null && files.Count > 0)
             {
-                LogService.Instance.Info(
+                _logService.Info(
                     $"[FileListControl] Выбрано файлов вручную: {files.Count}",
                     "FileListControl");
                 AddFiles(files.Select(f => f.Path));
@@ -476,7 +482,7 @@ public sealed partial class FileListControl : UserControl
         }
         catch (Exception ex)
         {
-            LogService.Instance.Exception(
+            _logService.Exception(
                 ex,
                 "Ошибка при открытии диалогового окна выбора файлов через Microsoft.Windows.Storage.Pickers",
                 "FileListControl");
@@ -530,7 +536,7 @@ public sealed partial class FileListControl : UserControl
                 formatsList = "не удалось извлечь форматы";
             }
 
-            LogService.Instance.Exception(
+            _logService.Exception(
                 ex,
                 $"Возникло исключение при обработке события Drop (перетаскивание файлов). " +
                 $"Доступные форматы в DataView: [{formatsList}]",
@@ -556,7 +562,7 @@ public sealed partial class FileListControl : UserControl
                     DragDropPromptTextBlock.Text = "Перетаскивание заблокировано (запущено от администратора)";
                     DragDropSubPromptTextBlock.Text = "Используйте кнопку «Добавить файлы» ниже для выбора файлов вручную.";
                     
-                    LogService.Instance.Info(
+                    _logService.Info(
                         "FileListControl: Обнаружен запуск процесса от имени администратора. " +
                         "Drag-and-Drop заблокирован операционной системой Windows (UIPI). " +
                         "Пользователю выведено предупреждение в интерфейсе.",
@@ -566,7 +572,7 @@ public sealed partial class FileListControl : UserControl
         }
         catch (Exception ex)
         {
-            LogService.Instance.Exception(
+            _logService.Exception(
                 ex,
                 "Исключение при проверке прав администратора для управления отображением Drag-and-Drop",
                 "FileListControl");

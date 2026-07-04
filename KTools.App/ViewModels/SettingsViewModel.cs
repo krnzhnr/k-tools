@@ -66,9 +66,11 @@ public sealed class BackdropChangedMessage
 /// </summary>
 public partial class SettingsViewModel : ObservableObject
 {
-    private readonly SettingsManager _settingsManager;
+    private readonly ISettingsManager _settingsManager;
     private readonly IDialogService _dialogService;
     private readonly IUpdateService _updateService;
+    private readonly ILogService _logService;
+    private readonly IPathManager _pathManager;
 
     /// <summary>
     /// Строка версии приложения для отображения в блоке "О программе".
@@ -240,13 +242,17 @@ public partial class SettingsViewModel : ObservableObject
     /// Инициализирует новый экземпляр SettingsViewModel с внедрением зависимостей.
     /// </summary>
     public SettingsViewModel(
-        SettingsManager settingsManager,
+        ISettingsManager settingsManager,
         IDialogService dialogService,
-        IUpdateService updateService)
+        IUpdateService updateService,
+        ILogService logService,
+        IPathManager pathManager)
     {
-        _settingsManager = settingsManager;
-        _dialogService = dialogService;
-        _updateService = updateService;
+        _settingsManager = settingsManager ?? throw new ArgumentNullException(nameof(settingsManager));
+        _dialogService = dialogService ?? throw new ArgumentNullException(nameof(dialogService));
+        _updateService = updateService ?? throw new ArgumentNullException(nameof(updateService));
+        _logService = logService ?? throw new ArgumentNullException(nameof(logService));
+        _pathManager = pathManager ?? throw new ArgumentNullException(nameof(pathManager));
 
         UpdateStatusText = "Обновления не проверялись";
         DefaultOutputSubfolder = "KTools_Result";
@@ -255,7 +261,7 @@ public partial class SettingsViewModel : ObservableObject
         RenameRegexReplace = string.Empty;
 
         CurrentVersionText = $"Версия {GetAppVersion()} (WinAppSDK / WinUI 3)";
-        DefaultLogDir = System.IO.Path.Combine(PathManager.GetSettingsDirectory(), "logs");
+        DefaultLogDir = System.IO.Path.Combine(_pathManager.GetSettingsDirectory(), "logs");
 
         MaxParallelLimit = Environment.ProcessorCount;
         LoadCurrentSettings();
@@ -487,7 +493,7 @@ public partial class SettingsViewModel : ObservableObject
         catch (Exception ex)
         {
             UpdateStatusText = "Не удалось выполнить проверку обновлений";
-            LogService.Instance.Exception(ex, "Ошибка при ручной проверке обновлений из панели настроек", "SettingsViewModel");
+            _logService.Exception(ex, "Ошибка при ручной проверке обновлений из панели настроек", "SettingsViewModel");
             await _dialogService.ShowMessageAsync("Ошибка", $"Не удалось проверить обновления: {ex.Message}");
         }
         finally
@@ -520,7 +526,7 @@ public partial class SettingsViewModel : ObservableObject
         catch (Exception ex)
         {
             IsDownloading = false;
-            LogService.Instance.Exception(ex, "Ошибка при скачивании или установке обновления", "SettingsViewModel");
+            _logService.Exception(ex, "Ошибка при скачивании или установке обновления", "SettingsViewModel");
             await _dialogService.ShowMessageAsync("Ошибка", $"Не удалось загрузить или установить обновление: {ex.Message}");
         }
     }
@@ -556,7 +562,7 @@ public partial class SettingsViewModel : ObservableObject
     private async System.Threading.Tasks.Task VersionClickedAsync()
     {
         _versionClickCount++;
-        LogService.Instance.Info($"Клик по кнопке версии: {_versionClickCount}/7", "SettingsViewModel");
+        _logService.Info($"Клик по кнопке версии: {_versionClickCount}/7", "SettingsViewModel");
         if (_versionClickCount >= 7)
         {
             IsDebugSettingsVisible = true;

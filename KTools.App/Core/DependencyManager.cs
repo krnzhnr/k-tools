@@ -37,13 +37,8 @@ public enum DependencyStatus
 /// </summary>
 public class DependencyManager : IDependencyManager
 {
-    private static readonly Lazy<DependencyManager> LazyInstance = 
-        new(() => new DependencyManager());
-
-    /// <summary>
-    /// Глобальная точка доступа к единственному экземпляру класса DependencyManager.
-    /// </summary>
-    public static DependencyManager Instance => LazyInstance.Value;
+    private readonly ILogService _logService;
+    private readonly IPathManager _pathManager;
 
     private const string DepsReleaseTag = "deps-v1";
     private const string DepsBaseUrl = $"https://github.com/krnzhnr/k-tools/releases/download/{DepsReleaseTag}";
@@ -66,10 +61,15 @@ public class DependencyManager : IDependencyManager
     /// <summary>Событие завершения процесса установки зависимости (ключ, признак успеха, сообщение об ошибке).</summary>
     public event Action<string, bool, string>? InstallFinished;
 
-    private DependencyManager()
+    /// <summary>
+    /// Инициализирует новый экземпляр класса DependencyManager с внедрением зависимостей.
+    /// </summary>
+    public DependencyManager(ILogService logService, IPathManager pathManager)
     {
+        _logService = logService ?? throw new ArgumentNullException(nameof(logService));
+        _pathManager = pathManager ?? throw new ArgumentNullException(nameof(pathManager));
         // Используем метод интеллектуального поиска директории bin
-        _binDir = PathManager.GetBinDirectory();
+        _binDir = _pathManager.GetBinDirectory();
         _httpClient = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
         _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("K-Tools-DependencyManager-WinUI3");
 
@@ -190,7 +190,7 @@ public class DependencyManager : IDependencyManager
             }
             catch (Exception ex)
             {
-                LogService.Instance.Error($"Ошибка при проверке установленных декодеров Nero: {ex.Message}", "DependencyManager");
+                _logService.Error($"Ошибка при проверке установленных декодеров Nero: {ex.Message}", "DependencyManager");
                 return false;
             }
         }
@@ -203,7 +203,7 @@ public class DependencyManager : IDependencyManager
         }
 
         // 2. Проверяем режим разработки (через PathManager)
-        string resolvedPath = PathManager.GetBinaryPath(dep.VerifyBinary);
+        string resolvedPath = _pathManager.GetBinaryPath(dep.VerifyBinary);
         if (File.Exists(resolvedPath) && !resolvedPath.Equals(dep.VerifyBinary, StringComparison.OrdinalIgnoreCase))
         {
             return true;
@@ -261,7 +261,7 @@ public class DependencyManager : IDependencyManager
         var dep = _registry.FirstOrDefault(d => d.Key.Equals(key, StringComparison.OrdinalIgnoreCase));
         if (dep == null)
         {
-            LogService.Instance.Error($"Запрос на установку неизвестной зависимости '{key}'", "DependencyManager");
+            _logService.Error($"Запрос на установку неизвестной зависимости '{key}'", "DependencyManager");
             InstallFinished?.Invoke(key, false, "Зависимость не найдена в реестре манифеста.");
             return;
         }
@@ -276,7 +276,7 @@ public class DependencyManager : IDependencyManager
             _activeDownloads[key] = cts;
         }
 
-        LogService.Instance.Info($"Запущена процедура установки зависимости '{dep.DisplayName}' ({dep.Key})", "DependencyManager");
+        _logService.Info($"Запущена процедура установки зависимости '{dep.DisplayName}' ({dep.Key})", "DependencyManager");
         SetStatus(key, DependencyStatus.Downloading);
         string tempArchivePath = Path.Combine(Path.GetTempPath(), dep.ArchiveName);
 
@@ -284,7 +284,7 @@ public class DependencyManager : IDependencyManager
         {
             // 1. Асинхронное скачивание архива
             string downloadUrl = $"{DepsBaseUrl}/{dep.ArchiveName}";
-            LogService.Instance.Info($"Начало скачивания архива: {downloadUrl} в {tempArchivePath}", "DependencyManager");
+            _logService.Info($"Начало скачивания архива: {downloadUrl} в {tempArchivePath}", "DependencyManager");
             using (var response = await _httpClient.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead))
             {
                 response.EnsureSuccessStatusCode();
@@ -333,7 +333,7 @@ public class DependencyManager : IDependencyManager
                 }
             }
 
-            LogService.Instance.Info($"Архив '{dep.ArchiveName}' успешно скачан на диск", "DependencyManager");
+            _logService.Info($"Архив '{dep.ArchiveName}' успешно скачан на диск", "DependencyManager");
 
             // 2. Распаковка архива через системную утилиту tar.exe
             SetStatus(key, DependencyStatus.Extracting);
@@ -350,15 +350,15 @@ public class DependencyManager : IDependencyManager
                 string errMsg = $"Нет прав доступа для создания папки '{destinationFolder}'. " +
                     $"Это может быть связано с ограничениями MSIX или прав пользователя. " +
                     $"Убедитесь что приложение запущено от правильного пользователя. Подробности: {ex.Message}";
-                LogService.Instance.Error($"Ошибка доступа при распаковке '{dep.DisplayName}': {errMsg}", "DependencyManager");
+                _logService.Error($"Ошибка доступа при распаковке '{dep.DisplayName}': {errMsg}", "DependencyManager");
                 InstallFinished?.Invoke(key, false, errMsg);
                 return;
             }
 
-            LogService.Instance.Info($"Начало распаковки архива в папку '{destinationFolder}'", "DependencyManager");
+            _logService.Info($"Начало распаковки архива в папку '{destinationFolder}'", "DependencyManager");
             var cancellationToken = _activeDownloads[key].Token;
             await ExtractArchiveAsync(tempArchivePath, destinationFolder, cancellationToken);
-            LogService.Instance.Info($"Распаковка архива '{dep.ArchiveName}' успешно завершена", "DependencyManager");
+            _logService.Info($"Распаковка архива '{dep.ArchiveName}' успешно завершена", "DependencyManager");
 
             // Если устанавливаем декодеры eac3to, нужно запустить тихую установку с повышением прав
             if (key.Equals("eac3to_decoders", StringComparison.OrdinalIgnoreCase))
@@ -366,7 +366,7 @@ public class DependencyManager : IDependencyManager
                 string setupPath = Path.Combine(destinationFolder, dep.VerifyBinary);
                 if (File.Exists(setupPath))
                 {
-                    LogService.Instance.Info($"Запуск тихой установки декодеров из файла: '{setupPath}' с повышением прав UAC", "DependencyManager");
+                    _logService.Info($"Запуск тихой установки декодеров из файла: '{setupPath}' с повышением прав UAC", "DependencyManager");
                     var startInfo = new ProcessStartInfo
                     {
                         FileName = setupPath,
@@ -380,9 +380,9 @@ public class DependencyManager : IDependencyManager
                         using var process = Process.Start(startInfo);
                         if (process != null)
                         {
-                            LogService.Instance.Info("Ожидание завершения установщика декодеров eac3to...", "DependencyManager");
+                            _logService.Info("Ожидание завершения установщика декодеров eac3to...", "DependencyManager");
                             await process.WaitForExitAsync(cancellationToken);
-                            LogService.Instance.Info("Установщик декодеров eac3to успешно завершил работу", "DependencyManager");
+                            _logService.Info("Установщик декодеров eac3to успешно завершил работу", "DependencyManager");
                         }
                         else
                         {
@@ -392,14 +392,14 @@ public class DependencyManager : IDependencyManager
                     catch (Exception ex)
                     {
                         string detailedErr = $"Ошибка при выполнении тихого установщика декодеров eac3to. Описание ошибки: {ex.Message}";
-                        LogService.Instance.Error(detailedErr, "DependencyManager");
+                        _logService.Error(detailedErr, "DependencyManager");
                         throw new InvalidOperationException(detailedErr, ex);
                     }
                 }
                 else
                 {
                     string missingSetupErr = $"Файл установщика декодеров '{setupPath}' не найден после распаковки архива.";
-                    LogService.Instance.Error(missingSetupErr, "DependencyManager");
+                    _logService.Error(missingSetupErr, "DependencyManager");
                     throw new FileNotFoundException(missingSetupErr);
                 }
             }
@@ -409,28 +409,28 @@ public class DependencyManager : IDependencyManager
             if (IsInstalled(key))
             {
                 SetStatus(key, DependencyStatus.Installed);
-                LogService.Instance.Info($"Зависимость '{dep.DisplayName}' успешно установлена и верифицирована", "DependencyManager");
+                _logService.Info($"Зависимость '{dep.DisplayName}' успешно установлена и верифицирована", "DependencyManager");
                 InstallFinished?.Invoke(key, true, string.Empty);
             }
             else
             {
                 SetStatus(key, DependencyStatus.Error);
                 string err = $"Файл-маркер '{dep.VerifyBinary}' отсутствует на диске после распаковки.";
-                LogService.Instance.Error($"Ошибка верификации '{dep.DisplayName}': {err}", "DependencyManager");
+                _logService.Error($"Ошибка верификации '{dep.DisplayName}': {err}", "DependencyManager");
                 InstallFinished?.Invoke(key, false, err);
             }
         }
         catch (OperationCanceledException)
         {
             SetStatus(key, DependencyStatus.NotInstalled);
-            LogService.Instance.Warn($"Установка зависимости '{dep.DisplayName}' отменена пользователем", "DependencyManager");
+            _logService.Warn($"Установка зависимости '{dep.DisplayName}' отменена пользователем", "DependencyManager");
             InstallFinished?.Invoke(key, false, "Установка отменена пользователем.");
         }
         catch (Exception ex)
         {
             SetStatus(key, DependencyStatus.Error);
             string detailedErrorMessage = $"Критический сбой в процессе загрузки, верификации или распаковки зависимости '{dep.DisplayName}' (ключ: {dep.Key}). Подробности возникшего исключения: {ex.Message}. Стек вызовов: {ex.StackTrace}";
-            LogService.Instance.Error(detailedErrorMessage, "DependencyManager");
+            _logService.Error(detailedErrorMessage, "DependencyManager");
             InstallFinished?.Invoke(key, false, ex.Message);
         }
         finally
@@ -475,7 +475,7 @@ public class DependencyManager : IDependencyManager
     /// <param name="cancellationToken">Токен отмены для прерывания процесса распаковки по требованию пользователя.</param>
     /// <exception cref="ArgumentNullException">Инициируется, если один из входных путей равен null.</exception>
     /// <exception cref="OperationCanceledException">Инициируется, если процесс был отменен через token.</exception>
-    private static async Task ExtractArchiveAsync(string archivePath, string destinationDir, CancellationToken cancellationToken)
+    private async Task ExtractArchiveAsync(string archivePath, string destinationDir, CancellationToken cancellationToken)
     {
         if (archivePath == null)
         {
@@ -487,7 +487,7 @@ public class DependencyManager : IDependencyManager
             throw new ArgumentNullException(nameof(destinationDir), "Путь к целевой папке не может быть пустым (null).");
         }
 
-        LogService.Instance.Info($"Запуск асинхронной распаковки tar.xz архива '{archivePath}' в папку '{destinationDir}'...", "DependencyManager");
+        _logService.Info($"Запуск асинхронной распаковки tar.xz архива '{archivePath}' в папку '{destinationDir}'...", "DependencyManager");
 
         await Task.Run(() =>
         {
@@ -509,12 +509,12 @@ public class DependencyManager : IDependencyManager
 
                 if (!reader.Entry.IsDirectory)
                 {
-                    LogService.Instance.Info($"Распаковка файла из архива: {reader.Entry.Key}", "DependencyManager");
+                    _logService.Info($"Распаковка файла из архива: {reader.Entry.Key}", "DependencyManager");
                     reader.WriteEntryToDirectory(destinationDir, options);
                 }
             }
 
-            LogService.Instance.Info($"Распаковка архива '{archivePath}' успешно завершена через SharpCompress", "DependencyManager");
+            _logService.Info($"Распаковка архива '{archivePath}' успешно завершена через SharpCompress", "DependencyManager");
         }, cancellationToken);
     }
 
@@ -526,15 +526,15 @@ public class DependencyManager : IDependencyManager
         var dep = _registry.FirstOrDefault(d => d.Key.Equals(key, StringComparison.OrdinalIgnoreCase));
         if (dep == null)
         {
-            LogService.Instance.Error($"Попытка удаления неизвестной зависимости '{key}'", "DependencyManager");
+            _logService.Error($"Попытка удаления неизвестной зависимости '{key}'", "DependencyManager");
             return false;
         }
 
-        LogService.Instance.Info($"Запрос на удаление зависимости '{dep.DisplayName}'", "DependencyManager");
+        _logService.Info($"Запрос на удаление зависимости '{dep.DisplayName}'", "DependencyManager");
 
         if (key.Equals("eac3to_decoders", StringComparison.OrdinalIgnoreCase))
         {
-            LogService.Instance.Info("Запрос на удаление декодеров eac3to: использование оригинального деинсталлятора из реестра", "DependencyManager");
+            _logService.Info("Запрос на удаление декодеров eac3to: использование оригинального деинсталлятора из реестра", "DependencyManager");
             bool uninstalledViaSetup = false;
             try
             {
@@ -544,7 +544,7 @@ public class DependencyManager : IDependencyManager
                     string exePath = uninstallStr.Trim().Trim('"');
                     if (File.Exists(exePath))
                     {
-                        LogService.Instance.Info($"Запуск оригинального деинсталлятора: '{exePath}' в тихом режиме", "DependencyManager");
+                        _logService.Info($"Запуск оригинального деинсталлятора: '{exePath}' в тихом режиме", "DependencyManager");
                         var startInfo = new ProcessStartInfo
                         {
                             FileName = exePath,
@@ -556,7 +556,7 @@ public class DependencyManager : IDependencyManager
                         if (process != null)
                         {
                             process.WaitForExit();
-                            LogService.Instance.Info("Деинсталлятор eac3to Decoder Pack успешно завершил работу", "DependencyManager");
+                            _logService.Info("Деинсталлятор eac3to Decoder Pack успешно завершил работу", "DependencyManager");
                             uninstalledViaSetup = true;
                         }
                     }
@@ -564,12 +564,12 @@ public class DependencyManager : IDependencyManager
             }
             catch (Exception ex)
             {
-                LogService.Instance.Error($"Ошибка при вызове официального деинсталлятора eac3to: {ex.Message}", "DependencyManager");
+                _logService.Error($"Ошибка при вызове официального деинсталлятора eac3to: {ex.Message}", "DependencyManager");
             }
 
             if (!uninstalledViaSetup)
             {
-                LogService.Instance.Warn("Не удалось использовать официальный деинсталлятор. Запуск резервного метода безопасной ручной деинсталляции", "DependencyManager");
+                _logService.Warn("Не удалось использовать официальный деинсталлятор. Запуск резервного метода безопасной ручной деинсталляции", "DependencyManager");
                 string tempBatPath = Path.Combine(Path.GetTempPath(), $"uninstall_eac3to_decoders_{Guid.NewGuid():N}.bat");
                 try
                 {
@@ -631,7 +631,7 @@ public class DependencyManager : IDependencyManager
 
                     File.WriteAllLines(tempBatPath, commands, System.Text.Encoding.UTF8);
 
-                    LogService.Instance.Info($"Запуск временного батника удаления '{tempBatPath}' с правами администратора", "DependencyManager");
+                    _logService.Info($"Запуск временного батника удаления '{tempBatPath}' с правами администратора", "DependencyManager");
                     var startInfo = new ProcessStartInfo
                     {
                         FileName = "cmd.exe",
@@ -646,7 +646,7 @@ public class DependencyManager : IDependencyManager
                     if (process != null)
                     {
                         process.WaitForExit();
-                        LogService.Instance.Info("Резервное удаление декодеров eac3to завершено успешно", "DependencyManager");
+                        _logService.Info("Резервное удаление декодеров eac3to завершено успешно", "DependencyManager");
                     }
                     else
                     {
@@ -655,7 +655,7 @@ public class DependencyManager : IDependencyManager
                 }
                 catch (Exception ex)
                 {
-                    LogService.Instance.Error($"Ошибка при резервном удалении декодеров Nero: {ex.Message}", "DependencyManager");
+                    _logService.Error($"Ошибка при резервном удалении декодеров Nero: {ex.Message}", "DependencyManager");
                 }
                 finally
                 {
@@ -670,7 +670,7 @@ public class DependencyManager : IDependencyManager
         string folderPath = Path.Combine(_binDir, dep.Subfolder);
         if (!Directory.Exists(folderPath))
         {
-            LogService.Instance.Warn($"Папка зависимости '{dep.DisplayName}' не обнаружена на диске. Сброс статуса в NotInstalled", "DependencyManager");
+            _logService.Warn($"Папка зависимости '{dep.DisplayName}' не обнаружена на диске. Сброс статуса в NotInstalled", "DependencyManager");
             SetStatus(key, DependencyStatus.NotInstalled);
             return true;
         }
@@ -678,13 +678,13 @@ public class DependencyManager : IDependencyManager
         try
         {
             Directory.Delete(folderPath, true);
-            LogService.Instance.Info($"Папка зависимости '{dep.DisplayName}' успешно удалена с диска", "DependencyManager");
+            _logService.Info($"Папка зависимости '{dep.DisplayName}' успешно удалена с диска", "DependencyManager");
             SetStatus(key, DependencyStatus.NotInstalled);
             return true;
         }
         catch (Exception ex)
         {
-            LogService.Instance.Error($"Не удалось удалить папку зависимости '{dep.DisplayName}': {ex.Message}", "DependencyManager");
+            _logService.Error($"Не удалось удалить папку зависимости '{dep.DisplayName}': {ex.Message}", "DependencyManager");
             SetStatus(key, DependencyStatus.Error);
             return false;
         }

@@ -1,3 +1,4 @@
+using KTools_App.Services.Contracts;
 // -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
@@ -16,6 +17,16 @@ namespace KTools_App.Scripts;
 /// </summary>
 public sealed class SubtitlesConvertScript : AbstractScript
 {
+    private readonly IFFmpegRunner _ffmpegRunner;
+    private readonly IAssParser _assParser;
+
+    public SubtitlesConvertScript(ILogService logService, ISettingsManager settingsManager, IPathManager pathManager, IFFmpegRunner ffmpegRunner, IAssParser assParser)
+        : base(logService, settingsManager, pathManager)
+    {
+        _ffmpegRunner = ffmpegRunner ?? throw new ArgumentNullException(nameof(ffmpegRunner));
+        _assParser = assParser ?? throw new ArgumentNullException(nameof(assParser));
+    }
+
     /// <summary>
     /// Локализованное название скрипта.
     /// </summary>
@@ -133,7 +144,7 @@ public sealed class SubtitlesConvertScript : AbstractScript
             _ => ".vtt"
         };
 
-        LogService.Instance.Info(
+        _logService.Info(
             $"Начало конвертации субтитров для '{originalName}'. " +
             $"Целевой формат: {targetFormat}",
             "SubtitlesConvertScript");
@@ -149,13 +160,13 @@ public sealed class SubtitlesConvertScript : AbstractScript
         string outputFileName = Path.GetFileName(outputFilePath);
 
         // Проверяем перезапись существующего файла
-        bool overwrite = SettingsManager.Instance.GetSetting(
+        bool overwrite = _settingsManager.GetSetting(
             "General", "OverwriteExisting", false);
             
         if (File.Exists(outputFilePath) && !overwrite)
         {
             string skipMsg = $"⏭ ПРОПУСК (существует): {outputFileName}";
-            LogService.Instance.Info(skipMsg, "SubtitlesConvertScript");
+            _logService.Info(skipMsg, "SubtitlesConvertScript");
             progressCallback(
                 fileIndex,
                 totalCount,
@@ -169,12 +180,12 @@ public sealed class SubtitlesConvertScript : AbstractScript
         if (keepStyles && !stripFormatting && !stripCaps)
         {
             progressCallback(fileIndex, totalCount, "Запуск FFmpeg напрямую...", 0.0);
-            LogService.Instance.Info(
+            _logService.Info(
                 $"Запущен прямой ремуксинг субтитров FFmpeg: " +
                 $"'{originalName}' -> '{outputFileName}'",
                 "SubtitlesConvertScript");
 
-            bool fastSuccess = await FFmpegRunner.Instance.RunAsync(
+            bool fastSuccess = await _ffmpegRunner.RunAsync(
                 inputPath: filePath,
                 outputPath: outputFilePath,
                 overwrite: overwrite);
@@ -202,11 +213,11 @@ public sealed class SubtitlesConvertScript : AbstractScript
         AssData assData;
         try
         {
-            assData = AssParser.Instance.Parse(filePath);
+            assData = _assParser.Parse(filePath);
         }
         catch (Exception ex)
         {
-            LogService.Instance.Exception(
+            _logService.Exception(
                 ex,
                 $"Ошибка парсинга субтитров '{originalName}': {ex.Message}",
                 "SubtitlesConvertScript");
@@ -218,7 +229,7 @@ public sealed class SubtitlesConvertScript : AbstractScript
         if (assData.Dialogues.Count == 0)
         {
             string emptyMsg = $"⏭ ПРОПУСК (нет строк диалогов): {originalName}";
-            LogService.Instance.Info(emptyMsg, "SubtitlesConvertScript");
+            _logService.Info(emptyMsg, "SubtitlesConvertScript");
             progressCallback(
                 fileIndex,
                 totalCount,
@@ -230,7 +241,7 @@ public sealed class SubtitlesConvertScript : AbstractScript
 
         // Подготовка временного файла .ass с отфильтрованными репликами
         string tempDir = Path.Combine(
-            PathManager.GetSettingsDirectory(),
+            _pathManager.GetSettingsDirectory(),
             "temp_subs_" + Guid.NewGuid().ToString("N"));
             
         try
@@ -239,7 +250,7 @@ public sealed class SubtitlesConvertScript : AbstractScript
         }
         catch (Exception ex)
         {
-            LogService.Instance.Exception(
+            _logService.Exception(
                 ex,
                 $"Не удалось создать временную директорию: {ex.Message}",
                 "SubtitlesConvertScript");
@@ -257,7 +268,7 @@ public sealed class SubtitlesConvertScript : AbstractScript
                 false,
                 Encoding.UTF8))
             {
-                writer.Write(AssParser.Instance.GetMinimalHeader());
+                writer.Write(_assParser.GetMinimalHeader());
                 
                 int dialogueIndex = 0;
                 foreach (var d in assData.Dialogues)
@@ -269,7 +280,7 @@ public sealed class SubtitlesConvertScript : AbstractScript
 
                     // Пропуск изначально пустых строк
                     if (string.IsNullOrWhiteSpace(
-                        AssParser.Instance.StripTags(d.Text)))
+                        _assParser.StripTags(d.Text)))
                     {
                         dialogueIndex++;
                         continue;
@@ -290,16 +301,16 @@ public sealed class SubtitlesConvertScript : AbstractScript
                     // Применяем чистку CAPS LOCK
                     if (stripCaps)
                     {
-                        text = AssParser.Instance.StripCaps(text);
+                        text = _assParser.StripCaps(text);
                     }
                     
                     // Применяем удаление тегов форматирования
                     if (stripFormatting)
                     {
-                        text = AssParser.Instance.StripTags(text);
+                        text = _assParser.StripTags(text);
                     }
 
-                    bool isEmptyAfterFilters = string.IsNullOrWhiteSpace(AssParser.Instance.StripTags(text));
+                    bool isEmptyAfterFilters = string.IsNullOrWhiteSpace(_assParser.StripTags(text));
 
                     // Если строка включена вручную и в результате очистки фильтрами она стала пустой,
                     // возвращаем оригинальный текст, чтобы она корректно попала в финальные субтитры.
@@ -332,7 +343,7 @@ public sealed class SubtitlesConvertScript : AbstractScript
                         effect: d.Effect,
                         text: text);
 
-                    writer.WriteLine(AssParser.Instance.ToAssLine(tempDialogue));
+                    writer.WriteLine(_assParser.ToAssLine(tempDialogue));
                     dialogueIndex++;
                 }
             }
@@ -351,12 +362,12 @@ public sealed class SubtitlesConvertScript : AbstractScript
 
             // Транскодирование отфильтрованного временного ASS в выходной формат
             progressCallback(fileIndex, totalCount, "Финальное сохранение...", 50.0);
-            LogService.Instance.Info(
+            _logService.Info(
                 $"Запуск FFmpeg для конвертации временного ASS: " +
                 $"'{originalName}' -> '{outputFileName}'",
                 "SubtitlesConvertScript");
 
-            bool success = await FFmpegRunner.Instance.RunAsync(
+            bool success = await _ffmpegRunner.RunAsync(
                 inputPath: tempAssPath,
                 outputPath: outputFilePath,
                 overwrite: overwrite);
@@ -381,7 +392,7 @@ public sealed class SubtitlesConvertScript : AbstractScript
         catch (Exception ex)
         {
             CleanupFailedOutputFile(outputFilePath);
-            LogService.Instance.Exception(
+            _logService.Exception(
                 ex,
                 $"Критическая ошибка обработки субтитров для '{originalName}': " +
                 $"{ex.Message}",
@@ -401,7 +412,7 @@ public sealed class SubtitlesConvertScript : AbstractScript
             }
             catch (Exception ex)
             {
-                LogService.Instance.DebugLog(
+                _logService.DebugLog(
                     $"Не удалось удалить временную директорию субтитров: " +
                     $"{ex.Message}",
                     "SubtitlesConvertScript");
@@ -413,8 +424,8 @@ public sealed class SubtitlesConvertScript : AbstractScript
 
     public override string GetOutputExtension(string inputPath)
     {
-        string settingsGroup = SettingsManager.Instance.GetSafeGroupName(Name);
-        string targetFormat = SettingsManager.Instance.GetSetting(settingsGroup, "target_format", "WebVTT");
+        string settingsGroup = _settingsManager.GetSafeGroupName(Name);
+        string targetFormat = _settingsManager.GetSetting(settingsGroup, "target_format", "WebVTT");
         return targetFormat.ToUpperInvariant() switch
         {
             "SRT" => ".srt",

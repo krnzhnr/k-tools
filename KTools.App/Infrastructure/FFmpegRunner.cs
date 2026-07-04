@@ -19,22 +19,18 @@ namespace KTools_App.Infrastructure;
 /// </summary>
 public sealed class FFmpegRunner : AbstractProcessRunner, IFFmpegRunner
 {
-    private static readonly Lazy<FFmpegRunner> LazyInstance =
-        new(() => new FFmpegRunner(LogService.Instance));
+
 
     /// <summary>
     /// Инициализирует новый экземпляр FFmpegRunner с внедрением зависимостей.
     /// </summary>
     /// <param name="logService">Сервис логирования.</param>
-    public FFmpegRunner(ILogService logService)
-        : base(logService)
+    public FFmpegRunner(ILogService logService, IPathManager pathManager)
+        : base(logService, pathManager)
     {
     }
 
-    /// <summary>
-    /// Возвращает единственный экземпляр класса FFmpegRunner.
-    /// </summary>
-    public static FFmpegRunner Instance => LazyInstance.Value;
+
 
     /// <summary>
     /// Запустить процесс обработки медиа через FFmpeg с отслеживанием прогресса в реальном времени.
@@ -111,7 +107,7 @@ public sealed class FFmpegRunner : AbstractProcessRunner, IFFmpegRunner
                 // Парсинг прогресса из вывода
                 if (onProgress != null && totalDuration > 0)
                 {
-                    var progress = FFmpegOutputParser.ParseLine(line, totalDuration);
+                    var progress = FFmpegOutputParser.ParseLine(line, totalDuration, Log);
                     if (progress != null)
                     {
                         onProgress(progress);

@@ -17,22 +17,18 @@ namespace KTools_App.Infrastructure;
 /// </summary>
 public sealed class Eac3toRunner : AbstractProcessRunner, IEac3toRunner
 {
-    private static readonly Lazy<Eac3toRunner> LazyInstance =
-        new(() => new Eac3toRunner(LogService.Instance));
+
 
     /// <summary>
     /// Инициализирует новый экземпляр Eac3toRunner с внедрением зависимостей.
     /// </summary>
     /// <param name="logService">Сервис логирования.</param>
-    public Eac3toRunner(ILogService logService)
-        : base(logService)
+    public Eac3toRunner(ILogService logService, IPathManager pathManager)
+        : base(logService, pathManager)
     {
     }
 
-    /// <summary>
-    /// Возвращает единственный экземпляр класса Eac3toRunner.
-    /// </summary>
-    public static Eac3toRunner Instance => LazyInstance.Value;
+
 
     /// <summary>
     /// Запустить eac3to асинхронно с переданными аргументами командной строки.

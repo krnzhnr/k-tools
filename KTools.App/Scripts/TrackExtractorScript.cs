@@ -1,3 +1,4 @@
+using KTools_App.Services.Contracts;
 // -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
@@ -19,6 +20,16 @@ namespace KTools_App.Scripts;
 /// </summary>
 public sealed class TrackExtractorScript : AbstractScript
 {
+    private readonly IMediaProbeService _mediaProbeService;
+    private readonly IFFmpegRunner _ffmpegRunner;
+
+    public TrackExtractorScript(ILogService logService, ISettingsManager settingsManager, IPathManager pathManager, IMediaProbeService mediaProbeService, IFFmpegRunner ffmpegRunner)
+        : base(logService, settingsManager, pathManager)
+    {
+        _mediaProbeService = mediaProbeService ?? throw new ArgumentNullException(nameof(mediaProbeService));
+        _ffmpegRunner = ffmpegRunner ?? throw new ArgumentNullException(nameof(ffmpegRunner));
+    }
+
     private static readonly Regex SanitizeRegex = new(@"[<>:""/\\|?*]", RegexOptions.Compiled);
 
     public override string Name => AppConstants.ScriptMetadata.TrackExtrName;
@@ -68,7 +79,7 @@ public sealed class TrackExtractorScript : AbstractScript
         ResetCancellation();
         var results = new List<string>();
 
-        LogService.Instance.Info($"Начало извлечения дорожек для файла: {Path.GetFileName(filePath)}", "TrackExtractorScript");
+        _logService.Info($"Начало извлечения дорожек для файла: {Path.GetFileName(filePath)}", "TrackExtractorScript");
 
         // 1. Извлекаем выбранные пользователем дорожки и вложения (шрифты)
         var tracksPerFile = GetSettingValue<Dictionary<string, List<int>>?>(settings, "selected_tracks_per_file", null);
@@ -86,18 +97,18 @@ public sealed class TrackExtractorScript : AbstractScript
         if (!hasTracks && !hasAttachments)
         {
             string skipMsg = $"⏭ Пропущен (нет выбранных дорожек или шрифтов): {Path.GetFileName(filePath)}";
-            LogService.Instance.Info(skipMsg, "TrackExtractorScript");
+            _logService.Info(skipMsg, "TrackExtractorScript");
             progressCallback(fileIndex, totalCount, "Пропущен (нет выбора)", 100.0);
             results.Add(skipMsg);
             return results;
         }
 
         // 2. Получаем структуру метаданных
-        var structure = await MediaProbeService.Instance.ProbeAsync(filePath);
+        var structure = await _mediaProbeService.ProbeAsync(filePath);
         if (structure == null)
         {
             string err = $"❌ Ошибка анализа метаданных файла: {Path.GetFileName(filePath)}";
-            LogService.Instance.Error(err, "TrackExtractorScript");
+            _logService.Error(err, "TrackExtractorScript");
             progressCallback(fileIndex, totalCount, "Ошибка анализа", 0.0);
             results.Add(err);
             return results;
@@ -118,13 +129,13 @@ public sealed class TrackExtractorScript : AbstractScript
                 if (!Directory.Exists(baseDir))
                 {
                     Directory.CreateDirectory(baseDir);
-                    LogService.Instance.Info($"Создана целевая подпапка: {baseDir}", "TrackExtractorScript");
+                    _logService.Info($"Создана целевая подпапка: {baseDir}", "TrackExtractorScript");
                 }
             }
             catch (Exception ex)
             {
                 string err = $"❌ Ошибка создания папки '{baseDir}': {ex.Message}";
-                LogService.Instance.Exception(ex, err, "TrackExtractorScript");
+                _logService.Exception(ex, err, "TrackExtractorScript");
                 results.Add(err);
                 return results;
             }
@@ -135,7 +146,7 @@ public sealed class TrackExtractorScript : AbstractScript
             "name_format", 
             "{original}_{lang}_{id}");
             
-        bool overwrite = SettingsManager.Instance.GetSetting(
+        bool overwrite = _settingsManager.GetSetting(
             "General", 
             "OverwriteExisting", 
             false);
@@ -186,7 +197,7 @@ public sealed class TrackExtractorScript : AbstractScript
 
                 if (File.Exists(outPath) && !overwrite)
                 {
-                    LogService.Instance.Info($"Дорожка #{track.TrackId} пропущена (файл существует): {outFilename}", "TrackExtractorScript");
+                    _logService.Info($"Дорожка #{track.TrackId} пропущена (файл существует): {outFilename}", "TrackExtractorScript");
                     extractResults.Add($"⏭ Пропущена дорожка {track.TrackId}: {outFilename}");
                     continue;
                 }
@@ -208,7 +219,7 @@ public sealed class TrackExtractorScript : AbstractScript
                         (filePath.EndsWith(".m2ts", StringComparison.OrdinalIgnoreCase) || filePath.EndsWith(".ts", StringComparison.OrdinalIgnoreCase)))
                     {
                         codecValue = "pcm_s24le";
-                        LogService.Instance.Info($"Применяется распаковка Blu-ray PCM -> PCM 24-bit WAV для дорожки #{track.TrackId}", "TrackExtractorScript");
+                        _logService.Info($"Применяется распаковка Blu-ray PCM -> PCM 24-bit WAV для дорожки #{track.TrackId}", "TrackExtractorScript");
                     }
                     else
                     {
@@ -221,7 +232,7 @@ public sealed class TrackExtractorScript : AbstractScript
                     if (AppConstants.SubtitleConvertCodecs.TryGetValue(track.Codec, out string? convertCodec))
                     {
                         codecValue = convertCodec;
-                        LogService.Instance.Info($"Применяется конвертация субтитров {track.Codec} -> {convertCodec} для дорожки #{track.TrackId}", "TrackExtractorScript");
+                        _logService.Info($"Применяется конвертация субтитров {track.Codec} -> {convertCodec} для дорожки #{track.TrackId}", "TrackExtractorScript");
                     }
                     else
                     {
@@ -244,7 +255,7 @@ public sealed class TrackExtractorScript : AbstractScript
         tracksSuccess = true;
         if (ffmpegArgs.Count > 0)
         {
-            LogService.Instance.Info($"Запуск процесса FFmpeg для One-Pass извлечения дорожек из {Path.GetFileName(filePath)}", "TrackExtractorScript");
+            _logService.Info($"Запуск процесса FFmpeg для One-Pass извлечения дорожек из {Path.GetFileName(filePath)}", "TrackExtractorScript");
             
             double duration = structure.Duration;
 
@@ -261,7 +272,7 @@ public sealed class TrackExtractorScript : AbstractScript
                 progressCallback(fileIndex, totalCount, $"Извлечение дорожек | {p.Percent:F1}% | Скорость: {speedStr}", p.Percent, p.Fps, p.Bitrate);
             };
 
-            tracksSuccess = await FFmpegRunner.Instance.RunAsync(
+            tracksSuccess = await _ffmpegRunner.RunAsync(
                 inputPath: filePath,
                 outputPath: null, // Передаем null, так как все выходы со своими флагами уже находятся в ffmpegArgs
                 extraArgs: ffmpegArgs,
@@ -277,14 +288,14 @@ public sealed class TrackExtractorScript : AbstractScript
                 {
                     CleanupIfCancelled(filesToExtract.ToArray());
                     string cancelMsg = $"⚠ Извлечение отменено пользователем: {Path.GetFileName(filePath)}";
-                    LogService.Instance.Info(cancelMsg, "TrackExtractorScript");
+                    _logService.Info(cancelMsg, "TrackExtractorScript");
                     results.Add(cancelMsg);
                     return results;
                 }
                 else
                 {
                     string failMsg = $"❌ Ошибка во время выполнения FFmpeg для {Path.GetFileName(filePath)}";
-                    LogService.Instance.Error(failMsg, "TrackExtractorScript");
+                    _logService.Error(failMsg, "TrackExtractorScript");
                     results.Add(failMsg);
                     return results;
                 }
@@ -312,7 +323,7 @@ public sealed class TrackExtractorScript : AbstractScript
 
                 if (File.Exists(outFontPath) && !overwrite)
                 {
-                    LogService.Instance.Info($"Шрифт пропущен (существует): {font.FileName}", "TrackExtractorScript");
+                    _logService.Info($"Шрифт пропущен (существует): {font.FileName}", "TrackExtractorScript");
                     extractResults.Add($"静态 Пропущен шрифт: {font.FileName}");
                     continue;
                 }
@@ -333,13 +344,13 @@ public sealed class TrackExtractorScript : AbstractScript
                       structure.Attachments.IndexOf(font)
                     : font.AttachmentId;
 
-                LogService.Instance.Info(
+                _logService.Info(
                     $"Запуск извлечения шрифта #{font.AttachmentId} " +
                     $"(индекс FFmpeg: {ffmpegAttachmentIndex}, " +
                     $"файл: {font.FileName})", 
                     "TrackExtractorScript");
                 
-                bool fSuccess = await FFmpegRunner.Instance.ExtractAttachmentAsync(filePath, ffmpegAttachmentIndex, outFontPath);
+                bool fSuccess = await _ffmpegRunner.ExtractAttachmentAsync(filePath, ffmpegAttachmentIndex, outFontPath);
                 
                 if (fSuccess)
                 {
@@ -347,7 +358,7 @@ public sealed class TrackExtractorScript : AbstractScript
                 }
                 else
                 {
-                    LogService.Instance.Error($"Не удалось извлечь шрифт #{font.AttachmentId} ({font.FileName})", "TrackExtractorScript");
+                    _logService.Error($"Не удалось извлечь шрифт #{font.AttachmentId} ({font.FileName})", "TrackExtractorScript");
                     extractResults.Add($"❌ Ошибка извлечения шрифта: {font.FileName}");
                     
                     if (IsCancelled)
@@ -363,7 +374,7 @@ public sealed class TrackExtractorScript : AbstractScript
         if (IsCancelled)
         {
             string cancelMsg = $"⚠ Извлечение отменено пользователем: {Path.GetFileName(filePath)}";
-            LogService.Instance.Info(cancelMsg, "TrackExtractorScript");
+            _logService.Info(cancelMsg, "TrackExtractorScript");
             results.Add(cancelMsg);
             return results;
         }
@@ -372,7 +383,7 @@ public sealed class TrackExtractorScript : AbstractScript
         {
             if (tracksSuccess && fontsSuccess)
             {
-                LogService.Instance.Info($"Успешно завершено извлечение для файла: {Path.GetFileName(filePath)}", "TrackExtractorScript");
+                _logService.Info($"Успешно завершено извлечение для файла: {Path.GetFileName(filePath)}", "TrackExtractorScript");
                 progressCallback(fileIndex, totalCount, "Успешно завершено!", 100.0);
                 results.AddRange(extractResults);
             }
@@ -380,7 +391,7 @@ public sealed class TrackExtractorScript : AbstractScript
             {
                 CleanupIfCancelled(filesToExtract.ToArray());
                 string failMsg = $"❌ Сбой извлечения потоков из файла: {Path.GetFileName(filePath)}";
-                LogService.Instance.Error(failMsg, "TrackExtractorScript");
+                _logService.Error(failMsg, "TrackExtractorScript");
                 progressCallback(fileIndex, totalCount, "Ошибка выполнения", 0.0);
                 results.Add(failMsg);
             }
@@ -390,7 +401,7 @@ public sealed class TrackExtractorScript : AbstractScript
             CleanupIfCancelled(filesToExtract.ToArray());
             string errorMsg = $"❌ Ошибка выполнения скрипта для {Path.GetFileName(filePath)}: {ex.Message}";
             results.Add(errorMsg);
-            LogService.Instance.Exception(ex, $"Ошибка при выполнении извлечения дорожек для '{Path.GetFileName(filePath)}': {ex.Message}", "TrackExtractorScript");
+            _logService.Exception(ex, $"Ошибка при выполнении извлечения дорожек для '{Path.GetFileName(filePath)}': {ex.Message}", "TrackExtractorScript");
         }
 
         return results;
@@ -479,11 +490,11 @@ public sealed class TrackExtractorScript : AbstractScript
                 try
                 {
                     File.Delete(path);
-                    LogService.Instance.Info($"Удален временный недописанный файл: {Path.GetFileName(path)}", "TrackExtractorScript");
+                    _logService.Info($"Удален временный недописанный файл: {Path.GetFileName(path)}", "TrackExtractorScript");
                 }
                 catch (Exception ex)
                 {
-                    LogService.Instance.Exception(ex, $"Не удалось подчистить временный файл {path} при отмене", "TrackExtractorScript");
+                    _logService.Exception(ex, $"Не удалось подчистить временный файл {path} при отмене", "TrackExtractorScript");
                 }
             }
         }

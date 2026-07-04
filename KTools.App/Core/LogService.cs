@@ -27,22 +27,14 @@ public enum LogLevel
 /// </summary>
 public sealed class LogService : ILogService
 {
-    private static readonly Lazy<LogService> LazyInstance =
-        new(() => new LogService());
-
     private readonly object _lock = new();
     private string _currentLogFile = string.Empty;
     private string _customLogDir = string.Empty;
 
-    private LogService()
+    public LogService()
     {
         InitializeLogFile();
     }
-
-    /// <summary>
-    /// Глобальная точка доступа к единственному экземпляру класса LogService.
-    /// </summary>
-    public static LogService Instance => LazyInstance.Value;
 
     /// <summary>
     /// Событие, возникающее при записи нового лог-сообщения.
@@ -73,8 +65,11 @@ public sealed class LogService : ILogService
                     _customLogDir = customLogDir;
                 }
 
-                // Определяем папку логов (настройки пользователя или папка по умолчанию)
-                string settingsDir = PathManager.GetSettingsDirectory();
+                string baseDir = AppContext.BaseDirectory;
+                bool isMsix = baseDir.Contains("WindowsApps", StringComparison.OrdinalIgnoreCase);
+                string settingsDir = isMsix 
+                    ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "KTools")
+                    : baseDir;
                 string defaultLogDir = Path.Combine(settingsDir, "logs");
 
                 string logDir = string.IsNullOrEmpty(_customLogDir)

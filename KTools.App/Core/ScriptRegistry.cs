@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Microsoft.Extensions.DependencyInjection;
 using KTools_App.Services.Contracts;
 
 namespace KTools_App.Core;
@@ -12,21 +13,24 @@ namespace KTools_App.Core;
 /// </summary>
 public sealed class ScriptRegistry : IScriptRegistry
 {
-    private static readonly Lazy<ScriptRegistry> LazyInstance =
-        new(() => new ScriptRegistry());
-
+    private readonly IServiceProvider _serviceProvider;
+    private readonly ISettingsManager _settingsManager;
+    private readonly ILogService _logService;
     private readonly List<AbstractScript> _scripts;
 
-    private ScriptRegistry()
+    /// <summary>
+    /// Инициализирует новый экземпляр класса ScriptRegistry с внедрением зависимостей.
+    /// </summary>
+    public ScriptRegistry(IServiceProvider serviceProvider, ISettingsManager settingsManager, ILogService logService)
     {
+        _serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
+        _settingsManager = settingsManager ?? throw new ArgumentNullException(nameof(settingsManager));
+        _logService = logService ?? throw new ArgumentNullException(nameof(logService));
         _scripts = new List<AbstractScript>();
         RegisterScripts();
     }
 
-    /// <summary>
-    /// Возвращает единственный экземпляр класса ScriptRegistry.
-    /// </summary>
-    public static ScriptRegistry Instance => LazyInstance.Value;
+
 
     /// <summary>
     /// Возвращает полный список зарегистрированных скриптов.
@@ -47,26 +51,25 @@ public sealed class ScriptRegistry : IScriptRegistry
     /// </summary>
     private void RegisterScripts()
     {
-        // В будущем здесь будут регистрироваться все реальные классы скриптов.
-        // Сейчас регистрируем первый рабочий скрипт "Очистка метаданных" и заглушки для остальных.
-        _scripts.Add(new Scripts.MetadataCleanupScript());
-        _scripts.Add(new Scripts.VideoEncodingScript());
-        _scripts.Add(new Scripts.ContainerConversionScript());
+        // Получаем зарегистрированные скрипты через IServiceProvider
+        _scripts.Add(_serviceProvider.GetRequiredService<Scripts.MetadataCleanupScript>());
+        _scripts.Add(_serviceProvider.GetRequiredService<Scripts.VideoEncodingScript>());
+        _scripts.Add(_serviceProvider.GetRequiredService<Scripts.ContainerConversionScript>());
         
-        _scripts.Add(new Scripts.AudioEncodingScript());
-        _scripts.Add(new Scripts.AudioDownmixScript());
-        _scripts.Add(new Scripts.AudioSpeedScript());
-        _scripts.Add(new Scripts.AudioChannelsScript());
+        _scripts.Add(_serviceProvider.GetRequiredService<Scripts.AudioEncodingScript>());
+        _scripts.Add(_serviceProvider.GetRequiredService<Scripts.AudioDownmixScript>());
+        _scripts.Add(_serviceProvider.GetRequiredService<Scripts.AudioSpeedScript>());
+        _scripts.Add(_serviceProvider.GetRequiredService<Scripts.AudioChannelsScript>());
 
-        _scripts.Add(new Scripts.MkvAssemblyScript());
-        _scripts.Add(new Scripts.StreamManagementScript());
-        _scripts.Add(new Scripts.StreamReplacementScript());
-        _scripts.Add(new Scripts.TrackExtractorScript());
+        _scripts.Add(_serviceProvider.GetRequiredService<Scripts.MkvAssemblyScript>());
+        _scripts.Add(_serviceProvider.GetRequiredService<Scripts.StreamManagementScript>());
+        _scripts.Add(_serviceProvider.GetRequiredService<Scripts.StreamReplacementScript>());
+        _scripts.Add(_serviceProvider.GetRequiredService<Scripts.TrackExtractorScript>());
 
-        _scripts.Add(new Scripts.SubtitlesConvertScript());
+        _scripts.Add(_serviceProvider.GetRequiredService<Scripts.SubtitlesConvertScript>());
 
         // Инициализируем настройки скриптов по умолчанию при регистрации
-        SettingsManager.Instance.InitializeDefaults(_scripts);
+        _settingsManager.InitializeDefaults(_scripts);
 
         // Явно гарантируем сброс всех очередей файлов и выбранных дорожек
         // для обеспечения запуска приложения с абсолютно чистого листа
@@ -84,7 +87,7 @@ public sealed class ScriptRegistry : IScriptRegistry
             }
             catch (Exception ex)
             {
-                LogService.Instance.Exception(
+                _logService.Exception(
                     ex, 
                     $"Не удалось очистить состояние скрипта '{script.Name}' при регистрации в реестре.", 
                     "ScriptRegistry");

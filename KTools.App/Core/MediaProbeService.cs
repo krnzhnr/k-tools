@@ -18,15 +18,21 @@ namespace KTools_App.Core;
 /// </summary>
 public sealed class MediaProbeService : IMediaProbeService
 {
-    private static readonly Lazy<MediaProbeService> LazyInstance =
-        new(() => new MediaProbeService());
-
-    private MediaProbeService() { }
+    private readonly ILogService _logService;
+    private readonly IMkvmergeRunner _mkvmergeRunner;
+    private readonly IFFmpegRunner _ffmpegRunner;
 
     /// <summary>
-    /// Глобальная точка доступа к единственному экземпляру класса.
+    /// Инициализирует новый экземпляр класса MediaProbeService с внедрением зависимостей.
     /// </summary>
-    public static MediaProbeService Instance => LazyInstance.Value;
+    public MediaProbeService(ILogService logService, IMkvmergeRunner mkvmergeRunner, IFFmpegRunner ffmpegRunner)
+    {
+        _logService = logService ?? throw new ArgumentNullException(nameof(logService));
+        _mkvmergeRunner = mkvmergeRunner ?? throw new ArgumentNullException(nameof(mkvmergeRunner));
+        _ffmpegRunner = ffmpegRunner ?? throw new ArgumentNullException(nameof(ffmpegRunner));
+    }
+
+
 
     /// <summary>
     /// Асинхронно анализирует медиафайл и возвращает его полную структуру.
@@ -38,12 +44,12 @@ public sealed class MediaProbeService : IMediaProbeService
     {
         if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
         {
-            LogService.Instance.Error($"Файл не существует или путь пуст: '{filePath}'", "MediaProbeService");
+            _logService.Error($"Файл не существует или путь пуст: '{filePath}'", "MediaProbeService");
             return null;
         }
 
         string extension = Path.GetExtension(filePath).ToLowerInvariant();
-        LogService.Instance.Info($"Начало фонового анализа структуры файла: '{Path.GetFileName(filePath)}'", "MediaProbeService");
+        _logService.Info($"Начало фонового анализа структуры файла: '{Path.GetFileName(filePath)}'", "MediaProbeService");
 
         try
         {
@@ -61,7 +67,7 @@ public sealed class MediaProbeService : IMediaProbeService
         }
         catch (Exception ex)
         {
-            LogService.Instance.Exception(ex, $"Непредвиденная ошибка при зондировании файла '{filePath}'", "MediaProbeService");
+            _logService.Exception(ex, $"Непредвиденная ошибка при зондировании файла '{filePath}'", "MediaProbeService");
             return null;
         }
     }
@@ -71,10 +77,10 @@ public sealed class MediaProbeService : IMediaProbeService
     /// </summary>
     private async Task<MediaStructure?> ProbeMkvAsync(string filePath)
     {
-        using var jsonDoc = await MkvmergeRunner.Instance.IdentifyAsync(filePath);
+        using var jsonDoc = await _mkvmergeRunner.IdentifyAsync(filePath);
         if (jsonDoc == null)
         {
-            LogService.Instance.Error($"Не удалось выполнить mkvmerge --identify для '{filePath}'", "MediaProbeService");
+            _logService.Error($"Не удалось выполнить mkvmerge --identify для '{filePath}'", "MediaProbeService");
             return null;
         }
 
@@ -219,7 +225,7 @@ public sealed class MediaProbeService : IMediaProbeService
             await EnrichTrackNamesAsync(structure);
         }
 
-        LogService.Instance.Info($"Анализ MKV завершен: '{Path.GetFileName(filePath)}' (Дорожек: {structure.Tracks.Count}, Вложений: {structure.Attachments.Count})", "MediaProbeService");
+        _logService.Info($"Анализ MKV завершен: '{Path.GetFileName(filePath)}' (Дорожек: {structure.Tracks.Count}, Вложений: {structure.Attachments.Count})", "MediaProbeService");
         return structure;
     }
 
@@ -228,10 +234,10 @@ public sealed class MediaProbeService : IMediaProbeService
     /// </summary>
     private async Task<MediaStructure?> ProbeGenericAsync(string filePath)
     {
-        using var jsonDoc = await FFmpegRunner.Instance.GetVideoInfoAsync(filePath);
+        using var jsonDoc = await _ffmpegRunner.GetVideoInfoAsync(filePath);
         if (jsonDoc == null)
         {
-            LogService.Instance.Error($"Не удалось выполнить ffprobe для '{filePath}'", "MediaProbeService");
+            _logService.Error($"Не удалось выполнить ffprobe для '{filePath}'", "MediaProbeService");
             return null;
         }
 
@@ -371,7 +377,7 @@ public sealed class MediaProbeService : IMediaProbeService
             }
         }
 
-        LogService.Instance.Info($"Анализ ffprobe завершен: '{Path.GetFileName(filePath)}' (Дорожек: {structure.Tracks.Count}, Вложений: {structure.Attachments.Count})", "MediaProbeService");
+        _logService.Info($"Анализ ffprobe завершен: '{Path.GetFileName(filePath)}' (Дорожек: {structure.Tracks.Count}, Вложений: {structure.Attachments.Count})", "MediaProbeService");
         return structure;
     }
 
@@ -383,7 +389,7 @@ public sealed class MediaProbeService : IMediaProbeService
     {
         try
         {
-            using var probeDoc = await FFmpegRunner.Instance.GetVideoInfoAsync(structure.FilePath);
+            using var probeDoc = await _ffmpegRunner.GetVideoInfoAsync(structure.FilePath);
             if (probeDoc == null) return;
 
             var streams = probeDoc.RootElement.GetProperty("streams");
@@ -420,7 +426,7 @@ public sealed class MediaProbeService : IMediaProbeService
                 if (string.IsNullOrWhiteSpace(mkvAudio[i].Name) && !string.IsNullOrWhiteSpace(probeAudio[i]))
                 {
                     mkvAudio[i].Name = probeAudio[i];
-                    LogService.Instance.DebugLog($"Дорожка аудио #{mkvAudio[i].TrackId} обогащена заголовком: '{probeAudio[i]}'", "MediaProbeService");
+                    _logService.DebugLog($"Дорожка аудио #{mkvAudio[i].TrackId} обогащена заголовком: '{probeAudio[i]}'", "MediaProbeService");
                 }
             }
 
@@ -430,7 +436,7 @@ public sealed class MediaProbeService : IMediaProbeService
                 if (string.IsNullOrWhiteSpace(mkvSubs[i].Name) && !string.IsNullOrWhiteSpace(probeSubs[i]))
                 {
                     mkvSubs[i].Name = probeSubs[i];
-                    LogService.Instance.DebugLog($"Дорожка субтитров #{mkvSubs[i].TrackId} обогащена заголовком: '{probeSubs[i]}'", "MediaProbeService");
+                    _logService.DebugLog($"Дорожка субтитров #{mkvSubs[i].TrackId} обогащена заголовком: '{probeSubs[i]}'", "MediaProbeService");
                 }
             }
 
@@ -440,13 +446,13 @@ public sealed class MediaProbeService : IMediaProbeService
                 if (string.IsNullOrWhiteSpace(mkvVideo[i].Name) && !string.IsNullOrWhiteSpace(probeVideo[i]))
                 {
                     mkvVideo[i].Name = probeVideo[i];
-                    LogService.Instance.DebugLog($"Дорожка видео #{mkvVideo[i].TrackId} обогащена заголовком: '{probeVideo[i]}'", "MediaProbeService");
+                    _logService.DebugLog($"Дорожка видео #{mkvVideo[i].TrackId} обогащена заголовком: '{probeVideo[i]}'", "MediaProbeService");
                 }
             }
         }
         catch (Exception ex)
         {
-            LogService.Instance.Exception(ex, "Ошибка обогащения заголовков дорожек через ffprobe", "MediaProbeService");
+            _logService.Exception(ex, "Ошибка обогащения заголовков дорожек через ffprobe", "MediaProbeService");
         }
     }
 }
