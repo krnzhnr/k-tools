@@ -291,24 +291,6 @@
                     Foreground="{ThemeResource TextFillColorPrimaryBrush}"
                     Text="Персонализация" />
 
-                <!-- Выбор языка интерфейса -->
-                <community:SettingsCard
-                    Padding="16,12,16,12"
-                    Description="Выберите предпочитаемый язык интерфейса приложения / Choose interface language"
-                    Header="Язык интерфейса / Language">
-                    <ComboBox
-                        x:Name="LanguageComboBox"
-                        Width="160"
-                        SelectedIndex="{x:Bind ViewModel.SelectedLanguageIndex, Mode=TwoWay}">
-                        <ComboBoxItem
-                            Tag="ru-RU"
-                            Content="Русский" />
-                        <ComboBoxItem
-                            Tag="en-US"
-                            Content="English" />
-                    </ComboBox>
-                </community:SettingsCard>
-
                 <!-- Выбор цветовой темы -->
                 <community:SettingsCard
                     Padding="16,12,16,12"

@@ -4,7 +4,6 @@
     <TargetFramework>net8.0-windows10.0.26100.0</TargetFramework>
     <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
     <RootNamespace>KTools_App</RootNamespace>
-    <AppPriFileName>resources.pri</AppPriFileName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <Platforms>x86;x64;ARM64</Platforms>
     <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-$([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString().ToLowerInvariant())</RuntimeIdentifier>
@@ -120,4 +119,18 @@
     SatelliteResourceLanguages игнорируется для SDK-файлов.
     Этот Target удаляет все ненужные папки локализаций из папки публикации, оставляя только ru-RU и en-US.
   -->
+  <Target Name="RemoveUnwantedLanguageDirectories" AfterTargets="Publish">
+    <ItemGroup>
+      <LanguageDirectoriesToDelete Include="$([System.IO.Directory]::GetDirectories('$(PublishDir)'))" />
+      <!-- Исключаем папки, которые нам нужны -->
+      <LanguageDirectoriesToDelete Remove="$(PublishDir)ru-RU" />
+      <LanguageDirectoriesToDelete Remove="$(PublishDir)en-US" />
+      <LanguageDirectoriesToDelete Remove="$(PublishDir)en-us" />
+      <!-- Папка ресурсов Microsoft.UI.Xaml обязательна для корректной работы UI -->
+      <LanguageDirectoriesToDelete Remove="$(PublishDir)Microsoft.UI.Xaml" />
+    </ItemGroup>
+
+    <Message Importance="high" Text="[K-Tools] Удаление неиспользуемых папок локализаций из каталога публикации: @(LanguageDirectoriesToDelete)" />
+    <RemoveDir Directories="@(LanguageDirectoriesToDelete)" />
+  </Target>
 </Project>
