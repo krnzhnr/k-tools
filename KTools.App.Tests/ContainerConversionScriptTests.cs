@@ -82,9 +82,11 @@ public class ContainerConversionScriptTests
     public async Task ExecuteSingleAsync_CompatibleCodecs_CopiesStreams()
     {
         // Arrange
-        string tempSourceFile = Path.Combine(Path.GetTempPath(), "source.avi");
+        string uniqueId = Guid.NewGuid().ToString("N");
+        string tempSourceFile = Path.Combine(Path.GetTempPath(), $"source_{uniqueId}.avi");
         File.WriteAllText(tempSourceFile, "dummy");
         string tempOutputDir = Path.GetTempPath();
+        string expectedDest = Path.Combine(tempOutputDir, $"source_{uniqueId}.mp4");
 
         // Имитируем JSON-ответ ffprobe с совместимыми кодеками для MP4 (h264 и aac)
         string jsonStr = @"{
@@ -125,7 +127,6 @@ public class ContainerConversionScriptTests
         finally
         {
             if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
-            string expectedDest = Path.Combine(tempOutputDir, "source.mp4");
             if (File.Exists(expectedDest)) File.Delete(expectedDest);
         }
     }
@@ -137,7 +138,7 @@ public class ContainerConversionScriptTests
     public async Task ExecuteSingleAsync_IncompatibleCodecs_SkipsConversion()
     {
         // Arrange
-        string tempSourceFile = Path.Combine(Path.GetTempPath(), "source_incompatible.mkv");
+        string tempSourceFile = Path.Combine(Path.GetTempPath(), $"source_incompatible_{Guid.NewGuid():N}.mkv");
         File.WriteAllText(tempSourceFile, "dummy");
         string tempOutputDir = Path.GetTempPath();
 
@@ -185,7 +186,7 @@ public class ContainerConversionScriptTests
     public async Task ExecuteSingleAsync_SameFormat_SkipsConversion()
     {
         // Arrange
-        string tempSourceFile = Path.Combine(Path.GetTempPath(), "source.mp4");
+        string tempSourceFile = Path.Combine(Path.GetTempPath(), $"source_{Guid.NewGuid():N}.mp4");
         File.WriteAllText(tempSourceFile, "dummy");
         string tempOutputDir = Path.GetTempPath();
 
