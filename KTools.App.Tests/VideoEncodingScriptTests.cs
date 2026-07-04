@@ -244,4 +244,191 @@ public class VideoEncodingScriptTests
             if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
         }
     }
+
+    /// <summary>
+    /// Проверяет генерацию аргументов для программного кодирования (libx265 CPU).
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_CpuLibx265_GeneratesCorrectArgs()
+    {
+        // Arrange
+        string tempSourceFile = Path.GetTempFileName();
+        string tempOutputDir = Path.GetDirectoryName(tempSourceFile) ?? AppContext.BaseDirectory;
+
+        var structure = new MediaStructure { FilePath = tempSourceFile, Duration = 60.0 };
+        structure.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "video", Codec = "h264", Name = "Video" });
+        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile)).ReturnsAsync(structure);
+
+        List<string>? capturedExtraArgs = null;
+        _ffmpegRunnerMock.Setup(r => r.RunAsync(
+            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<List<string>>(), It.IsAny<List<string>>(),
+            It.IsAny<bool>(), It.IsAny<double>(), It.IsAny<Action<ProgressInfo>>(), It.IsAny<CancellationToken>()
+        )).Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken>(
+            (inP, outP, extArgs, inArgs, ovr, dur, prog, ct) => capturedExtraArgs = extArgs
+        ).ReturnsAsync(true);
+
+        var settings = new Dictionary<string, object>
+        {
+            { "encoder", "x265 (CPU)" },
+            { "lossless", false },
+            { "cpu_preset", "slower" },
+            { "cpu_rc", "CRF" },
+            { "cpu_crf", 18 },
+            { "cpu_tune", "animation" },
+            { "cpu_aq_mode", "2" },
+            { "cpu_lookahead", "20" },
+            { "force_10bit", false }
+        };
+
+        try
+        {
+            // Act
+            await _script.ExecuteSingleAsync(tempSourceFile, settings, tempOutputDir, (idx, total, status, pct, fps, bit) => { }, 0, 1);
+
+            // Assert
+            capturedExtraArgs.Should().NotBeNull();
+            capturedExtraArgs.Should().Contain("-c:v");
+            capturedExtraArgs.Should().Contain("libx265");
+            capturedExtraArgs.Should().Contain("-preset");
+            capturedExtraArgs.Should().Contain("slower");
+            capturedExtraArgs.Should().Contain("-crf");
+            capturedExtraArgs.Should().Contain("18");
+            capturedExtraArgs.Should().Contain("-tune");
+            capturedExtraArgs.Should().Contain("animation");
+            capturedExtraArgs.Should().Contain("-x265-params");
+            capturedExtraArgs.Should().Contain(s => s.Contains("aq-mode=2") && s.Contains("rc-lookahead=20"));
+        }
+        finally
+        {
+            if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
+        }
+    }
+
+    /// <summary>
+    /// Проверяет логику вшивания субтитров и временного извлечения встроенных шрифтов.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_WithSubtitlesAndFonts_ExtractsAndBurnsThem()
+    {
+        // Arrange
+        string tempSourceFile = Path.Combine(Path.GetTempPath(), "test_file.mkv");
+        File.WriteAllText(tempSourceFile, "dummy media file");
+
+        string tempOutputDir = Path.GetTempPath();
+
+        var structure = new MediaStructure { FilePath = tempSourceFile, Duration = 60.0 };
+        // Добавляем видеодорожку
+        structure.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "video", Codec = "h264", Name = "Video" });
+        // Добавляем дорожку субтитров
+        structure.Tracks.Add(new MediaTrack { TrackId = 1, TrackType = "subtitles", Codec = "ass", Name = "English Subs", IsDefault = true });
+        // Добавляем вложенный шрифт
+        structure.Attachments.Add(new MediaAttachment { AttachmentId = 0, FileName = "customfont.ttf", MimeType = "application/x-truetype-font" });
+
+        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile)).ReturnsAsync(structure);
+
+        // Настраиваем извлечение шрифтов
+        _ffmpegRunnerMock.Setup(r => r.ExtractAttachmentAsync(tempSourceFile, It.IsAny<int>(), It.IsAny<string>()))
+            .ReturnsAsync(true);
+
+        // Настраиваем извлечение субтитров (записываем фиктивный файл)
+        _ffmpegRunnerMock.Setup(r => r.ExtractSubtitleAsync(tempSourceFile, It.IsAny<int>(), It.IsAny<string>(), true))
+            .Callback<string, int, string, bool>((inP, idx, outP, rel) => File.WriteAllText(outP, "[Events]\nDialogue: ..."))
+            .ReturnsAsync(true);
+
+        List<string>? capturedExtraArgs = null;
+        _ffmpegRunnerMock.Setup(r => r.RunAsync(
+            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<List<string>>(), It.IsAny<List<string>>(),
+            It.IsAny<bool>(), It.IsAny<double>(), It.IsAny<Action<ProgressInfo>>(), It.IsAny<CancellationToken>()
+        )).Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken>(
+            (inP, outP, extArgs, inArgs, ovr, dur, prog, ct) => capturedExtraArgs = extArgs
+        ).ReturnsAsync(true);
+
+        var settings = new Dictionary<string, object>
+        {
+            { "encoder", "NVENC (GPU)" },
+            { "lossless", true },
+            { "v_qp", 0 },
+            { "nvenc_preset", "p1" },
+            { "force_10bit", false }
+        };
+
+        try
+        {
+            // Act
+            await _script.ExecuteSingleAsync(tempSourceFile, settings, tempOutputDir, (idx, total, status, pct, fps, bit) => { }, 0, 1);
+
+            // Assert
+            _ffmpegRunnerMock.Verify(r => r.ExtractAttachmentAsync(tempSourceFile, It.IsAny<int>(), It.IsAny<string>()), Times.Once);
+            _ffmpegRunnerMock.Verify(r => r.ExtractSubtitleAsync(tempSourceFile, It.IsAny<int>(), It.IsAny<string>(), true), Times.Once);
+
+            capturedExtraArgs.Should().NotBeNull();
+            capturedExtraArgs.Should().Contain("-vf");
+            capturedExtraArgs.Should().Contain(s => s.Contains("subtitles=filename=") && s.Contains("fontsdir="));
+        }
+        finally
+        {
+            if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
+        }
+    }
+
+    /// <summary>
+    /// Проверяет генерацию аргументов для программного кодирования (libx265 CPU) в режиме битрейта (ABR).
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_CpuLibx265_BitrateMode_GeneratesCorrectArgs()
+    {
+        // Arrange
+        string tempSourceFile = Path.GetTempFileName();
+        string tempOutputDir = Path.GetDirectoryName(tempSourceFile) ?? AppContext.BaseDirectory;
+
+        var structure = new MediaStructure { FilePath = tempSourceFile, Duration = 60.0 };
+        structure.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "video", Codec = "h264", Name = "Video" });
+        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile)).ReturnsAsync(structure);
+
+        List<string>? capturedExtraArgs = null;
+        _ffmpegRunnerMock.Setup(r => r.RunAsync(
+            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<List<string>>(), It.IsAny<List<string>>(),
+            It.IsAny<bool>(), It.IsAny<double>(), It.IsAny<Action<ProgressInfo>>(), It.IsAny<CancellationToken>()
+        )).Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken>(
+            (inP, outP, extArgs, inArgs, ovr, dur, prog, ct) => capturedExtraArgs = extArgs
+        ).ReturnsAsync(true);
+
+        var settings = new Dictionary<string, object>
+        {
+            { "encoder", "x265 (CPU)" },
+            { "lossless", false },
+            { "cpu_preset", "medium" },
+            { "cpu_rc", "Битрейт (ABR)" },
+            { "cpu_v_bitrate", 5500 },
+            { "cpu_tune", "grain" },
+            { "cpu_aq_mode", "1" },
+            { "cpu_lookahead", "30" },
+            { "force_10bit", false }
+        };
+
+        try
+        {
+            // Act
+            await _script.ExecuteSingleAsync(tempSourceFile, settings, tempOutputDir, (idx, total, status, pct, fps, bit) => { }, 0, 1);
+
+            // Assert
+            capturedExtraArgs.Should().NotBeNull();
+            capturedExtraArgs.Should().Contain("-c:v");
+            capturedExtraArgs.Should().Contain("libx265");
+            capturedExtraArgs.Should().Contain("-b:v");
+            capturedExtraArgs.Should().Contain("5500k");
+            capturedExtraArgs.Should().Contain("-maxrate");
+            capturedExtraArgs.Should().Contain("11000k");
+            capturedExtraArgs.Should().Contain("-bufsize");
+            capturedExtraArgs.Should().Contain("22000k");
+            capturedExtraArgs.Should().Contain("-tune");
+            capturedExtraArgs.Should().Contain("grain");
+            capturedExtraArgs.Should().Contain("-x265-params");
+            capturedExtraArgs.Should().Contain(s => s.Contains("aq-mode=1") && s.Contains("rc-lookahead=30"));
+        }
+        finally
+        {
+            if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
+        }
+    }
 }
