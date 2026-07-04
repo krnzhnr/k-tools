@@ -1,7 +1,8 @@
-// -*- coding: utf-8 -*-
 using System;
 using Microsoft.UI.Xaml;
 using Microsoft.Extensions.DependencyInjection;
+using Polly;
+using Polly.Extensions.Http;
 using KTools_App.Core;
 using KTools_App.Infrastructure;
 using KTools_App.Services.Contracts;
@@ -164,6 +165,15 @@ public partial class App : Application
     private static IServiceProvider ConfigureServices()
     {
         var services = new ServiceCollection();
+
+        // 0. Регистрация HttpClient с политиками Polly
+        services.AddHttpClient("DefaultClient")
+            .AddPolicyHandler(HttpPolicyExtensions
+                .HandleTransientHttpError()
+                .WaitAndRetryAsync(3, retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt))))
+            .AddPolicyHandler(HttpPolicyExtensions
+                .HandleTransientHttpError()
+                .CircuitBreakerAsync(5, TimeSpan.FromSeconds(30)));
 
         // 1. Регистрация служб ядра через чистый DI
         services.AddSingleton<ILogService, LogService>();

@@ -56,24 +56,30 @@ internal sealed class GitHubAssetDto
 /// </summary>
 public sealed class UpdateService : IUpdateService
 {
-    private static readonly HttpClient HttpClientInstance = new();
+    private readonly IHttpClientFactory _httpClientFactory;
+    private readonly HttpClient _httpClient;
     private const string GitHubApiUrl = "https://api.github.com/repos/krnzhnr/k-tools/releases";
     private readonly ILogService _logService;
     private readonly ISettingsManager _settingsManager;
 
     /// <summary>
-    /// Инициализирует новый экземпляр класса UpdateService с внедрением логгера и настроек.
+    /// Инициализирует новый экземпляр класса UpdateService с внедрением логгера, настроек и фабрики HTTP-клиентов.
     /// </summary>
-    public UpdateService(ILogService logService, ISettingsManager settingsManager)
+    public UpdateService(
+        ILogService logService,
+        ISettingsManager settingsManager,
+        IHttpClientFactory httpClientFactory)
     {
         _logService = logService ?? throw new ArgumentNullException(nameof(logService));
         _settingsManager = settingsManager ?? throw new ArgumentNullException(nameof(settingsManager));
+        _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
+        _httpClient = _httpClientFactory.CreateClient("DefaultClient");
         
         // Настраиваем заголовки по умолчанию для HttpClient.
         // GitHub API требует наличие User-Agent для всех запросов.
-        if (HttpClientInstance.DefaultRequestHeaders.UserAgent.Count == 0)
+        if (_httpClient.DefaultRequestHeaders.UserAgent.Count == 0)
         {
-            HttpClientInstance.DefaultRequestHeaders.UserAgent.ParseAdd("K-Tools-App/2.0.0");
+            _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("K-Tools-App/2.0.0");
         }
     }
 
@@ -92,7 +98,7 @@ public sealed class UpdateService : IUpdateService
             _logService.DebugLog($"Текущая информационная версия приложения: {currentVersionStr}", "UpdateService");
 
             // Отправляем запрос к GitHub API для получения списка релизов
-            var response = await HttpClientInstance.GetAsync(GitHubApiUrl, cancellationToken);
+            var response = await _httpClient.GetAsync(GitHubApiUrl, cancellationToken);
             response.EnsureSuccessStatusCode();
 
             string json = await response.Content.ReadAsStringAsync(cancellationToken);
@@ -220,7 +226,7 @@ public sealed class UpdateService : IUpdateService
         try
         {
             // Скачиваем файл с отслеживанием прогресса
-            using (var response = await HttpClientInstance.GetAsync(
+            using (var response = await _httpClient.GetAsync(
                 downloadUrl,
                 HttpCompletionOption.ResponseHeadersRead,
                 cancellationToken))

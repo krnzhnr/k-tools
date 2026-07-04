@@ -46,6 +46,7 @@ public class DependencyManager : IDependencyManager
     private readonly string _binDir;
     private readonly Dictionary<string, DependencyStatus> _statuses = new();
     private readonly List<DependencyInfo> _registry = new();
+    private readonly IHttpClientFactory _httpClientFactory;
     private readonly HttpClient _httpClient;
     private readonly Dictionary<string, CancellationTokenSource> _activeDownloads = new();
 
@@ -64,14 +65,23 @@ public class DependencyManager : IDependencyManager
     /// <summary>
     /// Инициализирует новый экземпляр класса DependencyManager с внедрением зависимостей.
     /// </summary>
-    public DependencyManager(ILogService logService, IPathManager pathManager)
+    public DependencyManager(
+        ILogService logService,
+        IPathManager pathManager,
+        IHttpClientFactory httpClientFactory)
     {
         _logService = logService ?? throw new ArgumentNullException(nameof(logService));
         _pathManager = pathManager ?? throw new ArgumentNullException(nameof(pathManager));
+        _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
         // Используем метод интеллектуального поиска директории bin
         _binDir = _pathManager.GetBinDirectory();
-        _httpClient = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
-        _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("K-Tools-DependencyManager-WinUI3");
+        _httpClient = _httpClientFactory.CreateClient("DefaultClient");
+        _httpClient.Timeout = TimeSpan.FromMinutes(10);
+        
+        if (_httpClient.DefaultRequestHeaders.UserAgent.Count == 0)
+        {
+            _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("K-Tools-DependencyManager-WinUI3");
+        }
 
         InitializeRegistry();
         RefreshAllStatuses();

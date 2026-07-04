@@ -1068,25 +1068,8 @@ public sealed partial class TrackSelectionControl : UserControl
             }
             _isUpdatingSelection = false;
 
-            // Явно сохраняем измененное состояние выбора в ActiveScript
-            if (ActiveScript != null)
-            {
-                GetSelectedTracksAndAttachments(
-                    out var currentTracks, 
-                    out var currentAttachments);
-
-                ActiveScript.SelectedTrackIds.Clear();
-                foreach (var kvp in currentTracks)
-                {
-                    ActiveScript.SelectedTrackIds[kvp.Key] = kvp.Value;
-                }
-
-                ActiveScript.SelectedAttachmentIds.Clear();
-                foreach (var kvp in currentAttachments)
-                {
-                    ActiveScript.SelectedAttachmentIds[kvp.Key] = kvp.Value;
-                }
-            }
+            // Явно сохраняем измененное состояние выбора в ActiveScript и рассылаем сообщение
+            SyncActiveScriptSelectionAndNotify();
 
             UpdateSelectAllCheckBoxState();
             UpdateTabCounts();
@@ -1345,8 +1328,31 @@ public sealed partial class TrackSelectionControl : UserControl
             UpdateSelectAllCheckBoxState();
             UpdateTabCounts();
 
+            SyncActiveScriptSelectionAndNotify();
+        }
+        catch (Exception ex)
+        {
+            _logService.Exception(
+                ex, 
+                "Ошибка при синхронизации изменения выделения в дереве", 
+                "TrackSelectionControl");
+        }
+        finally
+        {
+            _isUpdatingSelection = false;
+        }
+    }
+
+    /// <summary>
+    /// Синхронизирует текущее выделение дерева дорожек с ActiveScript и рассылает сообщение об изменении выбора.
+    /// </summary>
+    private void SyncActiveScriptSelectionAndNotify()
+    {
+        try
+        {
             if (ActiveScript != null)
             {
+                _logService.Info("Запуск синхронизации выделенных в UI дорожек с моделью скрипта", "TrackSelectionControl");
                 GetSelectedTracksAndAttachments(
                     out var currentTracks, 
                     out var currentAttachments);
@@ -1363,6 +1369,10 @@ public sealed partial class TrackSelectionControl : UserControl
                     ActiveScript.SelectedAttachmentIds[kvp.Key] = kvp.Value;
                 }
 
+                _logService.DebugLog(
+                    $"Синхронизировано дорожек: {currentTracks.Values.Sum(v => v.Count)}, вложений: {currentAttachments.Values.Sum(v => v.Count)}. Рассылка сообщения TrackSelectedMessage.",
+                    "TrackSelectionControl");
+
                 CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Send(
                     new KTools_App.ViewModels.Messages.TrackSelectedMessage(currentTracks, currentAttachments));
             }
@@ -1370,13 +1380,9 @@ public sealed partial class TrackSelectionControl : UserControl
         catch (Exception ex)
         {
             _logService.Exception(
-                ex, 
-                "Ошибка при синхронизации изменения выделения в дереве", 
+                ex,
+                "Ошибка во время синхронизации выделения и рассылки сообщения",
                 "TrackSelectionControl");
-        }
-        finally
-        {
-            _isUpdatingSelection = false;
         }
     }
 
@@ -1462,6 +1468,8 @@ public sealed partial class TrackSelectionControl : UserControl
                 TracksTreeView.SelectedNodes.Add(node);
             }
             _isUpdatingSelection = false;
+
+            SyncActiveScriptSelectionAndNotify();
 
             UpdateSelectAllCheckBoxState();
             UpdateTabCounts();
