@@ -160,6 +160,10 @@ Flags: runascurrentuser; Components: decoders
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{{app}}\\bin"
+
+[Registry]
+Root: HKCU; Subkey: "Software\\Classes\\*\\shell\\KTools"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\\Classes\\Directory\\shell\\KTools"; Flags: uninsdeletekey
 """
     iss_path = SRC_DIR / "KTools_CSharp.iss"
     iss_path.write_text(iss_content, encoding="utf-8")
@@ -245,7 +249,6 @@ def main() -> None:
     if not publish_dir.exists():
         raise FileNotFoundError(f"Не удалось найти папку публикации после dotnet publish по пути: {publish_dir}")
     print(f"[✓] Папка публикации найдена: {publish_dir}")
-
     # Шаг 5. Копирование иконки в папку публикации для ярлыка
     dst_icon = publish_dir / "AppIcon.ico"
     if ICON_SRC.exists():

@@ -52,6 +52,18 @@
                         IsOn="{x:Bind ViewModel.ClearListOnAdd, Mode=TwoWay}" />
                 </community:SettingsCard>
 
+                <!-- Интеграция с контекстным меню Проводника -->
+                <community:SettingsCard
+                    Padding="16,12,16,12"
+                    Description="Добавить пункт 'Открыть в K-Tools' с выбором скрипта в контекстное меню Проводника"
+                    Header="Интеграция с Проводником Windows">
+                    <ToggleSwitch
+                        x:Name="ContextMenuToggle"
+                        OffContent="Выкл"
+                        OnContent="Вкл"
+                        IsOn="{x:Bind ViewModel.IsContextMenuEnabled, Mode=TwoWay}" />
+                </community:SettingsCard>
+
                 <!-- Регулировка максимального параллелизма (через SettingsExpander) -->
                 <community:SettingsExpander
                     Padding="16,12,16,12"

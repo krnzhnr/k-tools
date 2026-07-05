@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Microsoft.Extensions.DependencyInjection;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using KTools_App.Core;
@@ -25,6 +26,8 @@ public partial class MainViewModel : ThreadSafeViewModel
     private readonly SettingsViewModel _settingsViewModel;
     private readonly IDialogService _dialogService;
     private readonly IUpdateService _updateService;
+
+    private bool _isShellActivated = false;
 
     /// <summary>
     /// Словарь для быстрого поиска скрипта по тегу навигации.
@@ -105,6 +108,11 @@ public partial class MainViewModel : ThreadSafeViewModel
                 r.HeaderTitle = m.Script.Name;
                 r.HeaderSubtitle = m.Script.Description;
             });
+
+        // Подписываемся на сообщения активации через контекстное меню/командную строку
+        messenger.Register<MainViewModel, ShellActivationMessage>(
+            this,
+            (r, m) => r.HandleShellActivation(m));
     }
 
     /// <summary>
@@ -168,7 +176,7 @@ public partial class MainViewModel : ThreadSafeViewModel
                 "MainPage");
             Navigate("dependencies");
         }
-        else
+        else if (!_isShellActivated)
         {
             Navigate("home");
         }
@@ -334,5 +342,114 @@ public partial class MainViewModel : ThreadSafeViewModel
         _logService.Info("Пользователь кликнул по кнопке 'Обновиться' в баннере. Перенаправление в настройки.", "MainViewModel");
         Navigate("settings");
         _ = _settingsViewModel.DownloadAndInstallUpdateCommand.ExecuteAsync(null);
+    }
+
+    /// <summary>
+    /// Обрабатывает активацию приложения из командной строки или контекстного меню Проводника.
+    /// </summary>
+    private void HandleShellActivation(ShellActivationMessage message)
+    {
+        _isShellActivated = true;
+        _logService.Info($"Получен запрос активации через командную строку. Скрипт: '{message.ScriptTag ?? "не указан"}', файлов: {message.Files.Count}", "MainViewModel");
+
+        string? targetTag = null;
+        if (!string.IsNullOrEmpty(message.ScriptTag))
+        {
+            var cleanTag = message.ScriptTag.Trim().ToLowerInvariant();
+
+            // 1. Поиск по точному совпадению ключа тега (например, "script:video_encoding" или "video_encoding")
+            var key = _scriptsByTag.Keys.FirstOrDefault(k =>
+                k.Equals(cleanTag, StringComparison.OrdinalIgnoreCase) ||
+                k.Equals($"script:{cleanTag}", StringComparison.OrdinalIgnoreCase));
+
+            if (key != null)
+            {
+                targetTag = key;
+            }
+            else
+            {
+                // 2. Поиск по началу имени скрипта (например, "Ремуксинг" или "Transmuxing")
+                var pair = _scriptsByTag.FirstOrDefault(p =>
+                    p.Value.Name.Contains(message.ScriptTag, StringComparison.OrdinalIgnoreCase) ||
+                    p.Key.Contains(cleanTag, StringComparison.OrdinalIgnoreCase));
+                if (pair.Key != null)
+                {
+                    targetTag = pair.Key;
+                }
+            }
+        }
+
+        // Если нашли подходящий скрипт, добавляем файлы в его очередь и переключаемся
+        if (targetTag != null && _scriptsByTag.TryGetValue(targetTag, out var scriptInfo))
+        {
+            var realScript = _scriptRegistry.GetScriptByName(scriptInfo.Name);
+            if (realScript != null)
+            {
+                _logService.Info($"Перенаправление файлов в скрипт '{realScript.Name}' и навигация на вкладку", "MainViewModel");
+                AddFilesToScript(realScript, message.Files);
+                Navigate(targetTag);
+            }
+        }
+        else if (message.Files.Count > 0)
+        {
+            // Если скрипт не распознан, но файлы переданы, по умолчанию добавляем в первый доступный скрипт
+            // или выводим предупреждение. Давайте добавим файлы в "Кодирование видео" (первый скрипт).
+            var defaultPair = _scriptsByTag.FirstOrDefault();
+            if (defaultPair.Key != null)
+            {
+                var realScript = _scriptRegistry.GetScriptByName(defaultPair.Value.Name);
+                if (realScript != null)
+                {
+                    _logService.Warn($"Скрипт '{message.ScriptTag}' не распознан. Файлы добавлены в скрипт по умолчанию: '{realScript.Name}'", "MainViewModel");
+                    AddFilesToScript(realScript, message.Files);
+                    Navigate(defaultPair.Key);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Асинхронно добавляет файлы в очередь скрипта и запускает их технический анализ.
+    /// </summary>
+    private void AddFilesToScript(AbstractScript script, List<string> files)
+    {
+        var mediaProbeService = App.Services.GetRequiredService<IMediaProbeService>();
+        foreach (var file in files)
+        {
+            // Проверяем поддерживается ли расширение файла выбранным скриптом
+            if (script.FileExtensions != null && script.FileExtensions.Length > 0)
+            {
+                string ext = System.IO.Path.GetExtension(file).ToLowerInvariant();
+                if (!script.FileExtensions.Contains(ext))
+                {
+                    _logService.Warn($"Файл '{file}' пропущен: расширение '{ext}' не поддерживается скриптом '{script.Name}'", "MainViewModel");
+                    continue;
+                }
+            }
+
+            if (script.FilesQueue.Any(f => f.FilePath.Equals(file, StringComparison.OrdinalIgnoreCase)))
+            {
+                continue; // Исключаем дубликаты
+            }
+
+            var item = new FileQueueItem(file);
+            script.FilesQueue.Add(item);
+
+            // Запускаем фоновый асинхронный анализ структуры файла
+            System.Threading.Tasks.Task.Run(async () =>
+            {
+                try
+                {
+                    var structure = await mediaProbeService.ProbeAsync(item.FilePath);
+                    item.MediaInfo = structure ?? new MediaStructure { FilePath = item.FilePath };
+                }
+                catch (Exception ex)
+                {
+                    _logService.Exception(ex, $"Не удалось выполнить технический анализ файла: {item.FileName}", "MainViewModel");
+                    // Присваиваем пустую структуру, чтобы скрыть бесконечный спиннер в интерфейсе
+                    item.MediaInfo = new MediaStructure { FilePath = item.FilePath };
+                }
+            });
+        }
     }
 }

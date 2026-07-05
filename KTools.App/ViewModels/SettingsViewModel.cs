@@ -71,6 +71,7 @@ public partial class SettingsViewModel : ThreadSafeViewModel
     private readonly IUpdateService _updateService;
     private readonly ILogService _logService;
     private readonly IPathManager _pathManager;
+    private readonly IScriptRegistry _scriptRegistry;
 
     /// <summary>
     /// Строка версии приложения для отображения в блоке "О программе".
@@ -239,6 +240,12 @@ public partial class SettingsViewModel : ThreadSafeViewModel
     public partial bool RenameCaseSensitive { get; set; }
 
     /// <summary>
+    /// Флаг включения интеграции с контекстным меню Проводника Windows.
+    /// </summary>
+    [ObservableProperty]
+    public partial bool IsContextMenuEnabled { get; set; }
+
+    /// <summary>
     /// Инициализирует новый экземпляр SettingsViewModel с внедрением зависимостей.
     /// </summary>
     public SettingsViewModel(
@@ -246,13 +253,15 @@ public partial class SettingsViewModel : ThreadSafeViewModel
         IDialogService dialogService,
         IUpdateService updateService,
         ILogService logService,
-        IPathManager pathManager)
+        IPathManager pathManager,
+        IScriptRegistry scriptRegistry)
     {
         _settingsManager = settingsManager ?? throw new ArgumentNullException(nameof(settingsManager));
         _dialogService = dialogService ?? throw new ArgumentNullException(nameof(dialogService));
         _updateService = updateService ?? throw new ArgumentNullException(nameof(updateService));
         _logService = logService ?? throw new ArgumentNullException(nameof(logService));
         _pathManager = pathManager ?? throw new ArgumentNullException(nameof(pathManager));
+        _scriptRegistry = scriptRegistry ?? throw new ArgumentNullException(nameof(scriptRegistry));
 
         UpdateStatusText = "Обновления не проверялись";
         DefaultOutputSubfolder = "KTools_Result";
@@ -300,6 +309,7 @@ public partial class SettingsViewModel : ThreadSafeViewModel
         RenameUseRegex = _settingsManager.RenameUseRegex;
         RenameCaseSensitive = _settingsManager.RenameCaseSensitive;
         DebugSimulateOldVersion = _settingsManager.DebugSimulateOldVersion;
+        IsContextMenuEnabled = _settingsManager.GetSetting("Shell", "IsContextMenuEnabled", false);
     }
 
     partial void OnOverwriteExistingChanged(bool value)
@@ -404,6 +414,38 @@ public partial class SettingsViewModel : ThreadSafeViewModel
     partial void OnRenameCaseSensitiveChanged(bool value)
     {
         _settingsManager.RenameCaseSensitive = value;
+    }
+
+    partial void OnIsContextMenuEnabledChanged(bool value)
+    {
+        _settingsManager.SetSetting("Shell", "IsContextMenuEnabled", value);
+        _settingsManager.SaveSettings();
+
+        try
+        {
+            if (value)
+            {
+                var exePath = Environment.ProcessPath;
+                if (!string.IsNullOrEmpty(exePath))
+                {
+                    var scripts = _scriptRegistry.Scripts.Select(s => s.Name).ToList();
+                    ShellIntegration.Register(exePath, scripts);
+                    _logService.Info("Интеграция с контекстным меню Проводника успешно включена", "SettingsViewModel");
+                }
+            }
+            else
+            {
+                ShellIntegration.Unregister();
+                _logService.Info("Интеграция с контекстным меню Проводника успешно отключена", "SettingsViewModel");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logService.Exception(ex, "Ошибка при изменении состояния контекстного меню", "SettingsViewModel");
+            _dialogService.ShowMessageAsync(
+                "Ошибка интеграции",
+                $"Не удалось изменить состояние интеграции с контекстным меню: {ex.Message}");
+        }
     }
 
     /// <summary>

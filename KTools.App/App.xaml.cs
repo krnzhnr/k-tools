@@ -1,6 +1,10 @@
 using System;
+using System.Collections.Generic;
+using System.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Windows.AppLifecycle;
+using CommunityToolkit.Mvvm.Messaging;
 using Polly;
 using Polly.Extensions.Http;
 using KTools_App.Core;
@@ -33,6 +37,11 @@ public partial class App : Application
     /// (FolderPicker, FilePicker) через COM Interop.
     /// </summary>
     public static Window? CurrentMainWindow { get; private set; }
+
+    /// <summary>
+    /// Глобальная ссылка на DispatcherQueue UI-потока.
+    /// </summary>
+    public static Microsoft.UI.Dispatching.DispatcherQueue? UiDispatcherQueue { get; private set; }
 
     /// <summary>
     /// Инициализирует singleton-объект приложения
@@ -282,7 +291,24 @@ public partial class App : Application
                 provider.SetMainWindow(window);
             }
 
+            UiDispatcherQueue = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
+
             window.Activate();
+
+            // Обрабатываем собственные параметры запуска
+            var ownArgs = Environment.GetCommandLineArgs();
+            var (script, filesList) = ParseCommandLineArray(ownArgs);
+            if (!string.IsNullOrEmpty(script) || filesList.Count > 0)
+            {
+                _logService?.Info($"Обработка собственных аргументов запуска. Скрипт: {script ?? "нет"}, файлов: {filesList.Count}", "App");
+                WeakReferenceMessenger.Default.Send(new ShellActivationMessage(script, filesList));
+            }
+
+            // Обрабатываем накопленные аргументы от других экземпляров из папки PendingArgs
+            ProcessPendingArgsFiles();
+
+            // Запускаем отслеживание новых аргументов через FileSystemWatcher
+            StartArgsWatcher();
         }
         catch (Exception ex)
         {
@@ -292,5 +318,207 @@ public partial class App : Application
                 "App");
             throw;
         }
+    }
+
+    /// <summary>
+    /// Сканирует директорию PendingArgs и обрабатывает все перенаправленные аргументы.
+    /// </summary>
+    public static void ProcessPendingArgsFiles()
+    {
+        if (UiDispatcherQueue == null)
+        {
+            _logService?.Warn("Пропуск обработки отложенных аргументов: UiDispatcherQueue еще не инициализирован.", "App");
+            return;
+        }
+
+        try
+        {
+            string appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            string dir = Path.Combine(appData, "KTools", "PendingArgs");
+            if (!Directory.Exists(dir)) return;
+
+            string[] files = Directory.GetFiles(dir, "*.txt");
+            foreach (string file in files)
+            {
+                try
+                {
+                    if (!File.Exists(file)) continue;
+
+                    string[] args = File.ReadAllLines(file);
+                    File.Delete(file);
+
+                    var (script, filesList) = ParseCommandLineArray(args);
+                    if (!string.IsNullOrEmpty(script) || filesList.Count > 0)
+                    {
+                        if (UiDispatcherQueue is Microsoft.UI.Dispatching.DispatcherQueue dispatcherQueue)
+                        {
+                            dispatcherQueue.TryEnqueue(() =>
+                            {
+                                _logService?.Info($"Обработка перенаправленных файлов из файла аргументов. Скрипт: {script ?? "нет"}, файлов: {filesList.Count}", "App");
+                                WeakReferenceMessenger.Default.Send(new ShellActivationMessage(script, filesList));
+                            });
+                        }
+                    }
+                }
+                catch (IOException)
+                {
+                    // Файл занят другим процессом, обработаем при следующем вызове
+                }
+                catch (Exception ex)
+                {
+                    _logService?.Exception(ex, "Ошибка при обработке файла отложенных аргументов", "App");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logService?.Exception(ex, "Ошибка при доступе к папке отложенных аргументов", "App");
+        }
+    }
+
+    private static FileSystemWatcher? _argsWatcher;
+
+    /// <summary>
+    /// Запускает FileSystemWatcher для отслеживания новых файлов аргументов в директории PendingArgs.
+    /// </summary>
+    private static void StartArgsWatcher()
+    {
+        try
+        {
+            string appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            string dir = Path.Combine(appData, "KTools", "PendingArgs");
+            if (!Directory.Exists(dir))
+            {
+                Directory.CreateDirectory(dir);
+            }
+
+            _argsWatcher = new FileSystemWatcher(dir, "*.txt")
+            {
+                EnableRaisingEvents = true
+            };
+
+            _argsWatcher.Created += (s, e) =>
+            {
+                // Небольшая задержка, чтобы дать другому процессу завершить запись в файл
+                System.Threading.Thread.Sleep(50);
+                ProcessPendingArgsFiles();
+            };
+
+            _argsWatcher.Changed += (s, e) =>
+            {
+                ProcessPendingArgsFiles();
+            };
+        }
+        catch (Exception ex)
+        {
+            _logService?.Exception(ex, "Ошибка при инициализации FileSystemWatcher для аргументов запуска", "App");
+        }
+    }
+
+    /// <summary>
+    /// Обрабатывает аргументы запуска приложения (активации) и перенаправляет их через Messenger.
+    /// </summary>
+    public static void HandleActivation(AppActivationArguments args)
+    {
+        ProcessPendingArgsFiles();
+    }
+
+    private static (string? Script, List<string> Files) ParseActivationArgs(AppActivationArguments args)
+    {
+        string? script = null;
+        var files = new List<string>();
+
+        if (args.Kind == ExtendedActivationKind.Launch)
+        {
+            if (args.Data is Windows.ApplicationModel.Activation.ILaunchActivatedEventArgs launchArgs)
+            {
+                var rawArgs = SplitCommandLine(launchArgs.Arguments);
+                (script, files) = ParseCommandLineArray(rawArgs);
+            }
+        }
+        return (script, files);
+    }
+
+    public static (string? Script, List<string> Files) ParseCommandLineArray(string[] args)
+    {
+        string? script = null;
+        var files = new List<string>();
+
+        for (int i = 0; i < args.Length; i++)
+        {
+            if (string.Equals(args[i], "--script", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+            {
+                script = args[i + 1];
+                i++;
+            }
+            else
+            {
+                string path = args[i];
+                path = path.Trim('\"');
+
+                // Игнорируем сам исполняемый файл или сборку приложения (сравниваем имя без расширения, чтобы отфильтровать и .exe, и .dll)
+                string fileNameWithoutExt = System.IO.Path.GetFileNameWithoutExtension(path).ToLowerInvariant();
+                string currentExeNameWithoutExt = System.IO.Path.GetFileNameWithoutExtension(Environment.ProcessPath ?? "ktools.app").ToLowerInvariant();
+                if (fileNameWithoutExt == currentExeNameWithoutExt || fileNameWithoutExt == "ktools.app" || fileNameWithoutExt == "ktools_app")
+                {
+                    continue;
+                }
+
+                if (System.IO.File.Exists(path) || System.IO.Directory.Exists(path))
+                {
+                    files.Add(path);
+                }
+            }
+        }
+        return (script, files);
+    }
+
+    public static string[] SplitCommandLine(string commandLine)
+    {
+        var args = new List<string>();
+        if (string.IsNullOrWhiteSpace(commandLine)) return args.ToArray();
+
+        var inQuotes = false;
+        var current = new StringBuilder();
+        for (int i = 0; i < commandLine.Length; i++)
+        {
+            char c = commandLine[i];
+            if (c == '\"')
+            {
+                inQuotes = !inQuotes;
+            }
+            else if (c == ' ' && !inQuotes)
+            {
+                if (current.Length > 0)
+                {
+                    args.Add(current.ToString());
+                    current.Clear();
+                }
+            }
+            else
+            {
+                current.Append(c);
+            }
+        }
+        if (current.Length > 0)
+        {
+            args.Add(current.ToString());
+        }
+        return args.ToArray();
+    }
+}
+
+/// <summary>
+/// Сообщение активации через командную строку/Проводник.
+/// </summary>
+public sealed class ShellActivationMessage
+{
+    public string? ScriptTag { get; }
+    public List<string> Files { get; }
+
+    public ShellActivationMessage(string? scriptTag, List<string> files)
+    {
+        ScriptTag = scriptTag;
+        Files = files;
     }
 }
