@@ -179,10 +179,7 @@ public partial class App : Application
         services.AddHttpClient("DefaultClient")
             .AddPolicyHandler(HttpPolicyExtensions
                 .HandleTransientHttpError()
-                .WaitAndRetryAsync(3, retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt))))
-            .AddPolicyHandler(HttpPolicyExtensions
-                .HandleTransientHttpError()
-                .CircuitBreakerAsync(5, TimeSpan.FromSeconds(30)));
+                .WaitAndRetryAsync(3, retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt))));
 
         // 1. Регистрация служб ядра через чистый DI
         services.AddSingleton<ILogService, LogService>();
