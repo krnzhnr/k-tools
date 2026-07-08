@@ -431,4 +431,66 @@ public class VideoEncodingScriptTests
             if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
         }
     }
+
+    /// <summary>
+    /// Проверяет корректность выбора аудиодорожки по приоритету языков,
+    /// когда в настройках приоритета указан код 'rus', а в дорожке — 'ru'.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_AudioLangPriority_SelectsRuTrackForRusPriority()
+    {
+        // Arrange
+        string tempSourceFile = Path.GetTempFileName();
+        string tempOutputDir = Path.GetDirectoryName(tempSourceFile) ?? AppContext.BaseDirectory;
+
+        var structure = new MediaStructure { FilePath = tempSourceFile, Duration = 60.0 };
+        // Видеопоток
+        structure.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "video", Codec = "h264", Name = "Видео" });
+        // Первая аудиодорожка: японская, установлена как дорожка по умолчанию
+        structure.Tracks.Add(new MediaTrack { TrackId = 1, TrackType = "audio", Codec = "aac", Language = "jpn", IsDefault = true, Name = "Japanese Audio" });
+        // Вторая аудиодорожка: русская, не по умолчанию
+        structure.Tracks.Add(new MediaTrack { TrackId = 2, TrackType = "audio", Codec = "aac", Language = "ru", IsDefault = false, Name = "Russian Audio" });
+        
+        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile)).ReturnsAsync(structure);
+
+        List<string>? capturedExtraArgs = null;
+        _ffmpegRunnerMock.Setup(r => r.RunAsync(
+            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<List<string>>(), It.IsAny<List<string>>(),
+            It.IsAny<bool>(), It.IsAny<double>(), It.IsAny<Action<ProgressInfo>>(), It.IsAny<CancellationToken>()
+        )).Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken>(
+            (inP, outP, extArgs, inArgs, ovr, dur, prog, ct) => capturedExtraArgs = extArgs
+        ).ReturnsAsync(true);
+
+        var settings = new Dictionary<string, object>
+        {
+            { "encoder", "x265 (CPU)" },
+            { "cpu_preset", "medium" },
+            { "cpu_rc", "Битрейт (ABR)" },
+            { "cpu_v_bitrate", 2000 },
+            { "audio_codec", "copy" },
+            { "audio_lang_priority", new List<Dictionary<string, object>>
+                {
+                    new() { { "word", "rus" }, { "active", true } },
+                    new() { { "word", "jpn" }, { "active", false } }
+                }
+            }
+        };
+
+        try
+        {
+            // Act
+            await _script.ExecuteSingleAsync(tempSourceFile, settings, tempOutputDir, (idx, total, status, pct, fps, bit) => { }, 0, 1);
+
+            // Assert
+            // Проверяем, что в аргументах запуска FFmpeg для аудиопотока выбран относительный индекс 1 (соответствует второй аудиодорожке, т.е. TrackId=2)
+            // Картографирование дорожек в FFmpeg для аудио: "-map 0:a:1"
+            capturedExtraArgs.Should().NotBeNull();
+            capturedExtraArgs.Should().Contain("-map");
+            capturedExtraArgs.Should().Contain("0:a:1?");
+        }
+        finally
+        {
+            if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
+        }
+    }
 }

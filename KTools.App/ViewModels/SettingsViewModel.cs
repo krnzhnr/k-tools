@@ -485,7 +485,7 @@ public partial class SettingsViewModel : ThreadSafeViewModel
             _settingsManager.ShowLogsTab = false;
             _settingsManager.LogDir = string.Empty;
             _settingsManager.AutoCheckUpdates = true;
-            _settingsManager.IncludePreReleases = false;
+            _settingsManager.IncludePreReleases = true;
             _settingsManager.RenameEnableRegex = false;
             _settingsManager.RenameRegexSearch = string.Empty;
             _settingsManager.RenameRegexReplace = string.Empty;

@@ -145,7 +145,7 @@ public sealed class SettingsManager : ISettingsManager
     /// </summary>
     public bool IncludePreReleases
     {
-        get => GetSetting("Updates", "IncludePreReleases", false);
+        get => GetSetting("Updates", "IncludePreReleases", true);
         set => SetSetting("Updates", "IncludePreReleases", value);
     }
 
@@ -509,7 +509,7 @@ public sealed class SettingsManager : ISettingsManager
             }
             if (!HasSetting("Updates", "IncludePreReleases"))
             {
-                SetSettingInternal("Updates", "IncludePreReleases", false);
+                SetSettingInternal("Updates", "IncludePreReleases", true);
                 modified = true;
             }
             if (!HasSetting("Debug", "DebugSimulateOldVersion"))

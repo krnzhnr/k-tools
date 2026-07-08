@@ -442,9 +442,9 @@ public sealed class VideoEncodingScript : AbstractScript
                     SettingType.KeywordList,
                     new List<Dictionary<string, object>>
                     {
-                        new() { { "word", @"{\fad(500,500)\b1\an3\fnTahoma\fs50\shad3\bord1.3\4c&H000000&\4a&H00&}" }, { "active", true } },
-                        new() { { "word", @"{\fad(500,500)\b1\an3\fnTahoma\fs16.667\shad1\bord0.433\4c&H000000&\4a&H00&}" }, { "active", true } },
-                        new() { { "word", @"{\fad(500,500)\b1\an3\fnTahoma\fs100\shad6\bord2.6\4c&H000000&\4a&H00&}" }, { "active", true } }
+                        new() { { "word", @"{\fad(500,500)\b1\an3\fnTahoma\fs50\shad3\bord1.3\4c&H000000&\4a&H00&}" }, { "active", false } },
+                        new() { { "word", @"{\fad(500,500)\b1\an3\fnTahoma\fs16.667\shad1\bord0.433\4c&H000000&\4a&H00&}" }, { "active", false } },
+                        new() { { "word", @"{\fad(500,500)\b1\an3\fnTahoma\fs100\shad6\bord2.6\4c&H000000&\4a&H00&}" }, { "active", false } }
                     },
                     "Субтитры",
                     column: 0,
@@ -646,9 +646,13 @@ public sealed class VideoEncodingScript : AbstractScript
                 foreach (var lang in activeLangs)
                 {
                     bestAudio = audioTracks.FirstOrDefault(t => 
-                        t.Language.ToLowerInvariant().Contains(lang!) || 
-                        (lang!.Length >= 3 && t.Language.ToLowerInvariant().Contains(lang)) ||
-                        (t.Language.Length >= 3 && lang.Contains(t.Language.ToLowerInvariant())));
+                    {
+                        string normTrack = AppConstants.NormalizeLanguage(t.Language);
+                        string normLang = AppConstants.NormalizeLanguage(lang!);
+                        return normTrack.Equals(normLang, StringComparison.OrdinalIgnoreCase) ||
+                               normTrack.Contains(normLang, StringComparison.OrdinalIgnoreCase) ||
+                               normLang.Contains(normTrack, StringComparison.OrdinalIgnoreCase);
+                    });
 
                     if (bestAudio != null) break;
                 }
