@@ -249,7 +249,7 @@ public sealed class StreamManagementScript : AbstractScript
 
         string stem = Path.GetFileNameWithoutExtension(filePath);
         string targetFile = Path.Combine(targetDir, $"{stem}{targetExt}");
-        string finalOutputFile = GetSafeOutputPath(filePath, targetFile);
+        string finalOutputFile = GetSafeOutputPath(filePath, targetFile, settings);
 
         // Проверка флага перезаписи существующего файла
         bool overwrite = _settingsManager.GetSetting("General", "OverwriteExisting", false);

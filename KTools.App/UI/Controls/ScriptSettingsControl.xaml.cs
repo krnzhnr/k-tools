@@ -1457,10 +1457,20 @@ public sealed partial class ScriptSettingsControl : UserControl
         int maxFiles = _isPreviewExpanded ? files.Count : 5;
         var previewStack = new StackPanel { Spacing = 6, HorizontalAlignment = HorizontalAlignment.Stretch };
 
+        // Собираем текущие настройки для предпросмотра
+        var settings = new Dictionary<string, object>();
+        foreach (var field in _activeScript.GetFullSettingsSchema())
+        {
+            if (field.Type != SettingType.Subtitle)
+            {
+                settings[field.Key] = _settingsManager.GetSetting(settingsGroup, field.Key, field.DefaultValue);
+            }
+        }
+
         for (int i = 0; i < Math.Min(files.Count, maxFiles); i++)
         {
             var file = files[i];
-            string previewOutPath = _activeScript.GetPreviewOutputPath(file.FilePath, file.FilePath, i + 1);
+            string previewOutPath = _activeScript.GetPreviewOutputPath(file.FilePath, file.FilePath, i + 1, settings);
             string newName = Path.GetFileName(previewOutPath);
 
             var rowGrid = new Grid { HorizontalAlignment = HorizontalAlignment.Stretch };

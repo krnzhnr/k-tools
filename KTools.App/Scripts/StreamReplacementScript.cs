@@ -168,7 +168,7 @@ public sealed class StreamReplacementScript : AbstractScript
 
         string stem = Path.GetFileNameWithoutExtension(filePath);
         string targetFile = Path.Combine(targetDir, $"{stem}{ext}");
-        string finalOutputFile = GetSafeOutputPath(filePath, targetFile);
+        string finalOutputFile = GetSafeOutputPath(filePath, targetFile, settings);
 
         bool overwrite = _settingsManager.GetSetting("General", "OverwriteExisting", false);
         if (File.Exists(finalOutputFile) && !overwrite)

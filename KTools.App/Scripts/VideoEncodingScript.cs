@@ -681,7 +681,7 @@ public sealed class VideoEncodingScript : AbstractScript
 
             string stem = Path.GetFileNameWithoutExtension(filePath);
             string targetFile = Path.Combine(targetDir, $"{stem}.mp4");
-            string finalOutputFile = GetSafeOutputPath(filePath, targetFile);
+            string finalOutputFile = GetSafeOutputPath(filePath, targetFile, settings);
 
             // Объявляем finalOutputFile на уровне выше, чтобы она была доступна в catch блоке
             _finalOutputFileForCleanup = finalOutputFile;

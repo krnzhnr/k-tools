@@ -220,7 +220,7 @@ public sealed class MkvAssemblyScript : AbstractScript
             : outputPath;
 
         string targetFile = Path.Combine(targetDir, $"{stem}.mkv");
-        string finalOutputFile = GetSafeOutputPath(filePath, targetFile);
+        string finalOutputFile = GetSafeOutputPath(filePath, targetFile, settings);
 
         // 5. Проверка существования выходного файла при отключенной перезаписи
         bool overwrite = _settingsManager.GetSetting("General", "OverwriteExisting", false);

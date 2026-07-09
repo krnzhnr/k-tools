@@ -239,7 +239,7 @@ public sealed class AudioEncodingScript : AbstractScript
 
         string baseOutputName = Path.GetFileNameWithoutExtension(filePath) + targetExt;
         string targetOutputFilePath = Path.Combine(targetDir, baseOutputName);
-        string outputFilePath = GetSafeOutputPath(filePath, targetOutputFilePath);
+        string outputFilePath = GetSafeOutputPath(filePath, targetOutputFilePath, settings);
         string outputFileName = Path.GetFileName(outputFilePath);
 
         // 5. Проверяем флаг перезаписи существующего файла

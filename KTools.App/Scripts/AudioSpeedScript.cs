@@ -180,7 +180,7 @@ public sealed class AudioSpeedScript : AbstractScript
             : outputPath;
 
         string outputFilePath = Path.Combine(targetDir, outputName);
-        outputFilePath = GetSafeOutputPath(filePath, outputFilePath);
+        outputFilePath = GetSafeOutputPath(filePath, outputFilePath, settings);
 
         // Проверка флага перезаписи существующего файла
         bool overwrite = _settingsManager.GetSetting(

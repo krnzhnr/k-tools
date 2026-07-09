@@ -133,7 +133,7 @@ public sealed class AudioChannelsScript : AbstractScript
         string outputFilePath = Path.Combine(
             targetDir, 
             $"{originalName}.wavs");
-        outputFilePath = GetSafeOutputPath(filePath, outputFilePath);
+        outputFilePath = GetSafeOutputPath(filePath, outputFilePath, settings);
 
         string basePath = Path.ChangeExtension(outputFilePath, null);
 

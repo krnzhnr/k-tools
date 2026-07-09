@@ -156,7 +156,7 @@ public sealed class SubtitlesConvertScript : AbstractScript
 
         string baseOutputName = Path.GetFileNameWithoutExtension(filePath) + targetExt;
         string targetOutputFilePath = Path.Combine(targetDir, baseOutputName);
-        string outputFilePath = GetSafeOutputPath(filePath, targetOutputFilePath);
+        string outputFilePath = GetSafeOutputPath(filePath, targetOutputFilePath, settings);
         string outputFileName = Path.GetFileName(outputFilePath);
 
         // Проверяем перезапись существующего файла

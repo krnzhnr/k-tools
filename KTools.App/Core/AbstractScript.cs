@@ -273,7 +273,7 @@ public abstract class AbstractScript
     /// Возвращает безопасный путь для сохранения результата, предотвращая перезапись исходника
     /// и коллизии имен при пакетном переименовании. Поддерживает переименование по правилам PowerRename.
     /// </summary>
-    protected string GetSafeOutputPath(string inputPath, string outputPath)
+    protected string GetSafeOutputPath(string inputPath, string outputPath, Dictionary<string, object>? settings = null)
     {
         try
         {
@@ -333,14 +333,24 @@ public abstract class AbstractScript
             string replacement = "";
 
             string settingsGroup = _settingsManager.GetSafeGroupName(Name);
-            bool localOverride = _settingsManager.GetSetting(settingsGroup, "LocalRenameOverride", false);
+            bool localOverride = settings != null 
+                ? GetSettingValue(settings, "LocalRenameOverride", false)
+                : _settingsManager.GetSetting(settingsGroup, "LocalRenameOverride", false);
 
             if (localOverride)
             {
-                pattern = _settingsManager.GetSetting(settingsGroup, "LocalRenameSearch", string.Empty);
-                replacement = _settingsManager.GetSetting(settingsGroup, "LocalRenameReplace", string.Empty);
-                useRegex = _settingsManager.GetSetting(settingsGroup, "LocalRenameUseRegex", true);
-                caseSensitive = _settingsManager.GetSetting(settingsGroup, "LocalRenameCaseSensitive", false);
+                pattern = settings != null 
+                    ? GetSettingValue(settings, "LocalRenameSearch", string.Empty)
+                    : _settingsManager.GetSetting(settingsGroup, "LocalRenameSearch", string.Empty);
+                replacement = settings != null 
+                    ? GetSettingValue(settings, "LocalRenameReplace", string.Empty)
+                    : _settingsManager.GetSetting(settingsGroup, "LocalRenameReplace", string.Empty);
+                useRegex = settings != null 
+                    ? GetSettingValue(settings, "LocalRenameUseRegex", true)
+                    : _settingsManager.GetSetting(settingsGroup, "LocalRenameUseRegex", true);
+                caseSensitive = settings != null 
+                    ? GetSettingValue(settings, "LocalRenameCaseSensitive", false)
+                    : _settingsManager.GetSetting(settingsGroup, "LocalRenameCaseSensitive", false);
                 renameEnabled = !string.IsNullOrEmpty(pattern);
             }
             else
@@ -436,7 +446,7 @@ public abstract class AbstractScript
     /// <summary>
     /// Возвращает гипотетический выходной путь для предпросмотра переименования (без изменения состояния).
     /// </summary>
-    public string GetPreviewOutputPath(string inputPath, string outputPath, int fileNum)
+    public string GetPreviewOutputPath(string inputPath, string outputPath, int fileNum, Dictionary<string, object>? settings = null)
     {
         try
         {
@@ -454,14 +464,24 @@ public abstract class AbstractScript
             string replacement = "";
 
             string settingsGroup = _settingsManager.GetSafeGroupName(Name);
-            bool localOverride = _settingsManager.GetSetting(settingsGroup, "LocalRenameOverride", false);
+            bool localOverride = settings != null 
+                ? GetSettingValue(settings, "LocalRenameOverride", false)
+                : _settingsManager.GetSetting(settingsGroup, "LocalRenameOverride", false);
 
             if (localOverride)
             {
-                pattern = _settingsManager.GetSetting(settingsGroup, "LocalRenameSearch", string.Empty);
-                replacement = _settingsManager.GetSetting(settingsGroup, "LocalRenameReplace", string.Empty);
-                useRegex = _settingsManager.GetSetting(settingsGroup, "LocalRenameUseRegex", true);
-                caseSensitive = _settingsManager.GetSetting(settingsGroup, "LocalRenameCaseSensitive", false);
+                pattern = settings != null 
+                    ? GetSettingValue(settings, "LocalRenameSearch", string.Empty)
+                    : _settingsManager.GetSetting(settingsGroup, "LocalRenameSearch", string.Empty);
+                replacement = settings != null 
+                    ? GetSettingValue(settings, "LocalRenameReplace", string.Empty)
+                    : _settingsManager.GetSetting(settingsGroup, "LocalRenameReplace", string.Empty);
+                useRegex = settings != null 
+                    ? GetSettingValue(settings, "LocalRenameUseRegex", true)
+                    : _settingsManager.GetSetting(settingsGroup, "LocalRenameUseRegex", true);
+                caseSensitive = settings != null 
+                    ? GetSettingValue(settings, "LocalRenameCaseSensitive", false)
+                    : _settingsManager.GetSetting(settingsGroup, "LocalRenameCaseSensitive", false);
                 renameEnabled = !string.IsNullOrEmpty(pattern);
             }
             else
@@ -477,7 +497,6 @@ public abstract class AbstractScript
             {
                 try
                 {
-                    string oldStem = stem;
                     string resolvedReplacement = EvaluatePowerRenameVariables(replacement, fileNum, DateTime.Now);
 
                     if (useRegex)
@@ -496,17 +515,14 @@ public abstract class AbstractScript
                         
                         stem = System.Text.RegularExpressions.Regex.Replace(stem, System.Text.RegularExpressions.Regex.Escape(pattern), resolvedReplacement, options);
                     }
-
-                    if (oldStem != stem)
-                    {
-                        outResolved = Path.Combine(dir, $"{stem}{ext}");
-                    }
                 }
                 catch
                 {
                     // Игнорируем ошибки при предпросмотре
                 }
             }
+
+            outResolved = Path.Combine(dir, $"{stem}{ext}");
 
             if (inResolved.Equals(outResolved, StringComparison.OrdinalIgnoreCase))
             {

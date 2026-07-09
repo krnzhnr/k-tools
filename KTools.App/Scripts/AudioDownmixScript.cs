@@ -209,7 +209,7 @@ public sealed class AudioDownmixScript : AbstractScript
             : outputPath;
 
         string outputFilePath = Path.Combine(targetDir, outputName);
-        outputFilePath = GetSafeOutputPath(filePath, outputFilePath);
+        outputFilePath = GetSafeOutputPath(filePath, outputFilePath, settings);
 
         // Проверяем, существует ли файл и нужно ли его перезаписать
         bool overwrite = _settingsManager.GetSetting(
