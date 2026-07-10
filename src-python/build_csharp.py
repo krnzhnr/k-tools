@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Скрипт сборки C#-версии K-Tools.
 
-Выполняет компиляцию приложения на C# (.NET 8 / WinUI 3) в режиме self-contained
+Выполняет компиляцию приложения на C# (.NET 10 / WinUI 3) в режиме self-contained
 и генерирует скрипт Inno Setup для создания автономного установщика.
 """
 
@@ -87,6 +87,8 @@ def find_publish_folder() -> Path:
     """Динамически находит папку публикации publish."""
     # Возможные пути сборки (с x64 и без в зависимости от параметров MSBuild)
     candidates = [
+        SRC_DIR / "KTools.App" / "bin" / "Release" / "net10.0-windows10.0.26100.0" / "win-x64" / "publish",
+        SRC_DIR / "KTools.App" / "bin" / "x64" / "Release" / "net10.0-windows10.0.26100.0" / "win-x64" / "publish",
         SRC_DIR / "KTools.App" / "bin" / "Release" / "net8.0-windows10.0.26100.0" / "win-x64" / "publish",
         SRC_DIR / "KTools.App" / "bin" / "x64" / "Release" / "net8.0-windows10.0.26100.0" / "win-x64" / "publish"
     ]
@@ -199,6 +201,8 @@ def clean_publish_folder() -> None:
     """Очищает предыдущие сборки publish."""
     # Пытаемся найти папки публикации и очистить их
     candidates = [
+        SRC_DIR / "KTools.App" / "bin" / "Release" / "net10.0-windows10.0.26100.0" / "win-x64" / "publish",
+        SRC_DIR / "KTools.App" / "bin" / "x64" / "Release" / "net10.0-windows10.0.26100.0" / "win-x64" / "publish",
         SRC_DIR / "KTools.App" / "bin" / "Release" / "net8.0-windows10.0.26100.0" / "win-x64" / "publish",
         SRC_DIR / "KTools.App" / "bin" / "x64" / "Release" / "net8.0-windows10.0.26100.0" / "win-x64" / "publish"
     ]
@@ -216,7 +220,7 @@ def main() -> None:
     clean_publish_folder()
 
     # Шаг 2. Запуск dotnet publish с динамической версией
-    print("[*] Запуск компиляции C# проекта (.NET 8 / WinUI 3)...")
+    print("[*] Запуск компиляции C# проекта (.NET 10 / WinUI 3)...")
     
     # Формируем чисто числовую версию для AssemblyVersion/FileVersion
     assembly_version = "2.0.0.0"
