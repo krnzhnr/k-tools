@@ -531,8 +531,8 @@ dotnet test -c Debug -p:Platform=x64
 | 4 | Рефакторинг представления (x:Bind) | 2 | ✅ ЗАВЕРШЕН | Переход на скомпилированные привязки и разгрузка Code-Behind. |
 | 5 | Работа с сетью (IHttpClientFactory) | 2 | ✅ ЗАВЕРШЕН | Устранение проблем сокетов, интеграция Polly. |
 | 6 | Модальные окна (ContentDialog) | 1 | ✅ ЗАВЕРШЕН | Абстракция IDialogService с привязкой XamlRoot. |
-| 7 | Интернационализация (MRT Core) | 2 | 📅 ПЛАН | Поддержка .resw файлов и x:Uid локализации. |
-| 8 | Тестирование и стабилизация | 2 | 📅 ПЛАН | Юнит-тесты, включение `TreatWarningsAsErrors`. |
+| 7 | Интернационализация (MRT Core) | 2 | ❌ ОТМЕНЕН | Решено отказаться от динамической локализации. |
+| 8 | Тестирование и стабилизация | 2 | ✅ ЗАВЕРШЕН | Юнит-тесты (75 тестов), включение `TreatWarningsAsErrors`. |
 
 ---
 
@@ -540,21 +540,19 @@ dotnet test -c Debug -p:Platform=x64
 
 ```mermaid
 graph TD
-    E1["Этап 1: Инфраструктура<br/>(ЗАВЕРШЕН)"] --> E2["Этап 2: DI и DIP<br/>(В РАБОТЕ)"]
-    E2 --> E3["Этап 3: Многопоточность и DispatcherQueue"]
-    E2 --> E4["Этап 4: Рефакторинг XAML и x:Bind"]
-    E3 --> E5["Этап 5: Работа с сетью"]
+    E1["Этап 1: Инфраструктура<br/>(ЗАВЕРШЕН)"] --> E2["Этап 2: DI и DIP<br/>(ЗАВЕРШЕН)"]
+    E2 --> E3["Этап 3: Многопоточность и DispatcherQueue<br/>(ЗАВЕРШЕН)"]
+    E2 --> E4["Этап 4: Рефакторинг XAML и x:Bind<br/>(ЗАВЕРШЕН)"]
+    E3 --> E5["Этап 5: Работа с сетью<br/>(ЗАВЕРШЕН)"]
     E4 --> E5
-    E5 --> E6["Этап 6: Модальные окна"]
-    E6 --> E7["Этап 7: Интернационализация"]
-    E7 --> E8["Этап 8: Тестирование и TreatWarningsAsErrors"]
+    E5 --> E6["Этап 6: Модальные окна<br/>(ЗАВЕРШЕН)"]
+    E6 --> E8["Этап 8: Тестирование и TreatWarningsAsErrors<br/>(ЗАВЕРШЕН)"]
 
     style E1 fill:#1a365d,stroke:#3182ce,color:#fff
-    style E2 fill:#2d3748,stroke:#dd6b20,color:#fff
-    style E3 fill:#2d3748,stroke:#319795,color:#fff
-    style E4 fill:#2d3748,stroke:#805ad5,color:#fff
-    style E5 fill:#2d3748,stroke:#38a169,color:#fff
-    style E6 fill:#2d3748,stroke:#d69e2e,color:#fff
-    style E7 fill:#2d3748,stroke:#e53e3e,color:#fff
-    style E8 fill:#2d3748,stroke:#4a5568,color:#fff
+    style E2 fill:#1a365d,stroke:#3182ce,color:#fff
+    style E3 fill:#1a365d,stroke:#3182ce,color:#fff
+    style E4 fill:#1a365d,stroke:#3182ce,color:#fff
+    style E5 fill:#1a365d,stroke:#3182ce,color:#fff
+    style E6 fill:#1a365d,stroke:#3182ce,color:#fff
+    style E8 fill:#1a365d,stroke:#3182ce,color:#fff
 ```
