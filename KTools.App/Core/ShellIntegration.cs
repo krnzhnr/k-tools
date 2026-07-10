@@ -57,6 +57,75 @@ public static class ShellIntegration
     }
 
     /// <summary>
+    /// Проверяет, требуется ли обновить интеграцию с контекстным меню в реестре.
+    /// Возвращает true, если записи отсутствуют или не совпадают с текущими параметрами.
+    /// </summary>
+    public static bool NeedsUpdate(string exePath, List<string> scriptNames)
+    {
+        var scripts = new List<(string Name, string Code)>();
+        foreach (var name in scriptNames)
+        {
+            if (ScriptTagMap.TryGetValue(name, out var code))
+            {
+                scripts.Add((name, code));
+            }
+            else
+            {
+                string safeCode = name.Replace(" ", "_").ToLowerInvariant();
+                scripts.Add((name, safeCode));
+            }
+        }
+
+        return NeedsUpdateForKey(Registry.CurrentUser, RootKeyPath, exePath, scripts)
+            || NeedsUpdateForKey(Registry.CurrentUser, FolderKeyPath, exePath, scripts);
+    }
+
+    private static bool NeedsUpdateForKey(RegistryKey root, string subKeyPath, string exePath, List<(string Name, string Code)> scripts)
+    {
+        try
+        {
+            using var mainKey = root.OpenSubKey(subKeyPath, false);
+            if (mainKey == null) return true;
+
+            var muiVerb = mainKey.GetValue("MUIVerb") as string;
+            if (muiVerb != "Открыть в K-Tools") return true;
+
+            var extendedKey = mainKey.GetValue("ExtendedSubCommandsKey") as string;
+            if (extendedKey != subKeyPath.Replace(@"Software\Classes\", "")) return true;
+
+            var icon = mainKey.GetValue("Icon") as string;
+            if (icon != $"\"{exePath}\",0") return true;
+
+            using var shellKey = mainKey.OpenSubKey("shell", false);
+            if (shellKey == null) return true;
+
+            var subKeys = shellKey.GetSubKeyNames();
+            if (subKeys.Length != scripts.Count) return true;
+
+            foreach (var (name, code) in scripts)
+            {
+                using var scriptKey = shellKey.OpenSubKey(code, false);
+                if (scriptKey == null) return true;
+
+                var scriptMui = scriptKey.GetValue("MUIVerb") as string;
+                if (scriptMui != name) return true;
+
+                using var commandKey = scriptKey.OpenSubKey("command", false);
+                if (commandKey == null) return true;
+
+                var cmdValue = commandKey.GetValue("") as string;
+                if (cmdValue != $"\"{exePath}\" --script \"{code}\" \"%1\"") return true;
+            }
+
+            return false;
+        }
+        catch
+        {
+            return true;
+        }
+    }
+
+    /// <summary>
     /// Удаляет K-Tools из контекстного меню проводника.
     /// </summary>
     public static void Unregister()
@@ -73,7 +142,7 @@ public static class ShellIntegration
             if (mainKey == null) return;
 
             mainKey.SetValue("MUIVerb", "Открыть в K-Tools");
-            mainKey.SetValue("SubCommands", "");
+            mainKey.SetValue("ExtendedSubCommandsKey", subKeyPath.Replace(@"Software\Classes\", ""));
             mainKey.SetValue("Icon", $"\"{exePath}\",0");
 
             using var shellKey = mainKey.CreateSubKey("shell", true);

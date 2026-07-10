@@ -276,6 +276,30 @@ public partial class App : Application
                 "App");
             _ = Services.GetRequiredService<IScriptRegistry>().Scripts;
 
+            // Автоматически обновляем ключи контекстного меню в реестре, если интеграция включена
+            try
+            {
+                var settingsManager = Services.GetRequiredService<ISettingsManager>();
+                if (settingsManager.GetSetting("Shell", "IsContextMenuEnabled", false))
+                {
+                    var exePath = Environment.ProcessPath;
+                    if (!string.IsNullOrEmpty(exePath))
+                    {
+                        var scriptRegistry = Services.GetRequiredService<IScriptRegistry>();
+                        var scripts = scriptRegistry.Scripts.Select(s => s.Name).ToList();
+                        if (ShellIntegration.NeedsUpdate(exePath, scripts))
+                        {
+                            ShellIntegration.Register(exePath, scripts);
+                            _logService?.Info("Реестр контекстного меню успешно обновлен при запуске", "App");
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logService?.Exception(ex, "Не удалось обновить контекстное меню при запуске", "App");
+            }
+
             // Создаём и активируем главное окно
             var window = Services.GetRequiredService<MainWindow>();
             CurrentMainWindow = window;
