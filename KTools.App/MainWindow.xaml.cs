@@ -17,6 +17,9 @@ namespace KTools_App;
 public sealed partial class MainWindow : Window
 {
     private const int WM_GETMINMAXINFO = 0x0024;
+    private const int WM_NCHITTEST = 0x0084;
+    private const int HTSYSMENU = 3;
+    private const int HTCAPTION = 2;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct POINT
@@ -99,30 +102,11 @@ public sealed partial class MainWindow : Window
             ExtendsContentIntoTitleBar = true;
             SetTitleBar(AppTitleBar);
 
-            // Установка иконки приложения в TitleBar и панель задач.
-            // В установленной версии иконка лежит в корне (H:\K-Tools\AppIcon.ico),
-            // в dev-сборке — в подпапке Assets\AppIcon.ico.
+            // Установка иконки приложения в панель задач и настройка заголовка.
             try
             {
                 string baseDir = AppContext.BaseDirectory;
                 string? iconIcoPath = ResolveIconPath(baseDir, "AppIcon.ico");
-                string? iconPngPath = ResolveIconPath(baseDir, "Square44x44Logo.scale-200.png");
-
-                // Иконка TitleBar (кастомный заголовок окна) — используем PNG для BitmapIconSource
-                if (iconPngPath != null)
-                {
-                    AppTitleBar.IconSource = new Microsoft.UI.Xaml.Controls.BitmapIconSource
-                    {
-                        UriSource = new Uri(iconPngPath),
-                        ShowAsMonochrome = false,
-                    };
-                }
-                else if (iconIcoPath != null)
-                {
-                    // Фоллбек: используем ICO через ImageIconSource + BitmapImage
-                    var bitmapImage = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(iconIcoPath));
-                    AppTitleBar.IconSource = new Microsoft.UI.Xaml.Controls.ImageIconSource { ImageSource = bitmapImage };
-                }
 
                 // Иконка окна для AppWindow (системная иконка Alt+Tab)
                 if (iconIcoPath != null)
@@ -336,6 +320,16 @@ public sealed partial class MainWindow : Window
         uint uIdSubclass,
         IntPtr dwRefData)
     {
+        if (uMsg == WM_NCHITTEST)
+        {
+            IntPtr result = DefSubclassProc(hWnd, uMsg, wParam, lParam);
+            if (result.ToInt32() == HTSYSMENU)
+            {
+                return new IntPtr(HTCAPTION);
+            }
+            return result;
+        }
+
         if (uMsg == WM_GETMINMAXINFO)
         {
             try

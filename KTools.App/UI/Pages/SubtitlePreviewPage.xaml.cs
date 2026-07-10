@@ -44,33 +44,7 @@ public sealed partial class SubtitlePreviewPage : Page
         ViewModel = viewModel;
         InitializeComponent();
 
-        // Программная установка иконки TitleBar — в unpackaged-режиме
-        // относительные URI в XAML не резолвятся через PRI.
-        // В установленной версии иконка в корне, в dev-сборке — в Assets.
-        try
-        {
-            string baseDir = AppContext.BaseDirectory;
-            string? iconPngPath = ResolveIconPath(baseDir, "Square44x44Logo.scale-200.png");
-            string? iconIcoPath = ResolveIconPath(baseDir, "AppIcon.ico");
 
-            if (iconPngPath != null)
-            {
-                AppTitleBar.IconSource = new Microsoft.UI.Xaml.Controls.BitmapIconSource
-                {
-                    UriSource = new Uri(iconPngPath),
-                    ShowAsMonochrome = false,
-                };
-            }
-            else if (iconIcoPath != null)
-            {
-                var bitmapImage = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(iconIcoPath));
-                AppTitleBar.IconSource = new ImageIconSource { ImageSource = bitmapImage };
-            }
-        }
-        catch
-        {
-            // Иконка TitleBar не критична — продолжаем без неё
-        }
 
         // Слушаем изменения коллекции строк для обновления статистики
         ViewModel.PropertyChanged += OnViewModelPropertyChanged;

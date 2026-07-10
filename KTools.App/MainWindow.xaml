@@ -18,7 +18,7 @@
 
         <TitleBar x:Name="AppTitleBar" Title="K-Tools">
             <TitleBar.IconSource>
-                <SymbolIconSource Symbol="Home" />
+                <ImageIconSource ImageSource="/Assets/AppIcon.ico" />
             </TitleBar.IconSource>
         </TitleBar>
 

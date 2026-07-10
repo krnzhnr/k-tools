@@ -1,5 +1,6 @@
 // -*- coding: utf-8 -*-
 using System;
+using System.Runtime.InteropServices;
 using KTools_App.Services.Contracts;
 using Microsoft.UI.Xaml;
 using KTools_App.Core;
@@ -13,6 +14,41 @@ namespace KTools_App.UI.Pages;
 /// </summary>
 public sealed class SubtitlePreviewWindow : Window
 {
+    private const int WM_NCHITTEST = 0x0084;
+    private const int HTSYSMENU = 3;
+    private const int HTCAPTION = 2;
+
+    private delegate IntPtr SubclassProc(
+        IntPtr hWnd,
+        uint uMsg,
+        IntPtr wParam,
+        IntPtr lParam,
+        uint uIdSubclass,
+        IntPtr dwRefData);
+
+    [DllImport(
+        "comctl32.dll",
+        CharSet = CharSet.Auto,
+        EntryPoint = "SetWindowSubclass",
+        ExactSpelling = true)]
+    private static extern bool SetWindowSubclass(
+        IntPtr hWnd,
+        SubclassProc subclassProc,
+        uint uIdSubclass,
+        IntPtr dwRefData);
+
+    [DllImport(
+        "comctl32.dll",
+        CharSet = CharSet.Auto,
+        EntryPoint = "DefSubclassProc",
+        ExactSpelling = true)]
+    private static extern IntPtr DefSubclassProc(
+        IntPtr hWnd,
+        uint uMsg,
+        IntPtr wParam,
+        IntPtr lParam);
+
+    private SubclassProc? _subclassProcDelegate;
     /// <summary>
     /// Инициализирует новый экземпляр класса SubtitlePreviewWindow.
     /// </summary>
@@ -89,6 +125,40 @@ public sealed class SubtitlePreviewWindow : Window
                 var y = (screenHeight - 1000) / 2;
                 appWindow.Move(new Windows.Graphics.PointInt32(x, y));
             }
+            // Подключение subclass-процедуры для отключения системного меню на иконке
+            try
+            {
+                if (hwnd != IntPtr.Zero)
+                {
+                    _subclassProcDelegate = new SubclassProc(WindowSubclassProc);
+                    SetWindowSubclass(hwnd, _subclassProcDelegate, 1, IntPtr.Zero);
+                }
+            }
+            catch (Exception ex)
+            {
+                App.Services.GetRequiredService<ILogService>().Warn($"Не удалось установить обработчик сообщений окна предпросмотра: {ex.Message}", "SubtitlePreviewWindow");
+            }
         }
+    }
+
+    private IntPtr WindowSubclassProc(
+        IntPtr hWnd,
+        uint uMsg,
+        IntPtr wParam,
+        IntPtr lParam,
+        uint uIdSubclass,
+        IntPtr dwRefData)
+    {
+        if (uMsg == WM_NCHITTEST)
+        {
+            IntPtr result = DefSubclassProc(hWnd, uMsg, wParam, lParam);
+            if (result.ToInt32() == HTSYSMENU)
+            {
+                return new IntPtr(HTCAPTION);
+            }
+            return result;
+        }
+
+        return DefSubclassProc(hWnd, uMsg, wParam, lParam);
     }
 }
