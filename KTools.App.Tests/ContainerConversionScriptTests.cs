@@ -210,4 +210,133 @@ public class ContainerConversionScriptTests
             if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
         }
     }
+
+    /// <summary>
+    /// Проверяет, что при отсутствии метаданных (ffprobe null) совместимость принимается по умолчанию.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_NullMetadata_CompatibleByDefault()
+    {
+        // Arrange
+        string uniqueId = Guid.NewGuid().ToString("N");
+        string tempSourceFile = Path.Combine(Path.GetTempPath(), $"source_{uniqueId}.avi");
+        File.WriteAllText(tempSourceFile, "dummy");
+        string tempOutputDir = Path.GetTempPath();
+        string expectedDest = Path.Combine(tempOutputDir, $"source_{uniqueId}.mp4");
+
+        _ffmpegRunnerMock.Setup(r => r.GetVideoInfoAsync(tempSourceFile)).ReturnsAsync((JsonDocument?)null);
+        _ffmpegRunnerMock.Setup(r => r.RunAsync(
+            tempSourceFile, It.IsAny<string>(), It.IsAny<List<string>>(), null, false, 0.0, It.IsAny<Action<ProgressInfo>>(), It.IsAny<CancellationToken>()
+        )).ReturnsAsync(true);
+
+        var settings = new Dictionary<string, object>
+        {
+            { "target_format", "MP4" },
+            { "delete_original", false }
+        };
+
+        try
+        {
+            // Act
+            var results = await _script.ExecuteSingleAsync(tempSourceFile, settings, tempOutputDir, (idx, total, status, pct, fps, bit) => { }, 0, 1);
+
+            // Assert
+            results.Should().Contain(s => s.Contains("✅ Конвертирован"));
+        }
+        finally
+        {
+            if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
+            if (File.Exists(expectedDest)) File.Delete(expectedDest);
+        }
+    }
+
+    /// <summary>
+    /// Проверяет перепаковку M2TS в MP4 при совместимых кодеках.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_M2tsToMp4_CompatibleCodecs_CopiesStreams()
+    {
+        // Arrange
+        string uniqueId = Guid.NewGuid().ToString("N");
+        string tempSourceFile = Path.Combine(Path.GetTempPath(), $"source_{uniqueId}.m2ts");
+        File.WriteAllText(tempSourceFile, "dummy");
+        string tempOutputDir = Path.GetTempPath();
+        string expectedDest = Path.Combine(tempOutputDir, $"source_{uniqueId}.mp4");
+
+        string jsonStr = @"{
+            ""streams"": [
+                { ""codec_type"": ""video"", ""codec_name"": ""h264"" },
+                { ""codec_type"": ""audio"", ""codec_name"": ""aac"" }
+            ],
+            ""format"": { ""duration"": ""10.0"" }
+        }";
+        var jsonDoc = JsonDocument.Parse(jsonStr);
+
+        _ffmpegRunnerMock.Setup(r => r.GetVideoInfoAsync(tempSourceFile)).ReturnsAsync(jsonDoc);
+        _ffmpegRunnerMock.Setup(r => r.RunAsync(
+            tempSourceFile, It.IsAny<string>(), It.IsAny<List<string>>(), null, false, 10.0, It.IsAny<Action<ProgressInfo>>(), It.IsAny<CancellationToken>()
+        )).ReturnsAsync(true);
+
+        var settings = new Dictionary<string, object>
+        {
+            { "target_format", "MP4" },
+            { "delete_original", false }
+        };
+
+        try
+        {
+            // Act
+            var results = await _script.ExecuteSingleAsync(tempSourceFile, settings, tempOutputDir, (idx, total, status, pct, fps, bit) => { }, 0, 1);
+
+            // Assert
+            results.Should().Contain(s => s.Contains("✅ Конвертирован"));
+        }
+        finally
+        {
+            if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
+            if (File.Exists(expectedDest)) File.Delete(expectedDest);
+        }
+    }
+
+    /// <summary>
+    /// Проверяет, что GIF формат всегда требует перекодирования.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_Gif_RequiresEncoding_SkipsConversion()
+    {
+        // Arrange
+        string uniqueId = Guid.NewGuid().ToString("N");
+        string tempSourceFile = Path.Combine(Path.GetTempPath(), $"source_{uniqueId}.gif");
+        File.WriteAllText(tempSourceFile, "dummy");
+        string tempOutputDir = Path.GetTempPath();
+
+        string jsonStr = @"{
+            ""streams"": [
+                { ""codec_type"": ""video"", ""codec_name"": ""gif"" }
+            ],
+            ""format"": { ""duration"": ""5.0"" }
+        }";
+        var jsonDoc = JsonDocument.Parse(jsonStr);
+
+        _ffmpegRunnerMock.Setup(r => r.GetVideoInfoAsync(tempSourceFile)).ReturnsAsync(jsonDoc);
+
+        var settings = new Dictionary<string, object>
+        {
+            { "target_format", "MP4" },
+            { "delete_original", false }
+        };
+
+        try
+        {
+            // Act
+            var results = await _script.ExecuteSingleAsync(tempSourceFile, settings, tempOutputDir, (idx, total, status, pct, fps, bit) => { }, 0, 1);
+
+            // Assert
+            results.Should().Contain(s => s.Contains("ПРОПУСК (требуется перекодирование)"));
+        }
+        finally
+        {
+            if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
+        }
+    }
 }

@@ -108,4 +108,55 @@ public class CommandLineParserTests
         script.Should().BeNull();
         files.Should().ContainSingle().Which.Should().Be(_tempFilePath);
     }
+
+    /// <summary>
+    /// Проверяет разбор пустых аргументов.
+    /// </summary>
+    [TestMethod]
+    public void ParseCommandLineArray_EmptyArgs_ReturnsNullAndEmptyList()
+    {
+        // Arrange
+        string[] args = Array.Empty<string>();
+
+        // Act
+        var (script, files) = App.ParseCommandLineArray(args);
+
+        // Assert
+        script.Should().BeNull();
+        files.Should().BeEmpty();
+    }
+
+    /// <summary>
+    /// Проверяет обработку неизвестного флага.
+    /// </summary>
+    [TestMethod]
+    public void ParseCommandLineArray_InvalidFlag_SkipsFlagAndReturnsEmptyFiles()
+    {
+        // Arrange
+        string[] args = ["--unknown-flag", "value"];
+
+        // Act
+        var (script, files) = App.ParseCommandLineArray(args);
+
+        // Assert
+        script.Should().BeNull();
+        files.Should().BeEmpty();
+    }
+
+    /// <summary>
+    /// Проверяет поведение, когда флаг --script передан без значения.
+    /// </summary>
+    [TestMethod]
+    public void ParseCommandLineArray_ScriptFlagWithNoValue_ReturnsNull()
+    {
+        // Arrange
+        string[] args = ["--script"];
+
+        // Act
+        var (script, files) = App.ParseCommandLineArray(args);
+
+        // Assert
+        script.Should().BeNull();
+        files.Should().BeEmpty();
+    }
 }
