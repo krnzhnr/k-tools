@@ -14,8 +14,6 @@ using Microsoft.UI.Xaml.Media;
 using Windows.UI;
 using Windows.UI.Text;
 using CommunityToolkit.Mvvm.ComponentModel;
-using KTools_App.Core;
-using KTools_App.Infrastructure;
 using KTools_App.Models;
 
 namespace KTools_App.ViewModels;

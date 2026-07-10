@@ -252,25 +252,25 @@ public partial class App : Application
             }
             catch (Exception ex)
             {
-                _logService.Exception(
+                _logService?.Exception(
                     ex,
                     "Не удалось определить, запущено ли приложение с правами администратора",
                     "App");
             }
 
-            _logService.Info(
+            _logService?.Info(
                 $"=== Запуск приложения K-Tools C# Edition (Права администратора: {(isAdmin ? "Да" : "Нет")}) ===",
                 "App");
 
             string settingsDir = Services.GetRequiredService<IPathManager>().GetSettingsDirectory();
-            _logService.Info(
+            _logService?.Info(
                 $"Конфигурация приложения успешно "
                 + $"инициализирована. Папка: {settingsDir}",
                 "SettingsManager");
 
             // При первом запуске автоматически инициализируем
             // все настройки по умолчанию
-            _logService.DebugLog(
+            _logService?.DebugLog(
                 "Выполняется автоматическая инициализация "
                 + "настроек по умолчанию...",
                 "App");
@@ -309,7 +309,7 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
-            _logService.Exception(
+            _logService?.Exception(
                 ex,
                 "Критическая ошибка при инициализации приложения.",
                 "App");

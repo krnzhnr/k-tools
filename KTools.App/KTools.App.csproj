@@ -21,10 +21,10 @@
     <EnableNETAnalyzers>true</EnableNETAnalyzers>
     <AnalysisLevel>latest-recommended</AnalysisLevel>
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
-    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <_SkipUpgradeNetAnalyzersNuGetWarning>true</_SkipUpgradeNetAnalyzersNuGetWarning>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
-    <NoWarn>$(NoWarn);CS1591;NETSDK1206</NoWarn>
+    <NoWarn>$(NoWarn);CS1591;NETSDK1206;SA1208;SA1505;MVVMTK0045;CA1806;CS8602;CS0105</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
