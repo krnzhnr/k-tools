@@ -20,7 +20,14 @@ public abstract class ThreadSafeViewModel : ObservableObject
     /// </summary>
     protected ThreadSafeViewModel()
     {
-        _dispatcherQueue = DispatcherQueue.GetForCurrentThread();
+        try
+        {
+            _dispatcherQueue = DispatcherQueue.GetForCurrentThread();
+        }
+        catch
+        {
+            _dispatcherQueue = null;
+        }
     }
 
     /// <summary>
