@@ -21,7 +21,7 @@
 
         <TitleBar x:Name="AppTitleBar" Title="Предпросмотр субтитров и настройка фильтров" Grid.Row="0">
             <TitleBar.IconSource>
-                <ImageIconSource ImageSource="Assets/AppIcon.ico" />
+                <SymbolIconSource Symbol="Home" />
             </TitleBar.IconSource>
         </TitleBar>
 

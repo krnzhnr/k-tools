@@ -65,6 +65,24 @@ public sealed partial class MainWindow : Window
         IntPtr wParam,
         IntPtr lParam);
 
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern uint PrivateExtractIcons(
+        string lpszFile,
+        int nIconIndex,
+        int cxIconSize,
+        int cyIconSize,
+        IntPtr[] phicon,
+        uint[] piconid,
+        uint nIcons,
+        uint flags);
+
+    private const int WM_SETICON = 0x0080;
+    private const int ICON_SMALL = 0;
+    private const int ICON_BIG = 1;
+
     private SubclassProc? _subclassProcDelegate;
     private readonly ILogService _logService;
     private readonly ISettingsManager _settingsManager;
@@ -81,10 +99,61 @@ public sealed partial class MainWindow : Window
             ExtendsContentIntoTitleBar = true;
             SetTitleBar(AppTitleBar);
 
-            // Установка иконки приложения
+            // Установка иконки приложения в TitleBar и панель задач.
+            // В установленной версии иконка лежит в корне (H:\K-Tools\AppIcon.ico),
+            // в dev-сборке — в подпапке Assets\AppIcon.ico.
             try
             {
-                AppWindow.SetIcon("Assets/AppIcon.ico");
+                string baseDir = AppContext.BaseDirectory;
+                string? iconIcoPath = ResolveIconPath(baseDir, "AppIcon.ico");
+                string? iconPngPath = ResolveIconPath(baseDir, "Square44x44Logo.scale-200.png");
+
+                // Иконка TitleBar (кастомный заголовок окна) — используем PNG для BitmapIconSource
+                if (iconPngPath != null)
+                {
+                    AppTitleBar.IconSource = new Microsoft.UI.Xaml.Controls.BitmapIconSource
+                    {
+                        UriSource = new Uri(iconPngPath),
+                        ShowAsMonochrome = false,
+                    };
+                }
+                else if (iconIcoPath != null)
+                {
+                    // Фоллбек: используем ICO через ImageIconSource + BitmapImage
+                    var bitmapImage = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(iconIcoPath));
+                    AppTitleBar.IconSource = new Microsoft.UI.Xaml.Controls.ImageIconSource { ImageSource = bitmapImage };
+                }
+
+                // Иконка окна для AppWindow (системная иконка Alt+Tab)
+                if (iconIcoPath != null)
+                {
+                    AppWindow.SetIcon(iconIcoPath);
+                }
+
+                // Иконка окна для панели задач и превью через Win32 API из ресурсов EXE-файла
+                IntPtr hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+                if (hwnd != IntPtr.Zero)
+                {
+                    string? exePath = Environment.ProcessPath;
+                    if (!string.IsNullOrEmpty(exePath))
+                    {
+                        IntPtr[] hiconSmall = new IntPtr[1];
+                        IntPtr[] hiconBig = new IntPtr[1];
+                        uint[] iconIds = new uint[1];
+
+                        uint numSmall = PrivateExtractIcons(exePath, 0, 16, 16, hiconSmall, iconIds, 1, 0);
+                        uint numBig = PrivateExtractIcons(exePath, 0, 32, 32, hiconBig, iconIds, 1, 0);
+
+                        if (numSmall > 0 && hiconSmall[0] != IntPtr.Zero)
+                        {
+                            SendMessage(hwnd, WM_SETICON, new IntPtr(ICON_SMALL), hiconSmall[0]);
+                        }
+                        if (numBig > 0 && hiconBig[0] != IntPtr.Zero)
+                        {
+                            SendMessage(hwnd, WM_SETICON, new IntPtr(ICON_BIG), hiconBig[0]);
+                        }
+                    }
+                }
             }
             catch (Exception ex)
             {
@@ -281,5 +350,28 @@ public sealed partial class MainWindow : Window
         }
 
         return DefSubclassProc(hWnd, uMsg, wParam, lParam);
+    }
+
+    /// <summary>
+    /// Ищет файл иконки сначала в корне каталога приложения (установленная версия),
+    /// затем в подпапке Assets (dev-сборка). Возвращает абсолютный путь или null.
+    /// </summary>
+    private static string? ResolveIconPath(string baseDirectory, string fileName)
+    {
+        // Установленная версия: иконка в корне (H:\K-Tools\AppIcon.ico)
+        string rootPath = System.IO.Path.Combine(baseDirectory, fileName);
+        if (System.IO.File.Exists(rootPath))
+        {
+            return rootPath;
+        }
+
+        // Dev-сборка: иконка в подпапке Assets (bin\...\Assets\AppIcon.ico)
+        string assetsPath = System.IO.Path.Combine(baseDirectory, "Assets", fileName);
+        if (System.IO.File.Exists(assetsPath))
+        {
+            return assetsPath;
+        }
+
+        return null;
     }
 }

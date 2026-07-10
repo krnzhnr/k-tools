@@ -44,6 +44,34 @@ public sealed partial class SubtitlePreviewPage : Page
         ViewModel = viewModel;
         InitializeComponent();
 
+        // Программная установка иконки TitleBar — в unpackaged-режиме
+        // относительные URI в XAML не резолвятся через PRI.
+        // В установленной версии иконка в корне, в dev-сборке — в Assets.
+        try
+        {
+            string baseDir = AppContext.BaseDirectory;
+            string? iconPngPath = ResolveIconPath(baseDir, "Square44x44Logo.scale-200.png");
+            string? iconIcoPath = ResolveIconPath(baseDir, "AppIcon.ico");
+
+            if (iconPngPath != null)
+            {
+                AppTitleBar.IconSource = new Microsoft.UI.Xaml.Controls.BitmapIconSource
+                {
+                    UriSource = new Uri(iconPngPath),
+                    ShowAsMonochrome = false,
+                };
+            }
+            else if (iconIcoPath != null)
+            {
+                var bitmapImage = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(iconIcoPath));
+                AppTitleBar.IconSource = new ImageIconSource { ImageSource = bitmapImage };
+            }
+        }
+        catch
+        {
+            // Иконка TitleBar не критична — продолжаем без неё
+        }
+
         // Слушаем изменения коллекции строк для обновления статистики
         ViewModel.PropertyChanged += OnViewModelPropertyChanged;
 
@@ -370,5 +398,26 @@ public sealed partial class SubtitlePreviewPage : Page
     private void DoneButton_Click(object sender, RoutedEventArgs e)
     {
         OwnerWindow?.Close();
+    }
+
+    /// <summary>
+    /// Ищет файл иконки сначала в корне каталога приложения (установленная версия),
+    /// затем в подпапке Assets (dev-сборка). Возвращает абсолютный путь или null.
+    /// </summary>
+    private static string? ResolveIconPath(string baseDirectory, string fileName)
+    {
+        string rootPath = System.IO.Path.Combine(baseDirectory, fileName);
+        if (System.IO.File.Exists(rootPath))
+        {
+            return rootPath;
+        }
+
+        string assetsPath = System.IO.Path.Combine(baseDirectory, "Assets", fileName);
+        if (System.IO.File.Exists(assetsPath))
+        {
+            return assetsPath;
+        }
+
+        return null;
     }
 }
