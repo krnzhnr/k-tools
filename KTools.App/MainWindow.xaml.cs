@@ -130,6 +130,13 @@ public sealed partial class MainWindow : Window
                     AppWindow.SetIcon(iconIcoPath);
                 }
 
+                // Отключаем системную иконку и системное меню в заголовке,
+                // чтобы клик по кастомной иконке TitleBar не вызывал системное меню.
+                if (Microsoft.UI.Windowing.AppWindowTitleBar.IsCustomizationSupported())
+                {
+                    AppWindow.TitleBar.IconShowOptions = Microsoft.UI.Windowing.IconShowOptions.HideIconAndSystemMenu;
+                }
+
                 // Иконка окна для панели задач и превью через Win32 API из ресурсов EXE-файла
                 IntPtr hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
                 if (hwnd != IntPtr.Zero)

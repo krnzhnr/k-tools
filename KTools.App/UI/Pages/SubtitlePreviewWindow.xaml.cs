@@ -73,6 +73,7 @@ public sealed class SubtitlePreviewWindow : Window
             if (Microsoft.UI.Windowing.AppWindowTitleBar.IsCustomizationSupported())
             {
                 appWindow.TitleBar.PreferredTheme = Microsoft.UI.Windowing.TitleBarTheme.UseDefaultAppMode;
+                appWindow.TitleBar.IconShowOptions = Microsoft.UI.Windowing.IconShowOptions.HideIconAndSystemMenu;
             }
             appWindow.Resize(new Windows.Graphics.SizeInt32(1600, 1000));
             
