@@ -19,7 +19,27 @@ jobs:
     - name: Checkout Repository
       uses: actions/checkout@v4
       with:
-        lfs: true
+        lfs: false
+
+    - name: Download and Extract External Dependencies
+      shell: pwsh
+      run: |
+        New-Item -ItemType Directory -Force -Path bin
+        
+        function Download-And-Extract([string]$archiveName, [string]$subDir) {
+            $destDir = Join-Path "bin" $subDir
+            New-Item -ItemType Directory -Force -Path $destDir
+            Write-Host "Скачивание $archiveName в $destDir"
+            Invoke-WebRequest -Uri "https://github.com/krnzhnr/k-tools/releases/download/deps-v1/$archiveName" -OutFile $archiveName
+            tar -xf $archiveName -C $destDir
+            Remove-Item $archiveName
+        }
+
+        Download-And-Extract "ffmpeg.tar.xz" "ffmpeg"
+        Download-And-Extract "mkvtoolnix.tar.xz" "mkvtoolnix"
+        Download-And-Extract "eac3to.tar.xz" "eac3to"
+        Download-And-Extract "dee.tar.xz" "DEE"
+        Download-And-Extract "eac3to_decoders.tar.xz" "eac3to_decoders"
 
     - name: Set up Python
       uses: actions/setup-python@v5

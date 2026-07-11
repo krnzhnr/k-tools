@@ -18,7 +18,15 @@ jobs:
     - name: Checkout Repository
       uses: actions/checkout@v4
       with:
-        lfs: true
+        lfs: false
+
+    - name: Download and Extract eac3to Decoders
+      shell: pwsh
+      run: |
+        New-Item -ItemType Directory -Force -Path bin/eac3to_decoders
+        Invoke-WebRequest -Uri "https://github.com/krnzhnr/k-tools/releases/download/deps-v1/eac3to_decoders.tar.xz" -OutFile "eac3to_decoders.tar.xz"
+        tar -xf eac3to_decoders.tar.xz -C bin/eac3to_decoders
+        Remove-Item "eac3to_decoders.tar.xz"
 
     - name: Setup .NET SDK
       uses: actions/setup-dotnet@v4
