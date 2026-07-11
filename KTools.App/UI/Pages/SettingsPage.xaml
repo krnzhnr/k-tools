@@ -13,7 +13,7 @@
 
 
 
-    <ScrollViewer VerticalScrollBarVisibility="Auto">
+    <ScrollViewer x:Name="RootScrollViewer" VerticalScrollBarVisibility="Auto">
         <StackPanel
             Padding="36,12,36,36"
             HorizontalAlignment="Stretch"
@@ -386,7 +386,7 @@
             </StackPanel>
 
             <!-- Раздел: Обновления -->
-            <StackPanel Spacing="8">
+            <StackPanel x:Name="UpdatesSection" Spacing="8">
                 <TextBlock
                     Margin="0,8,0,8"
                     FontSize="16"
@@ -564,6 +564,14 @@
                             OffContent="Выкл"
                             OnContent="Вкл"
                             IsOn="{x:Bind ViewModel.DebugSimulateOldVersion, Mode=TwoWay}" />
+                    </community:SettingsCard>
+
+                    <community:SettingsCard Header="Отключить действия обновления" Description="Делает кнопки проверки и скачивания обновлений пустыми (блокирует выполнение)">
+                        <ToggleSwitch
+                            x:Name="DisableUpdateActionToggle"
+                            OffContent="Выкл"
+                            OnContent="Вкл"
+                            IsOn="{x:Bind ViewModel.DebugDisableUpdateAction, Mode=TwoWay}" />
                     </community:SettingsCard>
                 </community:SettingsExpander.Items>
             </community:SettingsExpander>

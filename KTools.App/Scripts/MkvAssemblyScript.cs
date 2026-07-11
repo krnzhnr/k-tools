@@ -20,11 +20,13 @@ namespace KTools_App.Scripts;
 public sealed class MkvAssemblyScript : AbstractScript
 {
     private readonly IMkvmergeRunner _mkvmergeRunner;
+    private readonly IMediaProbeService _mediaProbeService;
 
-    public MkvAssemblyScript(ILogService logService, ISettingsManager settingsManager, IPathManager pathManager, IMkvmergeRunner mkvmergeRunner)
+    public MkvAssemblyScript(ILogService logService, ISettingsManager settingsManager, IPathManager pathManager, IMkvmergeRunner mkvmergeRunner, IMediaProbeService mediaProbeService)
         : base(logService, settingsManager, pathManager)
     {
         _mkvmergeRunner = mkvmergeRunner ?? throw new ArgumentNullException(nameof(mkvmergeRunner));
+        _mediaProbeService = mediaProbeService ?? throw new ArgumentNullException(nameof(mediaProbeService));
     }
 
     /// <summary>
@@ -80,6 +82,15 @@ public sealed class MkvAssemblyScript : AbstractScript
             SettingType.Checkbox,
             true,
             "Сборка"
+        ),
+        new SettingField(
+            "position_before_builtin",
+            "Поместить новые дорожки перед встроенными",
+            SettingType.Checkbox,
+            false,
+            "Сборка",
+            visibleIfKey: "clean_tracks",
+            visibleIfValues: new List<string> { "False" }
         )
     };
 
@@ -132,6 +143,7 @@ public sealed class MkvAssemblyScript : AbstractScript
         // 2. Извлекаем пользовательские настройки
         string subsTitle = GetSettingValue(settings, "subs_title", "[Надписи]");
         bool cleanTracks = GetSettingValue(settings, "clean_tracks", true);
+        bool positionBeforeBuiltin = GetSettingValue(settings, "position_before_builtin", false);
 
         // 3. Сканируем папку на наличие сопутствующих аудио- и субтитровых файлов с тем же именем (stem)
         string? audioPath = null;
@@ -278,6 +290,75 @@ public sealed class MkvAssemblyScript : AbstractScript
             }));
         }
 
+        // 6.5 Позиционирование дорожек перед встроенными
+        List<string>? extraArgs = null;
+        if (!cleanTracks && positionBeforeBuiltin && (audioPath != null || subsPath != null))
+        {
+            try
+            {
+                _logService.Info("Запуск анализа оригинального видеофайла для определения порядка дорожек...", "MkvAssemblyScript");
+                
+                // Пытаемся получить метаданные из очереди
+                var queueItem = FilesQueue.FirstOrDefault(f => string.Equals(f.FilePath, filePath, StringComparison.OrdinalIgnoreCase));
+                var mediaStructure = queueItem?.MediaInfo;
+                
+                if (mediaStructure == null || mediaStructure.Tracks.Count == 0)
+                {
+                    mediaStructure = await _mediaProbeService.ProbeAsync(filePath);
+                }
+
+                if (mediaStructure != null)
+                {
+                    var orderParts = new List<string>();
+
+                    // Находим первое видео
+                    var videoTrack = mediaStructure.Tracks.FirstOrDefault(t => t.TrackType.Equals("video", StringComparison.OrdinalIgnoreCase));
+                    if (videoTrack != null)
+                    {
+                        orderParts.Add($"0:{videoTrack.TrackId}");
+                    }
+                    else
+                    {
+                        orderParts.Add("0:0"); // Фолбэк на 0:0
+                    }
+
+                    // Добавляем новые дорожки (Вход 1 - аудио, Вход 2 - субтитры, либо в зависимости от наличия)
+                    int nextInputIdx = 1;
+                    if (audioPath != null)
+                    {
+                        orderParts.Add($"{nextInputIdx}:0");
+                        nextInputIdx++;
+                    }
+                    if (subsPath != null)
+                    {
+                        orderParts.Add($"{nextInputIdx}:0");
+                        nextInputIdx++;
+                    }
+
+                    // Добавляем все остальные встроенные дорожки
+                    foreach (var track in mediaStructure.Tracks)
+                    {
+                        if (videoTrack != null && track.TrackId == videoTrack.TrackId)
+                        {
+                            continue; // Видео уже добавлено первым
+                        }
+                        orderParts.Add($"0:{track.TrackId}");
+                    }
+
+                    extraArgs = new List<string>
+                    {
+                        "--track-order",
+                        string.Join(",", orderParts)
+                    };
+                    _logService.Info($"Сформирован кастомный порядок дорожек (--track-order): {string.Join(",", orderParts)}", "MkvAssemblyScript");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logService.Exception(ex, $"Не удалось построить порядок дорожек: {ex.Message}. Будет использован порядок по умолчанию.", "MkvAssemblyScript");
+            }
+        }
+
         // 7. Запуск процесса сборки через MkvmergeRunner с мониторингом отмены
         progressCallback(fileIndex, totalCount, $"Сборка MKV: {stem}...", 0.0);
 
@@ -301,7 +382,7 @@ public sealed class MkvAssemblyScript : AbstractScript
                 finalOutputFile,
                 mkvInputs,
                 title: stem,
-                extraArgs: null,
+                extraArgs: extraArgs,
                 onProgress: progress =>
                 {
                     progressCallback(fileIndex, totalCount, $"Сборка MKV | {progress:F1}%", progress);

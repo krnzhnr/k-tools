@@ -22,6 +22,7 @@ public class MkvAssemblyScriptTests
     private Mock<ISettingsManager> _settingsManagerMock = null!;
     private Mock<IPathManager> _pathManagerMock = null!;
     private Mock<IMkvmergeRunner> _mkvmergeRunnerMock = null!;
+    private Mock<IMediaProbeService> _mediaProbeServiceMock = null!;
     private MkvAssemblyScript _script = null!;
 
     [TestInitialize]
@@ -31,12 +32,14 @@ public class MkvAssemblyScriptTests
         _settingsManagerMock = new Mock<ISettingsManager>();
         _pathManagerMock = new Mock<IPathManager>();
         _mkvmergeRunnerMock = new Mock<IMkvmergeRunner>();
+        _mediaProbeServiceMock = new Mock<IMediaProbeService>();
 
         _script = new MkvAssemblyScript(
             _logServiceMock.Object,
             _settingsManagerMock.Object,
             _pathManagerMock.Object,
-            _mkvmergeRunnerMock.Object
+            _mkvmergeRunnerMock.Object,
+            _mediaProbeServiceMock.Object
         );
     }
 
@@ -48,5 +51,87 @@ public class MkvAssemblyScriptTests
     {
         _script.Category.Should().Be("Контейнеры");
         _script.IconName.Should().Be("add");
+    }
+
+    /// <summary>
+    /// Проверяет генерацию аргументов с правильным порядком дорожек при включении position_before_builtin.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_WithPositionBeforeBuiltin_GeneratesCorrectTrackOrder()
+    {
+        // Arrange
+        // Используем реальную временную директорию ОС для теста, чтобы Directory.GetFiles работал корректно
+        string tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        Directory.CreateDirectory(tempDir);
+        
+        string videoPath = Path.Combine(tempDir, "video.mp4");
+        string audioPath = Path.Combine(tempDir, "video.mka");
+        
+        // Создаем пустые файлы, чтобы Directory.GetFiles их нашел
+        File.WriteAllText(videoPath, "");
+        File.WriteAllText(audioPath, "");
+        
+        var settings = new Dictionary<string, object>
+        {
+            { "clean_tracks", false },
+            { "position_before_builtin", true }
+        };
+
+        try
+        {
+            // Заполняем очередь
+            _script.FilesQueue.Add(new FileQueueItem(videoPath));
+            _script.FilesQueue.Add(new FileQueueItem(audioPath));
+
+        var structure = new MediaStructure { FilePath = videoPath };
+        structure.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "video" });
+        structure.Tracks.Add(new MediaTrack { TrackId = 1, TrackType = "audio" }); // Встроенное аудио
+
+        _mediaProbeServiceMock.Setup(m => m.ProbeAsync(videoPath))
+            .ReturnsAsync(structure);
+
+        _settingsManagerMock.Setup(s => s.GetSetting("General", "OverwriteExisting", false))
+            .Returns(true);
+
+        List<string>? capturedExtraArgs = null;
+        _mkvmergeRunnerMock.Setup(m => m.RunAsync(
+                It.IsAny<string>(),
+                It.IsAny<List<MkvInputSource>>(),
+                It.IsAny<string>(),
+                It.IsAny<List<string>>(),
+                It.IsAny<Action<double>>(),
+                It.IsAny<System.Threading.CancellationToken>()
+            ))
+            .Callback<string, List<MkvInputSource>, string, List<string>, Action<double>, System.Threading.CancellationToken>(
+                (outPath, inputs, title, extraArgs, onProgress, ct) => capturedExtraArgs = extraArgs)
+            .ReturnsAsync(true);
+
+        // Act
+        var results = await _script.ExecuteSingleAsync(
+            videoPath,
+            settings,
+            null,
+            (fIdx, total, status, progress, fps, bitrate) => { },
+            0,
+            1
+        );
+
+        // Assert
+        results.Should().NotBeNull();
+        capturedExtraArgs.Should().NotBeNull();
+        capturedExtraArgs.Should().Contain("--track-order");
+        
+        // Вход 0 - видеофайл, Вход 1 - внешний mka аудиофайл.
+        // Ожидаемый порядок: видео (0:0), потом новое аудио (1:0), потом встроенное аудио (0:1)
+        int orderIdx = capturedExtraArgs.IndexOf("--track-order");
+        capturedExtraArgs[orderIdx + 1].Should().Be("0:0,1:0,0:1");
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, true);
+            }
+        }
     }
 }

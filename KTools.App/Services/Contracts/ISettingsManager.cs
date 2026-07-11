@@ -75,6 +75,11 @@ public interface ISettingsManager
     bool DebugSimulateOldVersion { get; set; }
 
     /// <summary>
+    /// Отключать ли действие кнопок обновления и скачивания (имитация пустышек).
+    /// </summary>
+    bool DebugDisableUpdateAction { get; set; }
+
+    /// <summary>
     /// Флаг включения переименования выходных файлов по регулярным выражениям.
     /// </summary>
     bool RenameEnableRegex { get; set; }

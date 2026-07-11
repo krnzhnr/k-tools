@@ -248,6 +248,8 @@ public partial class MainViewModel : ThreadSafeViewModel
             // Показываем баннер обновлений снова, если обновление доступно, но еще не загружается/установлено
             if (_settingsViewModel.IsUpdateAvailable && !_settingsViewModel.IsDownloading)
             {
+                NewUpdateInfo = _settingsViewModel.NewUpdateInfo;
+                UpdateStatusText = _settingsViewModel.UpdateStatusText;
                 IsUpdateBannerVisible = true;
             }
             _navigationService.NavigateTo(typeof(HomePage));
@@ -340,7 +342,7 @@ public partial class MainViewModel : ThreadSafeViewModel
     {
         IsUpdateBannerVisible = false;
         _logService.Info("Пользователь кликнул по кнопке 'Обновиться' в баннере. Перенаправление в настройки.", "MainViewModel");
-        Navigate("settings");
+        _navigationService.NavigateTo(typeof(SettingsPage), "scroll_to_updates");
         _ = _settingsViewModel.DownloadAndInstallUpdateCommand.ExecuteAsync(null);
     }
 

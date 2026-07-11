@@ -49,7 +49,15 @@ public sealed class FileQueueItem : INotifyPropertyChanged
 
     public FileQueueItem(string filePath)
     {
-        _dispatcherQueue = DispatcherQueue.GetForCurrentThread();
+        try
+        {
+            _dispatcherQueue = DispatcherQueue.GetForCurrentThread();
+        }
+        catch
+        {
+            // Игнорируем ошибку при вызове в юнит-тестах вне WinUI потока
+            _dispatcherQueue = null;
+        }
         FilePath = filePath;
         FileName = Path.GetFileName(filePath);
         

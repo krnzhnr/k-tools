@@ -132,6 +132,12 @@ public partial class SettingsViewModel : ThreadSafeViewModel
     public partial bool DebugSimulateOldVersion { get; set; }
 
     /// <summary>
+    /// Флаг отключения действия кнопок обновления и скачивания (имитация пустышек).
+    /// </summary>
+    [ObservableProperty]
+    public partial bool DebugDisableUpdateAction { get; set; }
+
+    /// <summary>
     /// Видим ли раздел настроек отладки.
     /// </summary>
     [ObservableProperty]
@@ -309,7 +315,13 @@ public partial class SettingsViewModel : ThreadSafeViewModel
         RenameUseRegex = _settingsManager.RenameUseRegex;
         RenameCaseSensitive = _settingsManager.RenameCaseSensitive;
         DebugSimulateOldVersion = _settingsManager.DebugSimulateOldVersion;
+        DebugDisableUpdateAction = _settingsManager.DebugDisableUpdateAction;
         IsContextMenuEnabled = _settingsManager.GetSetting("Shell", "IsContextMenuEnabled", false);
+    }
+
+    partial void OnDebugDisableUpdateActionChanged(bool value)
+    {
+        _settingsManager.DebugDisableUpdateAction = value;
     }
 
     partial void OnOverwriteExistingChanged(bool value)
@@ -513,6 +525,12 @@ public partial class SettingsViewModel : ThreadSafeViewModel
     {
         if (IsChecking) return;
 
+        if (DebugDisableUpdateAction)
+        {
+            _logService.Info("[Debug] Проверка обновлений заблокирована переключателем.", "SettingsViewModel");
+            return;
+        }
+
         IsChecking = true;
         UpdateStatusText = "Выполняется проверка обновлений...";
         IsUpdateAvailable = false;
@@ -551,6 +569,12 @@ public partial class SettingsViewModel : ThreadSafeViewModel
     public async System.Threading.Tasks.Task DownloadAndInstallUpdateAsync()
     {
         if (NewUpdateInfo == null || IsDownloading) return;
+
+        if (DebugDisableUpdateAction)
+        {
+            _logService.Info("[Debug] Загрузка и установка обновлений заблокирована переключателем.", "SettingsViewModel");
+            return;
+        }
 
         IsDownloading = true;
         DownloadProgress = 0;

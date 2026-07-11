@@ -159,6 +159,15 @@ public sealed class SettingsManager : ISettingsManager
     }
 
     /// <summary>
+    /// Отключать ли действие кнопок обновления и скачивания (имитация пустышек).
+    /// </summary>
+    public bool DebugDisableUpdateAction
+    {
+        get => GetSetting("Debug", "DebugDisableUpdateAction", false);
+        set => SetSetting("Debug", "DebugDisableUpdateAction", value);
+    }
+
+    /// <summary>
     /// Флаг включения переименования выходных файлов по регулярным выражениям (Regex).
     /// </summary>
     public bool RenameEnableRegex

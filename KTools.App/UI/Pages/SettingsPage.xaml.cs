@@ -43,6 +43,25 @@ public partial class SettingsPage : Page
         };
     }
 
+    /// <summary>
+    /// Вызывается при навигации на страницу настроек.
+    /// Обрабатывает параметр навигации для скролла к блоку обновлений.
+    /// </summary>
+    protected override void OnNavigatedTo(Microsoft.UI.Xaml.Navigation.NavigationEventArgs e)
+    {
+        base.OnNavigatedTo(e);
+        if (e.Parameter is string action && action == "scroll_to_updates")
+        {
+            this.Loaded += (s, ev) =>
+            {
+                UpdatesSection.StartBringIntoView(new BringIntoViewOptions
+                {
+                    VerticalAlignmentRatio = 0.0
+                });
+            };
+        }
+    }
+
     private void OnTextBoxEnterKeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
     {
         if (e.Key == Windows.System.VirtualKey.Enter)
