@@ -72,6 +72,9 @@
                         <NavigationViewItem Content="ASS/SRT → VTT" Tag="script:subtitles_convert" Icon="Font" />
                     </NavigationViewItem.MenuItems>
                 </NavigationViewItem>
+                <NavigationViewItemSeparator x:Name="ToolsSeparator" />
+                <NavigationViewItemHeader Content="Инструменты" />
+                <NavigationViewItem Content="Калькулятор сдвига" Tag="tool:timing_calculator" Icon="Calculator" />
             </NavigationView.MenuItems>
 
             <!-- Фиксированные пункты меню внизу -->

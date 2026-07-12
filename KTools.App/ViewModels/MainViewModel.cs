@@ -290,6 +290,16 @@ public partial class MainViewModel : ThreadSafeViewModel
                 "Просмотр журналов выполнения и системных сообщений в реальном времени";
             _navigationService.NavigateTo(typeof(LogPage));
         }
+        else if (tag == "tool:timing_calculator")
+        {
+            _logService.Info(
+                "Пользователь переключился на страницу калькулятора сдвига таймингов",
+                "MainPage");
+            HeaderTitle = "Калькулятор сдвига";
+            HeaderSubtitle =
+                "Расчет разницы во времени между сэмплами для корректировки сдвига аудио и субтитров";
+            _navigationService.NavigateTo(typeof(TimingCalculatorPage));
+        }
         else if (tag == "dependencies")
         {
             _logService.Info(

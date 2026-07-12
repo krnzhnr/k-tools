@@ -131,6 +131,7 @@ public sealed partial class MainPage : Page
         string? targetTag = pageTypeName switch
         {
             nameof(HomePage) => "home",
+            nameof(TimingCalculatorPage) => "tool:timing_calculator",
             nameof(SettingsPage) => "settings",
             nameof(LogPage) => "logs",
             nameof(DependencySetupPage) => "dependencies",

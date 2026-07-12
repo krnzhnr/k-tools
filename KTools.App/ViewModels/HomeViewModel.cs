@@ -37,6 +37,11 @@ public partial class HomeViewModel : ThreadSafeViewModel
     /// </summary>
     public List<ScriptInfo> SubtitleScripts { get; }
 
+    /// <summary>
+    /// Список интерактивных инструментов (например, калькулятор таймингов).
+    /// </summary>
+    public List<ScriptInfo> ToolScripts { get; }
+
     private readonly IScriptRegistry _scriptRegistry;
 
     /// <summary>
@@ -150,6 +155,14 @@ public partial class HomeViewModel : ThreadSafeViewModel
                 Description = "Конвертация субтитров ASS/SSA/SRT в " +
                               "WebVTT с фильтрацией по актёрам и " +
                               "очисткой тегов."
+            },
+            new ScriptInfo
+            {
+                Name = "Калькулятор сдвига",
+                Category = "Инструменты",
+                IconName = "calculator",
+                Description = "Расчет разницы во времени между сэмплами " +
+                              "для корректировки сдвига аудио и субтитров."
             }
         };
 
@@ -165,6 +178,9 @@ public partial class HomeViewModel : ThreadSafeViewModel
         SubtitleScripts = scripts
             .Where(s => s.Category == "Субтитры")
             .ToList();
+        ToolScripts = scripts
+            .Where(s => s.Category == "Инструменты")
+            .ToList();
     }
 
     /// <summary>
@@ -173,6 +189,12 @@ public partial class HomeViewModel : ThreadSafeViewModel
     [RelayCommand]
     private void NavigateToScript(string scriptName)
     {
+        if (scriptName == "Калькулятор сдвига")
+        {
+            _navigationService.NavigateTo(typeof(TimingCalculatorPage));
+            return;
+        }
+
         var script = _scriptRegistry.GetScriptByName(scriptName);
         if (script != null)
         {

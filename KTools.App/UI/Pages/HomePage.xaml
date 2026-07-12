@@ -141,6 +141,23 @@
                     </ItemsControl.ItemsPanel>
                 </ItemsControl>
             </StackPanel>
+            <!-- Группа: Инструменты -->
+            <StackPanel Spacing="12">
+                <TextBlock Text="Инструменты"
+                           FontFamily="Segoe UI" 
+                           FontSize="16" 
+                           FontWeight="Bold"
+                           Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+                <ItemsControl x:Name="ToolsGridView"
+                              ItemsSource="{x:Bind ViewModel.ToolScripts}"
+                              ItemTemplate="{StaticResource ScriptCardTemplate}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <ItemsWrapGrid Orientation="Horizontal" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                </ItemsControl>
+            </StackPanel>
         </StackPanel>
     </ScrollViewer>
 </Page>
