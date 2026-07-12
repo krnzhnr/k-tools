@@ -13,14 +13,9 @@
             <StackPanel Padding="36,12,36,36" Spacing="28" MaxWidth="800" HorizontalAlignment="Left">
 
                 <!-- Блок полей ввода времени -->
-                <Grid ColumnSpacing="24" RowSpacing="12">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="*" />
-                    </Grid.ColumnDefinitions>
-                    
+                <StackPanel Spacing="16">
                     <!-- Оригинальное время -->
-                    <StackPanel Grid.Column="0" Spacing="8">
+                    <StackPanel Spacing="8">
                         <TextBlock Text="Оригинальное время (было)" 
                                    FontWeight="SemiBold" 
                                    Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
@@ -30,7 +25,6 @@
                                  FontSize="16" 
                                  Width="180" 
                                  HorizontalAlignment="Left"
-                                 TextAlignment="Center"
                                  SelectionStart="0"
                                  SelectionLength="0"
                                  MaxLength="10"
@@ -40,7 +34,7 @@
                     </StackPanel>
 
                     <!-- Новое время -->
-                    <StackPanel Grid.Column="1" Spacing="8">
+                    <StackPanel Spacing="8">
                         <TextBlock Text="Новое время (стало)" 
                                    FontWeight="SemiBold" 
                                    Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
@@ -50,7 +44,6 @@
                                  FontSize="16" 
                                  Width="180" 
                                  HorizontalAlignment="Left"
-                                 TextAlignment="Center"
                                  SelectionStart="0"
                                  SelectionLength="0"
                                  MaxLength="10"
@@ -58,7 +51,7 @@
                                  SelectionChanged="TimeBox_SelectionChanged"
                                  LostFocus="TimeBox_LostFocus" />
                     </StackPanel>
-                </Grid>
+                </StackPanel>
 
                 <!-- Кнопка очистки -->
                 <Button Content="Сбросить поля" 
