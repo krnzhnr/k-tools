@@ -193,6 +193,12 @@ public sealed partial class MainPage : Page
             ViewModel.HeaderSubtitle = 
                 "Ваш персональный набор инструментов для обработки медиа";
         }
+        else if (targetTag == "tool:timing_calculator")
+        {
+            ViewModel.HeaderTitle = "Калькулятор сдвига";
+            ViewModel.HeaderSubtitle = 
+                "Расчет разницы во времени между сэмплами для корректировки сдвига аудио и субтитров";
+        }
         else if (targetTag == "settings")
         {
             ViewModel.HeaderTitle = "Настройки";
