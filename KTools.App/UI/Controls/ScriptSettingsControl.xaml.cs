@@ -50,7 +50,6 @@ public sealed partial class ScriptSettingsControl : UserControl
         {
             this.IsTabStop = true;
             this.Focus(FocusState.Programmatic);
-            this.IsTabStop = false;
         };
 
         this.Unloaded += (s, e) =>

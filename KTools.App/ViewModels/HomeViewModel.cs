@@ -161,7 +161,7 @@ public partial class HomeViewModel : ThreadSafeViewModel
                 Name = "Калькулятор сдвига",
                 Category = "Инструменты",
                 IconName = "calculator",
-                Description = "Расчет разницы во времени между сэмплами " +
+                Description = "Расчет разницы во времени между двумя таймингами " +
                               "для корректировки сдвига аудио и субтитров."
             }
         };

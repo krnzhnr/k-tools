@@ -72,7 +72,9 @@
                         <NavigationViewItem Content="ASS/SRT → VTT" Tag="script:subtitles_convert" Icon="Font" />
                     </NavigationViewItem.MenuItems>
                 </NavigationViewItem>
-                <NavigationViewItem Content="Инструменты" Icon="Calculator" x:Name="NavItemTools" SelectsOnInvoked="False">
+
+                <!-- Группа: Инструменты -->
+                <NavigationViewItem Content="Инструменты" Icon="Repair" x:Name="NavItemTools" SelectsOnInvoked="False">
                     <NavigationViewItem.MenuItems>
                         <NavigationViewItem Content="Калькулятор сдвига" Tag="tool:timing_calculator" Icon="Calculator" />
                     </NavigationViewItem.MenuItems>
@@ -89,7 +91,7 @@
                 </NavigationViewItem>
                 <NavigationViewItem Content="Компоненты" x:Name="NavItemDependencies" Tag="dependencies">
                     <NavigationViewItem.Icon>
-                        <FontIcon Glyph="&#xF003;" />
+                        <FontIcon Glyph="&#xE896;" />
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
             </NavigationView.FooterMenuItems>

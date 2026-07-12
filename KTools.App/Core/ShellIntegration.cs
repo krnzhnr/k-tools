@@ -102,9 +102,12 @@ public static class ShellIntegration
             var subKeys = shellKey.GetSubKeyNames();
             if (subKeys.Length != scripts.Count) return true;
 
-            foreach (var (name, code) in scripts)
+            for (int i = 0; i < scripts.Count; i++)
             {
-                using var scriptKey = shellKey.OpenSubKey(code, false);
+                var (name, code) = scripts[i];
+                string expectedSubKey = $"{i:D2}_{code}";
+
+                using var scriptKey = shellKey.OpenSubKey(expectedSubKey, false);
                 if (scriptKey == null) return true;
 
                 var scriptMui = scriptKey.GetValue("MUIVerb") as string;
@@ -155,9 +158,12 @@ public static class ShellIntegration
             }
 
             // Добавляем новые подразделы
-            foreach (var (name, code) in scripts)
+            for (int i = 0; i < scripts.Count; i++)
             {
-                using var scriptKey = shellKey.CreateSubKey(code, true);
+                var (name, code) = scripts[i];
+                string codeWithPrefix = $"{i:D2}_{code}";
+
+                using var scriptKey = shellKey.CreateSubKey(codeWithPrefix, true);
                 if (scriptKey == null) continue;
 
                 scriptKey.SetValue("MUIVerb", name);

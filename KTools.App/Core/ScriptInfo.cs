@@ -46,6 +46,7 @@ public class ScriptInfo
         "download" => Symbol.Download,
         "font" => Symbol.Font,
         "characters" => Symbol.Font,
+        "calculator" => Symbol.Calculator,
         _ => Symbol.Document
     };
 

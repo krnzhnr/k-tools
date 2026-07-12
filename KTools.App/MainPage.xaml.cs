@@ -197,7 +197,7 @@ public sealed partial class MainPage : Page
         {
             ViewModel.HeaderTitle = "Калькулятор сдвига";
             ViewModel.HeaderSubtitle = 
-                "Расчет разницы во времени между сэмплами для корректировки сдвига аудио и субтитров";
+                "Расчет разницы во времени между двумя таймингами для корректировки сдвига аудио и субтитров";
         }
         else if (targetTag == "settings")
         {

@@ -297,7 +297,7 @@ public partial class MainViewModel : ThreadSafeViewModel
                 "MainPage");
             HeaderTitle = "Калькулятор сдвига";
             HeaderSubtitle =
-                "Расчет разницы во времени между сэмплами для корректировки сдвига аудио и субтитров";
+                "Расчет разницы во времени между двумя таймингами для корректировки сдвига аудио и субтитров";
             _navigationService.NavigateTo(typeof(TimingCalculatorPage));
         }
         else if (tag == "dependencies")

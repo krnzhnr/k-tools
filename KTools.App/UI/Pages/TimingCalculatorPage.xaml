@@ -6,109 +6,141 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d"
-    IsTabStop="True">
+    IsTabStop="True"
+    SizeChanged="Page_SizeChanged">
 
     <Grid>
-        <!-- Основное содержимое страницы -->
+        <!-- Основное содержимое страницы центрировано по горизонтали -->
         <ScrollViewer VerticalScrollBarVisibility="Auto">
-            <StackPanel Padding="36,12,36,36" Spacing="28" MaxWidth="800" HorizontalAlignment="Left">
+            <StackPanel Padding="36,24,36,36" Spacing="28" MaxWidth="600" HorizontalAlignment="Center">
 
-                <!-- Блок полей ввода времени -->
-                <StackPanel Spacing="16">
+                <!-- Блок полей ввода времени в ряд -->
+                <StackPanel x:Name="InputsPanel" Orientation="Horizontal" Spacing="24" HorizontalAlignment="Center">
                     <!-- Оригинальное время -->
-                    <StackPanel Spacing="8">
+                    <StackPanel Spacing="8" Width="230">
                         <TextBlock Text="Текущий тайминг" 
                                    FontWeight="SemiBold" 
+                                   HorizontalAlignment="Left"
                                    Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
-                        <TextBox x:Name="TimeBeforeBox" 
-                                 Text="0:00:00.00" 
-                                 FontFamily="Consolas, Courier New, monospace" 
-                                 FontSize="16" 
-                                 Width="180" 
-                                 HorizontalAlignment="Left"
-                                 SelectionStart="0"
-                                 SelectionLength="0"
-                                 MaxLength="10"
-                                 PreviewKeyDown="TimeBox_PreviewKeyDown"
-                                 SelectionChanged="TimeBox_SelectionChanged"
-                                 LostFocus="TimeBox_LostFocus" />
+                        <Grid ColumnSpacing="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBox x:Name="TimeBeforeBox" 
+                                     Text="0:00:00.00" 
+                                     FontFamily="Consolas, Courier New, monospace" 
+                                     FontSize="16" 
+                                     HorizontalAlignment="Stretch"
+                                     HorizontalContentAlignment="Center"
+                                     SelectionStart="0"
+                                     SelectionLength="0"
+                                     MaxLength="10"
+                                     PreviewKeyDown="TimeBox_PreviewKeyDown"
+                                     SelectionChanged="TimeBox_SelectionChanged"
+                                     LostFocus="TimeBox_LostFocus"
+                                     Grid.Column="0" />
+                            <Button Click="PasteBefore_Click" 
+                                    Grid.Column="1"
+                                    Width="36"
+                                    Height="32"
+                                    Padding="0"
+                                    ToolTipService.ToolTip="Вставить из буфера обмена"
+                                    Style="{ThemeResource DefaultButtonStyle}">
+                                <FontIcon Glyph="&#xE77F;" FontSize="14" />
+                            </Button>
+                        </Grid>
                     </StackPanel>
 
                     <!-- Новое время -->
-                    <StackPanel Spacing="8">
+                    <StackPanel Spacing="8" Width="230">
                         <TextBlock Text="Целевой тайминг" 
                                    FontWeight="SemiBold" 
+                                   HorizontalAlignment="Left"
                                    Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
-                        <TextBox x:Name="TimeAfterBox" 
-                                 Text="0:00:00.00" 
-                                 FontFamily="Consolas, Courier New, monospace" 
-                                 FontSize="16" 
-                                 Width="180" 
-                                 HorizontalAlignment="Left"
-                                 SelectionStart="0"
-                                 SelectionLength="0"
-                                 MaxLength="10"
-                                 PreviewKeyDown="TimeBox_PreviewKeyDown"
-                                 SelectionChanged="TimeBox_SelectionChanged"
-                                 LostFocus="TimeBox_LostFocus" />
+                        <Grid ColumnSpacing="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBox x:Name="TimeAfterBox" 
+                                     Text="0:00:00.00" 
+                                     FontFamily="Consolas, Courier New, monospace" 
+                                     FontSize="16" 
+                                     HorizontalAlignment="Stretch"
+                                     HorizontalContentAlignment="Center"
+                                     SelectionStart="0"
+                                     SelectionLength="0"
+                                     MaxLength="10"
+                                     PreviewKeyDown="TimeBox_PreviewKeyDown"
+                                     SelectionChanged="TimeBox_SelectionChanged"
+                                     LostFocus="TimeBox_LostFocus"
+                                     Grid.Column="0" />
+                            <Button Click="PasteAfter_Click" 
+                                    Grid.Column="1"
+                                    Width="36"
+                                    Height="32"
+                                    Padding="0"
+                                    ToolTipService.ToolTip="Вставить из буфера обмена"
+                                    Style="{ThemeResource DefaultButtonStyle}">
+                                <FontIcon Glyph="&#xE77F;" FontSize="14" />
+                            </Button>
+                        </Grid>
                     </StackPanel>
                 </StackPanel>
 
-                <!-- Кнопка очистки -->
+                <!-- Кнопка очистки по центру -->
                 <Button Content="Сбросить поля" 
                         Click="ResetButton_Click" 
                         Style="{ThemeResource DefaultButtonStyle}"
-                        HorizontalAlignment="Left" />
+                        HorizontalAlignment="Center" />
 
-                <!-- Блок результатов вычислений -->
+                <!-- Блок результатов вычислений растягивается на всю ширину контейнера (600px) -->
                 <Border CornerRadius="8" 
                         Padding="24" 
                         Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" 
                         BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" 
-                        BorderThickness="1">
-                    <StackPanel Spacing="20">
+                        BorderThickness="1"
+                        HorizontalAlignment="Stretch">
+                    <StackPanel Spacing="24" HorizontalAlignment="Center">
                         <TextBlock Text="Результат расчета сдвига" 
                                    FontSize="16" 
                                    FontWeight="SemiBold" 
+                                   HorizontalAlignment="Center"
                                    Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
                         
                         <!-- Абсолютный сдвиг (Aegisub Format) -->
-                        <StackPanel Spacing="4">
+                        <StackPanel Spacing="4" HorizontalAlignment="Center">
                             <TextBlock Text="Сдвиг для Aegisub:" 
                                        FontSize="12" 
+                                       HorizontalAlignment="Center"
                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                            <Grid ColumnSpacing="12" HorizontalAlignment="Left">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto" />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
-                                
+                            <StackPanel Orientation="Horizontal" Spacing="12" HorizontalAlignment="Center">
                                 <TextBlock x:Name="ResultTimeBlock" 
                                            Text="0:00:00.00" 
                                            FontFamily="Consolas, Courier New, monospace" 
                                            FontSize="32" 
                                            FontWeight="Bold" 
                                            Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" 
-                                           Grid.Column="0" 
                                            VerticalAlignment="Center" />
                                 
                                 <Button Click="CopyResult_Click" 
-                                        Grid.Column="1" 
                                         VerticalAlignment="Center" 
                                         Style="{ThemeResource AccentButtonStyle}">
                                     <StackPanel Orientation="Horizontal" Spacing="8">
                                         <FontIcon Glyph="&#xE8C8;" FontSize="16" />
                                     </StackPanel>
                                 </Button>
-                            </Grid>
+                            </StackPanel>
                         </StackPanel>
 
                         <!-- Направление сдвига -->
-                        <StackPanel Spacing="6">
+                        <StackPanel Spacing="6" HorizontalAlignment="Center">
                             <TextBlock Text="Нужно сдвинуть:" 
                                        FontSize="12" 
+                                       HorizontalAlignment="Center"
                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                            <StackPanel x:Name="DirectionPanel" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                            <StackPanel x:Name="DirectionPanel" Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center" VerticalAlignment="Center">
                                 <FontIcon x:Name="DirectionIcon" Glyph="&#xE72A;" FontSize="18" Foreground="{ThemeResource SystemFillColorSuccessBrush}" />
                                 <TextBlock x:Name="DirectionTextBlock" 
                                            Text="Нет изменений" 
@@ -119,31 +151,26 @@
                         </StackPanel>
 
                         <!-- Дополнительно: сдвиг в миллисекундах (для аудио) -->
-                        <StackPanel Spacing="4">
+                        <StackPanel Spacing="4" HorizontalAlignment="Center">
                             <TextBlock Text="Сдвиг в миллисекундах:" 
                                        FontSize="12" 
+                                       HorizontalAlignment="Center"
                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                            <Grid ColumnSpacing="12" HorizontalAlignment="Left">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto" />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
+                            <StackPanel Orientation="Horizontal" Spacing="12" HorizontalAlignment="Center">
                                 <TextBlock x:Name="ResultMsBlock" 
                                            Text="0 ms" 
                                            FontFamily="Consolas, Courier New, monospace" 
                                            FontSize="18" 
                                            FontWeight="SemiBold" 
                                            Foreground="{ThemeResource TextFillColorPrimaryBrush}" 
-                                           Grid.Column="0" 
                                            VerticalAlignment="Center" />
                                 <Button Click="CopyMs_Click" 
-                                        Grid.Column="1" 
                                         Style="{ThemeResource DefaultButtonStyle}">
                                     <StackPanel Orientation="Horizontal" Spacing="8">
                                         <FontIcon Glyph="&#xE8C8;" FontSize="16" />
                                     </StackPanel>
                                 </Button>
-                            </Grid>
+                            </StackPanel>
                         </StackPanel>
 
                     </StackPanel>

@@ -39,7 +39,6 @@ public partial class SettingsPage : Page
         {
             this.IsTabStop = true;
             this.Focus(FocusState.Programmatic);
-            this.IsTabStop = false;
         };
     }
 

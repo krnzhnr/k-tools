@@ -28,15 +28,146 @@ public sealed partial class TimingCalculatorPage : Page
     {
         InitializeComponent();
         _logService = App.Services.GetRequiredService<ILogService>();
-        
-        // Сброс фокуса при клике на свободную область страницы
-        this.PointerPressed += (s, e) =>
+
+        // Сброс фокуса при клике на свободную область страницы.
+        // Используем Tapped вместо PointerPressed, чтобы сброс фокуса выполнялся ПОСЛЕ
+        // завершения жеста клика (PointerReleased), а не до него.
+        // AddHandler с handledEventsToo: true гарантирует перехват даже если ScrollViewer
+        // или другие дочерние элементы уже пометили событие как обработанное.
+        this.AddHandler(UIElement.TappedEvent, new TappedEventHandler((s, e) =>
         {
-            this.Focus(FocusState.Programmatic);
-        };
+            if (!IsInsideInteractiveControl(e.OriginalSource as DependencyObject))
+            {
+                this.IsTabStop = true;
+                this.Focus(FocusState.Programmatic);
+                e.Handled = true;
+            }
+        }), true);
 
         // Начальный расчет
         UpdateCalculation();
+    }
+
+    private void Page_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (InputsPanel == null) return;
+
+        // Если доступная ширина меньше 560px (учитывая ширину полей 230*2 + spacing 24 + отступы 72),
+        // перегруппировываем поля в вертикальную стопку.
+        if (e.NewSize.Width < 560)
+        {
+            if (InputsPanel.Orientation != Orientation.Vertical)
+            {
+                InputsPanel.Orientation = Orientation.Vertical;
+                InputsPanel.Spacing = 16;
+                _logService.Info("[Калькулятор сдвига] Переключение макета в вертикальный режим.", "TimingCalculatorPage");
+            }
+        }
+        else
+        {
+            if (InputsPanel.Orientation != Orientation.Horizontal)
+            {
+                InputsPanel.Orientation = Orientation.Horizontal;
+                InputsPanel.Spacing = 24;
+                _logService.Info("[Калькулятор сдвига] Переключение макета в горизонтальный режим.", "TimingCalculatorPage");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Проверяет, находится ли элемент внутри интерактивного контрола (TextBox, Button).
+    /// Обход визуального дерева вверх необходим, так как OriginalSource события Tapped
+    /// может быть внутренним дочерним элементом шаблона TextBox/Button.
+    /// </summary>
+    private static bool IsInsideInteractiveControl(DependencyObject? source)
+    {
+        var current = source;
+        while (current != null)
+        {
+            if (current is TextBox || current is Button)
+                return true;
+            current = VisualTreeHelper.GetParent(current);
+        }
+        return false;
+    }
+
+    private async void PasteBefore_Click(object sender, RoutedEventArgs e)
+    {
+        await PasteFromClipboardAsync(TimeBeforeBox);
+    }
+
+    private async void PasteAfter_Click(object sender, RoutedEventArgs e)
+    {
+        await PasteFromClipboardAsync(TimeAfterBox);
+    }
+
+    private async System.Threading.Tasks.Task PasteFromClipboardAsync(TextBox textBox)
+    {
+        var dataPackageView = Clipboard.GetContent();
+        if (dataPackageView.Contains(StandardDataFormats.Text))
+        {
+            try
+            {
+                string text = await dataPackageView.GetTextAsync();
+                if (!string.IsNullOrWhiteSpace(text))
+                {
+                    text = text.Trim();
+                    string? formattedTime = NormalizeTimeText(text);
+                    if (formattedTime != null)
+                    {
+                        _logService.Info($"Вставка времени из буфера: '{text}' -> '{formattedTime}'", "TimingCalculatorPage");
+                        _isUpdatingText = true;
+                        textBox.Text = formattedTime;
+                        _isUpdatingText = false;
+                        UpdateCalculation();
+                    }
+                    else
+                    {
+                        _logService.Warn($"Некорректный формат времени в буфере обмена для вставки: '{text}'", "TimingCalculatorPage");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logService.Exception(ex, "Ошибка при чтении из буфера обмена", "TimingCalculatorPage");
+            }
+        }
+    }
+
+    private static string? NormalizeTimeText(string input)
+    {
+        if (string.IsNullOrEmpty(input)) return null;
+
+        // Aegisub формат: Ч:ММ:СС.сс (длина 10, двоеточия на 1 и 4, точка на 7)
+        if (input.Length == 10 && input[1] == ':' && input[4] == ':' && input[7] == '.')
+        {
+            bool allDigits = true;
+            for (int i = 0; i < input.Length; i++)
+            {
+                if (i != 1 && i != 4 && i != 7 && !char.IsDigit(input[i]))
+                {
+                    allDigits = false;
+                    break;
+                }
+            }
+            if (allDigits) return input;
+        }
+
+        // Поддержка формата ЧЧ:ММ:СС.сс (длина 11, двоеточия на 2 и 5, точка на 8)
+        if (input.Length == 11 && input[2] == ':' && input[5] == ':' && input[8] == '.')
+        {
+            string sliced = input.Substring(1);
+            return NormalizeTimeText(sliced);
+        }
+
+        // Поддержка формата ММ:СС.сс (длина 8, двоеточие на 2, точка на 5)
+        if (input.Length == 8 && input[2] == ':' && input[5] == '.')
+        {
+            string extended = "0:" + input;
+            return NormalizeTimeText(extended);
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -94,7 +225,7 @@ public sealed partial class TimingCalculatorPage : Page
     /// </summary>
     private void TimeBox_SelectionChanged(object sender, RoutedEventArgs e)
     {
-        if (sender is TextBox textBox)
+        if (sender is TextBox textBox && textBox.FocusState != FocusState.Unfocused)
         {
             int selectionStart = textBox.SelectionStart;
             // Корректируем положение курсора, чтобы он не застревал на разделителях при клике мышкой
@@ -253,10 +384,39 @@ public sealed partial class TimingCalculatorPage : Page
             return;
         }
 
+        // Обработка навигации стрелками влево/вправо с перешагиванием разделителей
+        if (e.Key == Windows.System.VirtualKey.Left)
+        {
+            e.Handled = true;
+            int prevCaret = textBox.SelectionStart - 1;
+            if (prevCaret >= 0)
+            {
+                if (SeparatorIndices.Contains(prevCaret))
+                {
+                    prevCaret--; // Перешагиваем разделитель влево
+                }
+                textBox.SelectionStart = Math.Max(prevCaret, 0);
+            }
+            return;
+        }
+
+        if (e.Key == Windows.System.VirtualKey.Right)
+        {
+            e.Handled = true;
+            int nextCaret = textBox.SelectionStart + 1;
+            if (nextCaret <= 10)
+            {
+                if (SeparatorIndices.Contains(nextCaret))
+                {
+                    nextCaret++; // Перешагиваем разделитель вправо
+                }
+                textBox.SelectionStart = Math.Min(nextCaret, 10);
+            }
+            return;
+        }
+
         // Блокируем любые другие клавиши (кроме стрелок навигации)
-        bool isNavigationKey = e.Key == Windows.System.VirtualKey.Left ||
-                              e.Key == Windows.System.VirtualKey.Right ||
-                              e.Key == Windows.System.VirtualKey.Up ||
+        bool isNavigationKey = e.Key == Windows.System.VirtualKey.Up ||
                               e.Key == Windows.System.VirtualKey.Down ||
                               e.Key == Windows.System.VirtualKey.Home ||
                               e.Key == Windows.System.VirtualKey.End;
