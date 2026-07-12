@@ -29,6 +29,14 @@ public sealed partial class TimingCalculatorPage : Page
         InitializeComponent();
         _logService = App.Services.GetRequiredService<ILogService>();
         
+        // Сброс фокуса при клике на свободную область страницы
+        this.PointerPressed += (s, e) =>
+        {
+            this.IsTabStop = true;
+            this.Focus(FocusState.Programmatic);
+            this.IsTabStop = false;
+        };
+
         // Начальный расчет
         UpdateCalculation();
     }
@@ -121,6 +129,16 @@ public sealed partial class TimingCalculatorPage : Page
     private void TimeBox_PreviewKeyDown(object sender, KeyRoutedEventArgs e)
     {
         if (sender is not TextBox textBox) return;
+
+        // Сброс фокуса при нажатии клавиши Enter
+        if (e.Key == Windows.System.VirtualKey.Enter)
+        {
+            this.IsTabStop = true;
+            this.Focus(FocusState.Programmatic);
+            this.IsTabStop = false;
+            e.Handled = true;
+            return;
+        }
 
         // Разрешаем стандартные управляющие сочетания клавиш (Ctrl+C, Ctrl+V, Tab)
         var ctrlState = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Control);
@@ -338,24 +356,24 @@ public sealed partial class TimingCalculatorPage : Page
         {
             if (diffMs > 0)
             {
-                // Задержка (Вперед) — иконка Forward
+                // Вперед
                 DirectionIcon.Glyph = "\uE72A"; // Forward
                 DirectionIcon.Foreground = (Brush)Application.Current.Resources["SystemFillColorSuccessBrush"];
-                DirectionTextBlock.Text = "Задержка (Вперед) — звук/субтитры отстают, нужно сдвинуть вперед";
+                DirectionTextBlock.Text = "Вперед";
             }
             else if (diffMs < 0)
             {
-                // Опережение (Назад) — иконка Back
+                // Назад
                 DirectionIcon.Glyph = "\uE72B"; // Back
                 DirectionIcon.Foreground = (Brush)Application.Current.Resources["SystemFillColorCautionBrush"];
-                DirectionTextBlock.Text = "Опережение (Назад) — звук/субтитры спешат, нужно сдвинуть назад";
+                DirectionTextBlock.Text = "Назад";
             }
             else
             {
                 // Нет изменений
                 DirectionIcon.Glyph = "\uE73E"; // CheckMark
                 DirectionIcon.Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"];
-                DirectionTextBlock.Text = "Сдвиг отсутствует (тайминги идентичны)";
+                DirectionTextBlock.Text = "Сдвиг отсутствует";
             }
         }
     }

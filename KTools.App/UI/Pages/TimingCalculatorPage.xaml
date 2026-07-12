@@ -16,7 +16,7 @@
                 <StackPanel Spacing="16">
                     <!-- Оригинальное время -->
                     <StackPanel Spacing="8">
-                        <TextBlock Text="Оригинальное время (было)" 
+                        <TextBlock Text="Текущий тайминг" 
                                    FontWeight="SemiBold" 
                                    Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
                         <TextBox x:Name="TimeBeforeBox" 
@@ -35,7 +35,7 @@
 
                     <!-- Новое время -->
                     <StackPanel Spacing="8">
-                        <TextBlock Text="Новое время (стало)" 
+                        <TextBlock Text="Целевой тайминг" 
                                    FontWeight="SemiBold" 
                                    Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
                         <TextBox x:Name="TimeAfterBox" 
@@ -97,7 +97,6 @@
                                         Style="{ThemeResource AccentButtonStyle}">
                                     <StackPanel Orientation="Horizontal" Spacing="8">
                                         <FontIcon Glyph="&#xE8C8;" FontSize="16" />
-                                        <TextBlock Text="Копировать" />
                                     </StackPanel>
                                 </Button>
                             </Grid>
@@ -105,7 +104,7 @@
 
                         <!-- Направление сдвига -->
                         <StackPanel Spacing="6">
-                            <TextBlock Text="Направление сдвига:" 
+                            <TextBlock Text="Нужно сдвинуть:" 
                                        FontSize="12" 
                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                             <StackPanel x:Name="DirectionPanel" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
@@ -141,7 +140,6 @@
                                         Style="{ThemeResource DefaultButtonStyle}">
                                     <StackPanel Orientation="Horizontal" Spacing="8">
                                         <FontIcon Glyph="&#xE8C8;" FontSize="16" />
-                                        <TextBlock Text="Копировать мс" />
                                     </StackPanel>
                                 </Button>
                             </Grid>
