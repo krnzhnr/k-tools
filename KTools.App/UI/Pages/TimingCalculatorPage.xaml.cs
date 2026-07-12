@@ -32,9 +32,7 @@ public sealed partial class TimingCalculatorPage : Page
         // Сброс фокуса при клике на свободную область страницы
         this.PointerPressed += (s, e) =>
         {
-            this.IsTabStop = true;
             this.Focus(FocusState.Programmatic);
-            this.IsTabStop = false;
         };
 
         // Начальный расчет
@@ -133,9 +131,7 @@ public sealed partial class TimingCalculatorPage : Page
         // Сброс фокуса при нажатии клавиши Enter
         if (e.Key == Windows.System.VirtualKey.Enter)
         {
-            this.IsTabStop = true;
             this.Focus(FocusState.Programmatic);
-            this.IsTabStop = false;
             e.Handled = true;
             return;
         }
