@@ -112,13 +112,23 @@ public sealed partial class MainWindow : Window
                 if (iconIcoPath != null)
                 {
                     AppWindow.SetIcon(iconIcoPath);
-                }
 
-                // Отключаем системную иконку и системное меню в заголовке,
-                // чтобы клик по кастомной иконке TitleBar не вызывал системное меню.
-                if (Microsoft.UI.Windowing.AppWindowTitleBar.IsCustomizationSupported())
-                {
-                    AppWindow.TitleBar.IconShowOptions = Microsoft.UI.Windowing.IconShowOptions.HideIconAndSystemMenu;
+                    // Иконка в кастомном TitleBar через абсолютный путь на диске,
+                    // поскольку ресурсный URI /Assets/AppIcon.ico не резолвится в unpackaged-сборке.
+                    try
+                    {
+                        AppTitleBar.IconSource = new Microsoft.UI.Xaml.Controls.ImageIconSource
+                        {
+                            ImageSource = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(
+                                new Uri(iconIcoPath))
+                        };
+                    }
+                    catch (Exception iconEx)
+                    {
+                        _logService.Warn(
+                            $"Не удалось установить иконку TitleBar: {iconEx.Message}",
+                            "MainWindow");
+                    }
                 }
 
                 // Иконка окна для панели задач и превью через Win32 API из ресурсов EXE-файла
