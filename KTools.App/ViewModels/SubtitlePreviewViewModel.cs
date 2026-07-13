@@ -6,6 +6,8 @@ using KTools_App.Services.Contracts;
 using KTools_App.Core;
 using KTools_App.Infrastructure;
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
+using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -46,6 +48,135 @@ public sealed class FilterItemViewModel : ObservableObject
     {
         Name = name;
         _isChecked = isChecked;
+    }
+}
+
+/// <summary>
+/// Представляет один паттерн регулярного выражения для фильтрации текста.
+/// </summary>
+public sealed class PatternItemViewModel : ObservableObject
+{
+    private string _word = string.Empty;
+    private bool _active = true;
+    private int _deleteModeIndex = 0; // 0 = Удалять совпадения (only_part = true), 1 = Удалять строки с совпадениями (only_part = false)
+    private string _sampleText = string.Empty;
+
+    public string Word
+    {
+        get => _word;
+        set
+        {
+            if (SetProperty(ref _word, value))
+            {
+                UpdateSampleText();
+            }
+        }
+    }
+
+    public bool Active
+    {
+        get => _active;
+        set => SetProperty(ref _active, value);
+    }
+
+    public int DeleteModeIndex
+    {
+        get => _deleteModeIndex;
+        set
+        {
+            if (SetProperty(ref _deleteModeIndex, value))
+            {
+                OnPropertyChanged(nameof(OnlyPart));
+            }
+        }
+    }
+
+    public bool OnlyPart
+    {
+        get => _deleteModeIndex == 0;
+        set => DeleteModeIndex = value ? 0 : 1;
+    }
+
+    public string SampleText
+    {
+        get => _sampleText;
+        private set => SetProperty(ref _sampleText, value);
+    }
+
+    public PatternItemViewModel(string word, bool active, bool onlyPart)
+    {
+        _word = word;
+        _active = active;
+        _deleteModeIndex = onlyPart ? 0 : 1;
+        UpdateSampleText();
+    }
+
+    private void UpdateSampleText()
+    {
+        if (string.IsNullOrWhiteSpace(_word))
+        {
+            SampleText = string.Empty;
+            return;
+        }
+
+        try
+        {
+            _ = new System.Text.RegularExpressions.Regex(_word);
+        }
+        catch (System.ArgumentException)
+        {
+            SampleText = "Некорректный regex";
+            return;
+        }
+
+        try
+        {
+            string farePattern = EscapeFareSpecialChars(_word);
+            var xeger = new Fare.Xeger(farePattern);
+            string generated = xeger.Generate();
+            
+            if (string.IsNullOrEmpty(generated))
+            {
+                SampleText = "Пример: (пустая строка)";
+            }
+            else
+            {
+                SampleText = $"Пример совпадения: \"{generated}\"";
+            }
+        }
+        catch (System.Exception)
+        {
+            SampleText = "Сложный regex (пример недоступен)";
+        }
+    }
+
+    private static string EscapeFareSpecialChars(string pattern)
+    {
+        if (string.IsNullOrEmpty(pattern)) return pattern;
+
+        var sb = new System.Text.StringBuilder();
+        int backslashCount = 0;
+        for (int i = 0; i < pattern.Length; i++)
+        {
+            char c = pattern[i];
+            if (c == '\\')
+            {
+                backslashCount++;
+            }
+            else
+            {
+                if (c == '&' || c == '~')
+                {
+                    if (backslashCount % 2 == 0)
+                    {
+                        sb.Append('\\');
+                    }
+                }
+                backslashCount = 0;
+            }
+            sb.Append(c);
+        }
+        return sb.ToString();
     }
 }
 
@@ -309,51 +440,57 @@ public sealed class SubtitlePreviewLine : ObservableObject
 
         // Вычисляем состояние пустоты после фильтров динамически с использованием кэширования
         string textAfterFilters = OriginalText;
+
+        // Последовательно применяем активные regex-паттерны
+        bool isDeletedByRegex = false;
+        foreach (var patternDict in _filterState.TextPatterns)
+        {
+            if (patternDict.TryGetValue("active", out var act) && SafeGetBool(act) &&
+                patternDict.TryGetValue("word", out var p) && p?.ToString() is string pattern && !string.IsNullOrEmpty(pattern))
+            {
+                bool onlyPart = patternDict.TryGetValue("only_part", out var op) && SafeGetBool(op);
+                try
+                {
+                    var regex = new System.Text.RegularExpressions.Regex(pattern);
+                    if (regex.IsMatch(textAfterFilters))
+                    {
+                        if (onlyPart)
+                        {
+                            textAfterFilters = regex.Replace(textAfterFilters, string.Empty);
+                        }
+                        else
+                        {
+                            isDeletedByRegex = true;
+                            break;
+                        }
+                    }
+                }
+                catch
+                {
+                    // Игнорируем некорректные regex в превью
+                }
+            }
+        }
+
         if (_filterState.StripCaps)
         {
             if (_textWithoutCaps == null)
             {
-                _textWithoutCaps = _assParser.StripCaps(OriginalText);
+                _textWithoutCaps = _assParser.StripCaps(textAfterFilters);
             }
             textAfterFilters = _textWithoutCaps;
         }
 
         if (_filterState.StripFormatting)
         {
-            if (_filterState.StripCaps)
+            if (_textWithoutBoth == null)
             {
-                if (_textWithoutBoth == null)
-                {
-                    _textWithoutBoth = _assParser.StripTags(textAfterFilters);
-                }
-                textAfterFilters = _textWithoutBoth;
+                _textWithoutBoth = _assParser.StripTags(textAfterFilters);
             }
-            else
-            {
-                textAfterFilters = CleanText;
-            }
+            textAfterFilters = _textWithoutBoth;
         }
 
-        bool isEmpty;
-        if (_filterState.StripFormatting)
-        {
-            isEmpty = string.IsNullOrWhiteSpace(textAfterFilters);
-        }
-        else
-        {
-            if (_filterState.StripCaps)
-            {
-                if (_textWithoutBoth == null)
-                {
-                    _textWithoutBoth = _assParser.StripTags(textAfterFilters);
-                }
-                isEmpty = string.IsNullOrWhiteSpace(_textWithoutBoth);
-            }
-            else
-            {
-                isEmpty = IsOriginallyEmpty;
-            }
-        }
+        bool isEmpty = isDeletedByRegex || string.IsNullOrWhiteSpace(_assParser.StripTags(textAfterFilters));
         IsEmptyAfterFilters = isEmpty;
 
         // Вычисляем финальный вид текста реплики с переносами
@@ -372,7 +509,7 @@ public sealed class SubtitlePreviewLine : ObservableObject
 
         // Строка считается удаленной, если:
         // 1. Исключена вручную
-        // 2. Пустая после CAPS/тегов и не включена вручную
+        // 2. Пустая после CAPS/тегов/regex и не включена вручную
         // 3. Отфильтрована по актеру/стилю/эффекту и не включена вручную
         bool newIsDeleted = isManuallyExcluded ||
                             (isEmpty && !isManuallyIncluded) ||
@@ -391,7 +528,7 @@ public sealed class SubtitlePreviewLine : ObservableObject
             }
             else if (isEmpty)
             {
-                newStatus = "Удалено (CAPS/Теги)";
+                newStatus = isDeletedByRegex ? "Удалено (Regex)" : "Удалено (CAPS/Теги)";
                 newStatusColor = "#ffa940"; // Оранжевый
             }
             else
@@ -491,6 +628,31 @@ public sealed class SubtitlePreviewLine : ObservableObject
         }
 
         UpdateState(true);
+    }
+
+    /// <summary>
+    /// Сбросить кэшированные текстовые представления (при изменении динамических паттернов).
+    /// </summary>
+    public void ResetCache()
+    {
+        _textWithoutCaps = null;
+        _textWithoutBoth = null;
+    }
+
+    private static bool SafeGetBool(object? obj)
+    {
+        if (obj == null) return false;
+        if (obj is bool b) return b;
+        if (obj is System.Text.Json.JsonElement elem)
+        {
+            if (elem.ValueKind == System.Text.Json.JsonValueKind.True) return true;
+            if (elem.ValueKind == System.Text.Json.JsonValueKind.False) return false;
+            if (elem.ValueKind == System.Text.Json.JsonValueKind.String)
+            {
+                return bool.TryParse(elem.GetString(), out var parsed) && parsed;
+            }
+        }
+        return false;
     }
 }
 
@@ -599,6 +761,9 @@ public sealed partial class SubtitlePreviewViewModel : ThreadSafeViewModel
         _settingsGroupName = settingsGroupName;
         StripFormatting = _filterState.StripFormatting;
         StripCaps = _filterState.StripCaps;
+
+        Patterns.CollectionChanged += OnPatternsCollectionChanged;
+        LoadPatterns(_filterState.TextPatterns);
 
         PropertyChanged += OnViewModelPropertyChanged;
     }
@@ -820,6 +985,116 @@ public sealed partial class SubtitlePreviewViewModel : ThreadSafeViewModel
     }
 
     /// <summary>
+    /// Список паттернов регулярных выражений для очистки.
+    /// </summary>
+    public List<Dictionary<string, object>> TextPatterns => _filterState.TextPatterns;
+
+    /// <summary>
+    /// Коллекция моделей паттернов для привязки к ListView.
+    /// </summary>
+    public ObservableCollection<PatternItemViewModel> Patterns { get; } = new();
+
+    private bool _isSuppressingSave = false;
+
+    private void OnPatternsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        if (_isSuppressingSave) return;
+
+        if (e.OldItems != null)
+        {
+            foreach (PatternItemViewModel item in e.OldItems)
+            {
+                item.PropertyChanged -= OnPatternItemPropertyChanged;
+            }
+        }
+        if (e.NewItems != null)
+        {
+            foreach (PatternItemViewModel item in e.NewItems)
+            {
+                item.PropertyChanged += OnPatternItemPropertyChanged;
+            }
+        }
+
+        SavePatterns();
+    }
+
+    private void OnPatternItemPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (_isSuppressingSave) return;
+
+        if (e.PropertyName == nameof(PatternItemViewModel.Word) ||
+            e.PropertyName == nameof(PatternItemViewModel.Active) ||
+            e.PropertyName == nameof(PatternItemViewModel.OnlyPart))
+        {
+            SavePatterns();
+        }
+    }
+
+    public void LoadPatterns(List<Dictionary<string, object>> rawList)
+    {
+        _isSuppressingSave = true;
+
+        foreach (var item in Patterns)
+        {
+            item.PropertyChanged -= OnPatternItemPropertyChanged;
+        }
+        Patterns.Clear();
+
+        foreach (var item in rawList)
+        {
+            string word = item.TryGetValue("word", out var w) ? w?.ToString() ?? "" : "";
+            bool active = !item.TryGetValue("active", out var act) || SafeGetBool(act);
+            bool onlyPart = !item.TryGetValue("only_part", out var op) || SafeGetBool(op);
+
+            var vm = new PatternItemViewModel(word, active, onlyPart);
+            vm.PropertyChanged += OnPatternItemPropertyChanged;
+            Patterns.Add(vm);
+        }
+
+        _isSuppressingSave = false;
+        SavePatterns();
+    }
+
+    /// <summary>
+    /// Сохранить список паттернов регулярных выражений в состоянии фильтра и настройках.
+    /// </summary>
+    public void SavePatterns()
+    {
+        var rawList = new List<Dictionary<string, object>>();
+        foreach (var item in Patterns)
+        {
+            rawList.Add(new Dictionary<string, object>
+            {
+                { "word", item.Word },
+                { "active", item.Active },
+                { "only_part", item.OnlyPart }
+            });
+        }
+
+        _filterState.TextPatterns.Clear();
+        _filterState.TextPatterns.AddRange(rawList);
+
+        if (!string.IsNullOrEmpty(_settingsGroupName))
+        {
+            _settingsManager.SetSetting(_settingsGroupName, "text_patterns", rawList);
+        }
+
+        ResetAllLinesCacheAndApply();
+    }
+
+    /// <summary>
+    /// Сбросить кэш текстовых представлений у всех строк и переприменить фильтры.
+    /// </summary>
+    public void ResetAllLinesCacheAndApply()
+    {
+        foreach (var line in SubtitleLines)
+        {
+            line.ResetCache();
+        }
+        ApplyFilters();
+    }
+
+    /// <summary>
     /// Применить глобальные фильтры к репликам.
     /// </summary>
     public void ApplyFilters()
@@ -1004,5 +1279,21 @@ public sealed partial class SubtitlePreviewViewModel : ThreadSafeViewModel
                 _filteredLines.RemoveAt(filteredIdx);
             }
         }
+    }
+
+    private static bool SafeGetBool(object? obj)
+    {
+        if (obj == null) return false;
+        if (obj is bool b) return b;
+        if (obj is System.Text.Json.JsonElement elem)
+        {
+            if (elem.ValueKind == System.Text.Json.JsonValueKind.True) return true;
+            if (elem.ValueKind == System.Text.Json.JsonValueKind.False) return false;
+            if (elem.ValueKind == System.Text.Json.JsonValueKind.String)
+            {
+                return bool.TryParse(elem.GetString(), out var parsed) && parsed;
+            }
+        }
+        return false;
     }
 }

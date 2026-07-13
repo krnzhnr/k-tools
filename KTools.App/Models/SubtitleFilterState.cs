@@ -36,6 +36,15 @@ public sealed class SubtitleFilterState
     public bool StripCaps { get; set; } = false;
 
     /// <summary>
+    /// Список паттернов регулярных выражений для очистки текста субтитров.
+    /// Каждый элемент содержит:
+    /// "word" (string) - регулярное выражение,
+    /// "active" (bool) - статус активности,
+    /// "only_part" (bool) - удалять только совпадение (true) или всю строку (false).
+    /// </summary>
+    public List<Dictionary<string, object>> TextPatterns { get; } = new();
+
+    /// <summary>
     /// Ручные включения реплик (ключ - путь к файлу субтитров, значение - набор индексов строк диалогов).
     /// Строки из этого списка принудительно сохраняются, даже если они попали под фильтры.
     /// </summary>
@@ -55,6 +64,7 @@ public sealed class SubtitleFilterState
         ExcludedActors.Clear();
         ExcludedStyles.Clear();
         ExcludedEffects.Clear();
+        TextPatterns.Clear();
         ManualInclusions.Clear();
         ManualExclusions.Clear();
     }

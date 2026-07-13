@@ -95,6 +95,14 @@ public sealed class SubtitlesConvertScript : AbstractScript
             comment: "Автоматически вырезать реплики CAPS LOCK"),
             
         new SettingField(
+            "text_patterns",
+            "Паттерны регулярных выражений",
+            SettingType.KeywordList,
+            new List<Dictionary<string, object>>(),
+            "Очистка",
+            comment: "Последовательное удаление текста/строк по регулярным выражениям"),
+            
+        new SettingField(
             "delete_original",
             "Удалить исходный файл",
             SettingType.Checkbox,
@@ -127,6 +135,13 @@ public sealed class SubtitlesConvertScript : AbstractScript
         // Синхронизируем FilterState с текущими настройками перед выполнением
         FilterState.StripFormatting = GetSettingValue(settings, "strip_formatting", FilterState.StripFormatting);
         FilterState.StripCaps = GetSettingValue(settings, "strip_caps", FilterState.StripCaps);
+
+        var rawPatterns = GetSettingValue<List<Dictionary<string, object>>?>(settings, "text_patterns", null);
+        FilterState.TextPatterns.Clear();
+        if (rawPatterns != null)
+        {
+            FilterState.TextPatterns.AddRange(rawPatterns);
+        }
 
         bool stripFormatting = FilterState.StripFormatting;
         bool keepStyles = GetSettingValue(settings, "keep_styles", false);
@@ -260,6 +275,8 @@ public sealed class SubtitlesConvertScript : AbstractScript
         }
 
         string tempAssPath = Path.Combine(tempDir, "temp.ass");
+        int deletedLinesCount = 0;
+        int modifiedLinesCount = 0;
         
         try
         {
@@ -297,6 +314,48 @@ public sealed class SubtitlesConvertScript : AbstractScript
                     bool isManuallyExcluded = FilterState.ManualExclusions.TryGetValue(filePath, out var excSet) && excSet.Contains(dialogueIndex);
 
                     string text = d.Text;
+
+                    // Применяем последовательную regex-фильтрацию
+                    bool isDeletedByRegex = false;
+                    bool isModifiedByRegex = false;
+                    foreach (var patternDict in FilterState.TextPatterns)
+                    {
+                        if (patternDict.TryGetValue("active", out var act) && SafeGetBool(act) &&
+                            patternDict.TryGetValue("word", out var p) && p?.ToString() is string pattern && !string.IsNullOrEmpty(pattern))
+                        {
+                            bool onlyPart = patternDict.TryGetValue("only_part", out var op) && SafeGetBool(op);
+                            try
+                            {
+                                var regex = new System.Text.RegularExpressions.Regex(pattern);
+                                if (regex.IsMatch(text))
+                                {
+                                    if (onlyPart)
+                                    {
+                                        string newText = regex.Replace(text, string.Empty);
+                                        if (newText != text)
+                                        {
+                                            text = newText;
+                                            isModifiedByRegex = true;
+                                        }
+                                    }
+                                    else
+                                    {
+                                        isDeletedByRegex = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                _logService.Warn($"Некорректное регулярное выражение '{pattern}' в конвертере: {ex.Message}", "SubtitlesConvertScript");
+                            }
+                        }
+                    }
+
+                    if (isModifiedByRegex && !isDeletedByRegex)
+                    {
+                        modifiedLinesCount++;
+                    }
                     
                     // Применяем чистку CAPS LOCK
                     if (stripCaps)
@@ -326,11 +385,16 @@ public sealed class SubtitlesConvertScript : AbstractScript
                     // 3. Она пустая после фильтров и не была вручную включена
                     // 4. Она попала под фильтр и не была вручную включена
                     bool isDeleted = isManuallyExcluded || 
+                                     (isDeletedByRegex && !isManuallyIncluded) ||
                                      (isEmptyAfterFilters && !isManuallyIncluded) || 
                                      (isFiltered && !isManuallyIncluded);
 
                     if (isDeleted)
                     {
+                        if (isDeletedByRegex && !isManuallyIncluded)
+                        {
+                            deletedLinesCount++;
+                        }
                         dialogueIndex++;
                         continue;
                     }
@@ -376,6 +440,11 @@ public sealed class SubtitlesConvertScript : AbstractScript
             {
                 progressCallback(fileIndex, totalCount, "Успешно завершено!", 100.0);
                 results.Add($"✅ Конвертирован: {outputFileName}");
+                
+                if (deletedLinesCount > 0 || modifiedLinesCount > 0)
+                {
+                    _logService.Info($"Очистка субтитров по регулярным выражениям для '{originalName}': удалено строк: {deletedLinesCount}, модифицировано строк: {modifiedLinesCount}", "SubtitlesConvertScript");
+                }
                 
                 if (deleteOriginal)
                 {
@@ -432,5 +501,21 @@ public sealed class SubtitlesConvertScript : AbstractScript
             "ASS" => ".ass",
             _ => ".vtt"
         };
+    }
+
+    private static bool SafeGetBool(object? obj)
+    {
+        if (obj == null) return false;
+        if (obj is bool b) return b;
+        if (obj is System.Text.Json.JsonElement elem)
+        {
+            if (elem.ValueKind == System.Text.Json.JsonValueKind.True) return true;
+            if (elem.ValueKind == System.Text.Json.JsonValueKind.False) return false;
+            if (elem.ValueKind == System.Text.Json.JsonValueKind.String)
+            {
+                return bool.TryParse(elem.GetString(), out var parsed) && parsed;
+            }
+        }
+        return false;
     }
 }

@@ -821,22 +821,28 @@ public sealed partial class ScriptSettingsControl : UserControl
             var listToSave = new List<Dictionary<string, object>>();
             foreach (Grid row in itemsStack.Children.OfType<Grid>())
             {
-                var checkBox = row.Children.OfType<CheckBox>().FirstOrDefault();
+                var checkBox = row.Children.OfType<CheckBox>().FirstOrDefault(c => c.Content == null);
                 var textBox = row.Children.OfType<TextBox>().FirstOrDefault();
+                var onlyPartCheckBox = row.Children.OfType<CheckBox>().FirstOrDefault(c => c.Content?.ToString() == "Только часть");
                 if (checkBox != null && textBox != null)
                 {
-                    listToSave.Add(new Dictionary<string, object>
+                    var itemDict = new Dictionary<string, object>
                     {
                         { "word", textBox.Text },
                         { "active", checkBox.IsChecked == true }
-                    });
+                    };
+                    if (onlyPartCheckBox != null)
+                    {
+                        itemDict["only_part"] = onlyPartCheckBox.IsChecked == true;
+                    }
+                    listToSave.Add(itemDict);
                 }
             }
             _settingsManager.SetSetting(settingsGroup, field.Key, listToSave);
         }
 
         // Вспомогательная локальная функция добавления строки ключевого слова в UI
-        void AddKeywordRow(string word, bool isActive)
+        void AddKeywordRow(string word, bool isActive, bool isOnlyPart = false)
         {
             var rowGrid = new Grid
             {
@@ -845,6 +851,12 @@ public sealed partial class ScriptSettingsControl : UserControl
             };
             rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(32) }); // Галочка
             rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }); // Поле ввода
+
+            bool isPatternField = field.Key == "strip_keywords" || field.Key == "text_patterns";
+            if (isPatternField)
+            {
+                rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto }); // Только часть
+            }
             rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto }); // Кнопка удаления
 
             var checkBox = new CheckBox
@@ -874,6 +886,21 @@ public sealed partial class ScriptSettingsControl : UserControl
             Grid.SetColumn(textBox, 1);
             rowGrid.Children.Add(textBox);
 
+            if (isPatternField)
+            {
+                var onlyPartCheckBox = new CheckBox
+                {
+                    Content = "Только часть",
+                    IsChecked = isOnlyPart,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(0, 0, 8, 0)
+                };
+                onlyPartCheckBox.Checked += (s, e) => SaveList();
+                onlyPartCheckBox.Unchecked += (s, e) => SaveList();
+                Grid.SetColumn(onlyPartCheckBox, 2);
+                rowGrid.Children.Add(onlyPartCheckBox);
+            }
+
             var deleteButton = new Button
             {
                 Content = new FontIcon { Glyph = "\uE74D", FontSize = 12 }, // Иконка корзины
@@ -888,7 +915,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                 itemsStack.Children.Remove(rowGrid);
                 SaveList();
             };
-            Grid.SetColumn(deleteButton, 2);
+            Grid.SetColumn(deleteButton, isPatternField ? 3 : 2);
             rowGrid.Children.Add(deleteButton);
 
             itemsStack.Children.Add(rowGrid);
@@ -901,14 +928,15 @@ public sealed partial class ScriptSettingsControl : UserControl
             {
                 string word = item.TryGetValue("word", out var w) ? w?.ToString() ?? "" : "";
                 bool isActive = item.TryGetValue("active", out var act) && SafeGetBool(act);
-                AddKeywordRow(word, isActive);
+                bool isOnlyPart = item.TryGetValue("only_part", out var op) && SafeGetBool(op);
+                AddKeywordRow(word, isActive, isOnlyPart);
             }
         }
 
         // Действие при клике на кнопку добавления
         addButton.Click += (s, e) =>
         {
-            AddKeywordRow("", true);
+            AddKeywordRow("", true, false);
             SaveList();
         };
 

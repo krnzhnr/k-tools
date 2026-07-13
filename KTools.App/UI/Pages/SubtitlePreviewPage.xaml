@@ -45,6 +45,7 @@
                 <NavigationViewItem Icon="Contact" Content="Актёры" Tag="actors" />
                 <NavigationViewItem Icon="Font" Content="Стили" Tag="styles" />
                 <NavigationViewItem Icon="OutlineStar" Content="Эффекты" Tag="effects" />
+                <NavigationViewItem Icon="Filter" Content="Очистка текста" Tag="patterns" />
                 <NavigationViewItemSeparator />
                 <NavigationViewItem Icon="Document" Content="Предпросмотр" Tag="preview_all" x:Name="PreviewRootItem">
                     <NavigationViewItem.MenuItems>
@@ -401,7 +402,106 @@
                         </ListView.ItemTemplate>
                     </ListView>
                 </Grid>
-                
+
+                <!-- 5. ЭКРАН ФИЛЬТРА ПАТТЕРНОВ -->
+                <Grid x:Name="PatternsGrid" Visibility="Collapsed" RowSpacing="16">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" /> <!-- Заголовок и описание -->
+                        <RowDefinition Height="Auto" /> <!-- Кнопка добавления -->
+                        <RowDefinition Height="*" />    <!-- Список паттернов -->
+                    </Grid.RowDefinitions>
+
+                    <StackPanel Grid.Row="0" Spacing="12">
+                        <TextBlock Text="Фильтрация текста по паттернам (Regex)" Style="{ThemeResource SubtitleTextBlockStyle}" />
+                        <TextBlock Text="Добавьте регулярные выражения (regex) для удаления частей текста или строк целиком. Правила применяются по очереди сверху вниз, результат каждого шага передается следующему." 
+                                   FontSize="12" 
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </StackPanel>
+
+                    <Button x:Name="AddPatternButton"
+                            Grid.Row="1"
+                            Style="{StaticResource DefaultButtonStyle}"
+                            Click="AddPatternButton_Click"
+                            Margin="0,0,0,8"
+                            HorizontalAlignment="Left">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <FontIcon Glyph="&#xE710;" FontSize="12" />
+                            <TextBlock Text="Добавить паттерн" FontSize="12" />
+                        </StackPanel>
+                    </Button>
+
+                    <ListView x:Name="PatternsListView"
+                              Grid.Row="2"
+                              CanReorderItems="True"
+                              AllowDrop="True"
+                              SelectionMode="None"
+                              HorizontalAlignment="Stretch"
+                              ItemsSource="{x:Bind ViewModel.Patterns, Mode=OneWay}"
+                              Padding="0,0,16,0">
+                        <ListView.ItemTemplate>
+                            <DataTemplate x:DataType="viewmodels:PatternItemViewModel">
+                                <Grid HorizontalAlignment="Stretch" Margin="0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="36" />
+                                        <ColumnDefinition Width="36" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="280" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    
+                                    <FontIcon Glyph="&#xE76F;"
+                                              FontFamily="Segoe MDL2 Assets"
+                                              FontSize="16"
+                                              Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                              VerticalAlignment="Top"
+                                              HorizontalAlignment="Center"
+                                              Height="32"
+                                              PointerEntered="DragIcon_PointerEntered"
+                                              Grid.Column="0" />
+                                              
+                                    <CheckBox IsChecked="{x:Bind Active, Mode=TwoWay}"
+                                              VerticalAlignment="Top"
+                                              HorizontalAlignment="Center"
+                                              Height="32"
+                                              MinWidth="0"
+                                              MinHeight="0"
+                                              Grid.Column="1" />
+                                              
+                                    <StackPanel Grid.Column="2" Margin="0,0,8,0" VerticalAlignment="Top">
+                                         <TextBox Text="{x:Bind Word, Mode=TwoWay}"
+                                                  HorizontalAlignment="Stretch"
+                                                  Height="32"
+                                                  PlaceholderText="Регулярное выражение..." />
+                                         <TextBlock Text="{x:Bind SampleText, Mode=OneWay}"
+                                                    FontSize="11"
+                                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                    Margin="2,2,0,0" />
+                                     </StackPanel>
+                                              
+                                    <ComboBox SelectedIndex="{x:Bind DeleteModeIndex, Mode=TwoWay}"
+                                              VerticalAlignment="Top"
+                                              Margin="0,0,8,0"
+                                              Height="32"
+                                              HorizontalAlignment="Stretch"
+                                              Grid.Column="3">
+                                        <ComboBoxItem Content="Удалять совпадения" />
+                                        <ComboBoxItem Content="Удалять строки с совпадениями" />
+                                    </ComboBox>
+                                    
+                                    <Button Click="DeletePatternButton_Click"
+                                            Content="&#xE74D;"
+                                            FontFamily="Segoe MDL2 Assets"
+                                            Style="{StaticResource DefaultButtonStyle}"
+                                            VerticalAlignment="Top"
+                                            Width="32"
+                                            Height="32"
+                                            Padding="0"
+                                            Grid.Column="4" />
+                                </Grid>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+                </Grid>
             </Grid>
             <NavigationView.PaneFooter>
                 <Button x:Name="DoneButton"

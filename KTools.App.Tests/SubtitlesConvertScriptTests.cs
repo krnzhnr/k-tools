@@ -262,4 +262,78 @@ Dialogue: 0:01:21.00,0:01:23.00,Style1,Actor1,,0,0,,SHOUTING TEXT";
             if (File.Exists(expectedDest)) File.Delete(expectedDest);
         }
     }
+
+    /// <summary>
+    /// Проверяет последовательную фильтрацию по регулярным выражениям (Regex).
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_WithRegexPatterns_FiltersCorrectly()
+    {
+        // Arrange
+        string tempSourceFile = Path.Combine(Path.GetTempPath(), "test_regex.ass");
+        string assContent = 
+@"[Script Info]
+Title: Test
+[Events]
+Format: Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0:01:00.00,0:01:02.00,Style1,Actor1,,0,0,,[вздох] Привет, мир!
+Dialogue: 0:01:03.00,0:01:05.00,Style1,Actor1,,0,0,,Тестовое предложение
+Dialogue: 0:01:06.00,0:01:08.00,Style1,Actor1,,0,0,,[смех] Удалить эту строку целиком";
+        File.WriteAllText(tempSourceFile, assContent);
+        string tempOutputDir = Path.GetTempPath();
+
+        string? tempAssContent = null;
+        _ffmpegRunnerMock.Setup(r => r.RunAsync(It.IsAny<string>(), It.IsAny<string>(), null, null, false, 0.0, null, It.IsAny<CancellationToken>()))
+            .Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken>(
+                (inP, outP, extArgs, inArgs, ovr, dur, prog, ct) => {
+                    if (File.Exists(inP))
+                    {
+                        tempAssContent = File.ReadAllText(inP);
+                    }
+                }
+            )
+            .ReturnsAsync(true);
+
+        var settings = new Dictionary<string, object>
+        {
+            { "target_format", "WebVTT" },
+            { "strip_formatting", false },
+            { "keep_styles", false },
+            { "strip_caps", false },
+            { "delete_original", false },
+            { "text_patterns", new List<Dictionary<string, object>>
+                {
+                    new() { { "word", "\\[[^\\]]+\\]" }, { "active", true }, { "only_part", true } }, // Удаляет квадратные скобки
+                    new() { { "word", "Удалить эту строку" }, { "active", true }, { "only_part", false } } // Удаляет всю строку
+                }
+            }
+        };
+
+        try
+        {
+            // Act
+            var results = await _script.ExecuteSingleAsync(tempSourceFile, settings, tempOutputDir, (idx, total, status, pct, fps, bit) => { }, 0, 1);
+
+            // Assert
+            results.Should().Contain(s => s.Contains("✅ Конвертирован"));
+            tempAssContent.Should().NotBeNull();
+            
+            // Первая строка: скобки удалены, текст остался
+            tempAssContent.Should().Contain("Привет, мир!");
+            tempAssContent.Should().NotContain("[вздох]");
+            
+            // Вторая строка: осталась без изменений
+            tempAssContent.Should().Contain("Тестовое предложение");
+            
+            // Третья строка: должна быть полностью удалена из-за regex "Удалить эту строку"
+            tempAssContent.Should().NotContain("Удалить эту строку целиком");
+            tempAssContent.Should().NotContain("[смех]");
+        }
+        finally
+        {
+            if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
+            string expectedDest = Path.Combine(tempOutputDir, "test_regex.vtt");
+            if (File.Exists(expectedDest)) File.Delete(expectedDest);
+        }
+    }
 }

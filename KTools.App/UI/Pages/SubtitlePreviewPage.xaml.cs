@@ -136,6 +136,7 @@ public sealed partial class SubtitlePreviewPage : Page
                 ActorsGrid.Visibility = Visibility.Collapsed;
                 StylesGrid.Visibility = Visibility.Collapsed;
                 EffectsGrid.Visibility = Visibility.Collapsed;
+                PatternsGrid.Visibility = Visibility.Collapsed;
 
                 ViewModel.SelectedFilePath = tag == "preview_all" ? null : tag.Substring("file:".Length);
                 UpdateStatsText();
@@ -146,6 +147,8 @@ public sealed partial class SubtitlePreviewPage : Page
                 ActorsGrid.Visibility = tag == "actors" ? Visibility.Visible : Visibility.Collapsed;
                 StylesGrid.Visibility = tag == "styles" ? Visibility.Visible : Visibility.Collapsed;
                 EffectsGrid.Visibility = tag == "effects" ? Visibility.Visible : Visibility.Collapsed;
+                PatternsGrid.Visibility = tag == "patterns" ? Visibility.Visible : Visibility.Collapsed;
+
             }
         }
     }
@@ -262,6 +265,84 @@ public sealed partial class SubtitlePreviewPage : Page
     /// <summary>
     /// Отрисовывает текст субтитра с подсветкой тегов форматирования и CAPS-реплик.
     /// </summary>
+    private void ApplyStandardStyles(Run run, bool isTag, bool shouldStripCaps, Brush primaryBrush)
+    {
+        if (isTag)
+        {
+            if (shouldStripCaps)
+            {
+                run.Foreground = _redBrush;
+                run.TextDecorations = TextDecorations.Strikethrough;
+            }
+            else if (ViewModel.StripFormatting)
+            {
+                run.Foreground = _redBrush;
+                run.TextDecorations = TextDecorations.Strikethrough;
+            }
+            else
+            {
+                run.Foreground = _purpleBrush;
+            }
+        }
+        else
+        {
+            if (shouldStripCaps)
+            {
+                run.Foreground = _redBrush;
+                run.TextDecorations = TextDecorations.Strikethrough;
+            }
+            else
+            {
+                run.Foreground = primaryBrush;
+            }
+        }
+    }
+
+    private void RenderPart(TextBlock textBlock, string part, int startOriginalIndex, bool[] isDeletedByRegex, bool isTag, bool isTransfer, bool shouldStripCaps, Brush primaryBrush)
+    {
+        int i = 0;
+        while (i < part.Length)
+        {
+            bool isDeleted = isDeletedByRegex[startOriginalIndex + i];
+            int runStart = i;
+            while (i < part.Length && isDeletedByRegex[startOriginalIndex + i] == isDeleted)
+            {
+                i++;
+            }
+            
+            string runText = part.Substring(runStart, i - runStart);
+            var run = new Run { Text = runText };
+            if (isDeleted)
+            {
+                run.Foreground = _redBrush;
+                run.TextDecorations = TextDecorations.Strikethrough;
+            }
+            else
+            {
+                if (isTransfer)
+                {
+                    if (ViewModel.StripFormatting)
+                    {
+                        run.Foreground = _redBrush;
+                        run.TextDecorations = TextDecorations.Strikethrough;
+                    }
+                    else
+                    {
+                        run.Foreground = _purpleBrush;
+                    }
+                }
+                else
+                {
+                    ApplyStandardStyles(run, isTag, shouldStripCaps, primaryBrush);
+                }
+            }
+            textBlock.Inlines.Add(run);
+        }
+    }
+
+    /// <summary>
+    /// Отрисовывает текст субтитра с подсветкой тегов форматирования, CAPS-реплик и частей, удаляемых регулярными выражениями.
+    /// </summary>
     private void RenderSubtitleText(TextBlock textBlock, SubtitlePreviewLine line)
     {
         textBlock.Inlines.Clear();
@@ -273,7 +354,6 @@ public sealed partial class SubtitlePreviewPage : Page
         }
 
         var primaryBrush = (Brush)Application.Current.Resources["TextFillColorPrimaryBrush"];
-        var tertiaryBrush = (Brush)Application.Current.Resources["TextFillColorTertiaryBrush"];
 
         // Если строка удалена целиком (ручным чекбоксом или общим фильтром)
         if (line.IsTextStrikethrough)
@@ -288,8 +368,55 @@ public sealed partial class SubtitlePreviewPage : Page
         textBlock.TextDecorations = TextDecorations.None;
         textBlock.Foreground = primaryBrush;
 
+        // Построение карты удаления символов по регулярным выражениям
+        bool[] isDeletedByRegex = new bool[text.Length];
+        var nonDeletedChars = new List<(char Char, int OriginalIndex)>();
+        for (int i = 0; i < text.Length; i++)
+        {
+            nonDeletedChars.Add((text[i], i));
+        }
+
+        if (ViewModel.TextPatterns != null)
+        {
+            foreach (var patternDict in ViewModel.TextPatterns)
+            {
+                if (patternDict.TryGetValue("active", out var act) && SafeGetBool(patternDict, "active") &&
+                    patternDict.TryGetValue("only_part", out var op) && SafeGetBool(patternDict, "only_part") &&
+                    patternDict.TryGetValue("word", out var p) && p?.ToString() is string pattern && !string.IsNullOrEmpty(pattern))
+                {
+                    try
+                    {
+                        var regex = new System.Text.RegularExpressions.Regex(pattern);
+                        string activeString = new string(nonDeletedChars.Select(x => x.Char).ToArray());
+                        var matches = regex.Matches(activeString);
+                        var indicesToRemove = new HashSet<int>();
+                        foreach (System.Text.RegularExpressions.Match match in matches)
+                        {
+                            for (int m = 0; m < match.Length; m++)
+                            {
+                                indicesToRemove.Add(match.Index + m);
+                            }
+                        }
+
+                        foreach (int idx in indicesToRemove)
+                        {
+                            int originalIndex = nonDeletedChars[idx].OriginalIndex;
+                            isDeletedByRegex[originalIndex] = true;
+                        }
+
+                        nonDeletedChars = nonDeletedChars.Where((x, idx) => !indicesToRemove.Contains(idx)).ToList();
+                    }
+                    catch
+                    {
+                        // Игнорируем некорректные regex
+                    }
+                }
+            }
+        }
+
         // Разделяем строку по переносам \N и \n с сохранением разделителей
         string[] lineParts = System.Text.RegularExpressions.Regex.Split(text, @"(\\N|\\n)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        int currentOriginalIndex = 0;
 
         for (int i = 0; i < lineParts.Length; i++)
         {
@@ -299,17 +426,8 @@ public sealed partial class SubtitlePreviewPage : Page
             if (i % 2 == 1)
             {
                 // Это перенос строки (\N или \n)
-                var run = new Run { Text = part };
-                if (ViewModel.StripFormatting)
-                {
-                    run.Foreground = _redBrush;
-                    run.TextDecorations = TextDecorations.Strikethrough;
-                }
-                else
-                {
-                    run.Foreground = _purpleBrush;
-                }
-                textBlock.Inlines.Add(run);
+                RenderPart(textBlock, part, currentOriginalIndex, isDeletedByRegex, false, true, false, primaryBrush);
+                currentOriginalIndex += part.Length;
             }
             else
             {
@@ -326,41 +444,8 @@ public sealed partial class SubtitlePreviewPage : Page
                     string subPart = subParts[j];
                     if (string.IsNullOrEmpty(subPart)) continue;
 
-                    var run = new Run { Text = subPart };
-
-                    if (j % 2 == 1)
-                    {
-                        // Это управляющий тег
-                        if (shouldStripCaps)
-                        {
-                            run.Foreground = _redBrush;
-                            run.TextDecorations = TextDecorations.Strikethrough;
-                        }
-                        else if (ViewModel.StripFormatting)
-                        {
-                            run.Foreground = _redBrush;
-                            run.TextDecorations = TextDecorations.Strikethrough;
-                        }
-                        else
-                        {
-                            run.Foreground = _purpleBrush;
-                        }
-                    }
-                    else
-                    {
-                        // Это обычный текст реплики
-                        if (shouldStripCaps)
-                        {
-                            run.Foreground = _redBrush;
-                            run.TextDecorations = TextDecorations.Strikethrough;
-                        }
-                        else
-                        {
-                            run.Foreground = primaryBrush;
-                        }
-                    }
-
-                    textBlock.Inlines.Add(run);
+                    RenderPart(textBlock, subPart, currentOriginalIndex, isDeletedByRegex, j % 2 == 1, false, shouldStripCaps, primaryBrush);
+                    currentOriginalIndex += subPart.Length;
                 }
             }
         }
@@ -393,5 +478,51 @@ public sealed partial class SubtitlePreviewPage : Page
         }
 
         return null;
+    }
+
+    private void AddPatternButton_Click(object sender, RoutedEventArgs e)
+    {
+        var vm = new PatternItemViewModel(string.Empty, true, true);
+        ViewModel.Patterns.Add(vm);
+    }
+
+    private void DeletePatternButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button button && button.DataContext is PatternItemViewModel item)
+        {
+            ViewModel.Patterns.Remove(item);
+        }
+    }
+
+    private static bool SafeGetBool(System.Collections.Generic.Dictionary<string, object> dict, string key)
+    {
+        if (!dict.TryGetValue(key, out var val)) return false;
+        return SafeGetBool(val);
+    }
+
+    private static bool SafeGetBool(object? val)
+    {
+        if (val == null) return false;
+        if (val is bool b) return b;
+        if (val is System.Text.Json.JsonElement elem)
+        {
+            if (elem.ValueKind == System.Text.Json.JsonValueKind.True) return true;
+            if (elem.ValueKind == System.Text.Json.JsonValueKind.False) return false;
+            if (elem.ValueKind == System.Text.Json.JsonValueKind.String)
+            {
+                return bool.TryParse(elem.GetString(), out var parsed) && parsed;
+            }
+        }
+        return false;
+    }
+
+    private void DragIcon_PointerEntered(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        if (sender is UIElement element)
+        {
+            var cursor = Microsoft.UI.Input.InputSystemCursor.Create(Microsoft.UI.Input.InputSystemCursorShape.Hand);
+            typeof(UIElement).GetProperty("ProtectedCursor", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public)
+                ?.SetValue(element, cursor);
+        }
     }
 }
