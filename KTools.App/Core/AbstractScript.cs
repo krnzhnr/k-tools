@@ -60,6 +60,16 @@ public abstract class AbstractScript
     public abstract string[] FileExtensions { get; }
 
     /// <summary>
+    /// Название первой вкладки в рабочей панели (по умолчанию "Файлы").
+    /// </summary>
+    public virtual string FirstTabHeader => "Файлы";
+
+    /// <summary>
+    /// Указывает, нужно ли отображать панель ввода URL над списком файлов.
+    /// </summary>
+    public virtual bool ShowUrlInputBar => false;
+
+    /// <summary>
     /// Декларативная схема параметров настроек скрипта.
     /// </summary>
     public virtual List<SettingField> SettingsSchema => new();

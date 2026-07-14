@@ -123,7 +123,91 @@ public sealed partial class WorkPanel : Page
             VerticalAlignment = VerticalAlignment.Stretch
         };
         ScriptSettings = _settingsControl;
+    }
 
+    private Grid? _urlInputBar;
+    private TextBox? _urlTextBox;
+
+    private Grid CreateUrlInputBar()
+    {
+        var grid = new Grid
+        {
+            Margin = new Thickness(0, 0, 0, 12),
+            ColumnSpacing = 8
+        };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        _urlTextBox = new TextBox
+        {
+            PlaceholderText = "Введите URL-адрес для скачивания (например, с YouTube, SoundCloud)...",
+            Height = 36,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        _urlTextBox.KeyDown += (s, e) =>
+        {
+            if (e.Key == Windows.System.VirtualKey.Enter)
+            {
+                AddUrlFromInput();
+            }
+        };
+        Grid.SetColumn(_urlTextBox, 0);
+        grid.Children.Add(_urlTextBox);
+
+        var pasteBtn = new Button
+        {
+            Content = new SymbolIcon(Symbol.Paste),
+            Height = 36,
+            Width = 36,
+            Padding = new Thickness(0),
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        ToolTipService.SetToolTip(pasteBtn, "Вставить из буфера");
+        pasteBtn.Click += async (s, e) =>
+        {
+            try
+            {
+                var dataPackageView = Windows.ApplicationModel.DataTransfer.Clipboard.GetContent();
+                if (dataPackageView.Contains(Windows.ApplicationModel.DataTransfer.StandardDataFormats.Text))
+                {
+                    string text = await dataPackageView.GetTextAsync();
+                    _urlTextBox.Text = text;
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Ошибка буфера обмена: {ex.Message}");
+            }
+        };
+        Grid.SetColumn(pasteBtn, 1);
+        grid.Children.Add(pasteBtn);
+
+        var addBtn = new Button
+        {
+            Content = new SymbolIcon(Symbol.Add),
+            Height = 36,
+            Width = 36,
+            Padding = new Thickness(0),
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        ToolTipService.SetToolTip(addBtn, "Добавить в очередь");
+        addBtn.Click += (s, e) => AddUrlFromInput();
+        Grid.SetColumn(addBtn, 2);
+        grid.Children.Add(addBtn);
+
+        return grid;
+    }
+
+    private void AddUrlFromInput()
+    {
+        if (_urlTextBox == null) return;
+        string url = _urlTextBox.Text.Trim();
+        if (!string.IsNullOrEmpty(url))
+        {
+            FileList.AddUrl(url);
+            _urlTextBox.Text = string.Empty;
+        }
     }
 
     /// <summary>
@@ -216,7 +300,47 @@ public sealed partial class WorkPanel : Page
                 }
             }
 
-            // По умолчанию выбираем первую вкладку «Файлы»
+            // Настройка имени первой вкладки и отображения URL-панели
+            SamplePage1Item.Content = _script.FirstTabHeader;
+
+            if (_script.ShowUrlInputBar)
+            {
+                if (_urlInputBar == null)
+                {
+                    _urlInputBar = CreateUrlInputBar();
+                }
+
+                if (!_filesContainer.Children.Contains(_urlInputBar))
+                {
+                    _filesContainer.RowDefinitions.Clear();
+                    _filesContainer.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // URL
+                    _filesContainer.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) }); // FileList
+                    _filesContainer.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // LogExpander
+
+                    Grid.SetRow(_urlInputBar, 0);
+                    Grid.SetRow(FileList, 1);
+                    Grid.SetRow(LogExpander, 2);
+
+                    _filesContainer.Children.Add(_urlInputBar);
+                }
+                _urlInputBar.Visibility = Visibility.Visible;
+            }
+            else
+            {
+                if (_urlInputBar != null)
+                {
+                    _urlInputBar.Visibility = Visibility.Collapsed;
+                }
+
+                _filesContainer.RowDefinitions.Clear();
+                _filesContainer.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+                _filesContainer.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+                Grid.SetRow(FileList, 0);
+                Grid.SetRow(LogExpander, 1);
+            }
+
+            // По умолчанию выбираем первую вкладку «Файлы» (или «Загрузка»)
             nvSample.SelectedItem = SamplePage1Item;
 
             // Инициализируем состояние кнопки запуска/отмены в соответствии с текущим состоянием обработки
@@ -284,6 +408,7 @@ public sealed partial class WorkPanel : Page
             if (tag == "files")
             {
                 contentFrame.Content = _filesContainer;
+                FileList.NotifySubtitlesSettingChanged();
             }
             else if (tag == "tracks")
             {

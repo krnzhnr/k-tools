@@ -62,6 +62,21 @@ public class DependencyInfo
     public bool IsRequired { get; set; }
 
     /// <summary>
+    /// Прямая ссылка для скачивания зависимости. Если не задана, используется базовый URL релизов.
+    /// </summary>
+    public string? CustomDownloadUrl { get; set; }
+
+    /// <summary>
+    /// Указывает, является ли зависимость чистым исполняемым файлом (без архивации).
+    /// </summary>
+    public bool IsRawExecutable { get; set; }
+
+    /// <summary>
+    /// Указывает на необходимость удаления верхнего уровня вложенности папок при распаковке архива.
+    /// </summary>
+    public bool StripTopLevelFolder { get; set; }
+
+    /// <summary>
     /// Возвращает соответствующую системную иконку WinUI для отображения на карточке.
     /// </summary>
     public Symbol IconSymbol => IconName.ToLowerInvariant() switch
@@ -71,6 +86,7 @@ public class DependencyInfo
         "audio" => Symbol.Audio,
         "music" => Symbol.Audio,
         "headphone" => Symbol.Audio,
+        "globe" => Symbol.Globe,
         _ => Symbol.Document
     };
 
@@ -84,6 +100,8 @@ public class DependencyInfo
         "eac3to" => new SolidColorBrush(ColorHelper.FromArgb(0x33, 0x28, 0xCA, 0xC6)),       // Бирюзовый
         "dee" => new SolidColorBrush(ColorHelper.FromArgb(0x33, 0x28, 0xCA, 0xC6)),          // Бирюзовый
         "eac3to_decoders" => new SolidColorBrush(ColorHelper.FromArgb(0x33, 0x28, 0xCA, 0xC6)), // Бирюзовый
+        "yt-dlp" => new SolidColorBrush(AppConstants.CategoryColors.NetworkBg),
+        "node" => new SolidColorBrush(AppConstants.CategoryColors.NetworkBg),
         _ => new SolidColorBrush(ColorHelper.FromArgb(0x33, 0xFF, 0xFF, 0xFF))
     };
 
@@ -97,6 +115,8 @@ public class DependencyInfo
         "eac3to" => new SolidColorBrush(ColorHelper.FromArgb(0xFF, 0x28, 0xCA, 0xC6)),
         "dee" => new SolidColorBrush(ColorHelper.FromArgb(0xFF, 0x28, 0xCA, 0xC6)),
         "eac3to_decoders" => new SolidColorBrush(ColorHelper.FromArgb(0xFF, 0x28, 0xCA, 0xC6)),
+        "yt-dlp" => new SolidColorBrush(AppConstants.CategoryColors.NetworkFg),
+        "node" => new SolidColorBrush(AppConstants.CategoryColors.NetworkFg),
         _ => new SolidColorBrush(ColorHelper.FromArgb(0xFF, 0xFF, 0xFF, 0xFF))
     };
 }

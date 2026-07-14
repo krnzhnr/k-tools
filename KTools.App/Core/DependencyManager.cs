@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using KTools_App.Services.Contracts;
@@ -39,6 +40,7 @@ public class DependencyManager : IDependencyManager
 {
     private readonly ILogService _logService;
     private readonly IPathManager _pathManager;
+    private readonly ISettingsManager _settingsManager;
 
     private const string DepsReleaseTag = "deps-v1";
     private const string DepsBaseUrl = $"https://github.com/krnzhnr/k-tools/releases/download/{DepsReleaseTag}";
@@ -68,11 +70,13 @@ public class DependencyManager : IDependencyManager
     public DependencyManager(
         ILogService logService,
         IPathManager pathManager,
-        IHttpClientFactory httpClientFactory)
+        IHttpClientFactory httpClientFactory,
+        ISettingsManager settingsManager)
     {
         _logService = logService ?? throw new ArgumentNullException(nameof(logService));
         _pathManager = pathManager ?? throw new ArgumentNullException(nameof(pathManager));
         _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
+        _settingsManager = settingsManager ?? throw new ArgumentNullException(nameof(settingsManager));
         // Используем метод интеллектуального поиска директории bin
         _binDir = _pathManager.GetBinDirectory();
         _httpClient = _httpClientFactory.CreateClient("DefaultClient");
@@ -161,6 +165,38 @@ public class DependencyManager : IDependencyManager
             VerifyBinary = "eac3to Decoder Pack 1.4.exe",
             IsRequired = false
         });
+
+        _registry.Add(new DependencyInfo
+        {
+            Key = "yt-dlp",
+            DisplayName = "yt-dlp (Nightly)",
+            Description = "Загрузка медиа-контента из сети (nightly-сборка)",
+            IconName = "globe",
+            Subfolder = "yt-dlp",
+            SizeMb = 50.0,
+            ArchiveSizeMb = 50.0,
+            ArchiveName = "yt-dlp.exe",
+            VerifyBinary = "yt-dlp.exe",
+            IsRequired = false,
+            CustomDownloadUrl = "https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp.exe",
+            IsRawExecutable = true
+        });
+
+        _registry.Add(new DependencyInfo
+        {
+            Key = "node",
+            DisplayName = "Node.js (Portable)",
+            Description = "Локальное окружение выполнения JavaScript",
+            IconName = "globe",
+            Subfolder = "node",
+            SizeMb = 70.0,
+            ArchiveSizeMb = 35.0,
+            ArchiveName = "node-v22.11.0-win-x64.zip",
+            VerifyBinary = "node.exe",
+            IsRequired = false,
+            CustomDownloadUrl = "https://nodejs.org/dist/v22.11.0/node-v22.11.0-win-x64.zip",
+            StripTopLevelFolder = true
+        });
     }
 
     /// <summary>
@@ -209,6 +245,22 @@ public class DependencyManager : IDependencyManager
         string localPath = Path.Combine(_binDir, dep.Subfolder, dep.VerifyBinary);
         if (File.Exists(localPath))
         {
+            if (dep.Key == "node")
+            {
+                try
+                {
+                    var versionInfo = System.Diagnostics.FileVersionInfo.GetVersionInfo(localPath);
+                    if (versionInfo.FileMajorPart < 22)
+                    {
+                        _logService.Info($"Обнаружена устаревшая версия Node.js ({versionInfo.FileVersion}). Требуется обновление до v22.", "DependencyManager");
+                        return false;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logService.Warn($"Не удалось проверить версию Node.js: {ex.Message}", "DependencyManager");
+                }
+            }
             return true;
         }
 
@@ -216,6 +268,22 @@ public class DependencyManager : IDependencyManager
         string resolvedPath = _pathManager.GetBinaryPath(dep.VerifyBinary);
         if (File.Exists(resolvedPath) && !resolvedPath.Equals(dep.VerifyBinary, StringComparison.OrdinalIgnoreCase))
         {
+            if (dep.Key == "node")
+            {
+                try
+                {
+                    var versionInfo = System.Diagnostics.FileVersionInfo.GetVersionInfo(resolvedPath);
+                    if (versionInfo.FileMajorPart < 22)
+                    {
+                        _logService.Info($"Обнаружена устаревшая версия Node.js в режиме разработки ({versionInfo.FileVersion}). Требуется обновление до v22.", "DependencyManager");
+                        return false;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logService.Warn($"Не удалось проверить версию Node.js в режиме разработки: {ex.Message}", "DependencyManager");
+                }
+            }
             return true;
         }
 
@@ -293,7 +361,9 @@ public class DependencyManager : IDependencyManager
         try
         {
             // 1. Асинхронное скачивание архива
-            string downloadUrl = $"{DepsBaseUrl}/{dep.ArchiveName}";
+            string downloadUrl = !string.IsNullOrEmpty(dep.CustomDownloadUrl)
+                ? dep.CustomDownloadUrl
+                : $"{DepsBaseUrl}/{dep.ArchiveName}";
             _logService.Info($"Начало скачивания архива: {downloadUrl} в {tempArchivePath}", "DependencyManager");
             using (var response = await _httpClient.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead))
             {
@@ -343,10 +413,8 @@ public class DependencyManager : IDependencyManager
                 }
             }
 
-            _logService.Info($"Архив '{dep.ArchiveName}' успешно скачан на диск", "DependencyManager");
+            _logService.Info($"Файл/архив '{dep.ArchiveName}' успешно скачан на диск", "DependencyManager");
 
-            // 2. Распаковка архива через системную утилиту tar.exe
-            SetStatus(key, DependencyStatus.Extracting);
             string destinationFolder = Path.Combine(_binDir, dep.Subfolder);
 
             // Гарантируем наличие целевых папок
@@ -360,15 +428,32 @@ public class DependencyManager : IDependencyManager
                 string errMsg = $"Нет прав доступа для создания папки '{destinationFolder}'. " +
                     $"Это может быть связано с ограничениями MSIX или прав пользователя. " +
                     $"Убедитесь что приложение запущено от правильного пользователя. Подробности: {ex.Message}";
-                _logService.Error($"Ошибка доступа при распаковке '{dep.DisplayName}': {errMsg}", "DependencyManager");
+                _logService.Error($"Ошибка доступа при распаковке/установке '{dep.DisplayName}': {errMsg}", "DependencyManager");
                 InstallFinished?.Invoke(key, false, errMsg);
                 return;
             }
 
-            _logService.Info($"Начало распаковки архива в папку '{destinationFolder}'", "DependencyManager");
             var cancellationToken = _activeDownloads[key].Token;
-            await ExtractArchiveAsync(tempArchivePath, destinationFolder, cancellationToken);
-            _logService.Info($"Распаковка архива '{dep.ArchiveName}' успешно завершена", "DependencyManager");
+
+            if (dep.IsRawExecutable)
+            {
+                _logService.Info($"Копирование исполняемого файла в папку '{destinationFolder}'...", "DependencyManager");
+                string targetPath = Path.Combine(destinationFolder, dep.VerifyBinary);
+                if (File.Exists(targetPath))
+                {
+                    try { File.Delete(targetPath); } catch { /* Игнорируем ошибки удаления старого файла */ }
+                }
+                File.Move(tempArchivePath, targetPath, true);
+                _logService.Info($"Файл '{dep.VerifyBinary}' успешно скопирован в целевую папку", "DependencyManager");
+            }
+            else
+            {
+                // 2. Распаковка архива
+                SetStatus(key, DependencyStatus.Extracting);
+                _logService.Info($"Начало распаковки архива в папку '{destinationFolder}'", "DependencyManager");
+                await ExtractArchiveAsync(dep, tempArchivePath, destinationFolder, cancellationToken);
+                _logService.Info($"Распаковка архива '{dep.ArchiveName}' успешно завершена", "DependencyManager");
+            }
 
             // Если устанавливаем декодеры eac3to, нужно запустить тихую установку с повышением прав
             if (key.Equals("eac3to_decoders", StringComparison.OrdinalIgnoreCase))
@@ -477,15 +562,16 @@ public class DependencyManager : IDependencyManager
     }
 
     /// <summary>
-    /// Асинхронно распаковывает архив .tar.xz в целевую папку, используя стороннюю библиотеку SharpCompress.
+    /// Асинхронно распаковывает архив (.tar.xz или .zip) в целевую папку, используя стороннюю библиотеку SharpCompress.
     /// Выполняется в фоновом режиме на пуле потоков без блокировки основного UI-потока.
     /// </summary>
-    /// <param name="archivePath">Абсолютный путь к исходному tar.xz-архиву на диске.</param>
+    /// <param name="dep">Информация о зависимости.</param>
+    /// <param name="archivePath">Абсолютный путь к исходному архиву на диске.</param>
     /// <param name="destinationDir">Абсолютный путь к целевой директории распаковки.</param>
     /// <param name="cancellationToken">Токен отмены для прерывания процесса распаковки по требованию пользователя.</param>
     /// <exception cref="ArgumentNullException">Инициируется, если один из входных путей равен null.</exception>
     /// <exception cref="OperationCanceledException">Инициируется, если процесс был отменен через token.</exception>
-    private async Task ExtractArchiveAsync(string archivePath, string destinationDir, CancellationToken cancellationToken)
+    private async Task ExtractArchiveAsync(DependencyInfo dep, string archivePath, string destinationDir, CancellationToken cancellationToken)
     {
         if (archivePath == null)
         {
@@ -497,21 +583,17 @@ public class DependencyManager : IDependencyManager
             throw new ArgumentNullException(nameof(destinationDir), "Путь к целевой папке не может быть пустым (null).");
         }
 
-        _logService.Info($"Запуск асинхронной распаковки tar.xz архива '{archivePath}' в папку '{destinationDir}'...", "DependencyManager");
+        _logService.Info($"Запуск асинхронной распаковки архива '{archivePath}' в папку '{destinationDir}'...", "DependencyManager");
 
-        await Task.Run(() =>
+        await Task.Run(async () =>
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            using var fileStream = File.OpenRead(archivePath);
-            using var xzStream = new XZStream(fileStream);
-            using var reader = ReaderFactory.OpenReader(xzStream);
+            bool isZip = archivePath.EndsWith(".zip", StringComparison.OrdinalIgnoreCase);
 
-            var options = new ExtractionOptions
-            {
-                ExtractFullPath = true,
-                Overwrite = true
-            };
+            using var fileStream = File.OpenRead(archivePath);
+            using var xzStream = isZip ? null : new XZStream(fileStream);
+            using var reader = ReaderFactory.OpenReader(xzStream ?? (Stream)fileStream);
 
             while (reader.MoveToNextEntry())
             {
@@ -519,8 +601,30 @@ public class DependencyManager : IDependencyManager
 
                 if (!reader.Entry.IsDirectory)
                 {
-                    _logService.Info($"Распаковка файла из архива: {reader.Entry.Key}", "DependencyManager");
-                    reader.WriteEntryToDirectory(destinationDir, options);
+                    string? entryKey = reader.Entry.Key;
+                    if (string.IsNullOrEmpty(entryKey)) continue;
+
+                    if (dep.StripTopLevelFolder)
+                    {
+                        int slashIndex = entryKey.IndexOf('/');
+                        if (slashIndex == -1) slashIndex = entryKey.IndexOf('\\');
+                        if (slashIndex != -1 && slashIndex < entryKey.Length - 1)
+                        {
+                            entryKey = entryKey.Substring(slashIndex + 1);
+                        }
+                    }
+
+                    _logService.Info($"Распаковка файла из архива: {reader.Entry.Key} -> {entryKey}", "DependencyManager");
+                    string targetPath = Path.Combine(destinationDir, entryKey);
+                    string? dir = Path.GetDirectoryName(targetPath);
+                    if (dir != null && !Directory.Exists(dir))
+                    {
+                        Directory.CreateDirectory(dir);
+                    }
+
+                    using var entryStream = reader.OpenEntryStream();
+                    using var targetFileStream = new FileStream(targetPath, FileMode.Create, FileAccess.Write, FileShare.None, 8192, true);
+                    await entryStream.CopyToAsync(targetFileStream, cancellationToken);
                 }
             }
 
@@ -763,5 +867,91 @@ public class DependencyManager : IDependencyManager
             catch { /* Игнорируем ошибки доступа к ветке реестра */ }
         }
         return null;
+    }
+
+    /// <summary>
+    /// Выполняет проверку обновлений для утилиты yt-dlp раз в сутки и обновляет её при необходимости.
+    /// </summary>
+    public async Task CheckAndUpdateYtDlpAsync(bool force = false)
+    {
+        // Если утилита yt-dlp не установлена, автообновление не требуется
+        if (!IsInstalled("yt-dlp"))
+        {
+            _logService.Info("Проверка обновлений yt-dlp пропущена, так как утилита не установлена.", "DependencyManager");
+            return;
+        }
+
+        try
+        {
+            // Проверяем время последней успешной проверки
+            string lastCheckStr = _settingsManager.GetSetting("Updates", "LastYtDlpCheckTime", string.Empty);
+            if (!force && DateTime.TryParse(lastCheckStr, out DateTime lastCheckTime))
+            {
+                if (DateTime.UtcNow - lastCheckTime < TimeSpan.FromDays(1))
+                {
+                    _logService.Info("Проверка обновлений yt-dlp выполнялась менее 24 часов назад. Пропуск.", "DependencyManager");
+                    return;
+                }
+            }
+
+            _logService.Info("Запуск фоновой проверки обновлений yt-dlp nightly...", "DependencyManager");
+
+            // Выполняем GET-запрос к GitHub API для получения последнего релиза
+            using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/repos/yt-dlp/yt-dlp-nightly-builds/releases/latest");
+            // GitHub API требует User-Agent
+            request.Headers.UserAgent.Clear();
+            request.Headers.UserAgent.ParseAdd("K-Tools-DependencyManager-WinUI3");
+
+            using var response = await _httpClient.SendAsync(request);
+            if (!response.IsSuccessStatusCode)
+            {
+                _logService.Warn($"Не удалось получить данные о релизе yt-dlp. Код ответа: {response.StatusCode}", "DependencyManager");
+                return;
+            }
+
+            string json = await response.Content.ReadAsStringAsync();
+            using var doc = JsonDocument.Parse(json);
+            if (!doc.RootElement.TryGetProperty("tag_name", out var tagProp))
+            {
+                _logService.Warn("Отсутствует свойство tag_name в ответе GitHub API для yt-dlp.", "DependencyManager");
+                return;
+            }
+
+            string latestTag = tagProp.GetString() ?? string.Empty;
+            if (string.IsNullOrEmpty(latestTag))
+            {
+                _logService.Warn("Тег последней версии yt-dlp пуст.", "DependencyManager");
+                return;
+            }
+
+            // Запоминаем время текущей проверки
+            _settingsManager.SetSetting("Updates", "LastYtDlpCheckTime", DateTime.UtcNow.ToString("o"));
+
+            string localVersion = _settingsManager.GetSetting("Updates", "YtDlpInstalledVersion", string.Empty);
+            _logService.Info($"Последняя доступная версия yt-dlp: {latestTag}. Локальная версия: {localVersion}", "DependencyManager");
+
+            if (latestTag.Equals(localVersion, StringComparison.OrdinalIgnoreCase))
+            {
+                _logService.Info("Установлена актуальная версия yt-dlp. Обновление не требуется.", "DependencyManager");
+                return;
+            }
+
+            // Если версии не совпадают, запускаем установку/обновление
+            _logService.Info($"Обнаружена новая версия yt-dlp: {latestTag}. Запуск автоматического обновления...", "DependencyManager");
+            
+            // Запускаем асинхронную установку
+            await InstallDependencyAsync("yt-dlp");
+
+            // Если установка завершилась успехом, сохраняем новую версию в настройки
+            if (IsInstalled("yt-dlp"))
+            {
+                _settingsManager.SetSetting("Updates", "YtDlpInstalledVersion", latestTag);
+                _logService.Info($"yt-dlp успешно обновлен до версии {latestTag}", "DependencyManager");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logService.Error($"Исключение при проверке обновлений yt-dlp: {ex.Message}", "DependencyManager");
+        }
     }
 }

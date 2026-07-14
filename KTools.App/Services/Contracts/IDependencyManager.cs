@@ -70,4 +70,11 @@ public interface IDependencyManager
     /// Удалить файлы зависимости с диска и сбросить её статус.
     /// </summary>
     bool RemoveDependency(string key);
+
+    /// <summary>
+    /// Выполняет проверку обновлений для утилиты yt-dlp раз в сутки и обновляет её при необходимости.
+    /// </summary>
+    /// <param name="force">Принудительно запустить проверку без учёта 24-часового интервала.</param>
+    /// <returns>Асинхронная задача проверки/обновления.</returns>
+    Task CheckAndUpdateYtDlpAsync(bool force = false);
 }

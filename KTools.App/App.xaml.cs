@@ -212,6 +212,7 @@ public partial class App : Application
         services.AddTransient<Scripts.SubtitlesConvertScript>();
         services.AddTransient<Scripts.AudioShiftScript>();
         services.AddTransient<Scripts.SubtitleShiftScript>();
+        services.AddTransient<Scripts.MediaDownloaderScript>();
 
         // 2. Регистрация служб приложения
         services.AddSingleton<INavigationService, NavigationService>();

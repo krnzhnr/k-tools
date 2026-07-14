@@ -38,6 +38,11 @@ public partial class HomeViewModel : ThreadSafeViewModel
     public List<ScriptInfo> SubtitleScripts { get; }
 
     /// <summary>
+    /// Список скриптов категории «Сеть».
+    /// </summary>
+    public List<ScriptInfo> NetworkScripts { get; }
+
+    /// <summary>
     /// Список интерактивных инструментов (например, калькулятор таймингов).
     /// </summary>
     public List<ScriptInfo> ToolScripts { get; }
@@ -154,8 +159,15 @@ public partial class HomeViewModel : ThreadSafeViewModel
             },
             new ScriptInfo
             {
+                Name = "Загрузка медиа",
+                Category = AppConstants.ScriptCategory.Network,
+                IconName = AppConstants.ScriptIcons.MediaDownloader,
+                Description = "Загрузка видео- и аудиофайлов из сети по URL-адресам через yt-dlp."
+            },
+            new ScriptInfo
+            {
                 Name = "Калькулятор сдвига",
-                Category = "Инструменты",
+                Category = AppConstants.ScriptCategory.Tools,
                 IconName = AppConstants.ScriptIcons.Calculator,
                 Description = "Расчет разницы во времени между двумя таймингами " +
                               "для корректировки сдвига аудио и субтитров."
@@ -163,19 +175,22 @@ public partial class HomeViewModel : ThreadSafeViewModel
         };
 
         VideoScripts = scripts
-            .Where(s => s.Category == "Видео")
+            .Where(s => s.Category == AppConstants.ScriptCategory.Video)
             .ToList();
         AudioScripts = scripts
-            .Where(s => s.Category == "Аудио")
+            .Where(s => s.Category == AppConstants.ScriptCategory.Audio)
             .ToList();
         ContainerScripts = scripts
-            .Where(s => s.Category == "Контейнеры")
+            .Where(s => s.Category == AppConstants.ScriptCategory.Containers)
             .ToList();
         SubtitleScripts = scripts
-            .Where(s => s.Category == "Субтитры")
+            .Where(s => s.Category == AppConstants.ScriptCategory.Subtitles)
+            .ToList();
+        NetworkScripts = scripts
+            .Where(s => s.Category == AppConstants.ScriptCategory.Network)
             .ToList();
         ToolScripts = scripts
-            .Where(s => s.Category == "Инструменты")
+            .Where(s => s.Category == AppConstants.ScriptCategory.Tools)
             .ToList();
     }
 

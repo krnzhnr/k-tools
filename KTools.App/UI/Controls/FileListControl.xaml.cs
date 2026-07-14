@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using KTools_App.Services.Contracts;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -140,6 +141,7 @@ public sealed partial class FileListControl : UserControl
     private ILogService _logService => App.Services.GetRequiredService<ILogService>();
     private ISettingsManager _settingsManager => App.Services.GetRequiredService<ISettingsManager>();
     private IMediaProbeService _mediaProbeService => App.Services.GetRequiredService<IMediaProbeService>();
+    private IPathManager _pathManager => App.Services.GetRequiredService<IPathManager>();
 
     private readonly Microsoft.UI.Dispatching.DispatcherQueue _dispatcherQueue = 
         Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
@@ -156,6 +158,7 @@ public sealed partial class FileListControl : UserControl
         _files.CollectionChanged += OnFilesCollectionChanged;
         FilesListView.ItemsSource = _files;
         MuxingListView.ItemsSource = _muxingRows;
+        DownloaderListView.ItemsSource = _files;
         UpdateEmptyState();
         CheckAdministratorStatus();
     }
@@ -174,6 +177,7 @@ public sealed partial class FileListControl : UserControl
                 _files = value;
                 _files.CollectionChanged += OnFilesCollectionChanged;
                 FilesListView.ItemsSource = _files;
+                DownloaderListView.ItemsSource = _files;
                 SyncMuxingRows();
                 UpdateEmptyState();
             }
@@ -209,7 +213,27 @@ public sealed partial class FileListControl : UserControl
                 _activeScript = value;
                 SyncMuxingRows();
                 UpdateEmptyState();
+
+                if (_activeScript is MediaDownloaderScript)
+                {
+                    AddFilesButton.Visibility = Visibility.Collapsed;
+                }
+                else
+                {
+                    AddFilesButton.Visibility = Visibility.Visible;
+                }
             }
+        }
+    }
+
+    /// <summary>
+    /// Оповещает все элементы в очереди об изменении настройки субтитров.
+    /// </summary>
+    public void NotifySubtitlesSettingChanged()
+    {
+        foreach (var item in Files)
+        {
+            item.NotifySubtitlesSettingChanged();
         }
     }
 
@@ -392,6 +416,7 @@ public sealed partial class FileListControl : UserControl
             EmptyPanel.Visibility = Visibility.Visible;
             FilesListView.Visibility = Visibility.Collapsed;
             MuxingGrid.Visibility = Visibility.Collapsed;
+            DownloaderListView.Visibility = Visibility.Collapsed;
         }
         else
         {
@@ -400,11 +425,19 @@ public sealed partial class FileListControl : UserControl
             {
                 FilesListView.Visibility = Visibility.Collapsed;
                 MuxingGrid.Visibility = Visibility.Visible;
+                DownloaderListView.Visibility = Visibility.Collapsed;
+            }
+            else if (ActiveScript is MediaDownloaderScript)
+            {
+                FilesListView.Visibility = Visibility.Collapsed;
+                MuxingGrid.Visibility = Visibility.Collapsed;
+                DownloaderListView.Visibility = Visibility.Visible;
             }
             else
             {
                 FilesListView.Visibility = Visibility.Visible;
                 MuxingGrid.Visibility = Visibility.Collapsed;
+                DownloaderListView.Visibility = Visibility.Collapsed;
             }
         }
     }
@@ -577,5 +610,240 @@ public sealed partial class FileListControl : UserControl
                 "Исключение при проверке прав администратора для управления отображением Drag-and-Drop",
                 "FileListControl");
         }
+    }
+
+    /// <summary>
+    /// Добавляет ссылку для скачивания и запускает фоновое получение её метаданных (качества и названия).
+    /// </summary>
+    public void AddUrl(string url)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return;
+
+        var item = new FileQueueItem(url);
+        
+        // Добавляем дефолтные варианты качеств
+        item.AvailableFormats.Add(new DownloadFormatItem { Id = "best_quality", DisplayName = "Наилучшее качество (Видео+Аудио)", FormatArg = "bv*+ba/b" });
+        item.AvailableFormats.Add(new DownloadFormatItem { Id = "best_video", DisplayName = "Только наилучшее видео", FormatArg = "bv*" });
+        item.AvailableFormats.Add(new DownloadFormatItem { Id = "best_audio", DisplayName = "Только наилучший звук", FormatArg = "ba" });
+        item.SelectedFormat = item.AvailableFormats[0];
+
+        item.AvailableSubtitles.Add(new DownloadSubtitleItem { Code = "none", DisplayName = "Без субтитров" });
+        item.SelectedSubtitle = item.AvailableSubtitles[0];
+
+        Files.Add(item);
+        
+        // Запуск фонового получения информации
+        _ = Task.Run(() => FetchUrlInfoAsync(item));
+    }
+
+    private async Task FetchUrlInfoAsync(FileQueueItem item)
+    {
+        try
+        {
+            string ytdlpPath = _pathManager.GetBinaryPath("yt-dlp");
+            if (!File.Exists(ytdlpPath)) return;
+
+            string nodePath = _pathManager.GetBinaryPath("node");
+            string jsRuntimeArg = "";
+            if (File.Exists(nodePath))
+            {
+                jsRuntimeArg = $"--js-runtimes \"node:{nodePath}\" ";
+            }
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = ytdlpPath,
+                Arguments = $"{jsRuntimeArg}--dump-json \"{item.FilePath}\"",
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = false
+            };
+
+            using var process = new Process { StartInfo = startInfo };
+            process.Start();
+
+            // Читаем stdout асинхронно
+            string stdout = await process.StandardOutput.ReadToEndAsync();
+            await process.WaitForExitAsync();
+
+            if (process.ExitCode == 0 && !string.IsNullOrWhiteSpace(stdout))
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(stdout);
+                var root = doc.RootElement;
+
+                // 1. Get Title
+                if (root.TryGetProperty("title", out var titleProp))
+                {
+                    string title = titleProp.GetString() ?? "";
+                    if (!string.IsNullOrEmpty(title))
+                    {
+                        _dispatcherQueue.TryEnqueue(() =>
+                        {
+                            item.DisplayName = title;
+                        });
+                    }
+                }
+
+                // 2. Parse Formats
+                var tempFormats = new List<DownloadFormatItem>();
+                tempFormats.Add(new DownloadFormatItem { Id = "best_quality", DisplayName = "Наилучшее качество (Видео+Аудио)", FormatArg = "bv*+ba/b" });
+                tempFormats.Add(new DownloadFormatItem { Id = "best_video", DisplayName = "Только наилучшее видео", FormatArg = "bv*" });
+                tempFormats.Add(new DownloadFormatItem { Id = "best_audio", DisplayName = "Только наилучший звук", FormatArg = "ba" });
+
+                if (root.TryGetProperty("formats", out var formatsProp) && formatsProp.ValueKind == System.Text.Json.JsonValueKind.Array)
+                {
+                    foreach (var format in formatsProp.EnumerateArray())
+                    {
+                        string formatId = format.TryGetProperty("format_id", out var fid) ? fid.GetString() ?? "" : "";
+                        if (string.IsNullOrEmpty(formatId)) continue;
+
+                        string ext = format.TryGetProperty("ext", out var extP) ? extP.GetString() ?? "" : "";
+                        
+                        bool hasVideo = format.TryGetProperty("vcodec", out var vcodecProp) && vcodecProp.GetString() != "none";
+                        bool hasAudio = format.TryGetProperty("acodec", out var acodecProp) && acodecProp.GetString() != "none";
+                        
+                        double tbr = 0;
+                        if (format.TryGetProperty("tbr", out var tbrP) && tbrP.ValueKind == System.Text.Json.JsonValueKind.Number)
+                        {
+                            tbr = tbrP.GetDouble();
+                        }
+                        
+                        int fps = 0;
+                        if (format.TryGetProperty("fps", out var fpsP) && fpsP.ValueKind == System.Text.Json.JsonValueKind.Number)
+                        {
+                            fps = (int)Math.Round(fpsP.GetDouble());
+                        }
+                        
+                        int height = 0;
+                        if (format.TryGetProperty("height", out var hP) && hP.ValueKind == System.Text.Json.JsonValueKind.Number)
+                        {
+                            height = (int)Math.Round(hP.GetDouble());
+                        }
+                        
+                        int width = 0;
+                        if (format.TryGetProperty("width", out var wP) && wP.ValueKind == System.Text.Json.JsonValueKind.Number)
+                        {
+                            width = (int)Math.Round(wP.GetDouble());
+                        }
+
+                        string vcodec = format.TryGetProperty("vcodec", out var vc) ? vc.GetString() ?? "" : "";
+                        string acodec = format.TryGetProperty("acodec", out var ac) ? ac.GetString() ?? "" : "";
+
+                        if (vcodec.Contains(".")) vcodec = vcodec.Split('.')[0];
+                        if (acodec.Contains(".")) acodec = acodec.Split('.')[0];
+
+                        string disp = "";
+                        string formatArg = formatId;
+
+                        if (hasVideo && hasAudio)
+                        {
+                            disp = $"[Видео+Аудио] {width}x{height} ({ext})";
+                            if (fps > 0) disp += $" - {fps}fps";
+                            if (tbr > 0) disp += $", ~{tbr:F0}k";
+                            disp += $" ({vcodec}/{acodec})";
+                        }
+                        else if (hasVideo)
+                        {
+                            disp = $"[Только видео] {width}x{height} ({ext})";
+                            if (fps > 0) disp += $" - {fps}fps";
+                            if (tbr > 0) disp += $", ~{tbr:F0}k";
+                            disp += $" ({vcodec})";
+
+                            // Добавляем также вариант склеивания этого видеопотока с лучшим звуком
+                            tempFormats.Add(new DownloadFormatItem
+                            {
+                                Id = formatId + "_merged",
+                                DisplayName = $"[Видео+Звук] {width}x{height} ({ext}) + Лучший звук",
+                                FormatArg = $"{formatId}+ba/b"
+                            });
+                        }
+                        else if (hasAudio)
+                        {
+                            disp = $"[Только аудио] {ext}";
+                            if (tbr > 0) disp += $" - ~{tbr:F0}k";
+                            disp += $" ({acodec})";
+                        }
+                        else
+                        {
+                            continue;
+                        }
+
+                        tempFormats.Add(new DownloadFormatItem { Id = formatId, DisplayName = disp, FormatArg = formatArg });
+                    }
+                }
+
+                // 3. Parse Subtitles
+                var tempSubtitles = new List<DownloadSubtitleItem>();
+                tempSubtitles.Add(new DownloadSubtitleItem { Code = "none", DisplayName = "Без субтитров" });
+                tempSubtitles.Add(new DownloadSubtitleItem { Code = "all", DisplayName = "Все субтитры" });
+
+                var addedCodes = new HashSet<string>();
+
+                if (root.TryGetProperty("subtitles", out var subsProp) && subsProp.ValueKind == System.Text.Json.JsonValueKind.Object)
+                {
+                    foreach (var prop in subsProp.EnumerateObject())
+                    {
+                        string code = prop.Name;
+                        addedCodes.Add(code);
+                        string name = TranslateLanguageCode(code);
+                        tempSubtitles.Add(new DownloadSubtitleItem { Code = code, DisplayName = $"{name} ({code})" });
+                    }
+                }
+
+                if (root.TryGetProperty("automatic_captions", out var autoSubsProp) && autoSubsProp.ValueKind == System.Text.Json.JsonValueKind.Object)
+                {
+                    foreach (var prop in autoSubsProp.EnumerateObject())
+                    {
+                        string code = prop.Name;
+                        if (!addedCodes.Contains(code))
+                        {
+                            addedCodes.Add(code);
+                            string name = TranslateLanguageCode(code);
+                            tempSubtitles.Add(new DownloadSubtitleItem { Code = code, DisplayName = $"{name} ({code}) [авто]" });
+                        }
+                    }
+                }
+
+                _dispatcherQueue.TryEnqueue(() =>
+                {
+                    item.AvailableFormats.Clear();
+                    foreach (var f in tempFormats)
+                    {
+                        item.AvailableFormats.Add(f);
+                    }
+                    item.SelectedFormat = item.AvailableFormats.FirstOrDefault(f => f.Id == "best_quality") ?? item.AvailableFormats.FirstOrDefault();
+
+                    item.AvailableSubtitles.Clear();
+                    foreach (var s in tempSubtitles)
+                    {
+                        item.AvailableSubtitles.Add(s);
+                    }
+                    item.SelectedSubtitle = item.AvailableSubtitles.FirstOrDefault(s => s.Code == "none") ?? item.AvailableSubtitles.FirstOrDefault();
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            _logService.Exception(ex, $"Ошибка фонового запроса информации для {item.FilePath}", "FileListControl");
+        }
+    }
+
+    private static string TranslateLanguageCode(string code)
+    {
+        string baseCode = code.Split('-')[0].ToLowerInvariant();
+        return baseCode switch
+        {
+            "ru" => "Русский",
+            "en" => "Английский",
+            "ja" => "Японский",
+            "de" => "Немецкий",
+            "fr" => "Французский",
+            "es" => "Испанский",
+            "zh" => "Китайский",
+            "ko" => "Корейский",
+            "it" => "Итальянский",
+            _ => code.ToUpperInvariant()
+        };
     }
 }

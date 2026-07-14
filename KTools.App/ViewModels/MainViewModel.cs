@@ -135,7 +135,8 @@ public partial class MainViewModel : ThreadSafeViewModel
             new ScriptInfo { Name = AppConstants.ScriptMetadata.StreamReplName, Category = AppConstants.ScriptCategory.Containers, IconName = AppConstants.ScriptIcons.StreamReplacement, Description = AppConstants.ScriptMetadata.StreamReplDesc },
             new ScriptInfo { Name = AppConstants.ScriptMetadata.TrackExtrName, Category = AppConstants.ScriptCategory.Containers, IconName = AppConstants.ScriptIcons.TrackExtractor, Description = AppConstants.ScriptMetadata.TrackExtrDesc },
             new ScriptInfo { Name = AppConstants.ScriptMetadata.AssToVttName, Category = AppConstants.ScriptCategory.Subtitles, IconName = AppConstants.ScriptIcons.SubtitlesConvert, Description = AppConstants.ScriptMetadata.AssToVttDesc },
-            new ScriptInfo { Name = AppConstants.ScriptMetadata.SubtitleShiftName, Category = AppConstants.ScriptCategory.Subtitles, IconName = AppConstants.ScriptIcons.SubtitlesShift, Description = AppConstants.ScriptMetadata.SubtitleShiftDesc }
+            new ScriptInfo { Name = AppConstants.ScriptMetadata.SubtitleShiftName, Category = AppConstants.ScriptCategory.Subtitles, IconName = AppConstants.ScriptIcons.SubtitlesShift, Description = AppConstants.ScriptMetadata.SubtitleShiftDesc },
+            new ScriptInfo { Name = "Загрузка медиа", Category = "Сеть", IconName = "World", Description = "Загрузка видео- и аудиофайлов из сети по URL-адресам через yt-dlp" }
         };
 
         _scriptsByTag.Add("script:video_encoding", scripts[0]);
@@ -152,6 +153,7 @@ public partial class MainViewModel : ThreadSafeViewModel
         _scriptsByTag.Add("script:container_demux", scripts[11]);
         _scriptsByTag.Add("script:subtitles_convert", scripts[12]);
         _scriptsByTag.Add("script:subtitles_shift", scripts[13]);
+        _scriptsByTag.Add("script:media_downloader", scripts[14]);
     }
 
     /// <summary>
@@ -190,6 +192,9 @@ public partial class MainViewModel : ThreadSafeViewModel
         {
             _ = CheckUpdatesSilentlyAsync();
         }
+
+        // Асинхронно запускаем фоновую проверку обновлений yt-dlp nightly
+        _ = _dependencyManager.CheckAndUpdateYtDlpAsync();
     }
 
     /// <summary>

@@ -478,7 +478,17 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
                 return;
             }
 
-            UpdateFileStatus(fileItem.FilePath, "Завершено", 100.0, FileProcessingState.Completed);
+            bool hasError = results.Any(r => r.StartsWith("❌") || 
+                                             r.Contains("Ошибка", StringComparison.OrdinalIgnoreCase) || 
+                                             r.Contains("ОШИБКА", StringComparison.OrdinalIgnoreCase));
+            if (hasError)
+            {
+                UpdateFileStatus(fileItem.FilePath, "Ошибка", 0.0, FileProcessingState.Failed);
+            }
+            else
+            {
+                UpdateFileStatus(fileItem.FilePath, "Завершено", 100.0, FileProcessingState.Completed);
+            }
         }
         catch (Exception ex)
         {

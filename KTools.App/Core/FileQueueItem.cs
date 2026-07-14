@@ -7,6 +7,8 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.Extensions.DependencyInjection;
+using KTools_App.Services.Contracts;
 
 namespace KTools_App.Core;
 
@@ -250,6 +252,85 @@ public sealed class FileQueueItem : INotifyPropertyChanged
         }
     }
 
+    private DownloadFormatItem? _selectedFormat;
+    private DownloadSubtitleItem? _selectedSubtitle;
+    private string _displayName = string.Empty;
+
+    public System.Collections.ObjectModel.ObservableCollection<DownloadFormatItem> AvailableFormats { get; } = new();
+    public System.Collections.ObjectModel.ObservableCollection<DownloadSubtitleItem> AvailableSubtitles { get; } = new();
+
+    /// <summary>
+    /// Выбранный формат/качество для скачивания.
+    /// </summary>
+    public DownloadFormatItem? SelectedFormat
+    {
+        get => _selectedFormat;
+        set
+        {
+            if (_selectedFormat != value)
+            {
+                _selectedFormat = value;
+                OnPropertyChanged();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Выбранные субтитры для скачивания.
+    /// </summary>
+    public DownloadSubtitleItem? SelectedSubtitle
+    {
+        get => _selectedSubtitle;
+        set
+        {
+            if (_selectedSubtitle != value)
+            {
+                _selectedSubtitle = value;
+                OnPropertyChanged();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Указывает, нужно ли показывать выбор субтитров.
+    /// </summary>
+    public bool ShowSubtitlesSelector
+    {
+        get
+        {
+            var settingsManager = App.Services.GetService<ISettingsManager>();
+            if (settingsManager != null)
+            {
+                return settingsManager.GetSetting<bool>("Script_Загрузка_медиа", "DownloadSubtitles", false);
+            }
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Оповещает UI о возможном изменении флага отображения селектора субтитров.
+    /// </summary>
+    public void NotifySubtitlesSettingChanged()
+    {
+        OnPropertyChanged(nameof(ShowSubtitlesSelector));
+    }
+
+    /// <summary>
+    /// Отображаемое имя файла или видеоролика (например, полученное с YouTube).
+    /// </summary>
+    public string DisplayName
+    {
+        get => string.IsNullOrEmpty(_displayName) ? FileName : _displayName;
+        set
+        {
+            if (_displayName != value)
+            {
+                _displayName = value;
+                OnPropertyChanged();
+            }
+        }
+    }
+
     public event PropertyChangedEventHandler? PropertyChanged;
 
     private void OnPropertyChanged([CallerMemberName] string? prop = null)
@@ -267,5 +348,22 @@ public sealed class FileQueueItem : INotifyPropertyChanged
             }
         }
     }
+}
+
+public sealed class DownloadFormatItem
+{
+    public string Id { get; set; } = "";
+    public string DisplayName { get; set; } = "";
+    public string FormatArg { get; set; } = "";
+
+    public override string ToString() => DisplayName;
+}
+
+public sealed class DownloadSubtitleItem
+{
+    public string Code { get; set; } = "none";
+    public string DisplayName { get; set; } = "Без субтитров";
+
+    public override string ToString() => DisplayName;
 }
 

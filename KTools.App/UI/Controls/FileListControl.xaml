@@ -300,6 +300,118 @@
                 </ListView.ItemTemplate>
             </ListView>
         </Grid>
+
+        <!-- Список для загрузчика (Сеть) -->
+        <ListView Grid.Row="1"
+                  x:Name="DownloaderListView"
+                  Visibility="Collapsed"
+                  SelectionMode="None"
+                  BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                  BorderThickness="1"
+                  Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                  CornerRadius="8"
+                  Margin="0,0,0,12"
+                  Padding="4">
+            <ListView.ItemContainerStyle>
+                <Style TargetType="ListViewItem">
+                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                    <Setter Property="Padding" Value="4,2,4,2" />
+                    <Setter Property="MinHeight" Value="0" />
+                </Style>
+            </ListView.ItemContainerStyle>
+            <ListView.ItemTemplate>
+                <DataTemplate x:DataType="core:FileQueueItem">
+                    <Grid HorizontalAlignment="Stretch" Padding="8,4,8,4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+
+                        <!-- Блок выбора качеств и субтитров сверху слева -->
+                        <StackPanel Grid.Row="0" Grid.Column="0" Orientation="Horizontal" Spacing="12" Margin="6,0,12,8">
+                            <!-- Выбор качества/формата -->
+                            <ComboBox ItemsSource="{x:Bind AvailableFormats, Mode=OneWay}"
+                                      SelectedItem="{x:Bind SelectedFormat, Mode=TwoWay}"
+                                      Header="Формат и качество"
+                                      Width="250"
+                                      VerticalAlignment="Center"
+                                      IsEnabled="{x:Bind IsDeleteEnabled, Mode=OneWay}" />
+ 
+                            <!-- Выбор субтитров -->
+                            <ComboBox ItemsSource="{x:Bind AvailableSubtitles, Mode=OneWay}"
+                                      SelectedItem="{x:Bind SelectedSubtitle, Mode=TwoWay}"
+                                      Header="Субтитры"
+                                      Width="165"
+                                      VerticalAlignment="Center"
+                                      IsEnabled="{x:Bind IsDeleteEnabled, Mode=OneWay}"
+                                      Visibility="{x:Bind ShowSubtitlesSelector, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
+                        </StackPanel>
+
+                        <!-- Название видео/аудио под комбобоксами -->
+                        <TextBlock Grid.Row="1" Grid.Column="0"
+                                   Text="{x:Bind DisplayName, Mode=OneWay}"
+                                   Style="{ThemeResource BaseTextBlockStyle}"
+                                   TextTrimming="CharacterEllipsis"
+                                   VerticalAlignment="Center"
+                                   Margin="6,0,12,4"/>
+
+                        <!-- Кольцевой прогресс-бар и иконка статуса -->
+                        <Grid Grid.Column="1" Grid.RowSpan="2"
+                              Width="32" 
+                              Height="32" 
+                              Margin="6,0,12,0" 
+                              VerticalAlignment="Center" 
+                              HorizontalAlignment="Center">
+                             
+                             <ProgressRing Value="{x:Bind Progress, Mode=OneWay}"
+                                           Maximum="100"
+                                           IsIndeterminate="{x:Bind IsProgressIndeterminate, Mode=OneWay}"
+                                           IsActive="True"
+                                           Width="24"
+                                           Height="24"
+                                           Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
+                                           Background="{ThemeResource SystemControlBackgroundBaseLowBrush}"
+                                           Visibility="{x:Bind ProgressRingVisibility, Mode=OneWay}" />
+ 
+                             <SymbolIcon Symbol="{x:Bind StatusIcon, Mode=OneWay}"
+                                         Foreground="{x:Bind StatusIconBrush, Mode=OneWay}"
+                                         Visibility="{x:Bind StatusIconVisibility, Mode=OneWay}"
+                                         Width="24"
+                                         Height="24"
+                                         HorizontalAlignment="Center"
+                                         VerticalAlignment="Center" />
+                        </Grid>
+ 
+                        <!-- Кнопка удаления из списка -->
+                        <Button Grid.Column="2" Grid.RowSpan="2"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                Padding="0"
+                                Width="32"
+                                Height="32"
+                                MinWidth="0"
+                                MinHeight="0"
+                                HorizontalAlignment="Center"
+                                VerticalAlignment="Center"
+                                HorizontalContentAlignment="Center"
+                                VerticalContentAlignment="Center"
+                                Click="DeleteButton_Click"
+                                ToolTipService.ToolTip="Удалить из списка"
+                                IsEnabled="{x:Bind IsDeleteEnabled, Mode=OneWay}">
+                            <FontIcon FontSize="20" Glyph="&#xE711;"
+                                      HorizontalAlignment="Center"
+                                      VerticalAlignment="Center"
+                                      FontFamily="{ThemeResource SymbolThemeFontFamily}" />
+                        </Button>
+                    </Grid>
+                </DataTemplate>
+            </ListView.ItemTemplate>
+        </ListView>
  
         <!-- Тулбар списка файлов снизу -->
         <CommandBar Grid.Row="2" 

@@ -131,6 +131,17 @@
                     </NavigationViewItem.MenuItems>
                 </NavigationViewItem>
 
+                <!-- Группа: Сеть -->
+                <NavigationViewItem Content="Сеть" Icon="World" x:Name="NavItemNetwork" SelectsOnInvoked="False">
+                    <NavigationViewItem.MenuItems>
+                        <NavigationViewItem Content="Загрузка медиа" Tag="script:media_downloader">
+                            <NavigationViewItem.Icon>
+                                <FontIcon Glyph="&#xE128;" FontFamily="Segoe Fluent Icons" />
+                            </NavigationViewItem.Icon>
+                        </NavigationViewItem>
+                    </NavigationViewItem.MenuItems>
+                </NavigationViewItem>
+
                 <!-- Группа: Инструменты -->
                 <NavigationViewItem Content="Инструменты" Icon="Repair" x:Name="NavItemTools" SelectsOnInvoked="False">
                     <NavigationViewItem.MenuItems>

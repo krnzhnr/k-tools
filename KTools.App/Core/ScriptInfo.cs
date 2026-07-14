@@ -34,6 +34,8 @@ public class ScriptInfo
         AppConstants.ScriptCategory.Audio => new SolidColorBrush(AppConstants.CategoryColors.AudioBg),
         AppConstants.ScriptCategory.Containers => new SolidColorBrush(AppConstants.CategoryColors.ContainersBg),
         AppConstants.ScriptCategory.Subtitles => new SolidColorBrush(AppConstants.CategoryColors.SubtitlesBg),
+        AppConstants.ScriptCategory.Network => new SolidColorBrush(AppConstants.CategoryColors.NetworkBg),
+        AppConstants.ScriptCategory.Tools => new SolidColorBrush(AppConstants.CategoryColors.ToolsBg),
         _ => new SolidColorBrush(AppConstants.CategoryColors.DefaultBg)
     };
 
@@ -46,6 +48,8 @@ public class ScriptInfo
         AppConstants.ScriptCategory.Audio => new SolidColorBrush(AppConstants.CategoryColors.AudioFg),
         AppConstants.ScriptCategory.Containers => new SolidColorBrush(AppConstants.CategoryColors.ContainersFg),
         AppConstants.ScriptCategory.Subtitles => new SolidColorBrush(AppConstants.CategoryColors.SubtitlesFg),
+        AppConstants.ScriptCategory.Network => new SolidColorBrush(AppConstants.CategoryColors.NetworkFg),
+        AppConstants.ScriptCategory.Tools => new SolidColorBrush(AppConstants.CategoryColors.ToolsFg),
         _ => new SolidColorBrush(AppConstants.CategoryColors.DefaultFg)
     };
 }

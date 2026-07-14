@@ -21,6 +21,7 @@ public class DependencyManagerTests
     private Mock<ILogService> _logServiceMock = null!;
     private Mock<IPathManager> _pathManagerMock = null!;
     private Mock<IHttpClientFactory> _httpClientFactoryMock = null!;
+    private Mock<ISettingsManager> _settingsManagerMock = null!;
     private string _tempBinDir = null!;
 
     [TestInitialize]
@@ -29,6 +30,7 @@ public class DependencyManagerTests
         _logServiceMock = new Mock<ILogService>();
         _pathManagerMock = new Mock<IPathManager>();
         _httpClientFactoryMock = new Mock<IHttpClientFactory>();
+        _settingsManagerMock = new Mock<ISettingsManager>();
 
         // Создаем временную директорию для бинарников
         _tempBinDir = Path.Combine(Path.GetTempPath(), "KTools_DepsTests_" + Guid.NewGuid().ToString());
@@ -61,12 +63,12 @@ public class DependencyManagerTests
     public void GetRegistry_ReturnsCorrectDependencies()
     {
         // Act
-        var manager = new DependencyManager(_logServiceMock.Object, _pathManagerMock.Object, _httpClientFactoryMock.Object);
+        var manager = new DependencyManager(_logServiceMock.Object, _pathManagerMock.Object, _httpClientFactoryMock.Object, _settingsManagerMock.Object);
         var registry = manager.GetRegistry();
 
         // Assert
         registry.Should().NotBeNull();
-        registry.Should().HaveCount(5);
+        registry.Should().HaveCount(7);
 
         var ffmpeg = registry.FirstOrDefault(d => d.Key == "ffmpeg");
         ffmpeg.Should().NotBeNull();
@@ -89,7 +91,7 @@ public class DependencyManagerTests
     public void GetStatus_WhenBinariesAreMissing_ReturnsNotInstalled()
     {
         // Act
-        var manager = new DependencyManager(_logServiceMock.Object, _pathManagerMock.Object, _httpClientFactoryMock.Object);
+        var manager = new DependencyManager(_logServiceMock.Object, _pathManagerMock.Object, _httpClientFactoryMock.Object, _settingsManagerMock.Object);
 
         // Assert
         manager.GetStatus("ffmpeg").Should().Be(DependencyStatus.NotInstalled);
@@ -116,7 +118,7 @@ public class DependencyManagerTests
         File.WriteAllText(Path.Combine(mkvFolder, "mkvmerge.exe"), "mock content");
 
         // Act
-        var manager = new DependencyManager(_logServiceMock.Object, _pathManagerMock.Object, _httpClientFactoryMock.Object);
+        var manager = new DependencyManager(_logServiceMock.Object, _pathManagerMock.Object, _httpClientFactoryMock.Object, _settingsManagerMock.Object);
 
         // Assert
         manager.GetStatus("ffmpeg").Should().Be(DependencyStatus.Installed);
@@ -138,7 +140,7 @@ public class DependencyManagerTests
         string markerFile = Path.Combine(ffmpegFolder, "kt-ffmpeg.exe");
         File.WriteAllText(markerFile, "mock content");
 
-        var manager = new DependencyManager(_logServiceMock.Object, _pathManagerMock.Object, _httpClientFactoryMock.Object);
+        var manager = new DependencyManager(_logServiceMock.Object, _pathManagerMock.Object, _httpClientFactoryMock.Object, _settingsManagerMock.Object);
         manager.IsInstalled("ffmpeg").Should().BeTrue();
 
         // Act

@@ -69,6 +69,7 @@ public sealed class ScriptRegistry : IScriptRegistry
 
         _scripts.Add(_serviceProvider.GetRequiredService<Scripts.SubtitlesConvertScript>());
         _scripts.Add(_serviceProvider.GetRequiredService<Scripts.SubtitleShiftScript>());
+        _scripts.Add(_serviceProvider.GetRequiredService<Scripts.MediaDownloaderScript>());
 
         // Инициализируем настройки скриптов по умолчанию при регистрации
         _settingsManager.InitializeDefaults(_scripts);

@@ -143,6 +143,24 @@
                     </ItemsControl.ItemsPanel>
                 </ItemsControl>
             </StackPanel>
+            <!-- Группа: Сеть -->
+            <StackPanel Spacing="12">
+                <TextBlock Text="Сеть"
+                           FontFamily="Segoe UI" 
+                           FontSize="16" 
+                           FontWeight="Bold"
+                           Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+                <ItemsControl x:Name="NetworkGridView"
+                              ItemsSource="{x:Bind ViewModel.NetworkScripts}"
+                              ItemTemplate="{StaticResource ScriptCardTemplate}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <ItemsWrapGrid Orientation="Horizontal" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                </ItemsControl>
+            </StackPanel>
+
             <!-- Группа: Инструменты -->
             <StackPanel Spacing="12">
                 <TextBlock Text="Инструменты"

@@ -1,4 +1,4 @@
-﻿// -*- coding: utf-8 -*-
+// -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -100,6 +100,16 @@ public static class AppConstants
         /// Категория для скриптов работы с файлами субтитров.
         /// </summary>
         public const string Subtitles = "Субтитры";
+
+        /// <summary>
+        /// Категория для сетевых скриптов (загрузка медиа).
+        /// </summary>
+        public const string Network = "Сеть";
+
+        /// <summary>
+        /// Категория для утилит и вспомогательных инструментов.
+        /// </summary>
+        public const string Tools = "Инструменты";
     }
 
     /// <summary>
@@ -122,6 +132,7 @@ public static class AppConstants
         public const string SubtitlesConvert = "\uE8D2";
         public const string SubtitlesShift = "\uE121";
         public const string Calculator = "\uE1D0";
+        public const string MediaDownloader = "\uE128";
     }
 
     /// <summary>
@@ -140,6 +151,12 @@ public static class AppConstants
 
         public static readonly Color SubtitlesBg = ColorHelper.FromArgb(0x33, 0xA8, 0x78, 0xE8);
         public static readonly Color SubtitlesFg = ColorHelper.FromArgb(0xFF, 0xA8, 0x78, 0xE8);
+
+        public static readonly Color NetworkBg = ColorHelper.FromArgb(0x33, 0xE8, 0x4D, 0x6E);
+        public static readonly Color NetworkFg = ColorHelper.FromArgb(0xFF, 0xE8, 0x4D, 0x6E);
+
+        public static readonly Color ToolsBg = ColorHelper.FromArgb(0x33, 0xF0, 0xA3, 0x30);
+        public static readonly Color ToolsFg = ColorHelper.FromArgb(0xFF, 0xF0, 0xA3, 0x30);
 
         public static readonly Color DefaultBg = ColorHelper.FromArgb(0x33, 0xFF, 0xFF, 0xFF);
         public static readonly Color DefaultFg = ColorHelper.FromArgb(0xFF, 0xFF, 0xFF, 0xFF);
