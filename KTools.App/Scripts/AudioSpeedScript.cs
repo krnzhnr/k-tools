@@ -46,7 +46,7 @@ public sealed class AudioSpeedScript : AbstractScript
     /// <summary>
     /// Имя Fluent-иконки для отображения в боковом меню.
     /// </summary>
-    public override string IconName => "sync";
+    public override string IconName => AppConstants.ScriptIcons.AudioSpeed;
 
     /// <summary>
     /// Список поддерживаемых расширений файлов.

@@ -53,6 +53,6 @@ public class AudioChannelsScriptTests
     public void ScriptProperties_VerifyCorrectValues()
     {
         _script.Category.Should().Be("Аудио");
-        _script.IconName.Should().Be("map");
+        _script.IconName.Should().Be(AppConstants.ScriptIcons.AudioChannels);
     }
 }

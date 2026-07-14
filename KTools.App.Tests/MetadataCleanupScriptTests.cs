@@ -46,7 +46,7 @@ public class MetadataCleanupScriptTests
     {
         // Assert
         _script.Category.Should().Be("Видео");
-        _script.IconName.Should().Be("delete");
+        _script.IconName.Should().Be(AppConstants.ScriptIcons.MetadataCleanup);
         _script.FileExtensions.Should().Contain(new[] { ".mkv", ".mp4", ".avi" });
     }
 

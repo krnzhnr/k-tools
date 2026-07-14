@@ -53,6 +53,6 @@ public class StreamReplacementScriptTests
     public void ScriptProperties_VerifyCorrectValues()
     {
         _script.Category.Should().Be("Контейнеры");
-        _script.IconName.Should().Be("switch");
+        _script.IconName.Should().Be(AppConstants.ScriptIcons.StreamReplacement);
     }
 }

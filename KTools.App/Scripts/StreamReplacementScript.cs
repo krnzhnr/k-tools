@@ -50,7 +50,7 @@ public sealed class StreamReplacementScript : AbstractScript
     public override string Name => AppConstants.ScriptMetadata.StreamReplName;
     public override string Description => AppConstants.ScriptMetadata.StreamReplDesc;
     public override string Category => AppConstants.ScriptCategory.Containers;
-    public override string IconName => "switch";
+    public override string IconName => AppConstants.ScriptIcons.StreamReplacement;
     public override string[] FileExtensions => AppConstants.VideoContainers.ToArray();
     public override string[] RequiredDependencies => new[] { "ffmpeg", "mkvtoolnix" };
     public override bool UseCustomWidget => true;

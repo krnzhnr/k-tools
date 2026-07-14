@@ -60,6 +60,7 @@ public sealed class ScriptRegistry : IScriptRegistry
         _scripts.Add(_serviceProvider.GetRequiredService<Scripts.AudioDownmixScript>());
         _scripts.Add(_serviceProvider.GetRequiredService<Scripts.AudioSpeedScript>());
         _scripts.Add(_serviceProvider.GetRequiredService<Scripts.AudioChannelsScript>());
+        _scripts.Add(_serviceProvider.GetRequiredService<Scripts.AudioShiftScript>());
 
         _scripts.Add(_serviceProvider.GetRequiredService<Scripts.MkvAssemblyScript>());
         _scripts.Add(_serviceProvider.GetRequiredService<Scripts.StreamManagementScript>());
@@ -67,6 +68,7 @@ public sealed class ScriptRegistry : IScriptRegistry
         _scripts.Add(_serviceProvider.GetRequiredService<Scripts.TrackExtractorScript>());
 
         _scripts.Add(_serviceProvider.GetRequiredService<Scripts.SubtitlesConvertScript>());
+        _scripts.Add(_serviceProvider.GetRequiredService<Scripts.SubtitleShiftScript>());
 
         // Инициализируем настройки скриптов по умолчанию при регистрации
         _settingsManager.InitializeDefaults(_scripts);

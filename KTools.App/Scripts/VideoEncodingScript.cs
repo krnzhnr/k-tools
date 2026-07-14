@@ -78,7 +78,7 @@ public sealed class VideoEncodingScript : AbstractScript
     public override string Name => AppConstants.ScriptMetadata.VideoProcessorName;
     public override string Description => AppConstants.ScriptMetadata.VideoProcessorDesc;
     public override string Category => AppConstants.ScriptCategory.Video;
-    public override string IconName => "video";
+    public override string IconName => AppConstants.ScriptIcons.VideoEncoding;
     public override string[] FileExtensions => AppConstants.VideoContainers.ToArray();
     public override string[] RequiredDependencies => new[] { "ffmpeg" };
 

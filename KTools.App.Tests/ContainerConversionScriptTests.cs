@@ -51,7 +51,7 @@ public class ContainerConversionScriptTests
     public void ScriptProperties_VerifyCorrectValues()
     {
         _script.Category.Should().Be("Видео");
-        _script.IconName.Should().Be("forward");
+        _script.IconName.Should().Be(AppConstants.ScriptIcons.ContainerConversion);
         _script.RequiredDependencies.Should().Contain("ffmpeg");
     }
 

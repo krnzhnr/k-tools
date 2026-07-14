@@ -56,6 +56,6 @@ public class AudioDownmixScriptTests
     public void ScriptProperties_VerifyCorrectValues()
     {
         _script.Category.Should().Be("Аудио");
-        _script.IconName.Should().Be("volume2");
+        _script.IconName.Should().Be(AppConstants.ScriptIcons.AudioDownmix);
     }
 }

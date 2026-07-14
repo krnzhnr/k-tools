@@ -50,7 +50,7 @@ public class MkvAssemblyScriptTests
     public void ScriptProperties_VerifyCorrectValues()
     {
         _script.Category.Should().Be("Контейнеры");
-        _script.IconName.Should().Be("add");
+        _script.IconName.Should().Be(AppConstants.ScriptIcons.MkvAssembly);
     }
 
     /// <summary>

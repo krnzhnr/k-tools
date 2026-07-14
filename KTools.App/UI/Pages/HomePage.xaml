@@ -35,16 +35,18 @@
                     </Grid.ColumnDefinitions>
                     <!-- Секция Иконки -->
                     <Border Grid.Column="0"
-                            Width="40" 
-                            Height="40" 
+                            Width="{x:Bind core:AppConstants.HomeIconBgSize}" 
+                            Height="{x:Bind core:AppConstants.HomeIconBgSize}" 
                             CornerRadius="8" 
                             Background="{x:Bind CategoryBgColor}"
                             VerticalAlignment="Center"
                             Margin="0,0,12,0">
-                        <SymbolIcon Symbol="{x:Bind IconSymbol}" 
-                                    Foreground="{x:Bind CategoryFgColor}"
-                                    Width="24"
-                                    Height="24" />
+                        <FontIcon Glyph="{x:Bind IconName}" 
+                                  FontFamily="Segoe Fluent Icons"
+                                  Foreground="{x:Bind CategoryFgColor}"
+                                  FontSize="{x:Bind core:AppConstants.HomeIconSize}"
+                                  HorizontalAlignment="Center"
+                                  VerticalAlignment="Center" />
                     </Border>
 
                     <!-- Текстовая Секция -->

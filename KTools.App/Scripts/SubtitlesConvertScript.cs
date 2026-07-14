@@ -45,7 +45,7 @@ public sealed class SubtitlesConvertScript : AbstractScript
     /// <summary>
     /// Имя системной Fluent-иконки.
     /// </summary>
-    public override string IconName => "font";
+    public override string IconName => AppConstants.ScriptIcons.SubtitlesConvert;
 
     /// <summary>
     /// Поддерживаемые входящие форматы файлов субтитров.

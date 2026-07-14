@@ -56,7 +56,7 @@ public class VideoEncodingScriptTests
     public void ScriptProperties_VerifyCorrectValues()
     {
         _script.Category.Should().Be("Видео");
-        _script.IconName.Should().Be("video");
+        _script.IconName.Should().Be(AppConstants.ScriptIcons.VideoEncoding);
         _script.FileExtensions.Should().Contain(".mkv");
         _script.RequiredDependencies.Should().Contain("ffmpeg");
     }

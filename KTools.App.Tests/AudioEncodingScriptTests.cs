@@ -50,6 +50,6 @@ public class AudioEncodingScriptTests
     public void ScriptProperties_VerifyCorrectValues()
     {
         _script.Category.Should().Be("Аудио");
-        _script.IconName.Should().Be("music");
+        _script.IconName.Should().Be(AppConstants.ScriptIcons.AudioEncoding);
     }
 }

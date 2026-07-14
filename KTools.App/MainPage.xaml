@@ -40,43 +40,105 @@
                 <!-- Группа: Видео -->
                 <NavigationViewItem Content="Видео" Icon="Video" x:Name="NavItemVideo" SelectsOnInvoked="False">
                     <NavigationViewItem.MenuItems>
-                        <NavigationViewItem Content="Кодирование видео" Tag="script:video_encoding" Icon="Video" />
-                        <NavigationViewItem Content="Конвертация контейнера" Tag="script:container_conversion" Icon="Forward" />
-                        <NavigationViewItem Content="Очистка метаданных" Tag="script:metadata_cleanup" Icon="Delete" />
+                        <NavigationViewItem Content="Кодирование видео" Tag="script:video_encoding">
+                            <NavigationViewItem.Icon>
+                                <FontIcon Glyph="&#xE116;" FontFamily="Segoe Fluent Icons" />
+                            </NavigationViewItem.Icon>
+                        </NavigationViewItem>
+                        <NavigationViewItem Content="Конвертация контейнера" Tag="script:container_conversion">
+                            <NavigationViewItem.Icon>
+                                <FontIcon Glyph="&#xE895;" FontFamily="Segoe Fluent Icons" />
+                            </NavigationViewItem.Icon>
+                        </NavigationViewItem>
+                        <NavigationViewItem Content="Очистка метаданных" Tag="script:metadata_cleanup">
+                            <NavigationViewItem.Icon>
+                                <FontIcon Glyph="&#xEA99;" FontFamily="Segoe Fluent Icons" />
+                            </NavigationViewItem.Icon>
+                        </NavigationViewItem>
                     </NavigationViewItem.MenuItems>
                 </NavigationViewItem>
 
                 <!-- Группа: Аудио -->
                 <NavigationViewItem Content="Аудио" Icon="Audio" x:Name="NavItemAudio" SelectsOnInvoked="False">
                     <NavigationViewItem.MenuItems>
-                        <NavigationViewItem Content="Кодирование аудио" Tag="script:audio_encoding" Icon="Audio" />
-                        <NavigationViewItem Content="Даунмикс в Stereo" Tag="script:audio_downmix" Icon="Volume" />
-                        <NavigationViewItem Content="Изменение скорости" Tag="script:audio_speed" Icon="Sync" />
-                        <NavigationViewItem Content="Разделение каналов" Tag="script:audio_channels" Icon="Map" />
+                        <NavigationViewItem Content="Кодирование аудио" Tag="script:audio_encoding">
+                            <NavigationViewItem.Icon>
+                                <FontIcon Glyph="&#xE189;" FontFamily="Segoe Fluent Icons" />
+                            </NavigationViewItem.Icon>
+                        </NavigationViewItem>
+                        <NavigationViewItem Content="Даунмикс в Stereo" Tag="script:audio_downmix">
+                            <NavigationViewItem.Icon>
+                                <FontIcon Glyph="&#xEA3C;" FontFamily="Segoe Fluent Icons" />
+                            </NavigationViewItem.Icon>
+                        </NavigationViewItem>
+                        <NavigationViewItem Content="Изменение скорости" Tag="script:audio_speed">
+                            <NavigationViewItem.Icon>
+                                <FontIcon Glyph="&#xEC49;" FontFamily="Segoe Fluent Icons" />
+                            </NavigationViewItem.Icon>
+                        </NavigationViewItem>
+                        <NavigationViewItem Content="Разделение каналов" Tag="script:audio_channels">
+                            <NavigationViewItem.Icon>
+                                <FontIcon Glyph="&#xE8C6;" FontFamily="Segoe Fluent Icons" />
+                            </NavigationViewItem.Icon>
+                        </NavigationViewItem>
+                        <NavigationViewItem Content="Сдвиг аудио" Tag="script:audio_shift">
+                            <NavigationViewItem.Icon>
+                                <FontIcon Glyph="&#xE121;" FontFamily="Segoe Fluent Icons" />
+                            </NavigationViewItem.Icon>
+                        </NavigationViewItem>
                     </NavigationViewItem.MenuItems>
                 </NavigationViewItem>
 
                 <!-- Группа: Контейнеры -->
                 <NavigationViewItem Content="Контейнеры" Icon="Share" x:Name="NavItemContainers" SelectsOnInvoked="False">
                     <NavigationViewItem.MenuItems>
-                        <NavigationViewItem Content="Сборка MKV" Tag="script:mkv_assembly" Icon="Add" />
-                        <NavigationViewItem Content="Управление потоками" Tag="script:stream_management" Icon="List" />
-                        <NavigationViewItem Content="Замена потоков" Tag="script:stream_replacement" Icon="Switch" />
-                        <NavigationViewItem Content="Разборка контейнера" Tag="script:container_demux" Icon="Download" />
+                        <NavigationViewItem Content="Сборка MKV" Tag="script:mkv_assembly">
+                            <NavigationViewItem.Icon>
+                                <FontIcon Glyph="&#xE7B8;" FontFamily="Segoe Fluent Icons" />
+                            </NavigationViewItem.Icon>
+                        </NavigationViewItem>
+                        <NavigationViewItem Content="Управление потоками" Tag="script:stream_management">
+                            <NavigationViewItem.Icon>
+                                <FontIcon Glyph="&#xE762;" FontFamily="Segoe Fluent Icons" />
+                            </NavigationViewItem.Icon>
+                        </NavigationViewItem>
+                        <NavigationViewItem Content="Замена потоков" Tag="script:stream_replacement">
+                            <NavigationViewItem.Icon>
+                                <FontIcon Glyph="&#xE8AB;" FontFamily="Segoe Fluent Icons" />
+                            </NavigationViewItem.Icon>
+                        </NavigationViewItem>
+                        <NavigationViewItem Content="Разборка контейнера" Tag="script:container_demux">
+                            <NavigationViewItem.Icon>
+                                <FontIcon Glyph="&#xE7AC;" FontFamily="Segoe Fluent Icons" />
+                            </NavigationViewItem.Icon>
+                        </NavigationViewItem>
                     </NavigationViewItem.MenuItems>
                 </NavigationViewItem>
 
                 <!-- Группа: Субтитры -->
                 <NavigationViewItem Content="Субтитры" Icon="Font" x:Name="NavItemSubtitles" SelectsOnInvoked="False">
                     <NavigationViewItem.MenuItems>
-                        <NavigationViewItem Content="ASS/SRT → VTT" Tag="script:subtitles_convert" Icon="Font" />
+                        <NavigationViewItem Content="ASS/SRT → VTT" Tag="script:subtitles_convert">
+                            <NavigationViewItem.Icon>
+                                <FontIcon Glyph="&#xE8D2;" FontFamily="Segoe Fluent Icons" />
+                            </NavigationViewItem.Icon>
+                        </NavigationViewItem>
+                        <NavigationViewItem Content="Сдвиг субтитров" Tag="script:subtitles_shift">
+                            <NavigationViewItem.Icon>
+                                <FontIcon Glyph="&#xE121;" FontFamily="Segoe Fluent Icons" />
+                            </NavigationViewItem.Icon>
+                        </NavigationViewItem>
                     </NavigationViewItem.MenuItems>
                 </NavigationViewItem>
 
                 <!-- Группа: Инструменты -->
                 <NavigationViewItem Content="Инструменты" Icon="Repair" x:Name="NavItemTools" SelectsOnInvoked="False">
                     <NavigationViewItem.MenuItems>
-                        <NavigationViewItem Content="Калькулятор сдвига" Tag="tool:timing_calculator" Icon="Calculator" />
+                        <NavigationViewItem Content="Калькулятор сдвига" Tag="tool:timing_calculator">
+                            <NavigationViewItem.Icon>
+                                <FontIcon Glyph="&#xE1D0;" FontFamily="Segoe Fluent Icons" />
+                            </NavigationViewItem.Icon>
+                        </NavigationViewItem>
                     </NavigationViewItem.MenuItems>
                 </NavigationViewItem>
             </NavigationView.MenuItems>

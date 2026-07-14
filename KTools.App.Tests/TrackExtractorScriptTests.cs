@@ -50,6 +50,6 @@ public class TrackExtractorScriptTests
     public void ScriptProperties_VerifyCorrectValues()
     {
         _script.Category.Should().Be("Контейнеры");
-        _script.IconName.Should().Be("download");
+        _script.IconName.Should().Be(AppConstants.ScriptIcons.TrackExtractor);
     }
 }

@@ -49,7 +49,7 @@ public sealed class AudioDownmixScript : AbstractScript
     /// <summary>
     /// Название системной Fluent-иконки.
     /// </summary>
-    public override string IconName => "volume2";
+    public override string IconName => AppConstants.ScriptIcons.AudioDownmix;
 
     /// <summary>
     /// Поддерживаемые расширения медиафайлов.

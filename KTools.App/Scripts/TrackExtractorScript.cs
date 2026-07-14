@@ -35,7 +35,7 @@ public sealed class TrackExtractorScript : AbstractScript
     public override string Name => AppConstants.ScriptMetadata.TrackExtrName;
     public override string Description => AppConstants.ScriptMetadata.TrackExtrDesc;
     public override string Category => AppConstants.ScriptCategory.Containers;
-    public override string IconName => "download";
+    public override string IconName => AppConstants.ScriptIcons.TrackExtractor;
     public override string[] FileExtensions => AppConstants.AllContainers.ToArray();
     public override string[] RequiredDependencies => new[] { "mkvtoolnix", "ffmpeg" };
     public override bool UseCustomWidget => true;

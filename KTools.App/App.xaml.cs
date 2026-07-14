@@ -210,6 +210,8 @@ public partial class App : Application
         services.AddTransient<Scripts.StreamReplacementScript>();
         services.AddTransient<Scripts.TrackExtractorScript>();
         services.AddTransient<Scripts.SubtitlesConvertScript>();
+        services.AddTransient<Scripts.AudioShiftScript>();
+        services.AddTransient<Scripts.SubtitleShiftScript>();
 
         // 2. Регистрация служб приложения
         services.AddSingleton<INavigationService, NavigationService>();

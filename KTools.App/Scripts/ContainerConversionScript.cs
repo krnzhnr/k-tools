@@ -55,7 +55,7 @@ public sealed class ContainerConversionScript : AbstractScript
     /// <summary>
     /// Системное имя Fluent-иконки для меню.
     /// </summary>
-    public override string IconName => "forward";
+    public override string IconName => AppConstants.ScriptIcons.ContainerConversion;
 
     /// <summary>
     /// Список допустимых входящих расширений (видеофайлы и GIF).

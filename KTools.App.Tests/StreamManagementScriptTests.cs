@@ -53,6 +53,6 @@ public class StreamManagementScriptTests
     public void ScriptProperties_VerifyCorrectValues()
     {
         _script.Category.Should().Be("Контейнеры");
-        _script.IconName.Should().Be("list");
+        _script.IconName.Should().Be(AppConstants.ScriptIcons.StreamManagement);
     }
 }

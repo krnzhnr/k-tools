@@ -57,7 +57,7 @@ public class SubtitlesConvertScriptTests
     public void ScriptProperties_VerifyCorrectValues()
     {
         _script.Category.Should().Be("Субтитры");
-        _script.IconName.Should().Be("font");
+        _script.IconName.Should().Be(AppConstants.ScriptIcons.SubtitlesConvert);
         _script.RequiredDependencies.Should().Contain("ffmpeg");
         _script.FileExtensions.Should().Contain(".ass");
         _script.FileExtensions.Should().Contain(".srt");

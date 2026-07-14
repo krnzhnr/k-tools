@@ -34,7 +34,7 @@ public sealed class MetadataCleanupScript : AbstractScript
     /// <summary>
     /// Название системной Fluent-иконки.
     /// </summary>
-    public override string IconName => "delete";
+    public override string IconName => AppConstants.ScriptIcons.MetadataCleanup;
 
     /// <summary>
     /// Поддерживаемые расширения медиафайлов.

@@ -122,18 +122,20 @@ public partial class MainViewModel : ThreadSafeViewModel
     {
         var scripts = new List<ScriptInfo>
         {
-            new ScriptInfo { Name = "Кодирование видео", Category = "Видео", IconName = "video", Description = "Кодирование видео: изменение формата, вшивание субтитров, фильтрация тегов и настройка звука" },
-            new ScriptInfo { Name = "Конвертация контейнера", Category = "Видео", IconName = "forward", Description = "Перемещение видео/аудио потоков в другой контейнер без перекодирования" },
-            new ScriptInfo { Name = "Очистка метаданных", Category = "Видео", IconName = "delete", Description = "Удаление метаданных из видеофайлов с сохранением оригинального качества" },
-            new ScriptInfo { Name = "Кодирование аудио", Category = "Аудио", IconName = "music", Description = "Перекодирование аудио в QAAC, AAC, FLAC, WAV, E-AC3, AC3 и др. с настройкой качества" },
-            new ScriptInfo { Name = "Даунмикс в Stereo", Category = "Аудио", IconName = "volume2", Description = "Даунмикс 5.1/7.1 в Stereo 2.0 (DDP/DD) через Dolby Encoding Engine" },
-            new ScriptInfo { Name = "Изменение скорости аудио", Category = "Аудио", IconName = "sync", Description = "Изменение скорости/тона аудио (PAL ↔ NTSC) с помощью eac3to." },
-            new ScriptInfo { Name = "Разделение каналов", Category = "Аудио", IconName = "map", Description = "Разделение многоканального аудио на моно-WAV файлы с опциональной склейкой в стереопары" },
-            new ScriptInfo { Name = "Сборка MKV", Category = "Контейнеры", IconName = "add", Description = "Сборка контейнера MKV из отдельных потоков видео, аудио и субтитров с сопоставлением по имени" },
-            new ScriptInfo { Name = "Управление потоками", Category = "Контейнеры", IconName = "list", Description = "Удаление или сохранение выбранных дорожек (видео, аудио, субтитры) в MKV и MP4 файлах." },
-            new ScriptInfo { Name = "Замена потоков", Category = "Контейнеры", IconName = "switch", Description = "Заменяет дорожки в MKV/MP4 на внешние файлы (видео, аудио, субтитры)." },
-            new ScriptInfo { Name = "Разборка контейнера", Category = "Контейнеры", IconName = "download", Description = "Массовое извлечение потоков из контейнера с авто-именованием." },
-            new ScriptInfo { Name = "ASS/SRT → VTT", Category = "Субтитры", IconName = "font", Description = "Конвертация субтитров ASS/SSA/SRT в WebVTT с фильтрацией по актёрам и очисткой тегов." }
+            new ScriptInfo { Name = AppConstants.ScriptMetadata.VideoProcessorName, Category = AppConstants.ScriptCategory.Video, IconName = AppConstants.ScriptIcons.VideoEncoding, Description = AppConstants.ScriptMetadata.VideoProcessorDesc },
+            new ScriptInfo { Name = AppConstants.ScriptMetadata.ContainerConvName, Category = AppConstants.ScriptCategory.Video, IconName = AppConstants.ScriptIcons.ContainerConversion, Description = AppConstants.ScriptMetadata.ContainerConvDesc },
+            new ScriptInfo { Name = AppConstants.ScriptMetadata.MetadataCleanName, Category = AppConstants.ScriptCategory.Video, IconName = AppConstants.ScriptIcons.MetadataCleanup, Description = AppConstants.ScriptMetadata.MetadataCleanDesc },
+            new ScriptInfo { Name = AppConstants.ScriptMetadata.AudioConverterName, Category = AppConstants.ScriptCategory.Audio, IconName = AppConstants.ScriptIcons.AudioEncoding, Description = AppConstants.ScriptMetadata.AudioConverterDesc },
+            new ScriptInfo { Name = AppConstants.ScriptMetadata.AudioDownmixName, Category = AppConstants.ScriptCategory.Audio, IconName = AppConstants.ScriptIcons.AudioDownmix, Description = AppConstants.ScriptMetadata.AudioDownmixDesc },
+            new ScriptInfo { Name = AppConstants.ScriptMetadata.AudioSpeedName, Category = AppConstants.ScriptCategory.Audio, IconName = AppConstants.ScriptIcons.AudioSpeed, Description = AppConstants.ScriptMetadata.AudioSpeedDesc },
+            new ScriptInfo { Name = AppConstants.ScriptMetadata.AudioSplitName, Category = AppConstants.ScriptCategory.Audio, IconName = AppConstants.ScriptIcons.AudioChannels, Description = AppConstants.ScriptMetadata.AudioSplitDesc },
+            new ScriptInfo { Name = AppConstants.ScriptMetadata.AudioShiftName, Category = AppConstants.ScriptCategory.Audio, IconName = AppConstants.ScriptIcons.AudioShift, Description = AppConstants.ScriptMetadata.AudioShiftDesc },
+            new ScriptInfo { Name = AppConstants.ScriptMetadata.MuxerName, Category = AppConstants.ScriptCategory.Containers, IconName = AppConstants.ScriptIcons.MkvAssembly, Description = AppConstants.ScriptMetadata.MuxerDesc },
+            new ScriptInfo { Name = AppConstants.ScriptMetadata.StreamMgrName, Category = AppConstants.ScriptCategory.Containers, IconName = AppConstants.ScriptIcons.StreamManagement, Description = AppConstants.ScriptMetadata.StreamMgrDesc },
+            new ScriptInfo { Name = AppConstants.ScriptMetadata.StreamReplName, Category = AppConstants.ScriptCategory.Containers, IconName = AppConstants.ScriptIcons.StreamReplacement, Description = AppConstants.ScriptMetadata.StreamReplDesc },
+            new ScriptInfo { Name = AppConstants.ScriptMetadata.TrackExtrName, Category = AppConstants.ScriptCategory.Containers, IconName = AppConstants.ScriptIcons.TrackExtractor, Description = AppConstants.ScriptMetadata.TrackExtrDesc },
+            new ScriptInfo { Name = AppConstants.ScriptMetadata.AssToVttName, Category = AppConstants.ScriptCategory.Subtitles, IconName = AppConstants.ScriptIcons.SubtitlesConvert, Description = AppConstants.ScriptMetadata.AssToVttDesc },
+            new ScriptInfo { Name = AppConstants.ScriptMetadata.SubtitleShiftName, Category = AppConstants.ScriptCategory.Subtitles, IconName = AppConstants.ScriptIcons.SubtitlesShift, Description = AppConstants.ScriptMetadata.SubtitleShiftDesc }
         };
 
         _scriptsByTag.Add("script:video_encoding", scripts[0]);
@@ -143,11 +145,13 @@ public partial class MainViewModel : ThreadSafeViewModel
         _scriptsByTag.Add("script:audio_downmix", scripts[4]);
         _scriptsByTag.Add("script:audio_speed", scripts[5]);
         _scriptsByTag.Add("script:audio_channels", scripts[6]);
-        _scriptsByTag.Add("script:mkv_assembly", scripts[7]);
-        _scriptsByTag.Add("script:stream_management", scripts[8]);
-        _scriptsByTag.Add("script:stream_replacement", scripts[9]);
-        _scriptsByTag.Add("script:container_demux", scripts[10]);
-        _scriptsByTag.Add("script:subtitles_convert", scripts[11]);
+        _scriptsByTag.Add("script:audio_shift", scripts[7]);
+        _scriptsByTag.Add("script:mkv_assembly", scripts[8]);
+        _scriptsByTag.Add("script:stream_management", scripts[9]);
+        _scriptsByTag.Add("script:stream_replacement", scripts[10]);
+        _scriptsByTag.Add("script:container_demux", scripts[11]);
+        _scriptsByTag.Add("script:subtitles_convert", scripts[12]);
+        _scriptsByTag.Add("script:subtitles_shift", scripts[13]);
     }
 
     /// <summary>

@@ -1,7 +1,10 @@
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Microsoft.UI;
+using Microsoft.UI.Xaml.Controls;
+using Windows.UI;
 
 namespace KTools_App.Core;
 
@@ -13,6 +16,16 @@ namespace KTools_App.Core;
 /// </summary>
 public static class AppConstants
 {
+    /// <summary>
+    /// Глобальный размер шрифтовых иконок на домашней странице.
+    /// </summary>
+    public const double HomeIconSize = 30.0;
+
+    /// <summary>
+    /// Глобальный размер подложки (фона) иконок на домашней странице.
+    /// </summary>
+    public static double HomeIconBgSize => HomeIconSize + 18.0;
+
     /// <summary>
     /// Множество расширений видео-контейнеров с точкой в нижнем регистре.
     /// </summary>
@@ -90,6 +103,49 @@ public static class AppConstants
     }
 
     /// <summary>
+    /// Константы имен иконок для всех скриптов (Unicode-глифы Segoe MDL2 Assets / Segoe Fluent Icons).
+    /// </summary>
+    public static class ScriptIcons
+    {
+        public const string VideoEncoding = "\uE116";
+        public const string ContainerConversion = "\uE895";
+        public const string MetadataCleanup = "\uEA99";
+        public const string AudioEncoding = "\uE189";
+        public const string AudioDownmix = "\uEA3C";
+        public const string AudioSpeed = "\uEC49";
+        public const string AudioChannels = "\uE8C6";
+        public const string AudioShift = "\uE121";
+        public const string MkvAssembly = "\uE7B8";
+        public const string StreamManagement = "\uE762";
+        public const string StreamReplacement = "\uE8AB";
+        public const string TrackExtractor = "\uE7AC";
+        public const string SubtitlesConvert = "\uE8D2";
+        public const string SubtitlesShift = "\uE121";
+        public const string Calculator = "\uE1D0";
+    }
+
+    /// <summary>
+    /// Константы цветов для категорий скриптов.
+    /// </summary>
+    public static class CategoryColors
+    {
+        public static readonly Color VideoBg = ColorHelper.FromArgb(0x33, 0x1B, 0x9D, 0xE3);
+        public static readonly Color VideoFg = ColorHelper.FromArgb(0xFF, 0x1B, 0x9D, 0xE3);
+
+        public static readonly Color AudioBg = ColorHelper.FromArgb(0x33, 0x28, 0xCA, 0xC6);
+        public static readonly Color AudioFg = ColorHelper.FromArgb(0xFF, 0x28, 0xCA, 0xC6);
+
+        public static readonly Color ContainersBg = ColorHelper.FromArgb(0x33, 0xEB, 0x6E, 0x4D);
+        public static readonly Color ContainersFg = ColorHelper.FromArgb(0xFF, 0xEB, 0x6E, 0x4D);
+
+        public static readonly Color SubtitlesBg = ColorHelper.FromArgb(0x33, 0xA8, 0x78, 0xE8);
+        public static readonly Color SubtitlesFg = ColorHelper.FromArgb(0xFF, 0xA8, 0x78, 0xE8);
+
+        public static readonly Color DefaultBg = ColorHelper.FromArgb(0x33, 0xFF, 0xFF, 0xFF);
+        public static readonly Color DefaultFg = ColorHelper.FromArgb(0xFF, 0xFF, 0xFF, 0xFF);
+    }
+
+    /// <summary>
     /// Текстовые метаданные (названия и описания) всех 12 скриптов приложения.
     /// </summary>
     public static class ScriptMetadata
@@ -131,8 +187,14 @@ public static class AppConstants
         public const string TrackExtrDesc = "Массовое извлечение потоков из контейнера с авто-именованием.";
 
         // --- Скрипты субтитров ---
-        public const string AssToVttName = "ASS/SRT → VTT";
+        public const string AssToVttName = "Конвертация субтитров";
         public const string AssToVttDesc = "Конвертация субтитров ASS/SSA/SRT в WebVTT с фильтрацией по актёрам и очисткой тегов.";
+
+        public const string AudioShiftName = "Сдвиг аудио";
+        public const string AudioShiftDesc = "Изменение временного сдвига (задержки) аудиопотока с сохранением в Lossless-форматы FLAC/WAV.";
+
+        public const string SubtitleShiftName = "Сдвиг субтитров";
+        public const string SubtitleShiftDesc = "Изменение тайминга субтитров (ASS, SRT, VTT, SSA) на заданное количество миллисекунд.";
     }
 
     /// <summary>

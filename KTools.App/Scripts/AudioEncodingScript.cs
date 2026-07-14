@@ -90,7 +90,7 @@ public sealed class AudioEncodingScript : AbstractScript
     /// <summary>
     /// Имя системной Fluent-иконки.
     /// </summary>
-    public override string IconName => "music";
+    public override string IconName => AppConstants.ScriptIcons.AudioEncoding;
 
     /// <summary>
     /// Допустимые расширения файлов (аудио-контейнеры, потоки и видеофайлы).

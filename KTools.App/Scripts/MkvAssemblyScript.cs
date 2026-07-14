@@ -45,7 +45,7 @@ public sealed class MkvAssemblyScript(
     /// <summary>
     /// Название системной Fluent-иконки.
     /// </summary>
-    public override string IconName => "add";
+    public override string IconName => AppConstants.ScriptIcons.MkvAssembly;
 
     /// <summary>
     /// Поддерживаемые расширения медиафайлов для добавления в очередь.

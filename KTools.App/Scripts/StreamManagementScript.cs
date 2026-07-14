@@ -49,7 +49,7 @@ public sealed class StreamManagementScript : AbstractScript
     /// <summary>
     /// Название иконки для UI.
     /// </summary>
-    public override string IconName => "list";
+    public override string IconName => AppConstants.ScriptIcons.StreamManagement;
 
     /// <summary>
     /// Список поддерживаемых форматов файлов (медиа-контейнеры).
