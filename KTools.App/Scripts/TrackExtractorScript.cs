@@ -119,26 +119,38 @@ public sealed class TrackExtractorScript : AbstractScript
             ? Path.GetDirectoryName(filePath) ?? AppContext.BaseDirectory
             : outputPath;
 
+        string inputDir = Path.GetDirectoryName(filePath) ?? "";
+        if (_settingsManager.UseAutoSubfolder && (string.IsNullOrEmpty(outputPath) || baseDir.Equals(inputDir, StringComparison.OrdinalIgnoreCase)))
+        {
+            string subfolderName = _settingsManager.DefaultOutputSubfolder;
+            if (string.IsNullOrWhiteSpace(subfolderName))
+            {
+                subfolderName = "KTools_Result";
+            }
+            baseDir = Path.Combine(inputDir, subfolderName);
+        }
+
         bool createSubfolders = GetSettingValue(settings, "create_subfolders", false);
         if (createSubfolders)
         {
             string subfolder = Path.GetFileNameWithoutExtension(filePath);
             baseDir = Path.Combine(baseDir, subfolder);
-            try
+        }
+
+        try
+        {
+            if (!Directory.Exists(baseDir))
             {
-                if (!Directory.Exists(baseDir))
-                {
-                    Directory.CreateDirectory(baseDir);
-                    _logService.Info($"Создана целевая подпапка: {baseDir}", "TrackExtractorScript");
-                }
+                Directory.CreateDirectory(baseDir);
+                _logService.Info($"Создана целевая папка результатов: {baseDir}", "TrackExtractorScript");
             }
-            catch (Exception ex)
-            {
-                string err = $"❌ Ошибка создания папки '{baseDir}': {ex.Message}";
-                _logService.Exception(ex, err, "TrackExtractorScript");
-                results.Add(err);
-                return results;
-            }
+        }
+        catch (Exception ex)
+        {
+            string err = $"❌ Ошибка создания папки '{baseDir}': {ex.Message}";
+            _logService.Exception(ex, err, "TrackExtractorScript");
+            results.Add(err);
+            return results;
         }
 
         string nameFormat = GetSettingValue(

@@ -852,7 +852,7 @@ public sealed partial class ScriptSettingsControl : UserControl
             rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(32) }); // Галочка
             rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }); // Поле ввода
 
-            bool isPatternField = field.Key == "strip_keywords" || field.Key == "text_patterns";
+            bool isPatternField = field.Key == "text_patterns";
             if (isPatternField)
             {
                 rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto }); // Только часть
@@ -1005,6 +1005,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                 }
             }
         }
+        HandleAutoBitrateChange(settingsGroup);
     }
 
     /// <summary>

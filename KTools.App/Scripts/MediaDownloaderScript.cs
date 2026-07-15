@@ -178,6 +178,7 @@ public sealed class MediaDownloaderScript : AbstractScript
             // Читаем stdout для прогресса и логов
             var outputReaderTask = Task.Run(async () =>
             {
+                int lastRaiseTime = Environment.TickCount;
                 while (!process.StandardOutput.EndOfStream)
                 {
                     string? line = await process.StandardOutput.ReadLineAsync();
@@ -193,8 +194,18 @@ public sealed class MediaDownloaderScript : AbstractScript
                     lock (results)
                     {
                         SavedLogText += line + "\r\n";
+                        if (SavedLogText.Length > 50000)
+                        {
+                            SavedLogText = SavedLogText.Substring(SavedLogText.Length - 40000);
+                        }
                     }
-                    RaiseStateChanged();
+
+                    int now = Environment.TickCount;
+                    if (Math.Abs(now - lastRaiseTime) > 250)
+                    {
+                        lastRaiseTime = now;
+                        RaiseStateChanged();
+                    }
 
                     // Парсим прогресс
                     var match = ProgressRegex.Match(line);
@@ -211,6 +222,7 @@ public sealed class MediaDownloaderScript : AbstractScript
             // Читаем stderr для логирования
             var errorReaderTask = Task.Run(async () =>
             {
+                int lastRaiseTime = Environment.TickCount;
                 while (!process.StandardError.EndOfStream)
                 {
                     string? line = await process.StandardError.ReadLineAsync();
@@ -222,8 +234,18 @@ public sealed class MediaDownloaderScript : AbstractScript
                     lock (results)
                     {
                         SavedLogText += $"[stderr] {line}\r\n";
+                        if (SavedLogText.Length > 50000)
+                        {
+                            SavedLogText = SavedLogText.Substring(SavedLogText.Length - 40000);
+                        }
                     }
-                    RaiseStateChanged();
+
+                    int now = Environment.TickCount;
+                    if (Math.Abs(now - lastRaiseTime) > 250)
+                    {
+                        lastRaiseTime = now;
+                        RaiseStateChanged();
+                    }
 
                     if (IsCancelled)
                     {
@@ -234,6 +256,7 @@ public sealed class MediaDownloaderScript : AbstractScript
             });
 
             await Task.WhenAll(process.WaitForExitAsync(), outputReaderTask, errorReaderTask);
+            RaiseStateChanged();
 
             if (IsCancelled)
             {

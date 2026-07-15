@@ -81,14 +81,16 @@ public sealed class MetadataCleanupScript : AbstractScript
 
         string originalName = Path.GetFileNameWithoutExtension(filePath);
         string ext = Path.GetExtension(filePath);
-        string outputName = $"{originalName}{suffix}{ext}";
+        string baseOutputName = $"{originalName}{suffix}{ext}";
 
         // Определяем директорию сохранения
         string targetDir = string.IsNullOrEmpty(outputPath) 
             ? Path.GetDirectoryName(filePath) ?? AppContext.BaseDirectory 
             : outputPath;
 
-        string outputFilePath = Path.Combine(targetDir, outputName);
+        string targetOutputFilePath = Path.Combine(targetDir, baseOutputName);
+        string outputFilePath = GetSafeOutputPath(filePath, targetOutputFilePath, settings);
+        string outputName = Path.GetFileName(outputFilePath);
 
         // Проверяем, существует ли файл
         bool overwrite = _settingsManager.GetSetting("General", "OverwriteExisting", false);

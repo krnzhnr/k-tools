@@ -363,10 +363,18 @@ public sealed partial class WorkPanel : Page
             LogTextBox.Text = ViewModel.LogText;
             LogTextBox.SelectionStart = LogTextBox.Text.Length;
             LogTextBox.SelectionLength = 0;
+            ScrollLogToBottom();
         }
         else if (e.PropertyName == nameof(WorkPanelViewModel.IsLogExpanded))
         {
             LogExpander.IsExpanded = ViewModel.IsLogExpanded;
+            if (ViewModel.IsLogExpanded)
+            {
+                DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+                {
+                    ScrollLogToBottom();
+                });
+            }
         }
         else if (e.PropertyName == nameof(WorkPanelViewModel.IsProcessing))
         {
@@ -631,5 +639,37 @@ public sealed partial class WorkPanel : Page
         {
             PreviewButton.IsEnabled = true;
         }
+    }
+
+    /// <summary>
+    /// Прокручивает текстовое поле лога к самому концу.
+    /// </summary>
+    private void ScrollLogToBottom()
+    {
+        if (LogTextBox == null) return;
+        var scrollViewer = FindVisualChild<ScrollViewer>(LogTextBox);
+        if (scrollViewer != null)
+        {
+            scrollViewer.ChangeView(null, scrollViewer.ScrollableHeight, null);
+        }
+    }
+
+    private static T? FindVisualChild<T>(DependencyObject parent) where T : DependencyObject
+    {
+        int count = VisualTreeHelper.GetChildrenCount(parent);
+        for (int i = 0; i < count; i++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, i);
+            if (child is T t)
+            {
+                return t;
+            }
+            var result = FindVisualChild<T>(child);
+            if (result != null)
+            {
+                return result;
+            }
+        }
+        return null;
     }
 }
