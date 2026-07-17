@@ -63,14 +63,26 @@ public sealed class FileQueueItem : INotifyPropertyChanged
         FilePath = filePath;
         FileName = Path.GetFileName(filePath);
         
-        try
+        bool isUrl = !string.IsNullOrEmpty(filePath) && (
+            filePath.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || 
+            filePath.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+        );
+
+        if (!isUrl)
         {
-            var info = new FileInfo(filePath);
-            FileSizeStr = $"{info.Length / (1024.0 * 1024.0):F2} МБ";
+            try
+            {
+                var info = new FileInfo(filePath);
+                FileSizeStr = $"{info.Length / (1024.0 * 1024.0):F2} МБ";
+            }
+            catch
+            {
+                FileSizeStr = "Неизвестно";
+            }
         }
-        catch
+        else
         {
-            FileSizeStr = "Неизвестно";
+            FileSizeStr = "Ссылка";
         }
     }
 
