@@ -544,7 +544,40 @@ public sealed class SettingsManager : ISettingsManager
                         modified = true;
                     }
                 }
+
+                // Нормализация настроек: удаление лишних ключей, которых нет в схеме
+                if (_cache.TryGetValue(groupName, out var groupDict))
+                {
+                    var validKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var field in script.SettingsSchema)
+                    {
+                        if (field.Type != SettingType.Subtitle)
+                        {
+                            validKeys.Add(field.Key);
+                        }
+                    }
+
+                    var keysToRemove = new List<string>();
+                    foreach (var key in groupDict.Keys)
+                    {
+                        if (!validKeys.Contains(key))
+                        {
+                            keysToRemove.Add(key);
+                        }
+                    }
+
+                    if (keysToRemove.Count > 0)
+                    {
+                        foreach (var key in keysToRemove)
+                        {
+                            groupDict.Remove(key);
+                            _logService.Info($"[Нормализация] Удален некорректный параметр [{groupName}/{key}]", "SettingsManager");
+                        }
+                        modified = true;
+                    }
+                }
             }
+
 
             if (modified)
             {
