@@ -81,6 +81,7 @@ public abstract class AbstractProcessRunner
         try
         {
             process.Start();
+            ActiveProcessTracker.Register(process);
             Log.Info(
                 $"Запущен дочерний процесс '{binaryName}' (PID: {process.Id})",
                 GetType().Name);
@@ -93,130 +94,137 @@ public abstract class AbstractProcessRunner
             return new ProcessResult(false, -2, failMsg);
         }
 
-        var readOutTask = Task.Run(async () =>
-        {
-            try
-            {
-                var buffer = new char[4096];
-                var sb = new System.Text.StringBuilder();
-                while (true)
-                {
-                    int read = await process.StandardOutput.ReadAsync(buffer, 0, buffer.Length);
-                    if (read <= 0) break;
-
-                    for (int i = 0; i < read; i++)
-                    {
-                        char c = buffer[i];
-                        if (c == '\r' || c == '\n')
-                        {
-                            if (sb.Length > 0)
-                            {
-                                string line = sb.ToString();
-                                onOutputLine?.Invoke(line);
-                                sb.Clear();
-                            }
-                        }
-                        else
-                        {
-                            sb.Append(c);
-                        }
-                    }
-                }
-                if (sb.Length > 0)
-                {
-                    onOutputLine?.Invoke(sb.ToString());
-                }
-            }
-            catch (Exception ex)
-            {
-                Log.Exception(ex,
-                    $"Ошибка обработки стандартного вывода '{binaryName}'",
-                    GetType().Name);
-            }
-        });
-
-        var readErrTask = Task.Run(async () =>
-        {
-            try
-            {
-                var buffer = new char[4096];
-                var sb = new System.Text.StringBuilder();
-                while (true)
-                {
-                    int read = await process.StandardError.ReadAsync(buffer, 0, buffer.Length);
-                    if (read <= 0) break;
-
-                    for (int i = 0; i < read; i++)
-                    {
-                        char c = buffer[i];
-                        if (c == '\r' || c == '\n')
-                        {
-                            if (sb.Length > 0)
-                            {
-                                string line = sb.ToString();
-                                onErrorLine?.Invoke(line);
-                                sb.Clear();
-                            }
-                        }
-                        else
-                        {
-                            sb.Append(c);
-                        }
-                    }
-                }
-                if (sb.Length > 0)
-                {
-                    onErrorLine?.Invoke(sb.ToString());
-                }
-            }
-            catch (Exception ex)
-            {
-                Log.Exception(ex,
-                    $"Ошибка обработки вывода ошибок '{binaryName}'",
-                    GetType().Name);
-            }
-        });
-
         try
         {
-            // Ожидание завершения с поддержкой токена отмены
-            await process.WaitForExitAsync(cancellationToken);
-            // Дожидаемся завершения считывания всех логов
-            await Task.WhenAll(readOutTask, readErrTask);
-        }
-        catch (OperationCanceledException)
-        {
-            Log.Warn(
-                $"Получен внешний сигнал отмены. Принудительное прерывание " +
-                $"процесса '{binaryName}' (PID: {process.Id})...",
-                GetType().Name);
-            try
+            var readOutTask = Task.Run(async () =>
             {
-                if (!process.HasExited)
+                try
                 {
-                    process.Kill(true); // Принудительно завершаем процесс
-                    Log.Info(
-                        $"Процесс '{binaryName}' (PID: {process.Id}) был " +
-                        $"успешно остановлен принудительно",
+                    var buffer = new char[4096];
+                    var sb = new System.Text.StringBuilder();
+                    while (true)
+                    {
+                        int read = await process.StandardOutput.ReadAsync(buffer, 0, buffer.Length);
+                        if (read <= 0) break;
+
+                        for (int i = 0; i < read; i++)
+                        {
+                            char c = buffer[i];
+                            if (c == '\r' || c == '\n')
+                            {
+                                if (sb.Length > 0)
+                                {
+                                    string line = sb.ToString();
+                                    onOutputLine?.Invoke(line);
+                                    sb.Clear();
+                                }
+                            }
+                            else
+                            {
+                                sb.Append(c);
+                            }
+                        }
+                    }
+                    if (sb.Length > 0)
+                    {
+                        onOutputLine?.Invoke(sb.ToString());
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Exception(ex,
+                        $"Ошибка обработки стандартного вывода '{binaryName}'",
                         GetType().Name);
                 }
-            }
-            catch (Exception ex)
+            });
+
+            var readErrTask = Task.Run(async () =>
             {
-                Log.Error(
-                    $"Ошибка при попытке принудительного прерывания " +
-                    $"процесса '{binaryName}': {ex.Message}",
-                    GetType().Name);
+                try
+                {
+                    var buffer = new char[4096];
+                    var sb = new System.Text.StringBuilder();
+                    while (true)
+                    {
+                        int read = await process.StandardError.ReadAsync(buffer, 0, buffer.Length);
+                        if (read <= 0) break;
+
+                        for (int i = 0; i < read; i++)
+                        {
+                            char c = buffer[i];
+                            if (c == '\r' || c == '\n')
+                            {
+                                if (sb.Length > 0)
+                                {
+                                    string line = sb.ToString();
+                                    onErrorLine?.Invoke(line);
+                                    sb.Clear();
+                                }
+                            }
+                            else
+                            {
+                                sb.Append(c);
+                            }
+                        }
+                    }
+                    if (sb.Length > 0)
+                    {
+                        onErrorLine?.Invoke(sb.ToString());
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Exception(ex,
+                        $"Ошибка обработки вывода ошибок '{binaryName}'",
+                        GetType().Name);
+                }
+            });
+
+            try
+            {
+                // Ожидание завершения с поддержкой токена отмены
+                await process.WaitForExitAsync(cancellationToken);
+                // Дожидаемся завершения считывания всех логов
+                await Task.WhenAll(readOutTask, readErrTask);
             }
-            return new ProcessResult(false, -3,
-                "Операция принудительно отменена пользователем");
+            catch (OperationCanceledException)
+            {
+                Log.Warn(
+                    $"Получен внешний сигнал отмены. Принудительное прерывание " +
+                    $"процесса '{binaryName}' (PID: {process.Id})...",
+                    GetType().Name);
+                try
+                {
+                    if (!process.HasExited)
+                    {
+                        process.Kill(true); // Принудительно завершаем процесс
+                        Log.Info(
+                            $"Процесс '{binaryName}' (PID: {process.Id}) был " +
+                            $"успешно остановлен принудительно",
+                            GetType().Name);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Error(
+                        $"Ошибка при попытке принудительного прерывания " +
+                        $"процесса '{binaryName}': {ex.Message}",
+                        GetType().Name);
+                }
+                return new ProcessResult(false, -3,
+                    "Операция принудительно отменена пользователем");
+            }
+
+            int exitCode = process.ExitCode;
+            bool success = exitCode == 0;
+
+            Log.Info($"Внешний процесс '{binaryName}' завершил работу с кодом выхода: {exitCode}", GetType().Name);
+            return new ProcessResult(success, exitCode, success ? "Выполнено успешно" : $"Процесс завершился с ошибкой. Код возврата: {exitCode}");
         }
-
-        int exitCode = process.ExitCode;
-        bool success = exitCode == 0;
-
-        Log.Info($"Внешний процесс '{binaryName}' завершил работу с кодом выхода: {exitCode}", GetType().Name);
-        return new ProcessResult(success, exitCode, success ? "Выполнено успешно" : $"Процесс завершился с ошибкой. Код возврата: {exitCode}");
+        finally
+        {
+            ActiveProcessTracker.Unregister(process);
+        }
     }
 }
 

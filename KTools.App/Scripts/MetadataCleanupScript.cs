@@ -157,56 +157,64 @@ public sealed class MetadataCleanupScript : AbstractScript
         {
             using var process = new Process { StartInfo = startInfo };
             process.Start();
+            ActiveProcessTracker.Register(process);
 
-            // Читаем stderr для логирования и отслеживания завершения (FFmpeg пишет логи в stderr)
-            var errorReaderTask = Task.Run(async () =>
+            try
             {
-                while (!process.StandardError.EndOfStream)
+                // Читаем stderr для логирования и отслеживания завершения (FFmpeg пишет логи в stderr)
+                var errorReaderTask = Task.Run(async () =>
                 {
-                    string? line = await process.StandardError.ReadLineAsync();
-                    if (IsCancelled)
+                    while (!process.StandardError.EndOfStream)
                     {
-                        try { process.Kill(); } catch { }
-                        break;
+                        string? line = await process.StandardError.ReadLineAsync();
+                        if (IsCancelled)
+                        {
+                            try { process.Kill(); } catch { }
+                            break;
+                        }
+                    }
+                });
+
+                await Task.WhenAny(process.WaitForExitAsync(), errorReaderTask);
+
+                if (IsCancelled)
+                {
+                    // При отмене удаляем временный файл
+                    if (File.Exists(outputFilePath))
+                    {
+                        try { File.Delete(outputFilePath); } catch { }
+                    }
+                    results.Add($"⚠ Отменено: {outputName}");
+                    return results;
+                }
+
+                if (process.ExitCode == 0)
+                {
+                    progressCallback(fileIndex, totalCount, $"Успешно завершено!", 100.0);
+                    results.Add($"✅ Очищены метаданные: {outputName}");
+
+                    if (deleteOriginal)
+                    {
+                        try
+                        {
+                            File.Delete(filePath);
+                            results.Add($"🗑 Удален исходник: {Path.GetFileName(filePath)}");
+                        }
+                        catch (Exception ex)
+                        {
+                            results.Add($"⚠ Не удалось удалить исходник: {ex.Message}");
+                        }
                     }
                 }
-            });
-
-            await Task.WhenAny(process.WaitForExitAsync(), errorReaderTask);
-
-            if (IsCancelled)
-            {
-                // При отмене удаляем временный файл
-                if (File.Exists(outputFilePath))
+                else
                 {
-                    try { File.Delete(outputFilePath); } catch { }
+                    CleanupFailedOutputFile(outputFilePath);
+                    results.Add($"❌ Ошибка обработки FFmpeg (Код: {process.ExitCode}) для {Path.GetFileName(filePath)}");
                 }
-                results.Add($"⚠ Отменено: {outputName}");
-                return results;
             }
-
-            if (process.ExitCode == 0)
+            finally
             {
-                progressCallback(fileIndex, totalCount, $"Успешно завершено!", 100.0);
-                results.Add($"✅ Очищены метаданные: {outputName}");
-
-                if (deleteOriginal)
-                {
-                    try
-                    {
-                        File.Delete(filePath);
-                        results.Add($"🗑 Удален исходник: {Path.GetFileName(filePath)}");
-                    }
-                    catch (Exception ex)
-                    {
-                        results.Add($"⚠ Не удалось удалить исходник: {ex.Message}");
-                    }
-                }
-            }
-            else
-            {
-                CleanupFailedOutputFile(outputFilePath);
-                results.Add($"❌ Ошибка обработки FFmpeg (Код: {process.ExitCode}) для {Path.GetFileName(filePath)}");
+                ActiveProcessTracker.Unregister(process);
             }
         }
         catch (Exception ex)

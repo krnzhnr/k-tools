@@ -239,6 +239,11 @@ public abstract class AbstractScript
     public double SavedGlobalProgress { get; set; }
 
     /// <summary>
+    /// Сохраненный пользовательский выходной путь.
+    /// </summary>
+    public string SavedOutputPath { get; set; } = string.Empty;
+
+    /// <summary>
     /// Указывает, выполняется ли скрипт в данный момент.
     /// </summary>
     public bool IsProcessing { get; set; }

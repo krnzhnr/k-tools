@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -54,6 +55,12 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
     /// </summary>
     [ObservableProperty]
     public partial string OutputPath { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Динамический текст плейсхолдера для поля выбора выходного пути.
+    /// </summary>
+    [ObservableProperty]
+    public partial string OutputPathPlaceholder { get; set; } = "По умолчанию (в папку с исходными файлами)";
 
     /// <summary>
     /// Информационный текст текущего статуса выполнения скрипта.
@@ -157,8 +164,18 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
             ActiveScript.StateChanged -= OnScriptStateChanged;
         }
 
+        if (Files != null)
+        {
+            Files.CollectionChanged -= OnFilesCollectionChanged;
+        }
+
         ActiveScript = script;
         Files = files;
+
+        if (Files != null)
+        {
+            Files.CollectionChanged += OnFilesCollectionChanged;
+        }
 
         IsTracksTabVisible = script.UseCustomWidget;
         var fullSchema = script.GetFullSettingsSchema();
@@ -167,6 +184,7 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
 
         RestoreState();
         CheckDependencies();
+        UpdateOutputPathPlaceholder();
 
         ActiveScript.StateChanged += OnScriptStateChanged;
 
@@ -234,6 +252,7 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
         }
 
         LogText = ActiveScript.SavedLogText ?? string.Empty;
+        OutputPath = ActiveScript.SavedOutputPath ?? string.Empty;
 
         StatusText = 
             ActiveScript.SavedStatusText ?? "Ожидание запуска...";
@@ -255,6 +274,7 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
         ActiveScript.SavedLogText = LogText;
         ActiveScript.SavedStatusText = StatusText;
         ActiveScript.SavedGlobalProgress = GlobalProgressValue;
+        ActiveScript.SavedOutputPath = OutputPath;
     }
 
     /// <summary>
@@ -764,6 +784,67 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
                     "WorkPanelViewModel");
             }
         });
+    }
+
+    private void OnFilesCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        UpdateOutputPathPlaceholder();
+    }
+
+    public void UpdateOutputPathPlaceholder()
+    {
+        if (ActiveScript == null)
+        {
+            OutputPathPlaceholder = "По умолчанию (в папку с исходными файлами)";
+            return;
+        }
+
+        string baseDir = "";
+        if (ActiveScript is Scripts.MediaDownloaderScript)
+        {
+            baseDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
+        }
+        else if (Files != null && Files.Count > 0)
+        {
+            try
+            {
+                var firstFile = Files[0].FilePath;
+                if (!string.IsNullOrEmpty(firstFile))
+                {
+                    if (firstFile.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || 
+                        firstFile.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                    {
+                        baseDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
+                    }
+                    else
+                    {
+                        baseDir = Path.GetDirectoryName(Path.GetFullPath(firstFile)) ?? "";
+                    }
+                }
+            }
+            catch
+            {
+                // Игнорируем
+            }
+        }
+
+        if (string.IsNullOrEmpty(baseDir))
+        {
+            OutputPathPlaceholder = "По умолчанию (в папку с исходными файлами)";
+            return;
+        }
+
+        if (_settingsManager.UseAutoSubfolder)
+        {
+            string subfolderName = _settingsManager.DefaultOutputSubfolder;
+            if (string.IsNullOrWhiteSpace(subfolderName))
+            {
+                subfolderName = "KTools_Result";
+            }
+            baseDir = Path.Combine(baseDir, subfolderName);
+        }
+
+        OutputPathPlaceholder = $"По умолчанию: {baseDir}";
     }
 }
 

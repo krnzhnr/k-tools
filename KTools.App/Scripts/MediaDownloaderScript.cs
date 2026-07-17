@@ -174,117 +174,125 @@ public sealed class MediaDownloaderScript : AbstractScript
         {
             using var process = new Process { StartInfo = startInfo };
             process.Start();
+            ActiveProcessTracker.Register(process);
 
-            // Читаем stdout для прогресса и логов
-            var outputReaderTask = Task.Run(async () =>
+            try
             {
-                int lastRaiseTime = Environment.TickCount;
-                while (!process.StandardOutput.EndOfStream)
+                // Читаем stdout для прогресса и логов
+                var outputReaderTask = Task.Run(async () =>
                 {
-                    string? line = await process.StandardOutput.ReadLineAsync();
-                    if (line == null) continue;
-
-                    if (IsCancelled)
+                    int lastRaiseTime = Environment.TickCount;
+                    while (!process.StandardOutput.EndOfStream)
                     {
-                        try { process.Kill(true); } catch { }
-                        break;
-                    }
+                        string? line = await process.StandardOutput.ReadLineAsync();
+                        if (line == null) continue;
 
-                    // Вывод в лог в реальном времени
-                    lock (results)
-                    {
-                        SavedLogText += line + "\r\n";
-                        if (SavedLogText.Length > 50000)
+                        if (IsCancelled)
                         {
-                            SavedLogText = SavedLogText.Substring(SavedLogText.Length - 40000);
+                            try { process.Kill(true); } catch { }
+                            break;
+                        }
+
+                        // Вывод в лог в реальном времени
+                        lock (results)
+                        {
+                            SavedLogText += line + "\r\n";
+                            if (SavedLogText.Length > 50000)
+                            {
+                                SavedLogText = SavedLogText.Substring(SavedLogText.Length - 40000);
+                            }
+                        }
+
+                        int now = Environment.TickCount;
+                        if (Math.Abs(now - lastRaiseTime) > 250)
+                        {
+                            lastRaiseTime = now;
+                            RaiseStateChanged();
+                        }
+
+                        // Парсим прогресс
+                        var match = ProgressRegex.Match(line);
+                        double? percent = null;
+                        if (match.Success && double.TryParse(match.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture, out double p))
+                        {
+                            percent = p;
+                        }
+
+                        progressCallback(fileIndex, totalCount, line, percent);
+                    }
+                });
+
+                // Читаем stderr для логирования
+                var errorReaderTask = Task.Run(async () =>
+                {
+                    int lastRaiseTime = Environment.TickCount;
+                    while (!process.StandardError.EndOfStream)
+                    {
+                        string? line = await process.StandardError.ReadLineAsync();
+                        if (line == null) continue;
+
+                        _logService.Warn($"[yt-dlp stderr] {line}", "MediaDownloaderScript");
+
+                        // Вывод в лог в реальном времени
+                        lock (results)
+                        {
+                            SavedLogText += $"[stderr] {line}\r\n";
+                            if (SavedLogText.Length > 50000)
+                            {
+                                SavedLogText = SavedLogText.Substring(SavedLogText.Length - 40000);
+                            }
+                        }
+
+                        int now = Environment.TickCount;
+                        if (Math.Abs(now - lastRaiseTime) > 250)
+                        {
+                            lastRaiseTime = now;
+                            RaiseStateChanged();
+                        }
+
+                        if (IsCancelled)
+                        {
+                            try { process.Kill(true); } catch { }
+                            break;
+                        }
+                    }
+                });
+
+                await Task.WhenAll(process.WaitForExitAsync(), outputReaderTask, errorReaderTask);
+                RaiseStateChanged();
+
+                if (IsCancelled)
+                {
+                    results.Add($"⚠ Отменено: {displayName}");
+                    return results;
+                }
+
+                if (process.ExitCode == 0)
+                {
+                    if (downloadSubs && cleanSubs)
+                    {
+                        try
+                        {
+                            CleanDownloadedVttFiles(targetDir);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logService.Error($"Ошибка автоматической очистки VTT: {ex.Message}", "MediaDownloaderScript");
                         }
                     }
 
-                    int now = Environment.TickCount;
-                    if (Math.Abs(now - lastRaiseTime) > 250)
-                    {
-                        lastRaiseTime = now;
-                        RaiseStateChanged();
-                    }
-
-                    // Парсим прогресс
-                    var match = ProgressRegex.Match(line);
-                    double? percent = null;
-                    if (match.Success && double.TryParse(match.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture, out double p))
-                    {
-                        percent = p;
-                    }
-
-                    progressCallback(fileIndex, totalCount, line, percent);
+                    progressCallback(fileIndex, totalCount, "Загрузка успешно завершена!", 100.0);
+                    results.Add($"✅ Скачано: {displayName}");
                 }
-            });
-
-            // Читаем stderr для логирования
-            var errorReaderTask = Task.Run(async () =>
-            {
-                int lastRaiseTime = Environment.TickCount;
-                while (!process.StandardError.EndOfStream)
+                else
                 {
-                    string? line = await process.StandardError.ReadLineAsync();
-                    if (line == null) continue;
-
-                    _logService.Warn($"[yt-dlp stderr] {line}", "MediaDownloaderScript");
-
-                    // Вывод в лог в реальном времени
-                    lock (results)
-                    {
-                        SavedLogText += $"[stderr] {line}\r\n";
-                        if (SavedLogText.Length > 50000)
-                        {
-                            SavedLogText = SavedLogText.Substring(SavedLogText.Length - 40000);
-                        }
-                    }
-
-                    int now = Environment.TickCount;
-                    if (Math.Abs(now - lastRaiseTime) > 250)
-                    {
-                        lastRaiseTime = now;
-                        RaiseStateChanged();
-                    }
-
-                    if (IsCancelled)
-                    {
-                        try { process.Kill(true); } catch { }
-                        break;
-                    }
+                    progressCallback(fileIndex, totalCount, "Ошибка", 0.0);
+                    results.Add($"❌ Ошибка загрузки (Код: {process.ExitCode}) для {displayName}");
                 }
-            });
-
-            await Task.WhenAll(process.WaitForExitAsync(), outputReaderTask, errorReaderTask);
-            RaiseStateChanged();
-
-            if (IsCancelled)
-            {
-                results.Add($"⚠ Отменено: {displayName}");
-                return results;
             }
-
-            if (process.ExitCode == 0)
+            finally
             {
-                if (downloadSubs && cleanSubs)
-                {
-                    try
-                    {
-                        CleanDownloadedVttFiles(targetDir);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logService.Error($"Ошибка автоматической очистки VTT: {ex.Message}", "MediaDownloaderScript");
-                    }
-                }
-
-                progressCallback(fileIndex, totalCount, "Загрузка успешно завершена!", 100.0);
-                results.Add($"✅ Скачано: {displayName}");
-            }
-            else
-            {
-                progressCallback(fileIndex, totalCount, "Ошибка", 0.0);
-                results.Add($"❌ Ошибка загрузки (Код: {process.ExitCode}) для {displayName}");
+                ActiveProcessTracker.Unregister(process);
             }
         }
         catch (Exception ex)

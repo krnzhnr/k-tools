@@ -140,7 +140,8 @@
                              Grid.Column="0"
                              Text="{x:Bind ViewModel.OutputPath, Mode=TwoWay}"
                              IsEnabled="{x:Bind ViewModel.IsProcessing, Mode=OneWay, Converter={StaticResource InverseBoolConverter}}"
-                             PlaceholderText="По умолчанию (в папку с исходными файлами)" 
+                             PlaceholderText="{x:Bind ViewModel.OutputPathPlaceholder, Mode=OneWay}" 
+                             IsSpellCheckEnabled="False"
                              VerticalAlignment="Center"
                              Height="36"
                              Margin="0,0,8,0" />

@@ -662,10 +662,19 @@ public sealed partial class FileListControl : UserControl
 
             using var process = new Process { StartInfo = startInfo };
             process.Start();
+            ActiveProcessTracker.Register(process);
 
-            // Читаем stdout асинхронно
-            string stdout = await process.StandardOutput.ReadToEndAsync();
-            await process.WaitForExitAsync();
+            string stdout;
+            try
+            {
+                // Читаем stdout асинхронно
+                stdout = await process.StandardOutput.ReadToEndAsync();
+                await process.WaitForExitAsync();
+            }
+            finally
+            {
+                ActiveProcessTracker.Unregister(process);
+            }
 
             if (process.ExitCode == 0 && !string.IsNullOrWhiteSpace(stdout))
             {
