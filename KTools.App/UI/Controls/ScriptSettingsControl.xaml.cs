@@ -199,11 +199,14 @@ public sealed partial class ScriptSettingsControl : UserControl
 
         UpdateVisibility(settingsGroup);
 
-        bool isLossless = _settingsManager.GetSetting(settingsGroup, "lossless", false);
-        HandleLosslessChange(settingsGroup, isLossless);
+        if (script is Scripts.VideoEncodingScript)
+        {
+            bool isLossless = _settingsManager.GetSetting(settingsGroup, "lossless", false);
+            HandleLosslessChange(settingsGroup, isLossless);
 
-        string rcMode = _settingsManager.GetSetting(settingsGroup, "nvenc_rc", "vbr_hq");
-        HandleRcChange(settingsGroup, rcMode);
+            string rcMode = _settingsManager.GetSetting(settingsGroup, "nvenc_rc", "vbr_hq");
+            HandleRcChange(settingsGroup, rcMode);
+        }
     }
 
     /// <summary>

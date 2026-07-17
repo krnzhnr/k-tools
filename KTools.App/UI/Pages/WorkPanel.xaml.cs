@@ -610,6 +610,13 @@ public sealed partial class WorkPanel : Page
             subScript.FilterState.StripFormatting = settingsManager.GetSetting(settingsGroup, "strip_formatting", true);
             subScript.FilterState.StripCaps = settingsManager.GetSetting(settingsGroup, "strip_caps", false);
 
+            subScript.FilterState.TextPatterns.Clear();
+            var rawPatterns = settingsManager.GetSetting<List<Dictionary<string, object>>?>(settingsGroup, "text_patterns", null);
+            if (rawPatterns != null)
+            {
+                subScript.FilterState.TextPatterns.AddRange(rawPatterns);
+            }
+
             var viewModel = new SubtitlePreviewViewModel(subScript.FilterState, settingsGroup);
             await viewModel.LoadDataAsync(filePaths);
 
