@@ -52,4 +52,92 @@ public class TrackExtractorScriptTests
         _script.Category.Should().Be("Контейнеры");
         _script.IconName.Should().Be(AppConstants.ScriptIcons.TrackExtractor);
     }
+
+    /// <summary>
+    /// Проверяет форматирование имени выходного файла с различными плейсхолдерами.
+    /// </summary>
+    [TestMethod]
+    public void FormatFilename_VariousPlaceholders_ShouldGenerateExpectedNames()
+    {
+        var track = new MediaTrack
+        {
+            TrackId = 2,
+            Language = "rus",
+            Name = "DUB",
+            Codec = "AC3",
+            TrackType = "audio"
+        };
+
+        var methodInfo = typeof(TrackExtractorScript).GetMethod(
+            "FormatFilename", 
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        
+        methodInfo.Should().NotBeNull();
+
+        // 1. Стандартный шаблон {original}_{lang}_{id}
+        var result1 = methodInfo!.Invoke(_script, new object[] { "Movie", track, ".ac3", "{original}_{lang}_{id}", "" }) as string;
+        result1.Should().Be("Movie_rus_track02.ac3");
+
+        // 2. Шаблон со всеми плейсхолдерами {original}_{lang}_{id}_{title}_{codec}
+        var result2 = methodInfo.Invoke(_script, new object[] { "Movie", track, ".ac3", "{original}_{lang}_{id}_{title}_{codec}", "" }) as string;
+        result2.Should().Be("Movie_rus_track02_DUB_ac3.ac3");
+
+        // 3. Шаблон с пустыми плейсхолдерами (например, если нет языка или названия)
+        var trackEmpty = new MediaTrack
+        {
+            TrackId = 3,
+            Language = "und",
+            Name = "",
+            Codec = "srt",
+            TrackType = "subtitles"
+        };
+        var result3 = methodInfo.Invoke(_script, new object[] { "Movie", trackEmpty, ".srt", "{original}_{lang}_{id}_{title}_{codec}", "" }) as string;
+        result3.Should().Be("Movie_track03_srt.srt");
+    }
+
+    /// <summary>
+    /// Проверяет дополнительные сценарии форматирования имени, такие как дефолтный шаблон,
+    /// независимость от регистра тегов и сложные разделители.
+    /// </summary>
+    [TestMethod]
+    public void FormatFilename_AdditionalScenarios_ShouldGenerateExpectedNames()
+    {
+        var track = new MediaTrack
+        {
+            TrackId = 5,
+            Language = "eng",
+            Name = "Commentary",
+            Codec = "AAC",
+            TrackType = "audio"
+        };
+
+        var methodInfo = typeof(TrackExtractorScript).GetMethod(
+            "FormatFilename", 
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        methodInfo.Should().NotBeNull();
+
+        // 1. Дефолтный шаблон {original}
+        var result1 = methodInfo!.Invoke(_script, new object[] { "Avatar", track, ".mka", "{original}", "" }) as string;
+        result1.Should().Be("Avatar.mka");
+
+        // 2. Регистронезависимость тегов
+        var result2 = methodInfo.Invoke(_script, new object[] { "Avatar", track, ".mka", "{FiLe_NaMe}_{TRACK_ID}_{TRACK_CODEC}", "" }) as string;
+        result2.Should().Be("Avatar_track05_aac.mka");
+
+        // 3. Сложные разделители и пустые плейсхолдеры
+        var trackEmpty = new MediaTrack
+        {
+            TrackId = 1,
+            Language = "und",
+            Name = "",
+            Codec = "SRT",
+            TrackType = "subtitles"
+        };
+        var result3 = methodInfo.Invoke(_script, new object[] { "Avatar", trackEmpty, ".srt", "{original}--{lang}__{id}---{codec}", "" }) as string;
+        result3.Should().Be("Avatar-track01-srt.srt");
+
+        // 4. Очистка пустых скобок вокруг отсутствующих значений плейсхолдеров
+        var result4 = methodInfo.Invoke(_script, new object[] { "Movie", trackEmpty, ".srt", "{original} [{lang}] [{id}] [{title}] [{codec}]", "" }) as string;
+        result4.Should().Be("Movie [track01] [srt].srt");
+    }
 }

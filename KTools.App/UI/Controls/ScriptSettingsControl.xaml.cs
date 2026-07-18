@@ -297,6 +297,15 @@ public sealed partial class ScriptSettingsControl : UserControl
                 continue;
             }
 
+            if (field.Key == "name_format")
+            {
+                var nameFormatContainer = CreateNameFormatDesignerContainer(settingsGroup, field);
+                cardContentStack.Children.Add(nameFormatContainer);
+                _generatedElements.Add((field, nameFormatContainer));
+                groupVisual.Elements.Add(nameFormatContainer);
+                continue;
+            }
+
             if (field.Type == SettingType.KeywordList)
             {
                 var keywordListContainer = CreateKeywordListContainer(settingsGroup, field);
@@ -944,6 +953,231 @@ public sealed partial class ScriptSettingsControl : UserControl
         };
 
         return mainStack;
+    }
+
+    /// <summary>
+    /// Создает интерактивный конструктор шаблонов имен файлов для скрипта разборки контейнера.
+    /// Предоставляет текстовое поле, набор быстрых кнопок-тегов и панель живого предпросмотра.
+    /// </summary>
+    private FrameworkElement CreateNameFormatDesignerContainer(string settingsGroup, SettingField field)
+    {
+        var mainStack = new StackPanel
+        {
+            Spacing = 10,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            Margin = new Thickness(0, 4, 0, 12)
+        };
+
+        // Заголовок настройки и комментарий
+        var labelStack = new StackPanel { Spacing = 2 };
+        labelStack.Children.Add(new TextBlock
+        {
+            Text = field.Label,
+            FontSize = 14,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            Foreground = (Brush)Application.Current.Resources["TextFillColorPrimaryBrush"]
+        });
+
+        if (!string.IsNullOrEmpty(field.Comment))
+        {
+            labelStack.Children.Add(new TextBlock
+            {
+                Text = field.Comment,
+                FontSize = 12,
+                Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
+                TextWrapping = TextWrapping.Wrap
+            });
+        }
+        mainStack.Children.Add(labelStack);
+
+        // Поле ввода шаблона
+        var textBox = new TextBox
+        {
+            Text = _settingsManager.GetSetting(
+                settingsGroup,
+                field.Key,
+                field.DefaultValue?.ToString() ?? string.Empty),
+            PlaceholderText = "Введите шаблон (например, {original}_{lang}_{id})",
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            Margin = new Thickness(0, 2, 0, 2)
+        };
+        mainStack.Children.Add(textBox);
+
+        // Сетка/панель быстрых тегов (кнопок-чипсов)
+        var chipsLabel = new TextBlock
+        {
+            Text = "Доступные теги (нажмите для добавления):",
+            FontSize = 12,
+            FontWeight = Microsoft.UI.Text.FontWeights.Medium,
+            Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"]
+        };
+        mainStack.Children.Add(chipsLabel);
+
+        var chipsPanel = new VariableSizedWrapGrid
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            ItemWidth = 140,
+            ItemHeight = 36,
+            Margin = new Thickness(0, 2, 0, 2)
+        };
+
+        var tags = new[]
+        {
+            (Tag: "{original}", Label: "Имя файла"),
+            (Tag: "{lang}", Label: "Язык"),
+            (Tag: "{id}", Label: "ID дорожки"),
+            (Tag: "{title}", Label: "Заголовок"),
+            (Tag: "{codec}", Label: "Кодек")
+        };
+
+        foreach (var (tag, tagLabel) in tags)
+        {
+            var btn = new Button
+            {
+                Content = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Spacing = 6,
+                    Children = {
+                        new FontIcon { Glyph = "\uE710", FontSize = 10 },
+                        new TextBlock { Text = tagLabel, FontSize = 12 }
+                    }
+                },
+                Style = (Style)Application.Current.Resources["DefaultButtonStyle"],
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Stretch,
+                Margin = new Thickness(0, 0, 4, 4),
+                CornerRadius = new CornerRadius(4)
+            };
+
+            btn.Click += (s, e) =>
+            {
+                int selectionStart = textBox.SelectionStart;
+                string currentText = textBox.Text;
+                string newText = currentText.Insert(selectionStart, tag);
+                textBox.Text = newText;
+                textBox.SelectionStart = selectionStart + tag.Length;
+                textBox.Focus(FocusState.Programmatic);
+            };
+
+            chipsPanel.Children.Add(btn);
+        }
+        mainStack.Children.Add(chipsPanel);
+
+        // Панель живого предпросмотра
+        var previewBorder = new Border
+        {
+            Background = (Brush)Application.Current.Resources["CardBackgroundFillColorSecondaryBrush"],
+            BorderBrush = (Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(4),
+            Padding = new Thickness(12, 8, 12, 8),
+            Margin = new Thickness(0, 4, 0, 4)
+        };
+
+        var previewStack = new StackPanel { Spacing = 2 };
+        previewStack.Children.Add(new TextBlock
+        {
+            Text = "Предпросмотр имени файла:",
+            FontSize = 12,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"]
+        });
+
+        var previewTextBlock = new TextBlock
+        {
+            Text = string.Empty,
+            FontSize = 13,
+            FontFamily = new FontFamily("Consolas"),
+            Foreground = (Brush)Application.Current.Resources["AccentTextFillColorPrimaryBrush"]
+        };
+        previewStack.Children.Add(previewTextBlock);
+        previewBorder.Child = previewStack;
+        mainStack.Children.Add(previewBorder);
+
+        // Функция обновления предпросмотра
+        void UpdateLocalPreview()
+        {
+            string pattern = textBox.Text;
+            
+            // Тестовые данные для отображения примера
+            string originalStem = "Overlord - 01";
+            string trackIdStr = "track03";
+            string lang = "rus";
+            string trackTitle = "TrackTitle";
+            string trackCodec = "dts";
+
+            // Симулируем логику FormatFilename
+            string name = pattern;
+            name = ReplacePlaceholderLocal(name, new[] { "{original}", "{original_name}", "{file_name}" }, originalStem);
+            name = ReplacePlaceholderLocal(name, new[] { "{id}", "{track_id}" }, trackIdStr);
+            name = ReplacePlaceholderLocal(name, new[] { "{title}", "{track_title}", "{name}" }, trackTitle);
+            name = ReplacePlaceholderLocal(name, new[] { "{codec}", "{track_codec}" }, trackCodec);
+            name = ReplacePlaceholderLocal(name, new[] { "{lang}", "{language}" }, lang);
+
+            name = CleanSeparatorsLocal(name);
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                name = $"{originalStem}_{trackIdStr}";
+            }
+
+            previewTextBlock.Text = $"{name}.{trackCodec}";
+        }
+
+        // Подписываемся на события изменения текста
+        textBox.TextChanged += (s, e) =>
+        {
+            _settingsManager.SetSetting(settingsGroup, field.Key, textBox.Text);
+            UpdateLocalPreview();
+        };
+
+        // Первоначальное обновление предпросмотра
+        UpdateLocalPreview();
+
+        return mainStack;
+    }
+
+    private static string ReplacePlaceholderLocal(string template, string[] placeholders, string value)
+    {
+        foreach (var placeholder in placeholders)
+        {
+            if (template.Contains(placeholder, StringComparison.OrdinalIgnoreCase))
+            {
+                if (!string.IsNullOrEmpty(value))
+                {
+                    template = System.Text.RegularExpressions.Regex.Replace(template, System.Text.RegularExpressions.Regex.Escape(placeholder), value, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                }
+                else
+                {
+                    template = System.Text.RegularExpressions.Regex.Replace(template, "_" + System.Text.RegularExpressions.Regex.Escape(placeholder), "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                    template = System.Text.RegularExpressions.Regex.Replace(template, System.Text.RegularExpressions.Regex.Escape(placeholder) + "_", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                    template = System.Text.RegularExpressions.Regex.Replace(template, "-" + System.Text.RegularExpressions.Regex.Escape(placeholder), "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                    template = System.Text.RegularExpressions.Regex.Replace(template, System.Text.RegularExpressions.Regex.Escape(placeholder) + "-", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                    template = System.Text.RegularExpressions.Regex.Replace(template, System.Text.RegularExpressions.Regex.Escape(placeholder), "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                }
+            }
+        }
+        return template;
+    }
+
+    private static string CleanSeparatorsLocal(string name)
+    {
+        if (string.IsNullOrEmpty(name)) return string.Empty;
+        
+        // 1. Очистка пустых скобок, оставшихся от незаполненных плейсхолдеров
+        name = System.Text.RegularExpressions.Regex.Replace(name, @"\[\s*\]", "");
+        name = System.Text.RegularExpressions.Regex.Replace(name, @"\(\s*\)", "");
+        name = System.Text.RegularExpressions.Regex.Replace(name, @"\{\s*\}", "");
+
+        // 2. Схлопывание дублирующихся разделителей и пробелов
+        name = System.Text.RegularExpressions.Regex.Replace(name, @"_+", "_");
+        name = System.Text.RegularExpressions.Regex.Replace(name, @"-+", "-");
+        name = System.Text.RegularExpressions.Regex.Replace(name, @"\s+", " ");
+        name = System.Text.RegularExpressions.Regex.Replace(name, @"_-", "-");
+        name = System.Text.RegularExpressions.Regex.Replace(name, @"-_", "-");
+        
+        return name.Trim('_', '-', ' ');
     }
 
     /// <summary>

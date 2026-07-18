@@ -45,15 +45,10 @@ public sealed class TrackExtractorScript : AbstractScript
         new SettingField(
             "name_format",
             "Шаблон имени файла",
-            SettingType.Combo,
-            "{original}_{lang}_{id}",
+            SettingType.Text,
+            "{original}",
             "Именование",
-            options: new List<string>
-            {
-                "{original}_{lang}_{id}",
-                "{original}_{id}_{lang}",
-                "{original}_{lang}"
-            }
+            comment: "Шаблон имени для извлеченных файлов. Доступные теги: {original} - имя файла, {lang} - язык, {id} - ID дорожки, {title} - заголовок, {codec} - кодек."
         ),
         new SettingField(
             "create_subfolders",
@@ -453,6 +448,7 @@ public sealed class TrackExtractorScript : AbstractScript
 
     /// <summary>
     /// Форматирует имя выходного файла в соответствии с выбранным шаблоном навигации.
+    /// Поддерживает плейсхолдеры: {original}, {lang}, {id}, {title}, {codec} и их синонимы.
     /// </summary>
     private string FormatFilename(
         string originalStem,
@@ -469,25 +465,83 @@ public sealed class TrackExtractorScript : AbstractScript
         }
 
         string trackIdStr = $"track{track.TrackId:D2}";
-        string name = nameFormat.Replace("{original}", originalStem);
-        name = name.Replace("{id}", trackIdStr);
+        string trackTitle = SanitizeName(track.Name);
+        string trackCodec = SanitizeName(track.Codec).ToLowerInvariant();
 
-        if (name.Contains("{lang}"))
+        string name = nameFormat;
+
+        // 1. Подстановка имени оригинального файла
+        name = ReplacePlaceholder(name, new[] { "{original}", "{original_name}", "{file_name}" }, originalStem);
+
+        // 2. Подстановка ID дорожки
+        name = ReplacePlaceholder(name, new[] { "{id}", "{track_id}" }, trackIdStr);
+
+        // 3. Подстановка названия/заголовка дорожки
+        name = ReplacePlaceholder(name, new[] { "{title}", "{track_title}", "{name}" }, trackTitle);
+
+        // 4. Подстановка кодека
+        name = ReplacePlaceholder(name, new[] { "{codec}", "{track_codec}" }, trackCodec);
+
+        // 5. Подстановка языка
+        name = ReplacePlaceholder(name, new[] { "{lang}", "{language}" }, lang);
+
+        // Очистка от дублирующихся или висящих разделителей
+        name = CleanSeparators(name);
+
+        if (string.IsNullOrWhiteSpace(name))
         {
-            if (!string.IsNullOrEmpty(lang))
-            {
-                name = name.Replace("{lang}", lang);
-            }
-            else
-            {
-                name = name.Replace("_{lang}", "")
-                           .Replace("{lang}_", "")
-                           .Replace("{lang}", "");
-            }
+            name = $"{originalStem}_{trackIdStr}";
         }
 
-        name = name.Replace("__", "_").Trim('_');
         return $"{name}{ext}";
+    }
+
+    /// <summary>
+    /// Безопасно заменяет плейсхолдеры на значения, убирая лишние разделители при отсутствии значения.
+    /// </summary>
+    private static string ReplacePlaceholder(string template, string[] placeholders, string value)
+    {
+        foreach (var placeholder in placeholders)
+        {
+            if (template.Contains(placeholder, StringComparison.OrdinalIgnoreCase))
+            {
+                if (!string.IsNullOrEmpty(value))
+                {
+                    template = Regex.Replace(template, Regex.Escape(placeholder), value, RegexOptions.IgnoreCase);
+                }
+                else
+                {
+                    template = Regex.Replace(template, "_" + Regex.Escape(placeholder), "", RegexOptions.IgnoreCase);
+                    template = Regex.Replace(template, Regex.Escape(placeholder) + "_", "", RegexOptions.IgnoreCase);
+                    template = Regex.Replace(template, "-" + Regex.Escape(placeholder), "", RegexOptions.IgnoreCase);
+                    template = Regex.Replace(template, Regex.Escape(placeholder) + "-", "", RegexOptions.IgnoreCase);
+                    template = Regex.Replace(template, Regex.Escape(placeholder), "", RegexOptions.IgnoreCase);
+                }
+            }
+        }
+        return template;
+    }
+
+    /// <summary>
+    /// Очищает имя от лишних разделителей.
+    /// </summary>
+    private static string CleanSeparators(string name)
+    {
+        if (string.IsNullOrEmpty(name)) return string.Empty;
+        
+        // 1. Очистка пустых скобок, оставшихся от незаполненных плейсхолдеров
+        name = Regex.Replace(name, @"\[\s*\]", "");
+        name = Regex.Replace(name, @"\(\s*\)", "");
+        name = Regex.Replace(name, @"\{\s*\}", "");
+
+        // 2. Схлопывание дублирующихся разделителей и пробелов
+        name = Regex.Replace(name, @"_+", "_");
+        name = Regex.Replace(name, @"-+", "-");
+        name = Regex.Replace(name, @"\s+", " ");
+        name = Regex.Replace(name, @"_-", "-");
+        name = Regex.Replace(name, @"-_", "-");
+        
+        return name.Trim('_', '-', ' ');
     }
 
     /// <summary>
