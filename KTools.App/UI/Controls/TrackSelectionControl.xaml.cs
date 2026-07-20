@@ -345,50 +345,12 @@ public sealed partial class TrackSelectionControl : UserControl
         {
             try
             {
-                // 1. Сохраняем текущий выбор пользователя перед очисткой дерева
+                // 1. Восстанавливаем выбор из текущего активного скрипта для предотвращения утечки выбора между скриптами
                 var savedTracks = new Dictionary<string, List<int>>();
                 var savedAttachments = new Dictionary<string, List<int>>();
 
-                if (TracksTreeView.RootNodes.Count > 0)
+                if (ActiveScript != null)
                 {
-                    var selectedNodes = TracksTreeView.SelectedNodes;
-                    foreach (var fileNode in TracksTreeView.RootNodes)
-                    {
-                        foreach (var trackNode in fileNode.Children)
-                        {
-                            if (selectedNodes.Contains(trackNode) && 
-                                trackNode.Content is TrackNodeItem item)
-                            {
-                                if (item.TrackId.HasValue)
-                                {
-                                    if (!savedTracks.TryGetValue(
-                                        item.FilePath, 
-                                        out var list))
-                                    {
-                                        list = new List<int>();
-                                        savedTracks[item.FilePath] = list;
-                                    }
-                                    list.Add(item.TrackId.Value);
-                                }
-                                else if (item.AttachmentId.HasValue && 
-                                         item.IsFont)
-                                {
-                                    if (!savedAttachments.TryGetValue(
-                                        item.FilePath, 
-                                        out var list))
-                                    {
-                                        list = new List<int>();
-                                        savedAttachments[item.FilePath] = list;
-                                    }
-                                    list.Add(item.AttachmentId.Value);
-                                }
-                            }
-                        }
-                    }
-                }
-                else if (ActiveScript != null)
-                {
-                    // Если дерево пустое, восстанавливаем выбор из скрипта
                     foreach (var kvp in ActiveScript.SelectedTrackIds)
                     {
                         savedTracks[kvp.Key] = new List<int>(kvp.Value);
