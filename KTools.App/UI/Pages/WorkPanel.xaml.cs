@@ -44,6 +44,7 @@ public sealed partial class WorkPanel : Page
     private Expander LogExpander = null!;
     private TextBox LogTextBox = null!;
     private ScriptSettingsControl ScriptSettings = null!;
+    private bool _isLandscape;
 
     /// <summary>
     /// Предоставляет доступ к модели представления рабочей панели.
@@ -60,6 +61,7 @@ public sealed partial class WorkPanel : Page
         InitializeTabs();
         InitializeComponent();
 
+        SizeChanged += WorkPanel_SizeChanged;
         Unloaded += WorkPanel_Unloaded;
     }
 
@@ -286,19 +288,7 @@ public sealed partial class WorkPanel : Page
                 PreviewButton.Visibility = Visibility.Collapsed;
             }
 
-            // Динамически управляем вкладкой "Настройки"
-            var schemaList = _script.GetFullSettingsSchema();
-            if (schemaList == null || schemaList.Count == 0)
-            {
-                nvSample.MenuItems.Remove(SamplePage2Item);
-            }
-            else
-            {
-                if (!nvSample.MenuItems.Contains(SamplePage2Item))
-                {
-                    nvSample.MenuItems.Add(SamplePage2Item);
-                }
-            }
+
 
             // Настройка имени первой вкладки и отображения URL-панели
             SamplePage1Item.Content = _script.FirstTabHeader;
@@ -342,6 +332,10 @@ public sealed partial class WorkPanel : Page
 
             // По умолчанию выбираем первую вкладку «Файлы» (или «Загрузка»)
             nvSample.SelectedItem = SamplePage1Item;
+
+            // Применяем актуальную ориентацию разметки для нового скрипта при его загрузке
+            _isLandscape = ActualWidth > ActualHeight;
+            ApplyLayoutOrientation();
 
             // Инициализируем состояние кнопки запуска/отмены в соответствии с текущим состоянием обработки
             UpdateActionButtonState(ViewModel.IsProcessing);
@@ -580,6 +574,7 @@ public sealed partial class WorkPanel : Page
     /// </summary>
     private void WorkPanel_Unloaded(object sender, RoutedEventArgs e)
     {
+        SizeChanged -= WorkPanel_SizeChanged;
         ViewModel.PropertyChanged -= OnViewModelPropertyChanged;
     }
 
@@ -645,6 +640,128 @@ public sealed partial class WorkPanel : Page
         finally
         {
             PreviewButton.IsEnabled = true;
+        }
+    }
+
+    /// <summary>
+    /// Обработчик события изменения размера страницы для адаптации верстки под ориентацию экрана.
+    /// </summary>
+    private void WorkPanel_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (_script == null) return;
+
+        bool newIsLandscape = e.NewSize.Width > e.NewSize.Height;
+
+        if (newIsLandscape != _isLandscape)
+        {
+            _isLandscape = newIsLandscape;
+            ApplyLayoutOrientation();
+        }
+    }
+
+    /// <summary>
+    /// Перестраивает разметку интерфейса в зависимости от ориентации окна (альбомная/портретная).
+    /// </summary>
+    private void ApplyLayoutOrientation()
+    {
+        if (_script == null) return;
+
+        var schemaList = _script.GetFullSettingsSchema();
+        bool hasSettings = schemaList != null && schemaList.Count > 0;
+
+        if (_isLandscape && hasSettings)
+        {
+            // --- Альбомная ориентация (настройки прикреплены справа) ---
+            
+            // 1. Убираем вкладку "Настройки" из меню NavigationView
+            if (nvSample.MenuItems.Contains(SamplePage2Item))
+            {
+                nvSample.MenuItems.Remove(SamplePage2Item);
+            }
+
+            // 2. Если настройки были выбраны на левой панели, переключаем на "Файлы"
+            if (nvSample.SelectedItem == (object)SamplePage2Item)
+            {
+                nvSample.SelectedItem = SamplePage1Item;
+            }
+
+            // 3. Вынимаем настройки из левого фрейма и переносим в правый фрейм
+            if (contentFrame.Content == (object)_settingsControl)
+            {
+                contentFrame.Content = null;
+                nvSample.SelectedItem = SamplePage1Item;
+            }
+            
+            rightSettingsFrame.Content = _settingsControl;
+
+            // 4. Показываем разделитель GridSplitter и правую панель
+            VerticalSeparator.Visibility = Visibility.Visible;
+            RightAreaGrid.Visibility = Visibility.Visible;
+
+            // 5. Устанавливаем ограничения и пропорции колонок: минимальная ширина левой области 400, правой — 300
+            LeftColumn.MinWidth = 400;
+            RightColumn.MinWidth = 300;
+            LeftColumn.Width = new GridLength(8, GridUnitType.Star);
+            SeparatorColumn.Width = GridLength.Auto;
+
+            double savedWidth = _settingsManager.GetSetting("Window", "RightPanelWidth", -1.0);
+            if (savedWidth >= 300)
+            {
+                RightColumn.Width = new GridLength(savedWidth, GridUnitType.Pixel);
+            }
+            else
+            {
+                RightColumn.Width = new GridLength(2, GridUnitType.Star);
+            }
+        }
+        else
+        {
+            // --- Портретная ориентация (настройки во вкладках) ---
+
+            // 1. Убираем настройки из правой панели
+            rightSettingsFrame.Content = null;
+
+            // 2. Скрываем разделитель GridSplitter и правую панель
+            VerticalSeparator.Visibility = Visibility.Collapsed;
+            RightAreaGrid.Visibility = Visibility.Collapsed;
+
+            // 3. Сбрасываем ограничения и ширину колонок разделителя и правой панели в 0
+            LeftColumn.MinWidth = 0;
+            RightColumn.MinWidth = 0;
+            LeftColumn.Width = new GridLength(1, GridUnitType.Star);
+            SeparatorColumn.Width = new GridLength(0);
+            RightColumn.Width = new GridLength(0);
+
+            // 4. Возвращаем вкладку "Настройки" в меню NavigationView
+            if (hasSettings)
+            {
+                if (!nvSample.MenuItems.Contains(SamplePage2Item))
+                {
+                    nvSample.MenuItems.Add(SamplePage2Item);
+                }
+            }
+            else
+            {
+                if (nvSample.MenuItems.Contains(SamplePage2Item))
+                {
+                    nvSample.MenuItems.Remove(SamplePage2Item);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Обработчик изменения размеров правой панели настроек. Сохраняет пользовательскую ширину в файл настроек.
+    /// </summary>
+    private void RightAreaGrid_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (_script == null) return;
+
+        // Сохраняем ширину только в альбомном режиме, когда правая панель действительно отображается
+        if (_isLandscape && RightAreaGrid.Visibility == Visibility.Visible && e.NewSize.Width > 0)
+        {
+            _settingsManager.SetSetting("Window", "RightPanelWidth", e.NewSize.Width);
+            _settingsManager.SaveSettings();
         }
     }
 

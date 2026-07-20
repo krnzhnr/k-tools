@@ -170,12 +170,16 @@ public sealed partial class MainWindow : Window
             IntPtr windowHandle = WinRT.Interop.WindowNative.GetWindowHandle(this);
             uint dpi = GetDpiForWindow(windowHandle);
             float scaleFactor = dpi / 96.0f;
-            int scaledWidth = (int)Math.Round(800 * scaleFactor);
-            int scaledHeight = (int)Math.Round(960 * scaleFactor);
+
+            double savedWidth = _settingsManager.GetSetting("Window", "Width", 800.0);
+            double savedHeight = _settingsManager.GetSetting("Window", "Height", 960.0);
+
+            int scaledWidth = (int)Math.Round(savedWidth * scaleFactor);
+            int scaledHeight = (int)Math.Round(savedHeight * scaleFactor);
 
             _logService.Info(
                 $"Вычисление размеров окна с учетом DPI. Текущее значение DPI: {dpi}, коэффициент масштабирования: {scaleFactor:F2}. " +
-                $"Базовые размеры: 800x960, итоговые физические размеры для изменения: {scaledWidth}x{scaledHeight} пикселей.",
+                $"Логические размеры: {savedWidth:F1}x{savedHeight:F1}, итоговые физические размеры для изменения: {scaledWidth}x{scaledHeight} пикселей.",
                 "MainWindow");
 
             AppWindow.Resize(new SizeInt32(scaledWidth, scaledHeight));
@@ -245,6 +249,30 @@ public sealed partial class MainWindow : Window
                     "Главное окно закрыто пользователем. Запуск процедуры полного завершения процесса приложения.", 
                     "MainWindow");
                 
+                try
+                {
+                    // Сохраняем размеры окна при закрытии
+                    var size = AppWindow.Size;
+                    IntPtr hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+                    uint dpi = GetDpiForWindow(hwnd);
+                    float scaleFactor = dpi / 96.0f;
+
+                    double logicalWidth = size.Width / scaleFactor;
+                    double logicalHeight = size.Height / scaleFactor;
+
+                    _settingsManager.SetSetting("Window", "Width", logicalWidth);
+                    _settingsManager.SetSetting("Window", "Height", logicalHeight);
+                    _settingsManager.SaveSettings();
+
+                    _logService.Info(
+                        $"Сохранение размеров окна при закрытии завершено. Физические: {size.Width}x{size.Height}, Логические: {logicalWidth:F1}x{logicalHeight:F1}.",
+                        "MainWindow");
+                }
+                catch (Exception saveEx)
+                {
+                    _logService.Error($"Не удалось сохранить размеры окна при закрытии: {saveEx.Message}", "MainWindow");
+                }
+
                 try
                 {
                     // Гарантированно убиваем все активные дочерние процессы (ffmpeg, yt-dlp и др.)

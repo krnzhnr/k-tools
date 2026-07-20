@@ -66,6 +66,7 @@
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
     <PackageReference Include="CommunityToolkit.WinUI.Controls.Primitives" Version="8.2.251219" />
     <PackageReference Include="CommunityToolkit.WinUI.Controls.SettingsControls" Version="8.2.251219" />
+    <PackageReference Include="CommunityToolkit.WinUI.Controls.Sizers" Version="8.2.251219" />
     <PackageReference Include="CommunityToolkit.WinUI.Extensions" Version="8.2.251219" />
     <PackageReference Include="Fare" Version="2.2.2" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.0" />

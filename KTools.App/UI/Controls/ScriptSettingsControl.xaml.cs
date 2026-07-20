@@ -324,7 +324,8 @@ public sealed partial class ScriptSettingsControl : UserControl
                     Text = field.Label,
                     FontSize = 14,
                     Foreground = (Brush)Application.Current.Resources[
-                        "TextFillColorPrimaryBrush"]
+                        "TextFillColorPrimaryBrush"],
+                    TextWrapping = TextWrapping.Wrap
                 });
 
                 if (!string.IsNullOrEmpty(field.Comment))
@@ -334,7 +335,8 @@ public sealed partial class ScriptSettingsControl : UserControl
                         Text = field.Comment,
                         FontSize = 12,
                         Foreground = (Brush)Application.Current.Resources[
-                            "TextFillColorSecondaryBrush"]
+                            "TextFillColorSecondaryBrush"],
+                        TextWrapping = TextWrapping.Wrap
                     });
                 }
 
@@ -437,7 +439,8 @@ public sealed partial class ScriptSettingsControl : UserControl
                 FontSize = 14,
                 Foreground = (Brush)Application.Current.Resources[
                     "TextFillColorPrimaryBrush"],
-                VerticalAlignment = VerticalAlignment.Center
+                VerticalAlignment = VerticalAlignment.Center,
+                TextWrapping = TextWrapping.Wrap
             });
 
             if (!string.IsNullOrEmpty(field.Comment))
@@ -447,7 +450,8 @@ public sealed partial class ScriptSettingsControl : UserControl
                     Text = field.Comment,
                     FontSize = 12,
                     Foreground = (Brush)Application.Current.Resources[
-                        "TextFillColorSecondaryBrush"]
+                        "TextFillColorSecondaryBrush"],
+                    TextWrapping = TextWrapping.Wrap
                 });
             }
             
@@ -975,7 +979,8 @@ public sealed partial class ScriptSettingsControl : UserControl
             Text = field.Label,
             FontSize = 14,
             FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-            Foreground = (Brush)Application.Current.Resources["TextFillColorPrimaryBrush"]
+            Foreground = (Brush)Application.Current.Resources["TextFillColorPrimaryBrush"],
+            TextWrapping = TextWrapping.Wrap
         });
 
         if (!string.IsNullOrEmpty(field.Comment))
@@ -1009,7 +1014,8 @@ public sealed partial class ScriptSettingsControl : UserControl
             Text = "Доступные теги (нажмите для добавления):",
             FontSize = 12,
             FontWeight = Microsoft.UI.Text.FontWeights.Medium,
-            Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"]
+            Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
+            TextWrapping = TextWrapping.Wrap
         };
         mainStack.Children.Add(chipsLabel);
 
@@ -1082,7 +1088,8 @@ public sealed partial class ScriptSettingsControl : UserControl
             Text = "Предпросмотр имени файла:",
             FontSize = 12,
             FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-            Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"]
+            Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
+            TextWrapping = TextWrapping.Wrap
         });
 
         var previewTextBlock = new TextBlock
@@ -1090,7 +1097,8 @@ public sealed partial class ScriptSettingsControl : UserControl
             Text = string.Empty,
             FontSize = 13,
             FontFamily = new FontFamily("Consolas"),
-            Foreground = (Brush)Application.Current.Resources["AccentTextFillColorPrimaryBrush"]
+            Foreground = (Brush)Application.Current.Resources["AccentTextFillColorPrimaryBrush"],
+            TextWrapping = TextWrapping.Wrap
         };
         previewStack.Children.Add(previewTextBlock);
         previewBorder.Child = previewStack;
