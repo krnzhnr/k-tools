@@ -483,11 +483,11 @@ public sealed partial class TrackSelectionControl : UserControl
                         var trackNode = new TreeViewNode { Content = trackItem };
                         fileNode.Children.Add(trackNode);
                         
-                        // Выбираем только если узел был выбран пользователем ранее
-                        if (savedTracks.TryGetValue(
+                        // Выбираем если узел был выбран пользователем ранее ИЛИ если это новый файл (выбор еще не сохранялся)
+                        if (!hasSavedForThisFile || (savedTracks.TryGetValue(
                             fileItem.FilePath,
                             out var list) &&
-                            list.Contains(track.TrackId))
+                            list.Contains(track.TrackId)))
                         {
                             nodesToSelect.Add(trackNode);
                         }
@@ -509,10 +509,10 @@ public sealed partial class TrackSelectionControl : UserControl
                         var trackNode = new TreeViewNode { Content = trackItem };
                         fileNode.Children.Add(trackNode);
                         
-                        if (savedTracks.TryGetValue(
+                        if (!hasSavedForThisFile || (savedTracks.TryGetValue(
                             fileItem.FilePath,
                             out var list) &&
-                            list.Contains(track.TrackId))
+                            list.Contains(track.TrackId)))
                         {
                             nodesToSelect.Add(trackNode);
                         }
@@ -534,10 +534,10 @@ public sealed partial class TrackSelectionControl : UserControl
                         var trackNode = new TreeViewNode { Content = trackItem };
                         fileNode.Children.Add(trackNode);
                         
-                        if (savedTracks.TryGetValue(
+                        if (!hasSavedForThisFile || (savedTracks.TryGetValue(
                             fileItem.FilePath,
                             out var list) &&
-                            list.Contains(track.TrackId))
+                            list.Contains(track.TrackId)))
                         {
                             nodesToSelect.Add(trackNode);
                         }
@@ -559,10 +559,10 @@ public sealed partial class TrackSelectionControl : UserControl
                         var trackNode = new TreeViewNode { Content = trackItem };
                         fileNode.Children.Add(trackNode);
                         
-                        if (savedAttachments.TryGetValue(
+                        if (!hasSavedForThisFile || (savedAttachments.TryGetValue(
                             fileItem.FilePath,
                             out var list) &&
-                            list.Contains(font.AttachmentId))
+                            list.Contains(font.AttachmentId)))
                         {
                             nodesToSelect.Add(trackNode);
                         }
@@ -1358,12 +1358,26 @@ public sealed partial class TrackSelectionControl : UserControl
                     out var currentAttachments);
 
                 ActiveScript.SelectedTrackIds.Clear();
+                if (_files != null)
+                {
+                    foreach (var file in _files)
+                    {
+                        ActiveScript.SelectedTrackIds[file.FilePath] = new List<int>();
+                    }
+                }
                 foreach (var kvp in currentTracks)
                 {
                     ActiveScript.SelectedTrackIds[kvp.Key] = kvp.Value;
                 }
 
                 ActiveScript.SelectedAttachmentIds.Clear();
+                if (_files != null)
+                {
+                    foreach (var file in _files)
+                    {
+                        ActiveScript.SelectedAttachmentIds[file.FilePath] = new List<int>();
+                    }
+                }
                 foreach (var kvp in currentAttachments)
                 {
                     ActiveScript.SelectedAttachmentIds[kvp.Key] = kvp.Value;
