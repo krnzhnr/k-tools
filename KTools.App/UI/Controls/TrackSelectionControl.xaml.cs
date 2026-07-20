@@ -483,11 +483,11 @@ public sealed partial class TrackSelectionControl : UserControl
                         var trackNode = new TreeViewNode { Content = trackItem };
                         fileNode.Children.Add(trackNode);
                         
-                        // Выбираем если узел был выбран пользователем ранее ИЛИ если это новый файл (выбор еще не сохранялся)
-                        if (!hasSavedForThisFile || (savedTracks.TryGetValue(
+                        // Выбираем только если узел был выбран пользователем ранее
+                        if (savedTracks.TryGetValue(
                             fileItem.FilePath,
                             out var list) &&
-                            list.Contains(track.TrackId)))
+                            list.Contains(track.TrackId))
                         {
                             nodesToSelect.Add(trackNode);
                         }
@@ -509,10 +509,10 @@ public sealed partial class TrackSelectionControl : UserControl
                         var trackNode = new TreeViewNode { Content = trackItem };
                         fileNode.Children.Add(trackNode);
                         
-                        if (!hasSavedForThisFile || (savedTracks.TryGetValue(
+                        if (savedTracks.TryGetValue(
                             fileItem.FilePath,
                             out var list) &&
-                            list.Contains(track.TrackId)))
+                            list.Contains(track.TrackId))
                         {
                             nodesToSelect.Add(trackNode);
                         }
@@ -534,10 +534,10 @@ public sealed partial class TrackSelectionControl : UserControl
                         var trackNode = new TreeViewNode { Content = trackItem };
                         fileNode.Children.Add(trackNode);
                         
-                        if (!hasSavedForThisFile || (savedTracks.TryGetValue(
+                        if (savedTracks.TryGetValue(
                             fileItem.FilePath,
                             out var list) &&
-                            list.Contains(track.TrackId)))
+                            list.Contains(track.TrackId))
                         {
                             nodesToSelect.Add(trackNode);
                         }
@@ -559,10 +559,10 @@ public sealed partial class TrackSelectionControl : UserControl
                         var trackNode = new TreeViewNode { Content = trackItem };
                         fileNode.Children.Add(trackNode);
                         
-                        if (!hasSavedForThisFile || (savedAttachments.TryGetValue(
+                        if (savedAttachments.TryGetValue(
                             fileItem.FilePath,
                             out var list) &&
-                            list.Contains(font.AttachmentId)))
+                            list.Contains(font.AttachmentId))
                         {
                             nodesToSelect.Add(trackNode);
                         }
@@ -616,6 +616,9 @@ public sealed partial class TrackSelectionControl : UserControl
 
                 UpdateSelectAllCheckBoxState();
                 UpdateTabCounts();
+
+                // Синхронизируем начальное или восстановленное состояние выбора с ActiveScript и моделью представления
+                SyncActiveScriptSelectionAndNotify();
 
                 _logService.Info($"Дерево дорожек успешно перестроено для {_files.Count} файлов (Выбрано по умолчанию/восстановлено: {nodesToSelect.Count})", "TrackSelectionControl");
             }
@@ -1358,26 +1361,12 @@ public sealed partial class TrackSelectionControl : UserControl
                     out var currentAttachments);
 
                 ActiveScript.SelectedTrackIds.Clear();
-                if (_files != null)
-                {
-                    foreach (var file in _files)
-                    {
-                        ActiveScript.SelectedTrackIds[file.FilePath] = new List<int>();
-                    }
-                }
                 foreach (var kvp in currentTracks)
                 {
                     ActiveScript.SelectedTrackIds[kvp.Key] = kvp.Value;
                 }
 
                 ActiveScript.SelectedAttachmentIds.Clear();
-                if (_files != null)
-                {
-                    foreach (var file in _files)
-                    {
-                        ActiveScript.SelectedAttachmentIds[file.FilePath] = new List<int>();
-                    }
-                }
                 foreach (var kvp in currentAttachments)
                 {
                     ActiveScript.SelectedAttachmentIds[kvp.Key] = kvp.Value;
