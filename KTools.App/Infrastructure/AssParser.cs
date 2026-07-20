@@ -69,6 +69,11 @@ public sealed class AssData
     /// Список разобранных диалогов.
     /// </summary>
     public List<AssDialogue> Dialogues { get; } = new();
+
+    /// <summary>
+    /// Оригинальный заголовок файла (стили, метаданные и т.д.).
+    /// </summary>
+    public string Header { get; set; } = string.Empty;
 }
 
 /// <summary>
@@ -131,7 +136,9 @@ public sealed class AssParser : IAssParser
     {
         var data = new AssData();
         bool inEvents = false;
+        bool metFirstDialogue = false;
         var formatFields = new List<string>();
+        var headerBuilder = new System.Text.StringBuilder();
 
         string content = ReadFileWithFallbackEncoding(filePath);
 
@@ -141,49 +148,57 @@ public sealed class AssParser : IAssParser
         {
             string stripped = line.Trim();
 
-            // Определение начала секции [Events]
-            if (stripped.Equals("[events]", StringComparison.OrdinalIgnoreCase))
-            {
-                inEvents = true;
-                continue;
-            }
-
-            // Выход из секции [Events] при начале новой секции
-            if (stripped.StartsWith("[") && stripped.EndsWith("]"))
-            {
-                if (inEvents)
-                {
-                    break;
-                }
-                continue;
-            }
-
-            if (!inEvents)
-            {
-                continue;
-            }
-
-            // Парсинг строки Format
-            if (stripped.StartsWith("Format:", StringComparison.OrdinalIgnoreCase))
-            {
-                string[] rawFields = stripped.Substring("Format:".Length).Split(',');
-                formatFields = rawFields
-                    .Select(f => f.Trim().ToLowerInvariant())
-                    .ToList();
-                continue;
-            }
-
-            // Парсинг строки Dialogue
             if (stripped.StartsWith(DialoguePrefix, StringComparison.OrdinalIgnoreCase))
             {
+                metFirstDialogue = true;
                 var dialogue = ParseDialogueLine(stripped, formatFields);
                 if (dialogue != null)
                 {
                     data.Dialogues.Add(dialogue);
                 }
             }
+            else
+            {
+                if (!metFirstDialogue)
+                {
+                    headerBuilder.AppendLine(line);
+                }
+
+                // Определение начала секции [Events]
+                if (stripped.Equals("[events]", StringComparison.OrdinalIgnoreCase))
+                {
+                    inEvents = true;
+                    continue;
+                }
+
+                // Выход из секции [Events] при начале новой секции
+                if (stripped.StartsWith("[") && stripped.EndsWith("]"))
+                {
+                    if (inEvents)
+                    {
+                        break;
+                    }
+                    continue;
+                }
+
+                if (!inEvents)
+                {
+                    continue;
+                }
+
+                // Парсинг строки Format
+                if (stripped.StartsWith("Format:", StringComparison.OrdinalIgnoreCase))
+                {
+                    string[] rawFields = stripped.Substring("Format:".Length).Split(',');
+                    formatFields = rawFields
+                        .Select(f => f.Trim().ToLowerInvariant())
+                        .ToList();
+                    continue;
+                }
+            }
         }
 
+        data.Header = headerBuilder.ToString();
         return data;
     }
 

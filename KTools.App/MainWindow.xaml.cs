@@ -82,6 +82,9 @@ public sealed partial class MainWindow : Window
         uint nIcons,
         uint flags);
 
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern uint GetDpiForWindow(IntPtr hwnd);
+
     private const int WM_SETICON = 0x0080;
     private const int ICON_SMALL = 0;
     private const int ICON_BIG = 1;
@@ -163,8 +166,19 @@ public sealed partial class MainWindow : Window
                     "MainWindow");
             }
 
-            // Установка точного размера окна (800 x 960 пикселей)
-            AppWindow.Resize(new SizeInt32(800, 960));
+            // Определение DPI и масштабирование размеров окна (базовый размер 800 x 960 логических пикселей)
+            IntPtr windowHandle = WinRT.Interop.WindowNative.GetWindowHandle(this);
+            uint dpi = GetDpiForWindow(windowHandle);
+            float scaleFactor = dpi / 96.0f;
+            int scaledWidth = (int)Math.Round(800 * scaleFactor);
+            int scaledHeight = (int)Math.Round(960 * scaleFactor);
+
+            _logService.Info(
+                $"Вычисление размеров окна с учетом DPI. Текущее значение DPI: {dpi}, коэффициент масштабирования: {scaleFactor:F2}. " +
+                $"Базовые размеры: 800x960, итоговые физические размеры для изменения: {scaledWidth}x{scaledHeight} пикселей.",
+                "MainWindow");
+
+            AppWindow.Resize(new SizeInt32(scaledWidth, scaledHeight));
 
             // Навигация по умолчанию на главную страницу
             RootFrame.Navigate(typeof(MainPage));
@@ -349,9 +363,12 @@ public sealed partial class MainWindow : Window
             try
             {
                 MINMAXINFO minMax = Marshal.PtrToStructure<MINMAXINFO>(lParam);
-                // Ограничиваем минимальную ширину и высоту размером по умолчанию
-                minMax.ptMinTrackSize.x = 800;
-                minMax.ptMinTrackSize.y = 960;
+                // Ограничиваем минимальную ширину и высоту размером по умолчанию с учетом DPI монитора
+                uint dpi = GetDpiForWindow(hWnd);
+                float scaleFactor = dpi / 96.0f;
+                minMax.ptMinTrackSize.x = (int)Math.Round(800 * scaleFactor);
+                minMax.ptMinTrackSize.y = (int)Math.Round(960 * scaleFactor);
+                
                 Marshal.StructureToPtr(minMax, lParam, false);
                 return IntPtr.Zero; // Сообщение обработано
             }
@@ -359,7 +376,7 @@ public sealed partial class MainWindow : Window
             {
                 _logService.Exception(
                     ex,
-                    "Ошибка при обработке сообщения WM_GETMINMAXINFO",
+                    "Возникло исключение при обработке сообщения WM_GETMINMAXINFO с динамическим расчетом масштабирования DPI.",
                     "MainWindow");
             }
         }

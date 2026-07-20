@@ -285,7 +285,18 @@ public sealed class SubtitlesConvertScript : AbstractScript
                 false,
                 Encoding.UTF8))
             {
-                writer.Write(_assParser.GetMinimalHeader());
+                if (targetFormat.ToUpperInvariant() == "ASS" && !string.IsNullOrEmpty(assData.Header))
+                {
+                    writer.Write(assData.Header);
+                    if (!assData.Header.EndsWith("\n"))
+                    {
+                        writer.WriteLine();
+                    }
+                }
+                else
+                {
+                    writer.Write(_assParser.GetMinimalHeader());
+                }
                 
                 int dialogueIndex = 0;
                 foreach (var d in assData.Dialogues)
