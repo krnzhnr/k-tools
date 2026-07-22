@@ -131,6 +131,7 @@ public static class AppConstants
         public const string TrackExtractor = "\uE7AC";
         public const string SubtitlesConvert = "\uE8D2";
         public const string SubtitlesShift = "\uE121";
+        public const string AudioTransplant = "\uE8AB";
         public const string Calculator = "\uE1D0";
         public const string MediaDownloader = "\uE128";
     }
@@ -209,6 +210,9 @@ public static class AppConstants
 
         public const string AudioShiftName = "Сдвиг аудио";
         public const string AudioShiftDesc = "Изменение временного сдвига (задержки) аудиопотока с сохранением в Lossless-форматы FLAC/WAV.";
+
+        public const string AudioTransplantName = "Пересадка аудио";
+        public const string AudioTransplantDesc = "Пересадка аудиодорожки в видеоконтейнер с визуальной синхронизацией по нативной осциллограмме (Win2D).";
 
         public const string SubtitleShiftName = "Сдвиг субтитров";
         public const string SubtitleShiftDesc = "Изменение тайминга субтитров (ASS, SRT, VTT, SSA) на заданное количество миллисекунд.";

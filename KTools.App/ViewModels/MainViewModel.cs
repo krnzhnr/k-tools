@@ -118,42 +118,59 @@ public partial class MainViewModel : ThreadSafeViewModel
     /// <summary>
     /// Инициализация и маппинг списка скриптов на теги навигации.
     /// </summary>
+    /// <summary>
+    /// Динамическая инициализация и маппинг ВСЕХ зарегистрированных скриптов из ScriptRegistry.
+    /// </summary>
     private void InitializeScripts()
     {
-        var scripts = new List<ScriptInfo>
-        {
-            new ScriptInfo { Name = AppConstants.ScriptMetadata.VideoProcessorName, Category = AppConstants.ScriptCategory.Video, IconName = AppConstants.ScriptIcons.VideoEncoding, Description = AppConstants.ScriptMetadata.VideoProcessorDesc },
-            new ScriptInfo { Name = AppConstants.ScriptMetadata.ContainerConvName, Category = AppConstants.ScriptCategory.Video, IconName = AppConstants.ScriptIcons.ContainerConversion, Description = AppConstants.ScriptMetadata.ContainerConvDesc },
-            new ScriptInfo { Name = AppConstants.ScriptMetadata.MetadataCleanName, Category = AppConstants.ScriptCategory.Video, IconName = AppConstants.ScriptIcons.MetadataCleanup, Description = AppConstants.ScriptMetadata.MetadataCleanDesc },
-            new ScriptInfo { Name = AppConstants.ScriptMetadata.AudioConverterName, Category = AppConstants.ScriptCategory.Audio, IconName = AppConstants.ScriptIcons.AudioEncoding, Description = AppConstants.ScriptMetadata.AudioConverterDesc },
-            new ScriptInfo { Name = AppConstants.ScriptMetadata.AudioDownmixName, Category = AppConstants.ScriptCategory.Audio, IconName = AppConstants.ScriptIcons.AudioDownmix, Description = AppConstants.ScriptMetadata.AudioDownmixDesc },
-            new ScriptInfo { Name = AppConstants.ScriptMetadata.AudioSpeedName, Category = AppConstants.ScriptCategory.Audio, IconName = AppConstants.ScriptIcons.AudioSpeed, Description = AppConstants.ScriptMetadata.AudioSpeedDesc },
-            new ScriptInfo { Name = AppConstants.ScriptMetadata.AudioSplitName, Category = AppConstants.ScriptCategory.Audio, IconName = AppConstants.ScriptIcons.AudioChannels, Description = AppConstants.ScriptMetadata.AudioSplitDesc },
-            new ScriptInfo { Name = AppConstants.ScriptMetadata.AudioShiftName, Category = AppConstants.ScriptCategory.Audio, IconName = AppConstants.ScriptIcons.AudioShift, Description = AppConstants.ScriptMetadata.AudioShiftDesc },
-            new ScriptInfo { Name = AppConstants.ScriptMetadata.MuxerName, Category = AppConstants.ScriptCategory.Containers, IconName = AppConstants.ScriptIcons.MkvAssembly, Description = AppConstants.ScriptMetadata.MuxerDesc },
-            new ScriptInfo { Name = AppConstants.ScriptMetadata.StreamMgrName, Category = AppConstants.ScriptCategory.Containers, IconName = AppConstants.ScriptIcons.StreamManagement, Description = AppConstants.ScriptMetadata.StreamMgrDesc },
-            new ScriptInfo { Name = AppConstants.ScriptMetadata.StreamReplName, Category = AppConstants.ScriptCategory.Containers, IconName = AppConstants.ScriptIcons.StreamReplacement, Description = AppConstants.ScriptMetadata.StreamReplDesc },
-            new ScriptInfo { Name = AppConstants.ScriptMetadata.TrackExtrName, Category = AppConstants.ScriptCategory.Containers, IconName = AppConstants.ScriptIcons.TrackExtractor, Description = AppConstants.ScriptMetadata.TrackExtrDesc },
-            new ScriptInfo { Name = AppConstants.ScriptMetadata.AssToVttName, Category = AppConstants.ScriptCategory.Subtitles, IconName = AppConstants.ScriptIcons.SubtitlesConvert, Description = AppConstants.ScriptMetadata.AssToVttDesc },
-            new ScriptInfo { Name = AppConstants.ScriptMetadata.SubtitleShiftName, Category = AppConstants.ScriptCategory.Subtitles, IconName = AppConstants.ScriptIcons.SubtitlesShift, Description = AppConstants.ScriptMetadata.SubtitleShiftDesc },
-            new ScriptInfo { Name = "Загрузка медиа", Category = "Сеть", IconName = "World", Description = "Загрузка видео- и аудиофайлов из сети по URL-адресам через yt-dlp" }
-        };
+        _scriptsByTag.Clear();
 
-        _scriptsByTag.Add("script:video_encoding", scripts[0]);
-        _scriptsByTag.Add("script:container_conversion", scripts[1]);
-        _scriptsByTag.Add("script:metadata_cleanup", scripts[2]);
-        _scriptsByTag.Add("script:audio_encoding", scripts[3]);
-        _scriptsByTag.Add("script:audio_downmix", scripts[4]);
-        _scriptsByTag.Add("script:audio_speed", scripts[5]);
-        _scriptsByTag.Add("script:audio_channels", scripts[6]);
-        _scriptsByTag.Add("script:audio_shift", scripts[7]);
-        _scriptsByTag.Add("script:mkv_assembly", scripts[8]);
-        _scriptsByTag.Add("script:stream_management", scripts[9]);
-        _scriptsByTag.Add("script:stream_replacement", scripts[10]);
-        _scriptsByTag.Add("script:container_demux", scripts[11]);
-        _scriptsByTag.Add("script:subtitles_convert", scripts[12]);
-        _scriptsByTag.Add("script:subtitles_shift", scripts[13]);
-        _scriptsByTag.Add("script:media_downloader", scripts[14]);
+        foreach (var script in _scriptRegistry.Scripts)
+        {
+            var info = new ScriptInfo
+            {
+                Name = script.Name,
+                Category = script.Category,
+                IconName = script.IconName,
+                Description = script.Description
+            };
+
+            // Прямая регистрация по имени скрипта
+            _scriptsByTag[$"script:{script.Name}"] = info;
+        }
+
+        // Сохраняем обратную совместимость для старых текстовых тегов меню
+        AddLegacyTagMapping("script:video_encoding", AppConstants.ScriptMetadata.VideoProcessorName);
+        AddLegacyTagMapping("script:container_conversion", AppConstants.ScriptMetadata.ContainerConvName);
+        AddLegacyTagMapping("script:metadata_cleanup", AppConstants.ScriptMetadata.MetadataCleanName);
+        AddLegacyTagMapping("script:audio_encoding", AppConstants.ScriptMetadata.AudioConverterName);
+        AddLegacyTagMapping("script:audio_downmix", AppConstants.ScriptMetadata.AudioDownmixName);
+        AddLegacyTagMapping("script:audio_speed", AppConstants.ScriptMetadata.AudioSpeedName);
+        AddLegacyTagMapping("script:audio_channels", AppConstants.ScriptMetadata.AudioSplitName);
+        AddLegacyTagMapping("script:audio_shift", AppConstants.ScriptMetadata.AudioShiftName);
+        AddLegacyTagMapping("script:audio_transplant", AppConstants.ScriptMetadata.AudioTransplantName);
+        AddLegacyTagMapping("script:mkv_assembly", AppConstants.ScriptMetadata.MuxerName);
+        AddLegacyTagMapping("script:stream_management", AppConstants.ScriptMetadata.StreamMgrName);
+        AddLegacyTagMapping("script:stream_replacement", AppConstants.ScriptMetadata.StreamReplName);
+        AddLegacyTagMapping("script:container_demux", AppConstants.ScriptMetadata.TrackExtrName);
+        AddLegacyTagMapping("script:subtitles_convert", AppConstants.ScriptMetadata.AssToVttName);
+        AddLegacyTagMapping("script:subtitles_shift", AppConstants.ScriptMetadata.SubtitleShiftName);
+        AddLegacyTagMapping("script:media_downloader", "Загрузка медиа");
+    }
+
+    private void AddLegacyTagMapping(string tag, string scriptName)
+    {
+        var script = _scriptRegistry.GetScriptByName(scriptName);
+        if (script != null)
+        {
+            _scriptsByTag[tag] = new ScriptInfo
+            {
+                Name = script.Name,
+                Category = script.Category,
+                IconName = script.IconName,
+                Description = script.Description
+            };
+        }
     }
 
     /// <summary>

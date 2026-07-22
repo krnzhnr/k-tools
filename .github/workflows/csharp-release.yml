@@ -1,17 +1,20 @@
-name: Build K-Tools C# Release
+name: KTools Release Pipeline
 
 on:
   push:
     branches:
-      - feature/csharp-migration
       - develop
+      - main
+      - feature/csharp-migration
+    tags:
+      - 'v*'
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  build-csharp:
+  build:
     runs-on: windows-latest
 
     steps:
@@ -31,39 +34,51 @@ jobs:
     - name: Setup .NET SDK
       uses: actions/setup-dotnet@v4
       with:
-        dotnet-version: '8.0.x'
+        dotnet-version: '10.0.x'
 
     - name: Setup Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.12'
 
-    - name: Extract Changelog Notes
-      id: extract_notes
+    - name: Determine Version and Release Info
+      id: prep
       shell: python
       run: |
         import re, os
+
+        ref = os.environ.get("GITHUB_REF", "")
+        run_num = os.environ.get("GITHUB_RUN_NUMBER", "0")
         changelog = open("CHANGELOG.md", "r", encoding="utf-8").read()
-        
-        # Находим базовую версию X.Y.Z из верхнего заголовка CHANGELOG.md (например, 2.0.0 из # 2.0.0-csharp-dev)
-        match_base = re.search(r"^#\s*(\d+\.\d+\.\d+)", changelog, re.MULTILINE)
-        match_full = re.search(r"^#\s*([\d\.\-\w]+)", changelog, re.MULTILINE)
-        
-        run_number = os.environ.get("GITHUB_RUN_NUMBER", "0")
-        
-        if match_base:
-            base_version = match_base.group(1)
-            version = f"{base_version}-preview.{run_number}"
-        elif match_full:
-            version = f"{match_full.group(1)}-preview.{run_number}"
+
+        # Проверяем, является ли запуск релизным тегом (например, refs/tags/v2.0.0)
+        is_tag = ref.startswith("refs/tags/v")
+
+        if is_tag:
+            tag_name = ref.replace("refs/tags/", "")
+            clean_version = tag_name.lstrip("v")
+            is_prerelease = False
+            release_tag = tag_name
+            release_name = f"KTools v{clean_version}"
         else:
-            version = f"2.0.0-preview.{run_number}"
-            
-        print(f"Generated build version: {version}")
+            # Сборка для develop/main пре-релиза
+            match_base = re.search(r"^#\s*(\d+\.\d+\.\d+)", changelog, re.MULTILINE)
+            base_ver = match_base.group(1) if match_base else "2.0.0"
+            clean_version = f"{base_ver}-preview.{run_num}"
+            is_prerelease = True
+            release_tag = "pre-release"
+            release_name = f"KTools Pre-Release v{clean_version}"
+
+        print(f"Version: {clean_version}, Tag: {release_tag}, Prerelease: {is_prerelease}")
+
         with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
-            f.write(f"version={version}\n")
-            
-        # Заметки для релиза вычленяем с использованием полного верхнего заголовка
+            f.write(f"version={clean_version}\n")
+            f.write(f"is_prerelease={'true' if is_prerelease else 'false'}\n")
+            f.write(f"release_tag={release_tag}\n")
+            f.write(f"release_name={release_name}\n")
+
+        # Извлечение заметок об изменениях из CHANGELOG.md
+        match_full = re.search(r"^#\s*([\d\.\-\w]+)", changelog, re.MULTILINE)
         if match_full:
             header = match_full.group(0)
             start_idx = changelog.find(header) + len(header)
@@ -71,7 +86,7 @@ jobs:
             notes = changelog[start_idx : start_idx + next_match.start()].strip() if next_match else changelog[start_idx:].strip()
             open("release_notes.md", "w", encoding="utf-8").write(notes)
         else:
-            open("release_notes.md", "w", encoding="utf-8").write("Автоматическая сборка предварительной версии C#.")
+            open("release_notes.md", "w", encoding="utf-8").write("Автоматическая сборка KTools.")
 
     - name: Install Inno Setup
       run: |
@@ -79,25 +94,27 @@ jobs:
 
     - name: Build C# App and Installer
       env:
-        BUILD_VERSION: ${{ steps.extract_notes.outputs.version }}
+        BUILD_VERSION: ${{ steps.prep.outputs.version }}
       run: |
         python src-python/build_csharp.py
 
-    - name: Delete Old Pre-Release
+    - name: Delete Old Pre-Release Tag (if Prerelease)
+      if: steps.prep.outputs.is_prerelease == 'true'
       shell: bash
       run: |
+        gh release delete pre-release --cleanup-tag --yes || true
         gh release delete csharp-pre-release --cleanup-tag --yes || true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Create or Update GitHub Release
+    - name: Publish GitHub Release
       uses: softprops/action-gh-release@v2
       with:
-        tag_name: csharp-pre-release
-        name: "K-Tools C# Edition v${{ steps.extract_notes.outputs.version }}"
+        tag_name: ${{ steps.prep.outputs.release_tag }}
+        name: ${{ steps.prep.outputs.release_name }}
         body_path: release_notes.md
-        prerelease: true
-        make_latest: false
-        files: setup_output/K-Tools_*.exe
+        prerelease: ${{ steps.prep.outputs.is_prerelease == 'true' }}
+        make_latest: ${{ steps.prep.outputs.is_prerelease == 'false' }}
+        files: setup_output/KTools_*.exe
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

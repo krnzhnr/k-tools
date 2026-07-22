@@ -11,11 +11,13 @@ namespace KTools_App.ViewModels;
 
 /// <summary>
 /// Модель представления домашней страницы со списком скриптов обработки медиа.
-/// Группирует скрипты по категориям для отображения в виде карточек.
+/// Динамически группирует ВСЕ скрипты из реестра ScriptRegistry по категориям для отображения в виде карточек.
+/// Все комментарии и логи исключительно на русском языке в соответствии с регламентом.
 /// </summary>
 public partial class HomeViewModel : ThreadSafeViewModel
 {
     private readonly INavigationService _navigationService;
+    private readonly IScriptRegistry _scriptRegistry;
 
     /// <summary>
     /// Список скриптов категории «Видео».
@@ -47,169 +49,77 @@ public partial class HomeViewModel : ThreadSafeViewModel
     /// </summary>
     public List<ScriptInfo> ToolScripts { get; }
 
-    private readonly IScriptRegistry _scriptRegistry;
-
     /// <summary>
-    /// Инициализирует ViewModel домашней страницы.
+    /// Инициализирует ViewModel домашней страницы и динамически формирует карточки скриптов.
     /// </summary>
     public HomeViewModel(INavigationService navigationService, IScriptRegistry scriptRegistry)
     {
         _navigationService = navigationService;
         _scriptRegistry = scriptRegistry;
 
-        var scripts = new List<ScriptInfo>
+        // Динамическое получение всех доступных скриптов из централизованного реестра
+        var allScripts = _scriptRegistry.Scripts.Select(s => new ScriptInfo
         {
-            new ScriptInfo
-            {
-                Name = AppConstants.ScriptMetadata.VideoProcessorName,
-                Category = AppConstants.ScriptCategory.Video,
-                IconName = AppConstants.ScriptIcons.VideoEncoding,
-                Description = AppConstants.ScriptMetadata.VideoProcessorDesc
-            },
-            new ScriptInfo
-            {
-                Name = AppConstants.ScriptMetadata.ContainerConvName,
-                Category = AppConstants.ScriptCategory.Video,
-                IconName = AppConstants.ScriptIcons.ContainerConversion,
-                Description = AppConstants.ScriptMetadata.ContainerConvDesc
-            },
-            new ScriptInfo
-            {
-                Name = AppConstants.ScriptMetadata.MetadataCleanName,
-                Category = AppConstants.ScriptCategory.Video,
-                IconName = AppConstants.ScriptIcons.MetadataCleanup,
-                Description = AppConstants.ScriptMetadata.MetadataCleanDesc
-            },
-            new ScriptInfo
-            {
-                Name = AppConstants.ScriptMetadata.AudioConverterName,
-                Category = AppConstants.ScriptCategory.Audio,
-                IconName = AppConstants.ScriptIcons.AudioEncoding,
-                Description = AppConstants.ScriptMetadata.AudioConverterDesc
-            },
-            new ScriptInfo
-            {
-                Name = AppConstants.ScriptMetadata.AudioDownmixName,
-                Category = AppConstants.ScriptCategory.Audio,
-                IconName = AppConstants.ScriptIcons.AudioDownmix,
-                Description = AppConstants.ScriptMetadata.AudioDownmixDesc
-            },
-            new ScriptInfo
-            {
-                Name = AppConstants.ScriptMetadata.AudioSpeedName,
-                Category = AppConstants.ScriptCategory.Audio,
-                IconName = AppConstants.ScriptIcons.AudioSpeed,
-                Description = AppConstants.ScriptMetadata.AudioSpeedDesc
-            },
-            new ScriptInfo
-            {
-                Name = AppConstants.ScriptMetadata.AudioSplitName,
-                Category = AppConstants.ScriptCategory.Audio,
-                IconName = AppConstants.ScriptIcons.AudioChannels,
-                Description = AppConstants.ScriptMetadata.AudioSplitDesc
-            },
-            new ScriptInfo
-            {
-                Name = AppConstants.ScriptMetadata.AudioShiftName,
-                Category = AppConstants.ScriptCategory.Audio,
-                IconName = AppConstants.ScriptIcons.AudioShift,
-                Description = AppConstants.ScriptMetadata.AudioShiftDesc
-            },
-            new ScriptInfo
-            {
-                Name = AppConstants.ScriptMetadata.MuxerName,
-                Category = AppConstants.ScriptCategory.Containers,
-                IconName = AppConstants.ScriptIcons.MkvAssembly,
-                Description = AppConstants.ScriptMetadata.MuxerDesc
-            },
-            new ScriptInfo
-            {
-                Name = AppConstants.ScriptMetadata.StreamMgrName,
-                Category = AppConstants.ScriptCategory.Containers,
-                IconName = AppConstants.ScriptIcons.StreamManagement,
-                Description = AppConstants.ScriptMetadata.StreamMgrDesc
-            },
-            new ScriptInfo
-            {
-                Name = AppConstants.ScriptMetadata.StreamReplName,
-                Category = AppConstants.ScriptCategory.Containers,
-                IconName = AppConstants.ScriptIcons.StreamReplacement,
-                Description = AppConstants.ScriptMetadata.StreamReplDesc
-            },
-            new ScriptInfo
-            {
-                Name = AppConstants.ScriptMetadata.TrackExtrName,
-                Category = AppConstants.ScriptCategory.Containers,
-                IconName = AppConstants.ScriptIcons.TrackExtractor,
-                Description = AppConstants.ScriptMetadata.TrackExtrDesc
-            },
-            new ScriptInfo
-            {
-                Name = AppConstants.ScriptMetadata.AssToVttName,
-                Category = AppConstants.ScriptCategory.Subtitles,
-                IconName = AppConstants.ScriptIcons.SubtitlesConvert,
-                Description = AppConstants.ScriptMetadata.AssToVttDesc
-            },
-            new ScriptInfo
-            {
-                Name = AppConstants.ScriptMetadata.SubtitleShiftName,
-                Category = AppConstants.ScriptCategory.Subtitles,
-                IconName = AppConstants.ScriptIcons.SubtitlesShift,
-                Description = AppConstants.ScriptMetadata.SubtitleShiftDesc
-            },
-            new ScriptInfo
-            {
-                Name = "Загрузка медиа",
-                Category = AppConstants.ScriptCategory.Network,
-                IconName = AppConstants.ScriptIcons.MediaDownloader,
-                Description = "Загрузка видео- и аудиофайлов из сети по URL-адресам через yt-dlp."
-            },
+            Name = s.Name,
+            Category = s.Category,
+            IconName = s.IconName,
+            Description = s.Description
+        }).ToList();
+
+        VideoScripts = allScripts.Where(s => s.Category == AppConstants.ScriptCategory.Video).ToList();
+        AudioScripts = allScripts.Where(s => s.Category == AppConstants.ScriptCategory.Audio).ToList();
+        ContainerScripts = allScripts.Where(s => s.Category == AppConstants.ScriptCategory.Containers).ToList();
+        SubtitleScripts = allScripts.Where(s => s.Category == AppConstants.ScriptCategory.Subtitles).ToList();
+        NetworkScripts = allScripts.Where(s => s.Category == AppConstants.ScriptCategory.Network).ToList();
+
+        // Формируем список инструментов (включая калькулятор и любые пользовательские скрипты категории "Инструменты")
+        ToolScripts = new List<ScriptInfo>
+        {
             new ScriptInfo
             {
                 Name = "Калькулятор сдвига",
                 Category = AppConstants.ScriptCategory.Tools,
                 IconName = AppConstants.ScriptIcons.Calculator,
-                Description = "Расчет разницы во времени между двумя таймингами " +
-                              "для корректировки сдвига аудио и субтитров."
+                Description = "Расчёт разницы во времени между двумя таймингами для корректировки сдвига аудио и субтитров"
             }
         };
-
-        VideoScripts = scripts
-            .Where(s => s.Category == AppConstants.ScriptCategory.Video)
-            .ToList();
-        AudioScripts = scripts
-            .Where(s => s.Category == AppConstants.ScriptCategory.Audio)
-            .ToList();
-        ContainerScripts = scripts
-            .Where(s => s.Category == AppConstants.ScriptCategory.Containers)
-            .ToList();
-        SubtitleScripts = scripts
-            .Where(s => s.Category == AppConstants.ScriptCategory.Subtitles)
-            .ToList();
-        NetworkScripts = scripts
-            .Where(s => s.Category == AppConstants.ScriptCategory.Network)
-            .ToList();
-        ToolScripts = scripts
-            .Where(s => s.Category == AppConstants.ScriptCategory.Tools)
-            .ToList();
+        ToolScripts.AddRange(allScripts.Where(s => s.Category == AppConstants.ScriptCategory.Tools));
     }
 
     /// <summary>
-    /// Выполняет переход к экрану выполнения скрипта через службу навигации.
+    /// Команда перехода на рабочий экран выбранного скрипта.
+    /// Поддерживает передачу объекта ScriptInfo или названия скрипта string.
     /// </summary>
     [RelayCommand]
-    private void NavigateToScript(string scriptName)
+    private void NavigateToScript(object? arg)
     {
-        if (scriptName == "Калькулятор сдвига")
+        if (arg is ScriptInfo script)
         {
-            _navigationService.NavigateTo(typeof(TimingCalculatorPage));
-            return;
-        }
+            if (script.Name == "Калькулятор сдвига")
+            {
+                _navigationService.NavigateTo(typeof(TimingCalculatorPage));
+                return;
+            }
 
-        var script = _scriptRegistry.GetScriptByName(scriptName);
-        if (script != null)
+            var realScript = _scriptRegistry.GetScriptByName(script.Name);
+            if (realScript != null)
+            {
+                _navigationService.NavigateTo(typeof(WorkPanel), realScript);
+            }
+        }
+        else if (arg is string scriptName)
         {
-            _navigationService.NavigateTo(typeof(WorkPanel), script);
+            if (scriptName == "Калькулятор сдвига")
+            {
+                _navigationService.NavigateTo(typeof(TimingCalculatorPage));
+                return;
+            }
+
+            var realScript = _scriptRegistry.GetScriptByName(scriptName);
+            if (realScript != null)
+            {
+                _navigationService.NavigateTo(typeof(WorkPanel), realScript);
+            }
         }
     }
 }

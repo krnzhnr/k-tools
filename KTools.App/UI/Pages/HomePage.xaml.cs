@@ -63,7 +63,7 @@ public sealed partial class HomePage : Page
     {
         if (sender is Border border && border.Tag is ScriptInfo scriptInfo)
         {
-            ViewModel.NavigateToScriptCommand.Execute(scriptInfo.Name);
+            ViewModel.NavigateToScriptCommand.Execute(scriptInfo);
         }
     }
 }

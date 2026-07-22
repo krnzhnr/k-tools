@@ -195,9 +195,10 @@ public partial class App : Application
         services.AddSingleton<IMkvmergeRunner, MkvmergeRunner>();
         services.AddSingleton<DeeRunner>();
         services.AddSingleton<QaacRunner>();
+        services.AddSingleton<IAudioWaveformService, AudioWaveformService>();
         services.AddSingleton<IAssParser, AssParser>();
 
-        // Регистрация 12 скриптов обработки медиа
+        // Регистрация скриптов обработки медиа
         services.AddTransient<Scripts.MetadataCleanupScript>();
         services.AddTransient<Scripts.VideoEncodingScript>();
         services.AddTransient<Scripts.ContainerConversionScript>();
@@ -205,6 +206,7 @@ public partial class App : Application
         services.AddTransient<Scripts.AudioDownmixScript>();
         services.AddTransient<Scripts.AudioSpeedScript>();
         services.AddTransient<Scripts.AudioChannelsScript>();
+        services.AddTransient<Scripts.AudioTransplantScript>();
         services.AddTransient<Scripts.MkvAssemblyScript>();
         services.AddTransient<Scripts.StreamManagementScript>();
         services.AddTransient<Scripts.StreamReplacementScript>();

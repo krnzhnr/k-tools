@@ -34,6 +34,7 @@ public sealed partial class WorkPanel : Page
     private Grid _filesContainer = null!;
     private TrackSelectionControl _tracksControl = null!;
     private StreamReplaceControl? _streamReplaceControl;
+    private AudioTransplantControl? _audioTransplantControl;
     private ScriptSettingsControl _settingsControl = null!;
 
     // Динамический элемент навигации для вкладки "Дорожки"
@@ -227,6 +228,44 @@ public sealed partial class WorkPanel : Page
             FileList.ActiveScript = _script;
             FileList.SetFiles(_script.FilesQueue);
             ScriptSettings.GenerateSettingsUI(_script);
+
+            // Если скрипт — Пересадка аудио, подменяем стандартный файл-лист на карточный DubSwap контрол
+            if (_script is AudioTransplantScript)
+            {
+                if (_audioTransplantControl == null)
+                {
+                    _audioTransplantControl = new AudioTransplantControl
+                    {
+                        HorizontalAlignment = HorizontalAlignment.Stretch,
+                        VerticalAlignment = VerticalAlignment.Stretch
+                    };
+                }
+                _audioTransplantControl.ActiveScript = _script;
+
+                _filesContainer.Children.Clear();
+                _filesContainer.RowDefinitions.Clear();
+                _filesContainer.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+                _filesContainer.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+                Grid.SetRow(_audioTransplantControl, 0);
+                Grid.SetRow(LogExpander, 1);
+
+                _filesContainer.Children.Add(_audioTransplantControl);
+                _filesContainer.Children.Add(LogExpander);
+            }
+            else
+            {
+                _filesContainer.Children.Clear();
+                _filesContainer.RowDefinitions.Clear();
+                _filesContainer.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+                _filesContainer.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+                Grid.SetRow(FileList, 0);
+                Grid.SetRow(LogExpander, 1);
+
+                _filesContainer.Children.Add(FileList);
+                _filesContainer.Children.Add(LogExpander);
+            }
 
             // Инициализируем ViewModel активным скриптом и коллекцией файлов
             ViewModel.Initialize(_script, FileList.Files);

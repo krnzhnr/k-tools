@@ -61,6 +61,7 @@ public sealed class ScriptRegistry : IScriptRegistry
         _scripts.Add(_serviceProvider.GetRequiredService<Scripts.AudioSpeedScript>());
         _scripts.Add(_serviceProvider.GetRequiredService<Scripts.AudioChannelsScript>());
         _scripts.Add(_serviceProvider.GetRequiredService<Scripts.AudioShiftScript>());
+        _scripts.Add(_serviceProvider.GetRequiredService<Scripts.AudioTransplantScript>());
 
         _scripts.Add(_serviceProvider.GetRequiredService<Scripts.MkvAssemblyScript>());
         _scripts.Add(_serviceProvider.GetRequiredService<Scripts.StreamManagementScript>());

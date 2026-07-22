@@ -75,6 +75,8 @@ public sealed partial class MainPage : Page
                 "MainPage");
         }
 
+        PopulateDynamicNavItems();
+
         if (ViewModel.InitializeCommand.CanExecute(null))
         {
             ViewModel.InitializeCommand.Execute(null);
@@ -85,6 +87,79 @@ public sealed partial class MainPage : Page
         _logService.Info(
             $"[MainPage] Инициализация видимости разделителя: {(NavView.IsPaneOpen ? "Скрыт" : "Показан")}",
             "MainPage");
+    }
+
+    /// <summary>
+    /// Динамическое наполнение подменю боковой панели всеми зарегистрированными скриптами из реестра ScriptRegistry.
+    /// </summary>
+    private void PopulateDynamicNavItems()
+    {
+        var scriptRegistry = App.Services.GetRequiredService<IScriptRegistry>();
+        var scripts = scriptRegistry.Scripts;
+
+        PopulateCategoryGroup(NavItemVideo, AppConstants.ScriptCategory.Video, scripts);
+        PopulateCategoryGroup(NavItemAudio, AppConstants.ScriptCategory.Audio, scripts);
+        PopulateCategoryGroup(NavItemContainers, AppConstants.ScriptCategory.Containers, scripts);
+        PopulateCategoryGroup(NavItemSubtitles, AppConstants.ScriptCategory.Subtitles, scripts);
+        PopulateCategoryGroup(NavItemNetwork, AppConstants.ScriptCategory.Network, scripts);
+
+        if (NavItemTools != null)
+        {
+            NavItemTools.MenuItems.Clear();
+
+            var timingCalcItem = new NavigationViewItem
+            {
+                Content = "Калькулятор сдвига",
+                Tag = "tool:timing_calculator",
+                Icon = new FontIcon
+                {
+                    Glyph = AppConstants.ScriptIcons.Calculator,
+                    FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Segoe Fluent Icons")
+                }
+            };
+            NavItemTools.MenuItems.Add(timingCalcItem);
+
+            var toolScripts = scripts.Where(s => s.Category.Equals(AppConstants.ScriptCategory.Tools, StringComparison.OrdinalIgnoreCase));
+            foreach (var script in toolScripts)
+            {
+                var item = new NavigationViewItem
+                {
+                    Content = script.Name,
+                    Tag = $"script:{script.Name}",
+                    Icon = new FontIcon
+                    {
+                        Glyph = script.IconName,
+                        FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Segoe Fluent Icons")
+                    }
+                };
+                NavItemTools.MenuItems.Add(item);
+            }
+        }
+    }
+
+    private static void PopulateCategoryGroup(NavigationViewItem? categoryNavHost, string categoryName, List<AbstractScript> scripts)
+    {
+        if (categoryNavHost == null) return;
+
+        var categoryScripts = scripts.Where(s => s.Category.Equals(categoryName, StringComparison.OrdinalIgnoreCase)).ToList();
+
+        categoryNavHost.MenuItems.Clear();
+
+        foreach (var script in categoryScripts)
+        {
+            var item = new NavigationViewItem
+            {
+                Content = script.Name,
+                Tag = $"script:{script.Name}",
+                Icon = new FontIcon
+                {
+                    Glyph = script.IconName,
+                    FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Segoe Fluent Icons")
+                }
+            };
+
+            categoryNavHost.MenuItems.Add(item);
+        }
     }
 
     /// <summary>
