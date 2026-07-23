@@ -57,12 +57,13 @@
             </Button>
         </StackPanel>
 
-        <!-- Высокопроизводительный виртуализированный список вывода логов в реальном времени -->
+        <!-- Высокопроизводительный виртуализированный список вывода логов в реальном времени с поддержкой выделения и копирования -->
         <ListView 
             Grid.Row="1"
             x:Name="LogListView"
             ItemsSource="{x:Bind ViewModel.Logs, Mode=OneWay}"
-            SelectionMode="None"
+            SelectionMode="Extended"
+            KeyDown="LogListView_KeyDown"
             HorizontalAlignment="Stretch"
             VerticalAlignment="Stretch"
             Background="Transparent"
@@ -72,15 +73,37 @@
             Padding="12"
             ScrollViewer.VerticalScrollBarVisibility="Auto"
             ScrollViewer.HorizontalScrollBarVisibility="Auto">
+
+            <ListView.ContextFlyout>
+                <MenuFlyout>
+                    <MenuFlyoutItem Text="Копировать выделенное" Click="CopySelectedLogs_Click">
+                        <MenuFlyoutItem.Icon>
+                            <FontIcon Glyph="&#xE8C8;" FontFamily="Segoe Fluent Icons" />
+                        </MenuFlyoutItem.Icon>
+                    </MenuFlyoutItem>
+                    <MenuFlyoutItem Text="Копировать все логи" Command="{x:Bind ViewModel.CopyAllLogsCommand}">
+                        <MenuFlyoutItem.Icon>
+                            <FontIcon Glyph="&#xE8D8;" FontFamily="Segoe Fluent Icons" />
+                        </MenuFlyoutItem.Icon>
+                    </MenuFlyoutItem>
+                    <MenuFlyoutSeparator />
+                    <MenuFlyoutItem Text="Выделить всё" Click="SelectAllLogs_Click">
+                        <MenuFlyoutItem.Icon>
+                            <FontIcon Glyph="&#xE8B3;" FontFamily="Segoe Fluent Icons" />
+                        </MenuFlyoutItem.Icon>
+                    </MenuFlyoutItem>
+                </MenuFlyout>
+            </ListView.ContextFlyout>
             
             <ListView.ItemTemplate>
                 <DataTemplate x:DataType="models:LogItem">
-                    <!-- Вывод строки лога шрифтом фиксированной ширины Consolas -->
+                    <!-- Вывод строки лога шрифтом фиксированной ширины Consolas с возможностью выделения текста -->
                     <TextBlock 
                         Text="{x:Bind Message}" 
                         Foreground="{x:Bind Level, Converter={StaticResource LogLevelToBrushConverter}}"
                         FontFamily="Consolas"
                         FontSize="13"
+                        IsTextSelectionEnabled="True"
                         TextWrapping="Wrap" />
                 </DataTemplate>
             </ListView.ItemTemplate>

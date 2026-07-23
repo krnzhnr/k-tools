@@ -93,4 +93,59 @@ public sealed partial class LogPage : Page
             System.Diagnostics.Debug.WriteLine($"[Error] Ошибка при прокрутке ListView к последней строке: {ex.Message}");
         }
     }
+
+    /// <summary>
+    /// Копирует выделенные пользователем строки лога в системный буфер обмена Windows.
+    /// </summary>
+    private void CopySelectedLogs_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
+    {
+        CopySelectedLogs();
+    }
+
+    /// <summary>
+    /// Выделяет все записи логов в списке.
+    /// </summary>
+    private void SelectAllLogs_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
+    {
+        LogListView.SelectAll();
+    }
+
+    /// <summary>
+    /// Обработчик нажатия горячих клавиш в списке логов (Ctrl+C — копировать выделенное, Ctrl+A — выделить все).
+    /// </summary>
+    private void LogListView_KeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
+    {
+        var ctrlState = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Control);
+        bool isCtrlPressed = (ctrlState & Windows.UI.Core.CoreVirtualKeyStates.Down) == Windows.UI.Core.CoreVirtualKeyStates.Down;
+
+        if (isCtrlPressed)
+        {
+            if (e.Key == Windows.System.VirtualKey.C)
+            {
+                CopySelectedLogs();
+                e.Handled = true;
+            }
+            else if (e.Key == Windows.System.VirtualKey.A)
+            {
+                LogListView.SelectAll();
+                e.Handled = true;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Вспомогательный метод для копирования элементов или вызова полного копирования при отсутствии выделения.
+    /// </summary>
+    private void CopySelectedLogs()
+    {
+        var selected = System.Linq.Enumerable.ToList(System.Linq.Enumerable.OfType<KTools_App.Models.LogItem>(LogListView.SelectedItems));
+        if (selected.Count > 0)
+        {
+            ViewModel.CopySelectedLogs(selected);
+        }
+        else
+        {
+            ViewModel.CopyAllLogsCommand.Execute(null);
+        }
+    }
 }

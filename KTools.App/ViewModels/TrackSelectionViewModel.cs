@@ -145,6 +145,9 @@ public sealed partial class TrackSelectionViewModel : ThreadSafeViewModel
                 }
             }
 
+            // Автоматически очищаем устаревшие правила фильтров, которых нет в новом наборе файлов
+            PruneObsoleteRules();
+
             _logService.Info("Сбор уникальных свойств медиадорожек для фильтрации успешно завершен во ViewModel", "TrackSelectionViewModel");
         }
         catch (Exception ex)
@@ -163,6 +166,57 @@ public sealed partial class TrackSelectionViewModel : ThreadSafeViewModel
             foreach (var prop in rules.Values)
             {
                 prop.Clear();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Полностью очищает все правила фильтрации по всем категориям.
+    /// </summary>
+    public void ClearAllRules()
+    {
+        foreach (var cat in ActiveRules.Values)
+        {
+            foreach (var prop in cat.Values)
+            {
+                prop.Clear();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Автоматически удаляет устаревшие правила фильтрации, значения которых отсутствуют в текущем наборе DynamicOptions.
+    /// Предотвращает появление фантомных бейджей ("единичек") и зависание неактуальных фильтров при смене или партионной замене файлов.
+    /// </summary>
+    public void PruneObsoleteRules()
+    {
+        foreach (var catKvp in ActiveRules)
+        {
+            string category = catKvp.Key;
+            var catRules = catKvp.Value;
+
+            if (!DynamicOptions.TryGetValue(category, out var catOptions))
+            {
+                foreach (var propSet in catRules.Values)
+                {
+                    propSet.Clear();
+                }
+                continue;
+            }
+
+            foreach (var propKvp in catRules)
+            {
+                string propKey = propKvp.Key;
+                var selectedValues = propKvp.Value;
+
+                if (!catOptions.TryGetValue(propKey, out var availableValues) || availableValues.Count == 0)
+                {
+                    selectedValues.Clear();
+                    continue;
+                }
+
+                // Удаляем значения правил, которых больше нет среди текущих медиафайлов
+                selectedValues.RemoveWhere(val => !availableValues.Contains(val));
             }
         }
     }

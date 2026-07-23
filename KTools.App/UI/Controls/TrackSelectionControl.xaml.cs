@@ -361,10 +361,11 @@ public sealed partial class TrackSelectionControl : UserControl
                     }
                 }
 
-                // Принудительно очищаем выбор, дерево и сбрасываем панель фильтров
+                // Принудительно очищаем выбор, дерево, сбрасываем панель фильтров и активные правила
                 TracksTreeView.SelectedNodes.Clear();
                 TracksTreeView.RootNodes.Clear();
                 FiltersBorder.Visibility = Visibility.Collapsed;
+                ViewModel.ClearAllRules();
 
                 if (_files == null || _files.Count == 0)
                 {

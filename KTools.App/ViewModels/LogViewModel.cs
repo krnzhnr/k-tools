@@ -147,6 +147,29 @@ public partial class LogViewModel : ThreadSafeViewModel
     }
 
     /// <summary>
+    /// Копирует переданный список выделенных элементов логов в системный буфер обмена Windows.
+    /// </summary>
+    public void CopySelectedLogs(System.Collections.Generic.IEnumerable<LogItem> selectedItems)
+    {
+        try
+        {
+            var lines = selectedItems.Select(x => x.Message).ToList();
+            if (lines.Count == 0) return;
+
+            string text = string.Join(Environment.NewLine, lines);
+            var dataPackage = new DataPackage();
+            dataPackage.SetText(text);
+            Clipboard.SetContent(dataPackage);
+
+            _logService.DebugLog($"Успешно скопировано {lines.Count} выделенных строк логов в буфер обмена Windows", "LogViewModel");
+        }
+        catch (Exception ex)
+        {
+            _logService.Exception(ex, "Ошибка при копировании выделенных строк логов", "LogViewModel");
+        }
+    }
+
+    /// <summary>
     /// Команда для очистки графического окна логов и отправки информационного сообщения.
     /// </summary>
     [RelayCommand]

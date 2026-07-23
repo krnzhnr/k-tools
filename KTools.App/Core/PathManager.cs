@@ -37,22 +37,45 @@ public sealed class PathManager : IPathManager
     /// Для обычных приложений: использует папку bin рядом с исполняемым файлом.
     /// Для MSIX приложений: использует LocalAppData (так как Program Files доступен только для чтения).
     /// Это обеспечивает работу скачивания и распаковки зависимостей в MSIX приложениях.
+    /// <summary>
+    /// Возвращает абсолютный путь к директории bin для утилит.
+    /// 
+    /// Для обычных приложений: при наличии прав использует папку bin рядом с исполняемым файлом.
+    /// Если прав записи нет (например, установка в Program Files) - автоматически переключается на LocalAppData.
+    /// Это гарантирует беспрепятственную загрузку и обновление утилит без ошибок доступа.
     /// </summary>
     /// <returns>Абсолютный путь к локальной папке bin утилит.</returns>
     public string GetBinDirectory()
     {
-        // Железобетонная проверка: если приложение запущено из защищенной системной папки, это MSIX
+        // Проверка: если приложение запущено из защищенной системной папки MSIX
         bool isMsix = _baseDir.Contains("WindowsApps", StringComparison.OrdinalIgnoreCase);
 
         if (isMsix)
         {
-            // Пишем в стандартный AppData пользователя, у FullTrust приложений туда есть доступ
             string appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
             return Path.Combine(appData, "KTools", "bin");
         }
 
-        // Для запуска из Visual Studio: используем папку сборки
-        return Path.Combine(_baseDir, "bin");
+        // Проверяем доступность папки приложения на запись (Program Files vs LocalAppData / Portable)
+        string testFile = Path.Combine(_baseDir, ".write_test_bin");
+        try
+        {
+            File.WriteAllText(testFile, "test");
+            File.Delete(testFile);
+            return Path.Combine(_baseDir, "bin");
+        }
+        catch (Exception)
+        {
+            // При отсутствии прав записи в папку установки (Program Files) используем LOCALAPPDATA
+            string appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            string fallbackPath = Path.Combine(appData, "KTools", "bin");
+
+            if (!Directory.Exists(fallbackPath))
+            {
+                Directory.CreateDirectory(fallbackPath);
+            }
+            return fallbackPath;
+        }
     }
 
     /// <summary>
@@ -102,6 +125,7 @@ public sealed class PathManager : IPathManager
 
     /// <summary>
     /// Найти путь к исполняемому файлу утилиты (ffmpeg, mkvmerge, eac3to и др.).
+    /// Проверяет как папку bin приложения, так и пользовательскую директорию LocalAppData.
     /// </summary>
     /// <param name="binaryName">Имя бинарного файла утилиты.</param>
     /// <returns>Полный абсолютный путь к файлу утилиты на диске.</returns>
@@ -123,19 +147,29 @@ public sealed class PathManager : IPathManager
         // Определение подпапки в зависимости от типа утилиты
         string subfolder = GetSubfolderName(targetName);
         string binDir = GetBinDirectory();
+        string localAppDataBinDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "KTools", "bin");
+        string baseBinDir = Path.Combine(_baseDir, "bin");
 
-        // 1. Поиск непосредственно в папке bin
-        string pathInBin = Path.Combine(binDir, targetName);
-        if (File.Exists(pathInBin))
-        {
-            return pathInBin;
-        }
+        // Кандидаты поиска утилиты (приоритет: текущая рабочая bin -> LocalAppData -> BaseDir/bin)
+        string[] candidateDirs = new[] { binDir, localAppDataBinDir, baseBinDir };
 
-        // 2. Поиск в соответствующей подпапке (например, bin/ffmpeg/kt-ffmpeg.exe)
-        string pathInSubfolder = Path.Combine(binDir, subfolder, targetName);
-        if (File.Exists(pathInSubfolder))
+        foreach (var dir in candidateDirs)
         {
-            return pathInSubfolder;
+            if (string.IsNullOrWhiteSpace(dir) || !Directory.Exists(dir)) continue;
+
+            // 1. Поиск непосредственно в папке bin
+            string pathInBin = Path.Combine(dir, targetName);
+            if (File.Exists(pathInBin))
+            {
+                return pathInBin;
+            }
+
+            // 2. Поиск в соответствующей подпапке (например, bin/ffmpeg/kt-ffmpeg.exe)
+            string pathInSubfolder = Path.Combine(dir, subfolder, targetName);
+            if (File.Exists(pathInSubfolder))
+            {
+                return pathInSubfolder;
+            }
         }
 
         // 3. Резервный возврат имени файла (поиск в системном PATH операционной системы)

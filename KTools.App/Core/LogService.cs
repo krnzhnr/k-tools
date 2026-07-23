@@ -66,11 +66,21 @@ public sealed class LogService : ILogService
                 }
 
                 string baseDir = AppContext.BaseDirectory;
-                bool isMsix = baseDir.Contains("WindowsApps", StringComparison.OrdinalIgnoreCase);
-                string settingsDir = isMsix 
-                    ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "KTools")
-                    : baseDir;
-                string defaultLogDir = Path.Combine(settingsDir, "logs");
+                string localAppDataLogDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "KTools", "logs");
+
+                // Проверяем доступность папки приложения на запись (Program Files vs LocalAppData / Portable)
+                string defaultLogDir;
+                string testFile = Path.Combine(baseDir, ".write_test_log");
+                try
+                {
+                    File.WriteAllText(testFile, "test");
+                    File.Delete(testFile);
+                    defaultLogDir = Path.Combine(baseDir, "logs");
+                }
+                catch
+                {
+                    defaultLogDir = localAppDataLogDir;
+                }
 
                 string logDir = string.IsNullOrEmpty(_customLogDir)
                     ? defaultLogDir
@@ -84,12 +94,11 @@ public sealed class LogService : ILogService
                         Directory.CreateDirectory(logDir);
                     }
                 }
-                catch (UnauthorizedAccessException)
+                catch (Exception ex)
                 {
-                    // Если пользовательская папка логов недоступна (например, в Program Files при MSIX),
-                    // используем папку логов по умолчанию в LocalAppData
-                    Debug.WriteLine($"[Warning] Нет доступа к папке логов {logDir}, используется папка по умолчанию");
-                    logDir = defaultLogDir;
+                    // Если выбранная папка недоступна (например, Program Files), гарантированно переключаемся на LocalAppData
+                    Debug.WriteLine($"[Warning] Не удалось создать папку логов {logDir} ({ex.Message}), используется папка по умолчанию в LocalAppData");
+                    logDir = localAppDataLogDir;
 
                     if (!Directory.Exists(logDir))
                     {
