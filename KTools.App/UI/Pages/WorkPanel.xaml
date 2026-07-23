@@ -8,6 +8,9 @@
     xmlns:viewmodels="using:KTools_App.ViewModels"
     xmlns:controls="using:CommunityToolkit.WinUI.Controls"
     x:DataType="viewmodels:WorkPanelViewModel"
+    AllowDrop="True"
+    DragOver="WorkPanel_DragOver"
+    Drop="WorkPanel_Drop"
     mc:Ignorable="d">
 
     <Grid Padding="36,0,36,24">

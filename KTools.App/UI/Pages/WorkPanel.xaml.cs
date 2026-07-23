@@ -27,6 +27,7 @@ namespace KTools_App.UI.Pages;
 public sealed partial class WorkPanel : Page
 {
     private ISettingsManager _settingsManager => App.Services.GetRequiredService<ISettingsManager>();
+    private ILogService _logService => App.Services.GetRequiredService<ILogService>();
 
     private AbstractScript? _script;
 
@@ -466,6 +467,73 @@ public sealed partial class WorkPanel : Page
             {
                 contentFrame.Content = _settingsControl;
             }
+        }
+    }
+
+    /// <summary>
+    /// Обработчик перетаскивания файлов над рабочей панелью.
+    /// При наведении мышью с файлами на любой вкладке, кроме "Файлы", мгновенно переключает вкладку на "Файлы".
+    /// </summary>
+    private void WorkPanel_DragOver(object sender, DragEventArgs e)
+    {
+        if (ViewModel.IsProcessing)
+        {
+            e.AcceptedOperation = Windows.ApplicationModel.DataTransfer.DataPackageOperation.None;
+            return;
+        }
+
+        if (e.DataView.Contains(Windows.ApplicationModel.DataTransfer.StandardDataFormats.StorageItems))
+        {
+            e.AcceptedOperation = Windows.ApplicationModel.DataTransfer.DataPackageOperation.Copy;
+            e.DragUIOverride.Caption = "Добавить в очередь файлов";
+            e.DragUIOverride.IsCaptionVisible = true;
+
+            // Если пользователь находится не на вкладке "Файлы", переключаем вкладку в момент наведения курсора
+            if (!ReferenceEquals(nvSample.SelectedItem, SamplePage1Item))
+            {
+                nvSample.SelectedItem = SamplePage1Item;
+                _logService.DebugLog("Автоматическое переключение на вкладку «Файлы» при наведении мышью с перетаскиваемыми файлами", "WorkPanel");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Обработчик отпускания файлов над рабочей панелью.
+    /// Передает сброшенные файлы в очередь обработки FileList.
+    /// </summary>
+    private async void WorkPanel_Drop(object sender, DragEventArgs e)
+    {
+        if (ViewModel.IsProcessing) return;
+
+        try
+        {
+            if (e.DataView.Contains(Windows.ApplicationModel.DataTransfer.StandardDataFormats.StorageItems))
+            {
+                var items = await e.DataView.GetStorageItemsAsync();
+                var paths = new List<string>();
+
+                foreach (var item in items)
+                {
+                    if (item is Windows.Storage.StorageFile file)
+                    {
+                        paths.Add(file.Path);
+                    }
+                    else if (item is Windows.Storage.StorageFolder folder)
+                    {
+                        paths.Add(folder.Path);
+                    }
+                }
+
+                if (paths.Count > 0)
+                {
+                    FileList.AddFiles(paths);
+                    _logService.Info($"Добавлено элементов через Drag & Drop рабочей панели: {paths.Count}", "WorkPanel");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logService.Exception(ex, "Ошибка при обработке перетащенных файлов в WorkPanel", "WorkPanel");
         }
     }
 

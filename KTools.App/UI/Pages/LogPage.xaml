@@ -97,23 +97,23 @@
             
             <ListView.ItemTemplate>
                 <DataTemplate x:DataType="models:LogItem">
-                    <!-- Вывод строки лога шрифтом фиксированной ширины Consolas с возможностью выделения текста -->
+                    <!-- Вывод строки лога шрифтом фиксированной ширины Consolas -->
                     <TextBlock 
                         Text="{x:Bind Message}" 
                         Foreground="{x:Bind Level, Converter={StaticResource LogLevelToBrushConverter}}"
                         FontFamily="Consolas"
                         FontSize="13"
-                        IsTextSelectionEnabled="True"
                         TextWrapping="Wrap" />
                 </DataTemplate>
             </ListView.ItemTemplate>
             
             <ListView.ItemContainerStyle>
-                <!-- Сброс дефолтных рамок и отступов ListViewItem для обеспечения плотного вывода консольного типа -->
+                <!-- Настройка красивого построчного выделения элементов Fluent Design -->
                 <Style TargetType="ListViewItem">
-                    <Setter Property="MinHeight" Value="0"/>
-                    <Setter Property="Padding" Value="0,1,0,1"/>
-                    <Setter Property="Margin" Value="0"/>
+                    <Setter Property="MinHeight" Value="24"/>
+                    <Setter Property="Padding" Value="8,3,8,3"/>
+                    <Setter Property="Margin" Value="0,1,0,1"/>
+                    <Setter Property="CornerRadius" Value="4"/>
                     <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
                 </Style>
             </ListView.ItemContainerStyle>
