@@ -25,7 +25,7 @@ if hasattr(sys.stdout, "reconfigure"):
         pass
 
 # === Настройки ===
-BASE_DIR = Path(__file__).parent.parent.resolve()
+BASE_DIR = Path(__file__).parent.resolve()
 SRC_DIR = BASE_DIR
 PROJECT_FILE = SRC_DIR / "KTools.App" / "KTools.App.csproj"
 VERSION_FILE = BASE_DIR / "version.txt"
@@ -85,7 +85,6 @@ def prompt_version_update() -> str:
 
 def find_publish_folder() -> Path:
     """Динамически находит папку публикации publish."""
-    # Возможные пути сборки (с x64 и без в зависимости от параметров MSBuild)
     candidates = [
         SRC_DIR / "KTools.App" / "bin" / "Release" / "net10.0-windows10.0.26100.0" / "win-x64" / "publish",
         SRC_DIR / "KTools.App" / "bin" / "x64" / "Release" / "net10.0-windows10.0.26100.0" / "win-x64" / "publish",
@@ -96,33 +95,81 @@ def find_publish_folder() -> Path:
         if (path / f"{EXE_BASE_NAME}.exe").exists():
             return path
     
-    # Возвращаем путь по умолчанию, если ничего не найдено
     return candidates[0]
 
 
-def create_inno_setup_script(
-    publish_dir: Path,
-    version_str: str,
-) -> Path:
-    """Генерация скрипта для Inno Setup."""
-    cwd = str(BASE_DIR).replace("\\", "\\\\")
-    publish_p = str(publish_dir).replace("\\", "\\\\")
-    icon_p = str(ICON_SRC).replace("\\", "\\\\")
+def build_csharp_app():
+    """Сборка C# приложения через dotnet publish."""
+    print("=" * 60)
+    print("1. Компиляция C# приложения (dotnet publish)...")
+    print("=" * 60)
 
-    output_filename = f"KTools_v{version_str}_setup"
+    cmd = [
+        "dotnet", "publish",
+        str(PROJECT_FILE),
+        "-c", "Release",
+        "-r", "win-x64",
+        "--self-contained", "true",
+        "-p:PublishSingleFile=false",
+        "-p:PublishReadyToRun=false",
+        "-p:Platform=x64"
+    ]
 
-    iss_content = f"""
+    print(f"Выполнение команды: {' '.join(cmd)}")
+    result = subprocess.run(cmd, cwd=str(BASE_DIR))
+
+    if result.returncode != 0:
+        print("[!] Ошибка при компиляции C# приложения!")
+        sys.exit(1)
+
+    publish_dir = find_publish_folder()
+    if not publish_dir.exists():
+        print(f"[!] Ошибка: Папка публикации не найдена по пути: {publish_dir}")
+        sys.exit(1)
+
+    print(f"[✓] C# приложение успешно скомпилировано в: {publish_dir}")
+    
+    # Очистка локализаций WinUI (удаляем все языковые папки кроме нужных если есть)
+    clean_unused_localizations(publish_dir)
+
+    return publish_dir
+
+
+def clean_unused_localizations(publish_dir: Path):
+    """Удаление ненужных языковых папок для уменьшения размера дистрибутива."""
+    print("[*] Очистка неиспользуемых папок локализации...")
+    cleaned_count = 0
+    for item in publish_dir.iterdir():
+        if item.is_dir() and item.name not in ["bin", "assets"]:
+            # В WinUI3 dotnet publish создаёт десятки языковых папок (de, fr, es, zh-Hans...)
+            if len(item.name) in (2, 5) and ("-" in item.name or item.name.isalpha()):
+                try:
+                    shutil.rmtree(item)
+                    cleaned_count += 1
+                except Exception as e:
+                    print(f"[!] Не удалось удалить папку локализации {item.name}: {e}")
+    print(f"[✓] Удалено папок локализации: {cleaned_count}")
+
+
+def generate_inno_script(version: str, publish_dir: Path) -> Path:
+    """Динамически генерирует файл скрипта установки Inno Setup (KTools_CSharp.iss)."""
+    iss_file = BASE_DIR / "KTools_CSharp.iss"
+    output_dir = BASE_DIR / "setup_output"
+    icon_file = SRC_DIR / "KTools.App" / "Assets" / "AppIcon.ico"
+    decoders_exe = BASE_DIR / "bin" / "eac3to_decoders" / "eac3to Decoder Pack 1.4.exe"
+
+    iss_content = f"""; === АВТОМАТИЧЕСКИ СГЕНЕРИРОВАННЫЙ СКРИПТ INNO SETUP ===
 [Setup]
 AppId=krnzhnr.ktools
 AppName=KTools
-AppVersion={version_str}
+AppVersion={version}
 DefaultDirName={{autopf}}\\KTools
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 DefaultGroupName=KTools
-OutputDir={cwd}\\setup_output
-OutputBaseFilename={output_filename}
-SetupIconFile={icon_p}
+OutputDir={output_dir}
+OutputBaseFilename=KTools_v{version}_Setup
+SetupIconFile={icon_file}
 Compression=lzma2/ultra64
 SolidCompression=yes
 LZMADictionarySize=65536
@@ -138,23 +185,23 @@ GroupDescription: "{{cm:AdditionalIcons}}"; Flags: unchecked
 
 [Files]
 ; Основная папка публикации .NET self-contained
-Source: "{publish_p}\\*"; DestDir: "{{app}}"; \\
+Source: "{publish_dir}\\*"; DestDir: "{{app}}"; \\
 Flags: ignoreversion recursesubdirs createallsubdirs
 ; Установщик декодеров eac3to
-Source: "{cwd}\\bin\\eac3to_decoders\\eac3to Decoder Pack 1.4.exe"; DestDir: "{{tmp}}"; \\
+Source: "{decoders_exe}"; DestDir: "{{tmp}}"; \\
 Flags: deleteafterinstall; Components: decoders
 
 [Icons]
 Name: "{{group}}\\KTools"; \\
-Filename: "{{app}}\\{EXE_BASE_NAME}.exe"; \\
+Filename: "{{app}}\\KTools.App.exe"; \\
 IconFilename: "{{app}}\\AppIcon.ico"
-Name: "{{commondesktop}}\\KTools"; \\
-Filename: "{{app}}\\{EXE_BASE_NAME}.exe"; \\
+Name: "{{autodesktop}}\\KTools"; \\
+Filename: "{{app}}\\KTools.App.exe"; \\
 IconFilename: "{{app}}\\AppIcon.ico"; \\
 Tasks: desktopicon
 
 [Run]
-Filename: "{{app}}\\{EXE_BASE_NAME}.exe"; \\
+Filename: "{{app}}\\KTools.App.exe"; \\
 Description: "{{cm:LaunchProgram,KTools}}"; \\
 Flags: nowait postinstall skipifsilent
 Filename: "{{tmp}}\\eac3to Decoder Pack 1.4.exe"; \\
@@ -199,122 +246,84 @@ procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssInstall then
   begin
-    // Бесшумное удаление старых временных версий
+    // Бесшумное удаление всех старых промежуточных версий
     RemoveOldVersion('krnzhnr.ktools.v1');
     RemoveOldVersion('krnzhnr.ktools.csharp.v2');
     RemoveOldVersion('krnzhnr.ktools.v2');
     // Удаление устаревших ярлыков с дефисом
-    DeleteFile(ExpandConstant('{{commondesktop}}\\K-Tools.lnk'));
+    DeleteFile(ExpandConstant('{{autodesktop}}\\K-Tools.lnk'));
     DeleteFile(ExpandConstant('{{userdesktop}}\\K-Tools.lnk'));
   end;
 end;
 """
-    iss_path = SRC_DIR / "KTools_CSharp.iss"
-    iss_path.write_text(iss_content, encoding="utf-8")
-    print(f"[✓] Создан скрипт инсталлятора Inno Setup: {iss_path}")
-    return iss_path
+    iss_file.write_text(iss_content, encoding="utf-8")
+    print(f"[✓] Скрипт установки {iss_file.name} успешно сгенерирован.")
+    return iss_file
 
 
-def compile_installer(iss_path: Path) -> None:
-    """Компиляция установщика через ISCC.exe."""
-    iscc_path = "ISCC.exe"  # Пробуем запустить из PATH
-    
-    # Стандартные пути установки Inno Setup
-    search_paths = [
-        Path("C:/Program Files (x86)/Inno Setup 6/ISCC.exe"),
-        Path("C:/Program Files/Inno Setup 6/ISCC.exe")
-    ]
-    
-    for path in search_paths:
-        if path.exists():
-            iscc_path = str(path)
-            break
+def build_inno_installer(version: str, publish_dir: Path):
+    """Компиляция инсталлятора через Inno Setup (iscc)."""
+    print("=" * 60)
+    print("2. Генерация инсталлятора через Inno Setup...")
+    print("=" * 60)
 
-    print(f"[*] Запуск компиляции установщика с помощью {iscc_path}...")
-    try:
-        subprocess.check_call([iscc_path, str(iss_path)])
-        print(f"[✓] Установщик успешно собран в папке: {BASE_DIR / 'setup_output'}")
-    except Exception as e:
-        print(f"[!] Не удалось автоматически скомпилировать установщик через Inno Setup: {e}")
-        print("[!] Пожалуйста, убедитесь, что Inno Setup 6 установлен и добавлен в PATH, либо запустите сгенерированный ISS скрипт вручную.")
+    iss_file = generate_inno_script(version, publish_dir)
 
+    # Ищем iscc.exe в PATH или в стандартных папках Program Files
+    iscc_exe = shutil.which("iscc")
+    if not iscc_exe:
+        possible_paths = [
+            Path(os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)")) / "Inno Setup 6" / "iscc.exe",
+            Path(os.environ.get("ProgramFiles", "C:\\Program Files")) / "Inno Setup 6" / "iscc.exe",
+        ]
+        for p in possible_paths:
+            if p.exists():
+                iscc_exe = str(p)
+                break
 
-def clean_publish_folder() -> None:
-    """Очищает предыдущие сборки publish."""
-    # Пытаемся найти папки публикации и очистить их
-    candidates = [
-        SRC_DIR / "KTools.App" / "bin" / "Release" / "net10.0-windows10.0.26100.0" / "win-x64" / "publish",
-        SRC_DIR / "KTools.App" / "bin" / "x64" / "Release" / "net10.0-windows10.0.26100.0" / "win-x64" / "publish",
-        SRC_DIR / "KTools.App" / "bin" / "Release" / "net8.0-windows10.0.26100.0" / "win-x64" / "publish",
-        SRC_DIR / "KTools.App" / "bin" / "x64" / "Release" / "net8.0-windows10.0.26100.0" / "win-x64" / "publish"
-    ]
-    for path in candidates:
-        if path.exists():
-            print(f"[*] Очистка папки публикации {path}...")
-            shutil.rmtree(path)
+    if not iscc_exe:
+        print("[!] Ошибка: Inno Setup Compiler (iscc.exe) не найден!")
+        print("Установите Inno Setup 6 или добавьте путь к iscc.exe в системный PATH.")
+        sys.exit(1)
 
+    output_dir = BASE_DIR / "setup_output"
+    output_dir.mkdir(exist_ok=True)
 
-def main() -> None:
-    print("=== Начало сборки K-Tools C# Edition ===")
-    version_str = prompt_version_update()
-
-    # Шаг 1. Очистка старых данных публикации
-    clean_publish_folder()
-
-    # Шаг 2. Запуск dotnet publish с динамической версией
-    print("[*] Запуск компиляции C# проекта (.NET 10 / WinUI 3)...")
-    
-    # Формируем чисто числовую версию для AssemblyVersion/FileVersion
-    assembly_version = "2.0.0.0"
-    match_nums = re.match(r"^(\d+\.\d+\.\d+)", version_str)
-    if match_nums:
-        base_num = match_nums.group(1)
-        suffix_match = re.search(r"-[\w\.]+\.(\d+)", version_str)
-        if suffix_match:
-            assembly_version = f"{base_num}.{suffix_match.group(1)}"
-        else:
-            assembly_version = f"{base_num}.0"
-            
-    print(f"[*] Сборка с версией: ProductVersion={version_str}, AssemblyVersion={assembly_version}")
-    
     cmd = [
-        "dotnet", "publish", str(PROJECT_FILE),
-        "-c", "Release",
-        "-r", "win-x64",
-        "--self-contained", "true",
-        "-p:WindowsPackageType=None",
-        f"-p:Version={version_str}",
-        f"-p:AssemblyVersion={assembly_version}",
-        f"-p:FileVersion={assembly_version}"
+        iscc_exe,
+        f"/DMyAppVersion={version}",
+        f"/DPublishDir={publish_dir}",
+        f"/DOutputDir={output_dir}",
+        str(iss_file)
     ]
-    print(f"Команда: {' '.join(cmd)}")
-    subprocess.check_call(cmd)
 
-    # Шаг 3. Поиск папки публикации
-    publish_dir = find_publish_folder()
-    if not publish_dir.exists():
-        raise FileNotFoundError(f"Не удалось найти папку публикации после dotnet publish по пути: {publish_dir}")
-    print(f"[✓] Папка публикации найдена: {publish_dir}")
-    # Шаг 5. Копирование иконки в папку публикации для ярлыка
-    dst_icon = publish_dir / "AppIcon.ico"
-    if ICON_SRC.exists():
-        shutil.copy2(ICON_SRC, dst_icon)
-        print(f"[✓] Иконка приложения скопирована в: {dst_icon}")
+    print(f"Выполнение команды: {' '.join(cmd)}")
+    result = subprocess.run(cmd, cwd=str(BASE_DIR))
 
-    # Шаг 6. Создание ISS скрипта
-    iss_path = create_inno_setup_script(publish_dir, version_str)
+    if result.returncode != 0:
+        print("[!] Ошибка при компиляции инсталлятора Inno Setup!")
+        sys.exit(1)
 
-    # Шаг 7. Компиляция установщика
-    compile_installer(iss_path)
+    setup_file = output_dir / f"KTools_v{version}_Setup.exe"
+    print(f"[✓] Инсталлятор успешно сгенерирован: {setup_file}")
 
-    print("\n=== Сборка K-Tools C# Edition успешно завершена! ===")
+
+def main():
+    print("=" * 60)
+    print("      K-Tools (C# / WinUI 3) - Автоматическая сборка")
+    print("=" * 60)
+
+    version = prompt_version_update()
+    print(f"[*] Сборка версии: {version}")
+
+    publish_dir = build_csharp_app()
+
+    build_inno_installer(version, publish_dir)
+
+    print("=" * 60)
+    print(f"[🎉] Сборка C# версии K-Tools v{version} успешно завершена!")
+    print("=" * 60)
 
 
 if __name__ == "__main__":
-    try:
-        main()
-        print("\n[*] Окно закроется через 10 секунд...")
-        time.sleep(10)
-    except Exception as e:
-        print(f"\n[!] ОШИБКА СБОРКИ: {e}")
-        input("Нажмите Enter, чтобы выйти...")
+    main()

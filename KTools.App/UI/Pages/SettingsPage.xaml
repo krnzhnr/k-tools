@@ -244,15 +244,15 @@
                     </community:SettingsExpander.HeaderIcon>
                     
                     <community:SettingsExpander.Items>
-                        <community:SettingsCard
+                        <Border
                             Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                             BorderThickness="1"
                             CornerRadius="8"
                             Padding="16"
-                            HorizontalContentAlignment="Stretch"
-                            IsEnabled="{x:Bind ViewModel.RenameEnableRegex, Mode=OneWay}">
-                            <StackPanel Spacing="16" HorizontalAlignment="Stretch">
+                            HorizontalAlignment="Stretch">
+                            <ContentControl IsEnabled="{x:Bind ViewModel.RenameEnableRegex, Mode=OneWay}" HorizontalContentAlignment="Stretch">
+                                <StackPanel Spacing="16" HorizontalAlignment="Stretch">
                                 <StackPanel Spacing="8">
                                     <Grid>
                                         <Grid.ColumnDefinitions>
@@ -289,7 +289,8 @@
                                     <StackPanel x:Name="ReplaceTemplatesContainer" Spacing="6" HorizontalAlignment="Stretch" />
                                 </StackPanel>
                             </StackPanel>
-                        </community:SettingsCard>
+                            </ContentControl>
+                        </Border>
                     </community:SettingsExpander.Items>
                 </community:SettingsExpander>
             </StackPanel>

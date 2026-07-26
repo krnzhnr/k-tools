@@ -16,18 +16,22 @@ public static class ShellIntegration
 
     private static readonly Dictionary<string, string> ScriptTagMap = new()
     {
-        { "Кодирование видео", "video_encoding" },
-        { "Конвертация контейнера", "container_conversion" },
-        { "Очистка метаданных", "metadata_cleanup" },
-        { "Кодирование аудио", "audio_encoding" },
-        { "Даунмикс в Stereo", "audio_downmix" },
-        { "Изменение скорости аудио", "audio_speed" },
-        { "Разделение каналов", "audio_channels" },
-        { "Сборка MKV", "mkv_assembly" },
-        { "Управление потоками", "stream_management" },
-        { "Замена потоков", "stream_replacement" },
-        { "Разборка контейнера", "container_demux" },
-        { "ASS/SRT → VTT", "subtitles_convert" }
+        { AppConstants.ScriptMetadata.VideoProcessorName, "video_encoding" },
+        { AppConstants.ScriptMetadata.ContainerConvName, "container_conversion" },
+        { AppConstants.ScriptMetadata.MetadataCleanName, "metadata_cleanup" },
+        { AppConstants.ScriptMetadata.AudioConverterName, "audio_encoding" },
+        { AppConstants.ScriptMetadata.AudioDownmixName, "audio_downmix" },
+        { AppConstants.ScriptMetadata.AudioSpeedName, "audio_speed" },
+        { AppConstants.ScriptMetadata.AudioSplitName, "audio_channels" },
+        { AppConstants.ScriptMetadata.AudioShiftName, "audio_shift" },
+        { AppConstants.ScriptMetadata.AudioTransplantName, "audio_transplant" },
+        { AppConstants.ScriptMetadata.MuxerName, "mkv_assembly" },
+        { AppConstants.ScriptMetadata.StreamMgrName, "stream_management" },
+        { AppConstants.ScriptMetadata.StreamReplName, "stream_replacement" },
+        { AppConstants.ScriptMetadata.TrackExtrName, "container_demux" },
+        { AppConstants.ScriptMetadata.AssToVttName, "subtitles_convert" },
+        { AppConstants.ScriptMetadata.SubtitleShiftName, "subtitles_shift" },
+        { "Загрузка медиа", "media_downloader" }
     };
 
     /// <summary>

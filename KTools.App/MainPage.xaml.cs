@@ -55,6 +55,38 @@ public sealed partial class MainPage : Page
         messenger.Register<MainPage, ActiveScriptChangedMessage>(
             this,
             (r, m) => r.OnActiveScriptChanged(m.Script));
+
+        // Регистрируем глобальный обработчик Enter для снятия фокуса с текстовых полей ввода
+        AddHandler(UIElement.KeyDownEvent, new Microsoft.UI.Xaml.Input.KeyEventHandler(OnGlobalKeyDown), handledEventsToo: true);
+    }
+
+    /// <summary>
+    /// Глобальный обработчик нажатия клавиш на уровне страницы.
+    /// Автоматически снимает фокус с однострочных полей ввода при нажатии клавиши Enter.
+    /// </summary>
+    private void OnGlobalKeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
+    {
+        if (e.Key == Windows.System.VirtualKey.Enter)
+        {
+            var focused = Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(this.XamlRoot) as UIElement;
+            if (FocusHelper.IsTextInputElement(focused))
+            {
+                FocusHelper.ClearFocus(this.XamlRoot, RootGrid);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Глобальный обработчик нажатия указки (мыши/тача) на корневой контейнер приложения.
+    /// Автоматически снимает фокус с текстовых полей ввода при клике на свободную область.
+    /// </summary>
+    private void RootGrid_PointerPressed(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        var originalSource = e.OriginalSource as UIElement;
+        if (!FocusHelper.IsTextInputElement(originalSource))
+        {
+            FocusHelper.ClearFocus(this.XamlRoot, RootGrid);
+        }
     }
 
     /// <summary>

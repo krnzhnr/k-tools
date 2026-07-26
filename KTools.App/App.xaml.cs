@@ -49,24 +49,19 @@ public partial class App : Application
     /// </summary>
     public App()
     {
-        // Регистрируем провайдер кодировок для поддержки чтения файлов
-        // в локальных кодировках (например, Windows-1251 / CP1251).
-        System.Text.Encoding.RegisterProvider(
-            System.Text.CodePagesEncodingProvider.Instance);
-
-        InitializeComponent();
-        Services = ConfigureServices();
-        _logService = Services.GetRequiredService<ILogService>();
-
-        // === Глобальные перехватчики исключений для диагностики крашей в publish-сборке ===
-
+        // === Глобальные перехватчики исключений для диагностики крашей ===
+        
         // 1. WinUI 3 UnhandledException — ловит исключения на UI-потоке XAML
         this.UnhandledException += (sender, e) =>
         {
             string report = FormatCrashReport("WinUI3 UnhandledException", e.Exception);
             WriteCrashReport(report);
-            _logService.Fatal(report, "App.UnhandledException");
-            e.Handled = true; // Попытка не дать процессу упасть до записи
+            try
+            {
+                _logService?.Fatal(report, "App.UnhandledException");
+            }
+            catch { }
+            e.Handled = true; // Попытка не дать процессу упасть
         };
 
         // 2. .NET AppDomain — ловит необработанные managed-исключения
@@ -79,12 +74,9 @@ public partial class App : Application
             WriteCrashReport(report);
             try
             {
-                _logService.Fatal(report, "AppDomain.UnhandledException");
+                _logService?.Fatal(report, "AppDomain.UnhandledException");
             }
-            catch
-            {
-                // LogService может быть недоступен при фатальном сбое
-            }
+            catch { }
         };
 
         // 3. TaskScheduler — ловит исключения из fire-and-forget async Task
@@ -92,9 +84,22 @@ public partial class App : Application
         {
             string report = FormatCrashReport("TaskScheduler.UnobservedTaskException", e.Exception);
             WriteCrashReport(report);
-            _logService.Error(report, "TaskScheduler.UnobservedException");
+            try
+            {
+                _logService?.Error(report, "TaskScheduler.UnobservedException");
+            }
+            catch { }
             e.SetObserved();
         };
+
+        // Регистрируем провайдер кодировок для поддержки чтения файлов
+        // в локальных кодировках (например, Windows-1251 / CP1251).
+        System.Text.Encoding.RegisterProvider(
+            System.Text.CodePagesEncodingProvider.Instance);
+
+        InitializeComponent();
+        Services = ConfigureServices();
+        _logService = Services.GetRequiredService<ILogService>();
     }
 
     /// <summary>
@@ -152,6 +157,21 @@ public partial class App : Application
     /// </summary>
     private static void WriteCrashReport(string report)
     {
+        // 1. Попытка записи в LocalAppData (всегда доступно для записи)
+        try
+        {
+            string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            string ktoolsFolder = System.IO.Path.Combine(localAppData, "KTools");
+            System.IO.Directory.CreateDirectory(ktoolsFolder);
+            string localCrashFile = System.IO.Path.Combine(ktoolsFolder, "crash_report.txt");
+            System.IO.File.AppendAllText(
+                localCrashFile,
+                report + Environment.NewLine,
+                System.Text.Encoding.UTF8);
+        }
+        catch { }
+
+        // 2. Попытка записи рядом с exe
         try
         {
             string exeDir = AppContext.BaseDirectory;
@@ -161,10 +181,7 @@ public partial class App : Application
                 report + Environment.NewLine,
                 System.Text.Encoding.UTF8);
         }
-        catch
-        {
-            // Если запись невозможна (например, нет прав на папку), просто проглатываем
-        }
+        catch { }
     }
 
     /// <summary>

@@ -61,17 +61,6 @@ public partial class SettingsPage : Page
         }
     }
 
-    private void OnTextBoxEnterKeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
-    {
-        if (e.Key == Windows.System.VirtualKey.Enter)
-        {
-            this.IsTabStop = true;
-            this.Focus(FocusState.Programmatic);
-            this.IsTabStop = false;
-            e.Handled = true;
-        }
-    }
-
     /// <summary>
     /// Обработчик клика по кнопке выбора директории для логов.
     /// Требует HWND главного окна приложения для открытия системного FolderPicker в WinUI 3.
@@ -181,10 +170,6 @@ public partial class SettingsPage : Page
     private void SettingsPage_Loaded(object sender, RoutedEventArgs e)
     {
         LoadTemplatesUI();
-
-        // Сброс фокуса при нажатии Enter в полях переименования
-        RenameRegexSearchTextBox.KeyDown += OnTextBoxEnterKeyDown;
-        RenameRegexReplaceTextBox.KeyDown += OnTextBoxEnterKeyDown;
     }
 
     private static string CleanDescription(string desc)
@@ -244,7 +229,6 @@ public partial class SettingsPage : Page
             _settingsManager.SaveSettings();
             UpdateHelpFlyouts();
         };
-        patternBox.KeyDown += OnTextBoxEnterKeyDown;
         Grid.SetColumn(patternBox, 0);
         rowGrid.Children.Add(patternBox);
 
@@ -262,7 +246,6 @@ public partial class SettingsPage : Page
             _settingsManager.SaveSettings();
             UpdateHelpFlyouts();
         };
-        descBox.KeyDown += OnTextBoxEnterKeyDown;
         Grid.SetColumn(descBox, 1);
         rowGrid.Children.Add(descBox);
 

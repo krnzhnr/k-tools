@@ -21,18 +21,46 @@ public sealed class MediaProbeService : IMediaProbeService
     private readonly ILogService _logService;
     private readonly IMkvmergeRunner _mkvmergeRunner;
     private readonly IFFmpegRunner _ffmpegRunner;
+    private readonly ISettingsManager? _settingsManager;
+
+    private readonly object _semaphoreLock = new();
+    private System.Threading.SemaphoreSlim? _probeSemaphore;
+    private int _currentMaxParallel = -1;
 
     /// <summary>
     /// Инициализирует новый экземпляр класса MediaProbeService с внедрением зависимостей.
     /// </summary>
-    public MediaProbeService(ILogService logService, IMkvmergeRunner mkvmergeRunner, IFFmpegRunner ffmpegRunner)
+    public MediaProbeService(
+        ILogService logService,
+        IMkvmergeRunner mkvmergeRunner,
+        IFFmpegRunner ffmpegRunner,
+        ISettingsManager? settingsManager = null)
     {
         _logService = logService ?? throw new ArgumentNullException(nameof(logService));
         _mkvmergeRunner = mkvmergeRunner ?? throw new ArgumentNullException(nameof(mkvmergeRunner));
         _ffmpegRunner = ffmpegRunner ?? throw new ArgumentNullException(nameof(ffmpegRunner));
+        _settingsManager = settingsManager;
     }
 
+    private System.Threading.SemaphoreSlim GetProbeSemaphore()
+    {
+        int targetParallel = 1;
+        if (_settingsManager != null && _settingsManager.EnableParallel)
+        {
+            targetParallel = Math.Max(1, _settingsManager.MaxParallelTasks);
+        }
 
+        lock (_semaphoreLock)
+        {
+            if (_probeSemaphore == null || _currentMaxParallel != targetParallel)
+            {
+                _probeSemaphore?.Dispose();
+                _probeSemaphore = new System.Threading.SemaphoreSlim(targetParallel, targetParallel);
+                _currentMaxParallel = targetParallel;
+            }
+            return _probeSemaphore;
+        }
+    }
 
     /// <summary>
     /// Асинхронно анализирует медиафайл и возвращает его полную структуру.
@@ -48,11 +76,14 @@ public sealed class MediaProbeService : IMediaProbeService
             return null;
         }
 
-        string extension = Path.GetExtension(filePath).ToLowerInvariant();
-        _logService.Info($"Начало фонового анализа структуры файла: '{Path.GetFileName(filePath)}'", "MediaProbeService");
+        var semaphore = GetProbeSemaphore();
+        await semaphore.WaitAsync();
 
         try
         {
+            string extension = Path.GetExtension(filePath).ToLowerInvariant();
+            _logService.Info($"Начало фонового анализа структуры файла: '{Path.GetFileName(filePath)}'", "MediaProbeService");
+
             // Определяем, является ли файл MKV-контейнером
             bool isMkv = extension == ".mkv" || extension == ".mka";
 
@@ -69,6 +100,10 @@ public sealed class MediaProbeService : IMediaProbeService
         {
             _logService.Exception(ex, $"Непредвиденная ошибка при зондировании файла '{filePath}'", "MediaProbeService");
             return null;
+        }
+        finally
+        {
+            semaphore.Release();
         }
     }
 
@@ -216,13 +251,6 @@ public sealed class MediaProbeService : IMediaProbeService
 
                 structure.Attachments.Add(attach);
             }
-        }
-
-        // 4. Обогащаем пустые заголовки дорожек через ffprobe
-        bool hasNameless = structure.Tracks.Any(t => string.IsNullOrWhiteSpace(t.Name));
-        if (hasNameless)
-        {
-            await EnrichTrackNamesAsync(structure);
         }
 
         _logService.Info($"Анализ MKV завершен: '{Path.GetFileName(filePath)}' (Дорожек: {structure.Tracks.Count}, Вложений: {structure.Attachments.Count})", "MediaProbeService");

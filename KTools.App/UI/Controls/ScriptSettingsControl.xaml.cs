@@ -493,16 +493,6 @@ public sealed partial class ScriptSettingsControl : UserControl
                             UpdatePreview();
                         }
                     };
-                    textBox.KeyDown += (s, e) =>
-                    {
-                        if (e.Key == Windows.System.VirtualKey.Enter)
-                        {
-                            this.IsTabStop = true;
-                            this.Focus(FocusState.Programmatic);
-                            this.IsTabStop = false;
-                            e.Handled = true;
-                        }
-                    };
 
                     if (isRenameField)
                     {
@@ -568,16 +558,6 @@ public sealed partial class ScriptSettingsControl : UserControl
                                 (int)numberBox.Value);
                             UpdateVisibility(settingsGroup);
                             HandleIntSettingChanged(settingsGroup, field.Key, (int)numberBox.Value);
-                        }
-                    };
-                    numberBox.KeyDown += (s, e) =>
-                    {
-                        if (e.Key == Windows.System.VirtualKey.Enter)
-                        {
-                            this.IsTabStop = true;
-                            this.Focus(FocusState.Programmatic);
-                            this.IsTabStop = false;
-                            e.Handled = true;
                         }
                     };
                     inputControl = numberBox;

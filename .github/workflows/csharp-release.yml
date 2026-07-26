@@ -96,7 +96,7 @@ jobs:
       env:
         BUILD_VERSION: ${{ steps.prep.outputs.version }}
       run: |
-        python src-python/build_csharp.py
+        python build_csharp.py
 
     - name: Delete Old Pre-Release Tag (if Prerelease)
       if: steps.prep.outputs.is_prerelease == 'true'

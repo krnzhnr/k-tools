@@ -10,12 +10,6 @@
     <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,4,12,12">
         <StackPanel Spacing="16">
 
-            <!-- Заголовок утилиты -->
-            <StackPanel Spacing="4">
-                <TextBlock Text="Пересадка аудиодорожки (DubSwap)" FontSize="18" FontWeight="Bold" Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
-                <TextBlock Text="Укажите исходный файл аудио/видео, целевой видеоконтейнер и выполните точное выравнивание." FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-            </StackPanel>
-
             <!-- 1. Исходное видео/аудио -->
             <Border BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                     BorderThickness="1"

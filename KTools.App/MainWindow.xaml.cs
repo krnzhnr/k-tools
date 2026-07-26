@@ -172,10 +172,26 @@ public sealed partial class MainWindow : Window
             float scaleFactor = dpi / 96.0f;
 
             double savedWidth = _settingsManager.GetSetting("Window", "Width", 800.0);
-            double savedHeight = _settingsManager.GetSetting("Window", "Height", 960.0);
+            double savedHeight = _settingsManager.GetSetting("Window", "Height", 740.0);
 
             int scaledWidth = (int)Math.Round(savedWidth * scaleFactor);
             int scaledHeight = (int)Math.Round(savedHeight * scaleFactor);
+
+            // Защита от вылезания окна за пределы рабочей области экрана при любом масштабе DPI
+            try
+            {
+                var windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(windowHandle);
+                var displayArea = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(windowId, Microsoft.UI.Windowing.DisplayAreaFallback.Nearest);
+                if (displayArea != null)
+                {
+                    int maxWorkAreaHeight = displayArea.WorkArea.Height - 40;
+                    if (scaledHeight > maxWorkAreaHeight)
+                    {
+                        scaledHeight = Math.Max(500, maxWorkAreaHeight);
+                    }
+                }
+            }
+            catch { }
 
             _logService.Info(
                 $"Вычисление размеров окна с учетом DPI. Текущее значение DPI: {dpi}, коэффициент масштабирования: {scaleFactor:F2}. " +
@@ -394,8 +410,28 @@ public sealed partial class MainWindow : Window
                 // Ограничиваем минимальную ширину и высоту размером по умолчанию с учетом DPI монитора
                 uint dpi = GetDpiForWindow(hWnd);
                 float scaleFactor = dpi / 96.0f;
+
+                // Сохраняем ширину 800 DIP для идеальной сетки 2 колонок на Home странице
                 minMax.ptMinTrackSize.x = (int)Math.Round(800 * scaleFactor);
-                minMax.ptMinTrackSize.y = (int)Math.Round(960 * scaleFactor);
+
+                // Минимальная высота: 620 DIP с защитой от вылезания за пределы экрана
+                int minHeight = (int)Math.Round(620 * scaleFactor);
+                try
+                {
+                    var windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(hWnd);
+                    var displayArea = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(windowId, Microsoft.UI.Windowing.DisplayAreaFallback.Nearest);
+                    if (displayArea != null)
+                    {
+                        int maxWorkHeight = displayArea.WorkArea.Height - 40;
+                        if (minHeight > maxWorkHeight)
+                        {
+                            minHeight = Math.Max(480, maxWorkHeight);
+                        }
+                    }
+                }
+                catch { }
+
+                minMax.ptMinTrackSize.y = minHeight;
                 
                 Marshal.StructureToPtr(minMax, lParam, false);
                 return IntPtr.Zero; // Сообщение обработано

@@ -10,7 +10,7 @@
     x:DataType="viewmodels:MainViewModel"
     mc:Ignorable="d">
 
-    <Grid>
+    <Grid x:Name="RootGrid" IsTabStop="True" PointerPressed="RootGrid_PointerPressed">
         <!-- Главное меню навигации приложения -->
         <NavigationView x:Name="NavView"
                          PaneDisplayMode="Left"

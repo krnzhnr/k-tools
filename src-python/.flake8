@@ -1,6 +1,0 @@
-[flake8]
-max-line-length = 79
-exclude = bin/, .git, __pycache__, venv/, .mypy_cache, .pytest_cache, dist/, .antigravity/
-count = True
-statistics = True
-show-source = True

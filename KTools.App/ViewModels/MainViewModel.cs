@@ -394,11 +394,13 @@ public partial class MainViewModel : ThreadSafeViewModel
         if (!string.IsNullOrEmpty(message.ScriptTag))
         {
             var cleanTag = message.ScriptTag.Trim().ToLowerInvariant();
+            var normalizedTag = cleanTag.Replace("_", " ");
 
             // 1. Поиск по точному совпадению ключа тега (например, "script:video_encoding" или "video_encoding")
             var key = _scriptsByTag.Keys.FirstOrDefault(k =>
                 k.Equals(cleanTag, StringComparison.OrdinalIgnoreCase) ||
-                k.Equals($"script:{cleanTag}", StringComparison.OrdinalIgnoreCase));
+                k.Equals($"script:{cleanTag}", StringComparison.OrdinalIgnoreCase) ||
+                k.Equals($"script:{normalizedTag}", StringComparison.OrdinalIgnoreCase));
 
             if (key != null)
             {
@@ -406,9 +408,10 @@ public partial class MainViewModel : ThreadSafeViewModel
             }
             else
             {
-                // 2. Поиск по началу имени скрипта (например, "Ремуксинг" или "Transmuxing")
+                // 2. Поиск по имени скрипта (например, "конвертация_субтитров" -> "конвертация субтитров")
                 var pair = _scriptsByTag.FirstOrDefault(p =>
                     p.Value.Name.Contains(message.ScriptTag, StringComparison.OrdinalIgnoreCase) ||
+                    p.Value.Name.Contains(normalizedTag, StringComparison.OrdinalIgnoreCase) ||
                     p.Key.Contains(cleanTag, StringComparison.OrdinalIgnoreCase));
                 if (pair.Key != null)
                 {
