@@ -203,3 +203,5 @@ CLAUDE.md
 *.msix
 devcert.pfx
 /.vscode
+TEACHING_GUIDES_PLAN.md
+.agents/AGENTS.md

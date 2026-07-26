@@ -244,53 +244,51 @@
                     </community:SettingsExpander.HeaderIcon>
                     
                     <community:SettingsExpander.Items>
-                        <Border
-                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                            BorderThickness="1"
-                            CornerRadius="8"
-                            Padding="16"
-                            HorizontalAlignment="Stretch">
-                            <ContentControl IsEnabled="{x:Bind ViewModel.RenameEnableRegex, Mode=OneWay}" HorizontalContentAlignment="Stretch">
-                                <StackPanel Spacing="16" HorizontalAlignment="Stretch">
-                                <StackPanel Spacing="8">
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="Auto" />
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock Text="Шаблоны поиска" FontWeight="SemiBold" FontSize="14" VerticalAlignment="Center"/>
-                                        <Button Grid.Column="1" Style="{ThemeResource DefaultButtonStyle}" Click="AddSearchTemplate_Click">
-                                            <StackPanel Orientation="Horizontal" Spacing="8">
-                                                <FontIcon Glyph="&#xE710;" FontSize="12"/>
-                                                <TextBlock Text="Добавить" FontSize="12"/>
-                                            </StackPanel>
-                                        </Button>
-                                    </Grid>
-                                    <StackPanel x:Name="SearchTemplatesContainer" Spacing="6" HorizontalAlignment="Stretch" />
-                                </StackPanel>
-
-                                <MenuFlyoutSeparator Margin="0,4,0,4"/>
-
-                                <StackPanel Spacing="8">
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="Auto" />
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock Text="Шаблоны автозамены" FontWeight="SemiBold" FontSize="14" VerticalAlignment="Center"/>
-                                        <Button Grid.Column="1" Style="{ThemeResource DefaultButtonStyle}" Click="AddReplaceTemplate_Click">
-                                            <StackPanel Orientation="Horizontal" Spacing="8">
-                                                <FontIcon Glyph="&#xE710;" FontSize="12"/>
-                                                <TextBlock Text="Добавить" FontSize="12"/>
-                                            </StackPanel>
-                                        </Button>
-                                    </Grid>
-                                    <StackPanel x:Name="ReplaceTemplatesContainer" Spacing="6" HorizontalAlignment="Stretch" />
-                                </StackPanel>
+                        <community:SettingsCard
+                            Header="Шаблоны поиска"
+                            Description="Настройте регулярные выражения для быстрой вставки"
+                            ContentAlignment="Vertical"
+                            HorizontalContentAlignment="Stretch"
+                            IsEnabled="{x:Bind ViewModel.RenameEnableRegex, Mode=OneWay}">
+                            <StackPanel Spacing="8" HorizontalAlignment="Stretch">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <Button Grid.Column="1" Style="{ThemeResource DefaultButtonStyle}" Click="AddSearchTemplate_Click">
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                            <FontIcon Glyph="&#xE710;" FontSize="12"/>
+                                            <TextBlock Text="Добавить шаблон" FontSize="12"/>
+                                        </StackPanel>
+                                    </Button>
+                                </Grid>
+                                <StackPanel x:Name="SearchTemplatesContainer" Spacing="6" HorizontalAlignment="Stretch" />
                             </StackPanel>
-                            </ContentControl>
-                        </Border>
+                        </community:SettingsCard>
+
+                        <community:SettingsCard
+                            Header="Шаблоны автозамены"
+                            Description="Настройте переменные и макросы замены"
+                            ContentAlignment="Vertical"
+                            HorizontalContentAlignment="Stretch"
+                            IsEnabled="{x:Bind ViewModel.RenameEnableRegex, Mode=OneWay}">
+                            <StackPanel Spacing="8" HorizontalAlignment="Stretch">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <Button Grid.Column="1" Style="{ThemeResource DefaultButtonStyle}" Click="AddReplaceTemplate_Click">
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                            <FontIcon Glyph="&#xE710;" FontSize="12"/>
+                                            <TextBlock Text="Добавить шаблон" FontSize="12"/>
+                                        </StackPanel>
+                                    </Button>
+                                </Grid>
+                                <StackPanel x:Name="ReplaceTemplatesContainer" Spacing="6" HorizontalAlignment="Stretch" />
+                            </StackPanel>
+                        </community:SettingsCard>
                     </community:SettingsExpander.Items>
                 </community:SettingsExpander>
             </StackPanel>
