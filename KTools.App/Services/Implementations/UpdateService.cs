@@ -263,18 +263,19 @@ public sealed class UpdateService : IUpdateService
                 }
             }
 
-            _logService.Info($"Файл обновления успешно скачан: {tempFilePath}. Запуск процесса установки...", "UpdateService");
+            _logService.Info($"Файл обновления успешно скачан: {tempFilePath}. Запуск процесса бесшумного обновления...", "UpdateService");
 
-            // Запускаем инсталлятор во внешнем процессе
+            // Запускаем инсталлятор во внешнем процессе с ключами /SILENT /SUPPRESSMSGBOXES
             var processStartInfo = new System.Diagnostics.ProcessStartInfo
             {
                 FileName = tempFilePath,
-                UseShellExecute = true // Обязательный параметр в .NET 8 для запуска exe файлов напрямую
+                Arguments = "/SILENT /SUPPRESSMSGBOXES",
+                UseShellExecute = true // Обязательный параметр в .NET 10 для запуска exe файлов напрямую
             };
 
             System.Diagnostics.Process.Start(processStartInfo);
 
-            _logService.Info("Процесс установщика успешно запущен. Завершение работы текущего приложения для возможности перезаписи файлов.", "UpdateService");
+            _logService.Info("Процесс установщика успешно запущен. Завершение работы текущего приложения для перезаписи файлов и автоматического перезапуска.", "UpdateService");
 
             // Безопасно выходим из приложения
             Microsoft.UI.Xaml.Application.Current.Exit();

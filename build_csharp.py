@@ -157,6 +157,20 @@ def generate_inno_script(version: str, publish_dir: Path) -> Path:
     output_dir = BASE_DIR / "setup_output"
     icon_file = SRC_DIR / "KTools.App" / "Assets" / "AppIcon.ico"
     decoders_exe = BASE_DIR / "bin" / "eac3to_decoders" / "eac3to Decoder Pack 1.4.exe"
+    # Флаг временного включения/отключения упаковывания декодеров eac3to в инсталлятор
+    include_decoders = False and decoders_exe.exists()
+
+    components_section = """[Components]
+Name: "main"; Description: "Основные файлы KTools"; Types: full compact custom; Flags: fixed"""
+    if include_decoders:
+        components_section += '\nName: "decoders"; Description: "Декодеры eac3to (опционально, для работы с DTS/DTS-HD)"; Types: custom; Flags: dontinheritcheck'
+
+    files_decoders_line = f'Source: "{decoders_exe}"; DestDir: "{{tmp}}"; Flags: deleteafterinstall; Components: decoders' if include_decoders else ''
+
+    run_decoders_line = f"""Filename: "{{tmp}}\\eac3to Decoder Pack 1.4.exe"; \\
+Parameters: "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART"; \\
+StatusMsg: "Установка декодеров для eac3to..."; \\
+Flags: runascurrentuser; Components: decoders""" if include_decoders else ''
 
     iss_content = f"""; === АВТОМАТИЧЕСКИ СГЕНЕРИРОВАННЫЙ СКРИПТ INNO SETUP ===
 [Setup]
@@ -175,9 +189,7 @@ SolidCompression=yes
 LZMADictionarySize=65536
 ArchitecturesInstallIn64BitMode=x64compatible
 
-[Components]
-Name: "main"; Description: "Основные файлы KTools"; Types: full compact custom; Flags: fixed
-Name: "decoders"; Description: "Декодеры eac3to (требуются для работы с AAC/DTS/AC3)"; Types: full
+{components_section}
 
 [Tasks]
 Name: "desktopicon"; Description: "{{cm:CreateDesktopIcon}}"; \\
@@ -187,9 +199,7 @@ GroupDescription: "{{cm:AdditionalIcons}}"; Flags: unchecked
 ; Основная папка публикации .NET self-contained
 Source: "{publish_dir}\\*"; DestDir: "{{app}}"; \\
 Flags: ignoreversion recursesubdirs createallsubdirs
-; Установщик декодеров eac3to
-Source: "{decoders_exe}"; DestDir: "{{tmp}}"; \\
-Flags: deleteafterinstall; Components: decoders
+{files_decoders_line}
 
 [Icons]
 Name: "{{group}}\\KTools"; \\
@@ -204,10 +214,9 @@ Tasks: desktopicon
 Filename: "{{app}}\\KTools.App.exe"; \\
 Description: "{{cm:LaunchProgram,KTools}}"; \\
 Flags: nowait postinstall skipifsilent
-Filename: "{{tmp}}\\eac3to Decoder Pack 1.4.exe"; \\
-Parameters: "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART"; \\
-StatusMsg: "Установка декодеров для eac3to..."; \\
-Flags: runascurrentuser; Components: decoders
+Filename: "{{app}}\\KTools.App.exe"; \\
+Flags: nowait; Check: IsSilentUpdate
+{run_decoders_line}
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{{app}}\\bin"
@@ -217,6 +226,23 @@ Root: HKCU; Subkey: "Software\\Classes\\*\\shell\\KTools"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\\Classes\\Directory\\shell\\KTools"; Flags: uninsdeletekey
 
 [Code]
+function IsSilentUpdate: Boolean;
+begin
+  Result := WizardSilent;
+end;
+
+function GetInstallDir(const AppIdStr: String): String;
+var
+  sUnInstPath: String;
+  sInstallDir: String;
+begin
+  sUnInstPath := 'Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\' + AppIdStr + '_is1';
+  sInstallDir := '';
+  if not RegQueryStringValue(HKLM, sUnInstPath, 'InstallLocation', sInstallDir) then
+    RegQueryStringValue(HKCU, sUnInstPath, 'InstallLocation', sInstallDir);
+  Result := sInstallDir;
+end;
+
 function GetUninstallString(const AppIdStr: String): String;
 var
   sUnInstPath: String;
@@ -232,13 +258,24 @@ end;
 procedure RemoveOldVersion(const AppIdStr: String);
 var
   sUnInstallString: String;
+  sInstallDir: String;
   iResultCode: Integer;
 begin
+  sInstallDir := GetInstallDir(AppIdStr);
   sUnInstallString := GetUninstallString(AppIdStr);
   if sUnInstallString <> '' then
   begin
+    if sInstallDir = '' then
+    begin
+      sInstallDir := ExtractFilePath(RemoveQuotes(sUnInstallString));
+    end;
     sUnInstallString := RemoveQuotes(sUnInstallString);
     Exec(sUnInstallString, '/VERYSILENT /NORESTART /SUPPRESSMSGBOXES', '', SW_HIDE, ewWaitUntilTerminated, iResultCode);
+    // Принудительно удаляем оставшуюся папку со старыми файлами Python версии
+    if (sInstallDir <> '') and DirExists(sInstallDir) then
+    begin
+      DelTree(sInstallDir, True, True, True);
+    end;
   end;
 end;
 
@@ -251,8 +288,8 @@ begin
     RemoveOldVersion('krnzhnr.ktools.csharp.v2');
     RemoveOldVersion('krnzhnr.ktools.v2');
     // Удаление устаревших ярлыков с дефисом
-    DeleteFile(ExpandConstant('{{autodesktop}}\\K-Tools.lnk'));
-    DeleteFile(ExpandConstant('{{userdesktop}}\\K-Tools.lnk'));
+    DeleteFile(ExpandConstant('{{autodesktop}}\K-Tools.lnk'));
+    DeleteFile(ExpandConstant('{{userdesktop}}\K-Tools.lnk'));
   end;
 end;
 """

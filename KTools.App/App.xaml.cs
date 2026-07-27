@@ -391,16 +391,17 @@ public partial class App : Application
                     File.Delete(file);
 
                     var (script, filesList) = ParseCommandLineArray(args);
-                    if (!string.IsNullOrEmpty(script) || filesList.Count > 0)
+                    if (UiDispatcherQueue is Microsoft.UI.Dispatching.DispatcherQueue dispatcherQueue)
                     {
-                        if (UiDispatcherQueue is Microsoft.UI.Dispatching.DispatcherQueue dispatcherQueue)
+                        dispatcherQueue.TryEnqueue(() =>
                         {
-                            dispatcherQueue.TryEnqueue(() =>
+                            _logService?.Info($"Обработка перенаправленных файлов из файла аргументов. Скрипт: {script ?? "нет"}, файлов: {filesList.Count}", "App");
+                            BringMainWindowToFront();
+                            if (!string.IsNullOrEmpty(script) || filesList.Count > 0)
                             {
-                                _logService?.Info($"Обработка перенаправленных файлов из файла аргументов. Скрипт: {script ?? "нет"}, файлов: {filesList.Count}", "App");
                                 WeakReferenceMessenger.Default.Send(new ShellActivationMessage(script, filesList));
-                            });
-                        }
+                            }
+                        });
                     }
                 }
                 catch (IOException)
@@ -455,6 +456,52 @@ public partial class App : Application
         catch (Exception ex)
         {
             _logService?.Exception(ex, "Ошибка при инициализации FileSystemWatcher для аргументов запуска", "App");
+        }
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static extern bool IsIconic(IntPtr hWnd);
+
+    private const int SW_RESTORE = 9;
+    private const int SW_SHOW = 5;
+
+    /// <summary>
+    /// Выводит главное окно приложения на передний план, восстанавливая его из свернутого состояния при необходимости.
+    /// </summary>
+    public static void BringMainWindowToFront()
+    {
+        if (CurrentMainWindow == null) return;
+
+        try
+        {
+            IntPtr hwnd = WinRT.Interop.WindowNative.GetWindowHandle(CurrentMainWindow);
+            if (hwnd != IntPtr.Zero)
+            {
+                if (IsIconic(hwnd))
+                {
+                    ShowWindow(hwnd, SW_RESTORE);
+                }
+                else
+                {
+                    ShowWindow(hwnd, SW_SHOW);
+                }
+                SetForegroundWindow(hwnd);
+            }
+
+            CurrentMainWindow.Activate();
+        }
+        catch (Exception ex)
+        {
+            _logService?.Error($"Не удалось вывести главное окно на передний план: {ex.Message}", "App");
         }
     }
 
