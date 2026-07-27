@@ -52,6 +52,11 @@ public interface IDependencyManager
     bool IsInstalled(string key);
 
     /// <summary>
+    /// Проверить, доступно ли обновление для указанной зависимости.
+    /// </summary>
+    bool IsUpdateAvailable(string key);
+
+    /// <summary>
     /// Проверить, установлены ли все обязательные зависимости (ffmpeg, mkvtoolnix).
     /// </summary>
     bool AreRequiredDependenciesInstalled();

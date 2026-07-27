@@ -13,4 +13,10 @@ public interface IMediaProbeService
     /// Асинхронно анализирует медиафайл и возвращает его структуру (дорожки, вложения, длительность).
     /// </summary>
     Task<MediaStructure?> ProbeAsync(string filePath);
+
+    /// <summary>
+    /// Дополнительно обогащает названия дорожек из ffprobe, если они отсутствуют.
+    /// Вызывается точечно по запросу для предотвращения замедления первичного сканирования.
+    /// </summary>
+    Task EnrichTrackNamesAsync(MediaStructure structure);
 }

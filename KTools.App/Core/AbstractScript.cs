@@ -149,10 +149,17 @@ public abstract class AbstractScript
     /// </summary>
     public virtual string[] RequiredDependencies => Array.Empty<string>();
 
+    private System.Threading.CancellationTokenSource _cts = new();
+
+    /// <summary>
+    /// Токен отмены выполнения текущего скрипта.
+    /// </summary>
+    public System.Threading.CancellationToken CancellationToken => _cts.Token;
+
     /// <summary>
     /// Проверить, была ли отправлена команда отмены выполнения скрипта.
     /// </summary>
-    public bool IsCancelled => _isCancelled;
+    public bool IsCancelled => _isCancelled || _cts.IsCancellationRequested;
 
     /// <summary>
     /// Инициировать отмену выполнения текущего скрипта.
@@ -160,6 +167,17 @@ public abstract class AbstractScript
     public virtual void Cancel()
     {
         _isCancelled = true;
+        try
+        {
+            if (!_cts.IsCancellationRequested)
+            {
+                _cts.Cancel();
+            }
+        }
+        catch (Exception ex)
+        {
+            _logService?.Warn($"Исключение при отмене CancellationTokenSource в {GetType().Name}: {ex.Message}", GetType().Name);
+        }
     }
 
     /// <summary>
@@ -168,6 +186,12 @@ public abstract class AbstractScript
     public virtual void ResetCancellation()
     {
         _isCancelled = false;
+        try
+        {
+            _cts.Dispose();
+        }
+        catch { }
+        _cts = new System.Threading.CancellationTokenSource();
     }
 
     protected ILogService _logService { get; }
@@ -531,9 +555,9 @@ public abstract class AbstractScript
                         stem = System.Text.RegularExpressions.Regex.Replace(stem, System.Text.RegularExpressions.Regex.Escape(pattern), resolvedReplacement, options);
                     }
                 }
-                catch
+                catch (Exception ex)
                 {
-                    // Игнорируем ошибки при предпросмотре
+                    _logService?.DebugLog($"Ошибка при предпросмотре шаблона переименования: {ex.Message}", "AbstractScript");
                 }
             }
 
@@ -546,8 +570,9 @@ public abstract class AbstractScript
 
             return outResolved;
         }
-        catch
+        catch (Exception ex)
         {
+            _logService?.DebugLog($"Ошибка при резолвинге выходного пути шаблона: {ex.Message}", "AbstractScript");
             return outputPath;
         }
     }
@@ -585,10 +610,10 @@ public abstract class AbstractScript
     }
 
     /// <summary>
-    /// Физически удаляет исходный файл с диска и заносит лог в результаты.
+    /// Физически удаляет исходный файл с диска и заносит лог в результаты (асинхронно).
     /// При возникновении ошибок доступа (например, файл занят другим процессом) выполняется несколько попыток повтора с задержкой.
     /// </summary>
-    protected void DeleteSource(string filePath, List<string> results)
+    protected async Task DeleteSourceAsync(string filePath, List<string> results)
     {
         const int maxRetries = 5;
         const int delayMs = 500;
@@ -611,7 +636,7 @@ public abstract class AbstractScript
                 string lockingInfo = FileLockDetector.GetLockingProcessesInfo(filePath, _logService);
                 string procSuffix = string.IsNullOrEmpty(lockingInfo) ? "процесс неизвестен" : $"заблокирован процессами: {lockingInfo}";
                 _logService.Warn($"Попытка удаления исходника {attempt}/{maxRetries} не удалась (файл занят, {procSuffix}): {ioEx.Message}. Повторная попытка через {delayMs} мс.", "AbstractScript");
-                Thread.Sleep(delayMs);
+                await Task.Delay(delayMs);
             }
             catch (Exception ex)
             {
@@ -628,11 +653,16 @@ public abstract class AbstractScript
         _logService.Error($"Не удалось физически удалить исходный файл '{filePath}' после {maxRetries} попыток. Файл {finalProcStr}.", "AbstractScript");
     }
 
+    protected void DeleteSource(string filePath, List<string> results)
+    {
+        DeleteSourceAsync(filePath, results).GetAwaiter().GetResult();
+    }
+
     /// <summary>
-    /// Физически заменяет исходный файл полученным результатом с сохранением имени оригинала.
+    /// Физически заменяет исходный файл полученным результатом с сохранением имени оригинала (асинхронно).
     /// При возникновении ошибок доступа (например, файл занят другим процессом) выполняется несколько попыток повтора с задержкой.
     /// </summary>
-    protected bool ReplaceSourceWithResult(string sourcePath, string resultPath, List<string> results)
+    protected async Task<bool> ReplaceSourceWithResultAsync(string sourcePath, string resultPath, List<string> results)
     {
         const int maxRetries = 5;
         const int delayMs = 500;
@@ -657,7 +687,7 @@ public abstract class AbstractScript
                 string lockingInfo = FileLockDetector.GetLockingProcessesInfo(sourcePath, _logService);
                 string procSuffix = string.IsNullOrEmpty(lockingInfo) ? "процесс неизвестен" : $"заблокирован процессами: {lockingInfo}";
                 _logService.Warn($"Попытка подмены оригинала {attempt}/{maxRetries} не удалась (файл занят, {procSuffix}): {ioEx.Message}. Повторная попытка через {delayMs} мс.", "AbstractScript");
-                Thread.Sleep(delayMs);
+                await Task.Delay(delayMs);
             }
             catch (Exception ex)
             {
@@ -673,6 +703,11 @@ public abstract class AbstractScript
         results.Add(failMsg);
         _logService.Error($"Не удалось подменить оригинальный файл '{sourcePath}' результатом '{resultPath}' после {maxRetries} попыток. Файл {finalProcStr}.", "AbstractScript");
         return false;
+    }
+
+    protected bool ReplaceSourceWithResult(string sourcePath, string resultPath, List<string> results)
+    {
+        return ReplaceSourceWithResultAsync(sourcePath, resultPath, results).GetAwaiter().GetResult();
     }
 
     /// <summary>

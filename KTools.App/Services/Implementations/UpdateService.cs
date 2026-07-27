@@ -223,6 +223,18 @@ public sealed class UpdateService : IUpdateService
         string tempFilePath = Path.Combine(Path.GetTempPath(), fileName);
         _logService.DebugLog($"Файл будет временно сохранен по пути: {tempFilePath}", "UpdateService");
 
+        if (File.Exists(tempFilePath))
+        {
+            try
+            {
+                File.Delete(tempFilePath);
+            }
+            catch (Exception delEx)
+            {
+                _logService.Warn($"Не удалось заранее удалить временный файл обновления '{tempFilePath}': {delEx.Message}", "UpdateService");
+            }
+        }
+
         try
         {
             // Скачиваем файл с отслеживанием прогресса

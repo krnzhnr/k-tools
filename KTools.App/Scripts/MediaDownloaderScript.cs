@@ -189,7 +189,7 @@ public sealed class MediaDownloaderScript : AbstractScript
 
                         if (IsCancelled)
                         {
-                            try { process.Kill(true); } catch { }
+                            try { process.Kill(true); } catch (Exception killEx) { _logService.Warn($"Не удалось завершить процесс yt-dlp при отмене: {killEx.Message}", "MediaDownloaderScript"); }
                             break;
                         }
 
@@ -252,7 +252,7 @@ public sealed class MediaDownloaderScript : AbstractScript
 
                         if (IsCancelled)
                         {
-                            try { process.Kill(true); } catch { }
+                            try { process.Kill(true); } catch (Exception killEx) { _logService.Warn($"Не удалось завершить процесс yt-dlp при отмене: {killEx.Message}", "MediaDownloaderScript"); }
                             break;
                         }
                     }

@@ -60,7 +60,10 @@ public partial class App : Application
             {
                 _logService?.Fatal(report, "App.UnhandledException");
             }
-            catch { }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[FATAL] Ошибка при записи в лог перехваченного WinUI3 исключения: {ex.Message}");
+            }
             e.Handled = true; // Попытка не дать процессу упасть
         };
 
@@ -76,7 +79,10 @@ public partial class App : Application
             {
                 _logService?.Fatal(report, "AppDomain.UnhandledException");
             }
-            catch { }
+            catch (Exception logEx)
+            {
+                System.Diagnostics.Debug.WriteLine($"[FATAL] Ошибка при записи в лог перехваченного AppDomain исключения: {logEx.Message}");
+            }
         };
 
         // 3. TaskScheduler — ловит исключения из fire-and-forget async Task
@@ -88,7 +94,10 @@ public partial class App : Application
             {
                 _logService?.Error(report, "TaskScheduler.UnobservedException");
             }
-            catch { }
+            catch (Exception logEx)
+            {
+                System.Diagnostics.Debug.WriteLine($"[FATAL] Ошибка при записи в лог перехваченного TaskScheduler исключения: {logEx.Message}");
+            }
             e.SetObserved();
         };
 
@@ -169,7 +178,10 @@ public partial class App : Application
                 report + Environment.NewLine,
                 System.Text.Encoding.UTF8);
         }
-        catch { }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[FATAL] Ошибка при записи файла краш-отчёта в LocalAppData: {ex.Message}");
+        }
 
         // 2. Попытка записи рядом с exe
         try
@@ -181,7 +193,10 @@ public partial class App : Application
                 report + Environment.NewLine,
                 System.Text.Encoding.UTF8);
         }
-        catch { }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[FATAL] Ошибка при записи файла краш-отчёта в папку exe: {ex.Message}");
+        }
     }
 
     /// <summary>
@@ -325,6 +340,18 @@ public partial class App : Application
             // Создаём и активируем главное окно
             var window = Services.GetRequiredService<MainWindow>();
             CurrentMainWindow = window;
+            window.Closed += (s, e) =>
+            {
+                try
+                {
+                    _argsWatcher?.Dispose();
+                    _argsWatcher = null;
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[App] Ошибка при освобождении FileSystemWatcher: {ex.Message}");
+                }
+            };
 
             // Инициализируем провайдер дескриптора окна
             var handleProvider = Services
@@ -383,13 +410,35 @@ public partial class App : Application
             string[] files = Directory.GetFiles(dir, "*.txt");
             foreach (string file in files)
             {
+                string[]? args = null;
+                for (int attempt = 0; attempt < 3; attempt++)
+                {
+                    try
+                    {
+                        if (!File.Exists(file)) break;
+                        args = File.ReadAllLines(file);
+                        File.Delete(file);
+                        break;
+                    }
+                    catch (IOException ioEx)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[PendingArgs] Попытка {attempt + 1}/3: файл '{file}' занят другом процессом: {ioEx.Message}");
+                        if (attempt < 2)
+                        {
+                            System.Threading.Thread.Sleep((attempt + 1) * 150);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logService?.Exception(ex, $"Ошибка при чтении файла отложенных аргументов: {file}", "App");
+                        break;
+                    }
+                }
+
+                if (args == null || args.Length == 0) continue;
+
                 try
                 {
-                    if (!File.Exists(file)) continue;
-
-                    string[] args = File.ReadAllLines(file);
-                    File.Delete(file);
-
                     var (script, filesList) = ParseCommandLineArray(args);
                     if (UiDispatcherQueue is Microsoft.UI.Dispatching.DispatcherQueue dispatcherQueue)
                     {
@@ -404,13 +453,9 @@ public partial class App : Application
                         });
                     }
                 }
-                catch (IOException)
-                {
-                    // Файл занят другим процессом, обработаем при следующем вызове
-                }
                 catch (Exception ex)
                 {
-                    _logService?.Exception(ex, "Ошибка при обработке файла отложенных аргументов", "App");
+                    _logService?.Exception(ex, "Ошибка при обработке разобранных аргументов", "App");
                 }
             }
         }

@@ -853,7 +853,7 @@ public sealed class VideoEncodingScript : AbstractScript
                 {
                     string vCodec = vTracks[0].Codec.ToLowerInvariant();
                     // Проверяем доступные декодеры CUVID
-                    var decoders = GetAvailableCuvidDecoders();
+                    var decoders = await GetAvailableCuvidDecodersAsync(CancellationToken);
                     string? cuvid = null;
 
                     var mapping = new Dictionary<string, string>
@@ -1007,16 +1007,23 @@ public sealed class VideoEncodingScript : AbstractScript
     /// <summary>
     /// Вычисляет список доступных в системе CUVID декодеров.
     /// </summary>
-    private static HashSet<string> GetAvailableCuvidDecoders()
+    private async Task<HashSet<string>> GetAvailableCuvidDecodersAsync(CancellationToken cancellationToken = default)
     {
         var decoders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        string ffmpegPath = _pathManager.GetBinaryPath("ffmpeg");
+        if (string.IsNullOrWhiteSpace(ffmpegPath) || !File.Exists(ffmpegPath))
+        {
+            _logService.Warn("kt-ffmpeg не найден, определение CUVID-декодеров пропущено", "VideoEncodingScript");
+            return decoders;
+        }
+
         try
         {
             using var process = new System.Diagnostics.Process
             {
                 StartInfo = new System.Diagnostics.ProcessStartInfo
                 {
-                    FileName = "ffmpeg",
+                    FileName = ffmpegPath,
                     Arguments = "-decoders",
                     CreateNoWindow = true,
                     UseShellExecute = false,
@@ -1024,28 +1031,37 @@ public sealed class VideoEncodingScript : AbstractScript
                 }
             };
             process.Start();
-            using var reader = process.StandardOutput;
-            string? line;
-            while ((line = reader.ReadLine()) != null)
+            ActiveProcessTracker.Register(process);
+
+            try
             {
-                if (line.Contains("_cuvid", StringComparison.OrdinalIgnoreCase))
+                using var reader = process.StandardOutput;
+                string? line;
+                while ((line = await reader.ReadLineAsync(cancellationToken)) != null)
                 {
-                    // Извлекаем название декодера (обычно второе слово в строке)
-                    var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                    foreach (var part in parts)
+                    if (line.Contains("_cuvid", StringComparison.OrdinalIgnoreCase))
                     {
-                        if (part.Contains("_cuvid", StringComparison.OrdinalIgnoreCase))
+                        // Извлекаем название декодера (обычно второе слово в строке)
+                        var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                        foreach (var part in parts)
                         {
-                            decoders.Add(part.Trim());
+                            if (part.Contains("_cuvid", StringComparison.OrdinalIgnoreCase))
+                            {
+                                decoders.Add(part.Trim());
+                            }
                         }
                     }
                 }
+                await process.WaitForExitAsync(cancellationToken);
             }
-            process.WaitForExit();
+            finally
+            {
+                ActiveProcessTracker.Unregister(process);
+            }
         }
-        catch
+        catch (Exception ex)
         {
-            // Ошибки при получении игнорируем
+            _logService.Warn($"Не удалось определить доступные CUVID-декодеры: {ex.Message}", "VideoEncodingScript");
         }
         return decoders;
     }

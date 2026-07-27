@@ -48,7 +48,17 @@ public sealed class AudioWaveformService : IAudioWaveformService
         string ffmpegPath = _pathManager.GetBinaryPath("ffmpeg");
         if (string.IsNullOrWhiteSpace(ffmpegPath) || !File.Exists(ffmpegPath))
         {
-            ffmpegPath = "ffmpeg";
+            _logService.Warn("kt-ffmpeg не найден, построение осциллограммы невозможно", "AudioWaveformService");
+            return new WaveformLevelData
+            {
+                SampleRate = 44100,
+                TotalDurationSeconds = 0.0,
+                Peaks1000Hz = Array.Empty<WaveformPeak>(),
+                Peaks200Hz = Array.Empty<WaveformPeak>(),
+                Peaks50Hz = Array.Empty<WaveformPeak>(),
+                Peaks10Hz = Array.Empty<WaveformPeak>(),
+                Peaks1Hz = Array.Empty<WaveformPeak>()
+            };
         }
 
         string tempWavPath = Path.Combine(Path.GetTempPath(), $"waveform_{Guid.NewGuid():N}.wav");

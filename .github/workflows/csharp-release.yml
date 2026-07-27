@@ -92,6 +92,10 @@ jobs:
       run: |
         choco install innosetup
 
+    - name: Run Unit Tests
+      run: |
+        dotnet test KTools.App.Tests/KTools.App.Tests.csproj -c Release -p:Platform=x64 --no-restore
+
     - name: Build C# App and Installer
       env:
         BUILD_VERSION: ${{ steps.prep.outputs.version }}

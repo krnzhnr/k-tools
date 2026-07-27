@@ -322,6 +322,20 @@ public class DependencyManager : IDependencyManager
         return dep != null && IsBinaryPresent(dep);
     }
 
+    private bool _ytDlpUpdateAvailable;
+
+    /// <summary>
+    /// Проверяет, доступно ли обновление для указанной зависимости.
+    /// </summary>
+    public bool IsUpdateAvailable(string key)
+    {
+        if (key.Equals("yt-dlp", StringComparison.OrdinalIgnoreCase))
+        {
+            return _ytDlpUpdateAvailable;
+        }
+        return false;
+    }
+
     /// <summary>
     /// Проверяет, установлены ли все обязательные зависимости приложения.
     /// </summary>
@@ -743,7 +757,7 @@ public class DependencyManager : IDependencyManager
                         "reg delete \"HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{167887DA-6C4F-4265-8139-8750A543FD52}_is1\" /f >nul 2>&1"
                     };
 
-                    File.WriteAllLines(tempBatPath, commands, System.Text.Encoding.UTF8);
+                    File.WriteAllLines(tempBatPath, commands, System.Text.Encoding.ASCII);
 
                     _logService.Info($"Запуск временного батника удаления '{tempBatPath}' с правами администратора", "DependencyManager");
                     var startInfo = new ProcessStartInfo
@@ -932,11 +946,13 @@ public class DependencyManager : IDependencyManager
 
             if (latestTag.Equals(localVersion, StringComparison.OrdinalIgnoreCase))
             {
+                _ytDlpUpdateAvailable = false;
                 _logService.Info("Установлена актуальная версия yt-dlp. Обновление не требуется.", "DependencyManager");
                 return;
             }
 
-            // Если версии не совпадают, запускаем установку/обновление
+            // Если версии не совпадают, фиксируем наличие обновления и запускаем установку/обновление
+            _ytDlpUpdateAvailable = true;
             _logService.Info($"Обнаружена новая версия yt-dlp: {latestTag}. Запуск автоматического обновления...", "DependencyManager");
             
             // Запускаем асинхронную установку
@@ -945,6 +961,7 @@ public class DependencyManager : IDependencyManager
             // Если установка завершилась успехом, сохраняем новую версию в настройки
             if (IsInstalled("yt-dlp"))
             {
+                _ytDlpUpdateAvailable = false;
                 _settingsManager.SetSetting("Updates", "YtDlpInstalledVersion", latestTag);
                 _logService.Info($"yt-dlp успешно обновлен до версии {latestTag}", "DependencyManager");
             }

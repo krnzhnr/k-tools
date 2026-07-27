@@ -54,8 +54,8 @@ public sealed class MediaProbeService : IMediaProbeService
         {
             if (_probeSemaphore == null || _currentMaxParallel != targetParallel)
             {
-                _probeSemaphore?.Dispose();
-                _probeSemaphore = new System.Threading.SemaphoreSlim(targetParallel, targetParallel);
+                var newSemaphore = new System.Threading.SemaphoreSlim(targetParallel, targetParallel);
+                System.Threading.Interlocked.Exchange(ref _probeSemaphore, newSemaphore);
                 _currentMaxParallel = targetParallel;
             }
             return _probeSemaphore;
@@ -413,7 +413,7 @@ public sealed class MediaProbeService : IMediaProbeService
     /// Обогащает пустые заголовки дорожек MKV данными из ffprobe.
     /// Сопоставление дорожек производится по типу и относительному индексу.
     /// </summary>
-    private async Task EnrichTrackNamesAsync(MediaStructure structure)
+    public async Task EnrichTrackNamesAsync(MediaStructure structure)
     {
         try
         {

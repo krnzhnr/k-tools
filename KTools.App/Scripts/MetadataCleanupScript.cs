@@ -169,7 +169,7 @@ public sealed class MetadataCleanupScript : AbstractScript
                         string? line = await process.StandardError.ReadLineAsync();
                         if (IsCancelled)
                         {
-                            try { process.Kill(); } catch { }
+                            try { process.Kill(); } catch (Exception killEx) { _logService.Warn($"Не удалось принудительно завершить ffmpeg при отмене: {killEx.Message}", "MetadataCleanupScript"); }
                             break;
                         }
                     }
@@ -182,7 +182,7 @@ public sealed class MetadataCleanupScript : AbstractScript
                     // При отмене удаляем временный файл
                     if (File.Exists(outputFilePath))
                     {
-                        try { File.Delete(outputFilePath); } catch { }
+                        try { File.Delete(outputFilePath); } catch (Exception deleteEx) { _logService.Warn($"Не удалось удалить временный файл после отмены: {deleteEx.Message}", "MetadataCleanupScript"); }
                     }
                     results.Add($"⚠ Отменено: {outputName}");
                     return results;

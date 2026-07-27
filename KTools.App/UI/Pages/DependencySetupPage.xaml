@@ -116,6 +116,13 @@
                                 Visibility="{x:Bind InstallButtonVisibility, Mode=OneWay}"
                                 Command="{x:Bind InstallCommand}" />
 
+                        <!-- Кнопка Обновить (видна при наличии новой версии) -->
+                        <Button Content="Обновить" 
+                                Style="{StaticResource AccentButtonStyle}"
+                                HorizontalAlignment="Stretch"
+                                Visibility="{x:Bind UpdateButtonVisibility, Mode=OneWay}"
+                                Command="{x:Bind UpdateCommand}" />
+
                         <!-- Кнопка Отмена (видна при Downloading/Extracting) -->
                         <Button Content="Отмена" 
                                 HorizontalAlignment="Stretch"

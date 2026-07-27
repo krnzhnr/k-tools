@@ -85,11 +85,19 @@ def prompt_version_update() -> str:
 
 def find_publish_folder() -> Path:
     """Динамически находит папку публикации publish."""
+    bin_dir = SRC_DIR / "KTools.App" / "bin"
+    if bin_dir.exists():
+        matches = list(bin_dir.rglob(f"publish/{EXE_BASE_NAME}.exe"))
+        # Фильтруем Release сборки
+        release_matches = [m.parent for m in matches if "Release" in str(m)]
+        if release_matches:
+            return release_matches[0]
+        if matches:
+            return matches[0].parent
+
     candidates = [
         SRC_DIR / "KTools.App" / "bin" / "Release" / "net10.0-windows10.0.26100.0" / "win-x64" / "publish",
-        SRC_DIR / "KTools.App" / "bin" / "x64" / "Release" / "net10.0-windows10.0.26100.0" / "win-x64" / "publish",
-        SRC_DIR / "KTools.App" / "bin" / "Release" / "net8.0-windows10.0.26100.0" / "win-x64" / "publish",
-        SRC_DIR / "KTools.App" / "bin" / "x64" / "Release" / "net8.0-windows10.0.26100.0" / "win-x64" / "publish"
+        SRC_DIR / "KTools.App" / "bin" / "x64" / "Release" / "net10.0-windows10.0.26100.0" / "win-x64" / "publish"
     ]
     for path in candidates:
         if (path / f"{EXE_BASE_NAME}.exe").exists():
@@ -147,8 +155,9 @@ def clean_unused_localizations(publish_dir: Path):
     """Удаление ненужных языковых папок для уменьшения размера дистрибутива."""
     print("[*] Очистка неиспользуемых папок локализации...")
     cleaned_count = 0
+    keep_locales = {"bin", "assets", "en-US", "ru", "ru-RU"}
     for item in publish_dir.iterdir():
-        if item.is_dir() and item.name not in ["bin", "assets"]:
+        if item.is_dir() and item.name not in keep_locales:
             # В WinUI3 dotnet publish создаёт десятки языковых папок (de, fr, es, zh-Hans...)
             if len(item.name) in (2, 5) and ("-" in item.name or item.name.isalpha()):
                 try:
@@ -278,7 +287,7 @@ begin
       sInstallDir := ExtractFilePath(RemoveQuotes(sUnInstallString));
     end;
     sUnInstallString := RemoveQuotes(sUnInstallString);
-    Exec(sUnInstallString, '/VERYSILENT /NORESTART /SUPPRESSMSGBOXES', '', SW_HIDE, ewWaitUntilTerminated, iResultCode);
+    Exec(sUnInstallString, '/VERYSILENT /NORESTART /SUPPRESSMSGBOXES /_?="' + sInstallDir + '"', '', SW_HIDE, ewWaitUntilTerminated, iResultCode);
     // Принудительно удаляем оставшуюся папку со старыми файлами Python версии
     if (sInstallDir <> '') and DirExists(sInstallDir) then
     begin
@@ -336,9 +345,6 @@ def build_inno_installer(version: str, publish_dir: Path):
 
     cmd = [
         iscc_exe,
-        f"/DMyAppVersion={version}",
-        f"/DPublishDir={publish_dir}",
-        f"/DOutputDir={output_dir}",
         str(iss_file)
     ]
 
