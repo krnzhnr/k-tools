@@ -98,11 +98,15 @@ def find_publish_folder() -> Path:
     return candidates[0]
 
 
-def build_csharp_app():
+def build_csharp_app(version: str) -> Path:
     """Сборка C# приложения через dotnet publish."""
     print("=" * 60)
-    print("1. Компиляция C# приложения (dotnet publish)...")
+    print(f"1. Компиляция C# приложения (dotnet publish) v{version}...")
     print("=" * 60)
+
+    clean_version = version.split("-")[0]
+    if clean_version.count(".") == 2:
+        clean_version += ".0"
 
     cmd = [
         "dotnet", "publish",
@@ -112,7 +116,11 @@ def build_csharp_app():
         "--self-contained", "true",
         "-p:PublishSingleFile=false",
         "-p:PublishReadyToRun=false",
-        "-p:Platform=x64"
+        "-p:Platform=x64",
+        f"-p:Version={version}",
+        f"-p:InformationalVersion={version}",
+        f"-p:FileVersion={clean_version}",
+        f"-p:AssemblyVersion={clean_version}"
     ]
 
     print(f"Выполнение команды: {' '.join(cmd)}")
@@ -288,8 +296,8 @@ begin
     RemoveOldVersion('krnzhnr.ktools.csharp.v2');
     RemoveOldVersion('krnzhnr.ktools.v2');
     // Удаление устаревших ярлыков с дефисом
-    DeleteFile(ExpandConstant('{{autodesktop}}\K-Tools.lnk'));
-    DeleteFile(ExpandConstant('{{userdesktop}}\K-Tools.lnk'));
+    DeleteFile(ExpandConstant('{{autodesktop}}\\K-Tools.lnk'));
+    DeleteFile(ExpandConstant('{{userdesktop}}\\K-Tools.lnk'));
   end;
 end;
 """
@@ -353,7 +361,7 @@ def main():
     version = prompt_version_update()
     print(f"[*] Сборка версии: {version}")
 
-    publish_dir = build_csharp_app()
+    publish_dir = build_csharp_app(version)
 
     build_inno_installer(version, publish_dir)
 
