@@ -6,6 +6,10 @@ __pycache__/
 # C extensions
 *.so
 
+# Profiling traces
+*.nettrace
+*.speedscope.json
+
 # Distribution / packaging
 .Python
 build/
