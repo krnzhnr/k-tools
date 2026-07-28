@@ -141,11 +141,28 @@ public sealed class SettingsManager : ISettingsManager
     }
 
     /// <summary>
+    /// Определяет, является ли текущая сборка пре-релизом (Preview/Alpha/Beta/RC).
+    /// </summary>
+    public static bool IsPreviewBuild
+    {
+        get
+        {
+            var infoVer = System.Reflection.Assembly.GetExecutingAssembly()
+                .GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? string.Empty;
+
+            return infoVer.Contains("-preview", StringComparison.OrdinalIgnoreCase) ||
+                   infoVer.Contains("-alpha", StringComparison.OrdinalIgnoreCase) ||
+                   infoVer.Contains("-beta", StringComparison.OrdinalIgnoreCase) ||
+                   infoVer.Contains("-rc", StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    /// <summary>
     /// Включать ли бета-версии при поиске обновлений.
     /// </summary>
     public bool IncludePreReleases
     {
-        get => GetSetting("Updates", "IncludePreReleases", true);
+        get => GetSetting("Updates", "IncludePreReleases", IsPreviewBuild);
         set => SetSetting("Updates", "IncludePreReleases", value);
     }
 
@@ -518,7 +535,7 @@ public sealed class SettingsManager : ISettingsManager
             }
             if (!HasSetting("Updates", "IncludePreReleases"))
             {
-                SetSettingInternal("Updates", "IncludePreReleases", true);
+                SetSettingInternal("Updates", "IncludePreReleases", IsPreviewBuild);
                 modified = true;
             }
             if (!HasSetting("Debug", "DebugSimulateOldVersion"))
