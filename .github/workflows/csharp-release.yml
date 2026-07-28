@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - develop
-      - feature/csharp-migration
     tags:
       - 'v*'
   workflow_dispatch:
