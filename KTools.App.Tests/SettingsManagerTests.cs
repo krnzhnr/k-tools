@@ -65,7 +65,7 @@ public class SettingsManagerTests
         manager.EnableParallel.Should().BeTrue();
         manager.ClearListOnAdd.Should().BeFalse();
         manager.AutoCheckUpdates.Should().BeTrue();
-        manager.IncludePreReleases.Should().BeTrue();
+        manager.IncludePreReleases.Should().Be(SettingsManager.IsPreviewBuild);
         manager.DebugSimulateOldVersion.Should().BeFalse();
     }
 
