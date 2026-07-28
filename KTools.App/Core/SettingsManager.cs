@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Reflection;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using KTools_App.Services.Contracts;
@@ -147,8 +148,8 @@ public sealed class SettingsManager : ISettingsManager
     {
         get
         {
-            var infoVer = System.Reflection.Assembly.GetExecutingAssembly()
-                .GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? string.Empty;
+            var infoVer = typeof(SettingsManager).Assembly
+                .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? string.Empty;
 
             return infoVer.Contains("-preview", StringComparison.OrdinalIgnoreCase) ||
                    infoVer.Contains("-alpha", StringComparison.OrdinalIgnoreCase) ||
