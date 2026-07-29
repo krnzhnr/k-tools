@@ -431,6 +431,15 @@ public sealed partial class TrackSelectionControl : UserControl
                     // Определяем, есть ли уже сохраненный выбор для ДАННОГО конкретного файла
                     bool hasSavedForThisFile = savedTracks.ContainsKey(fileItem.FilePath) || savedAttachments.ContainsKey(fileItem.FilePath);
 
+                    var settingsManager = App.Services.GetService<ISettingsManager>();
+                    bool isMp4Container = false;
+                    if (ActiveScript is MkvAssemblyScript assemblyScript && settingsManager != null)
+                    {
+                        string groupName = settingsManager.GetSafeGroupName(assemblyScript.Name);
+                        string containerChoice = settingsManager.GetSetting(groupName, "output_container", "MKV");
+                        isMp4Container = containerChoice.Equals("MP4", StringComparison.OrdinalIgnoreCase);
+                    }
+
                     // 2. Видеодорожки
                     var videoTracks = structure.GetVideoTracks();
                     foreach (var track in videoTracks)
@@ -460,10 +469,17 @@ public sealed partial class TrackSelectionControl : UserControl
                     var audioTracks = structure.GetAudioTracks();
                     foreach (var track in audioTracks)
                     {
+                        bool isMp4Unsupp = isMp4Container && (
+                            track.Codec.Equals("flac", StringComparison.OrdinalIgnoreCase) ||
+                            track.Codec.Equals("truehd", StringComparison.OrdinalIgnoreCase) ||
+                            track.Codec.Contains("dts", StringComparison.OrdinalIgnoreCase) ||
+                            track.Codec.Contains("dca", StringComparison.OrdinalIgnoreCase));
+                        string mp4Tag = isMp4Unsupp ? " • ⚠️ [Не поддерживается в MP4]" : "";
+
                         string langStr = !string.IsNullOrEmpty(track.Language) && track.Language != "und" ? track.Language.ToUpperInvariant() : "UND";
                         var trackItem = new TrackNodeItem
                         {
-                            Text = $"Аудио #{track.TrackId} • {track.Codec.ToUpperInvariant()} • {langStr} • {track.Channels} ch{(!string.IsNullOrEmpty(track.Name) ? $" • \"{track.Name}\"" : "")}",
+                            Text = $"Аудио #{track.TrackId} • {track.Codec.ToUpperInvariant()} • {langStr} • {track.Channels} ch{(!string.IsNullOrEmpty(track.Name) ? $" • \"{track.Name}\"" : "")}{mp4Tag}",
                             IconGlyph = "\uE7F6", // Иконка динамика/аудио
                             FilePath = fileItem.FilePath,
                             TrackId = track.TrackId,
@@ -472,7 +488,7 @@ public sealed partial class TrackSelectionControl : UserControl
                         var trackNode = new TreeViewNode { Content = trackItem };
                         fileNode.Children.Add(trackNode);
                         
-                        if (savedTracks.TryGetValue(
+                        if (!isMp4Unsupp && savedTracks.TryGetValue(
                             fileItem.FilePath,
                             out var list) &&
                             list.Contains(track.TrackId))
@@ -485,10 +501,15 @@ public sealed partial class TrackSelectionControl : UserControl
                     var subtitleTracks = structure.GetSubtitleTracks();
                     foreach (var track in subtitleTracks)
                     {
+                        bool isMp4Unsupp = isMp4Container && (
+                            track.Codec.Equals("ass", StringComparison.OrdinalIgnoreCase) ||
+                            track.Codec.Equals("ssa", StringComparison.OrdinalIgnoreCase));
+                        string mp4Tag = isMp4Unsupp ? " • ⚠️ [Не поддерживается в MP4]" : "";
+
                         string langStr = !string.IsNullOrEmpty(track.Language) && track.Language != "und" ? track.Language.ToUpperInvariant() : "UND";
                         var trackItem = new TrackNodeItem
                         {
-                            Text = $"Субтитры #{track.TrackId} • {track.Codec.ToUpperInvariant()} • {langStr}{(!string.IsNullOrEmpty(track.Name) ? $" • \"{track.Name}\"" : "")}",
+                            Text = $"Субтитры #{track.TrackId} • {track.Codec.ToUpperInvariant()} • {langStr}{(!string.IsNullOrEmpty(track.Name) ? $" • \"{track.Name}\"" : "")}{mp4Tag}",
                             IconGlyph = "\uE8D2", // Иконка субтитров/текста
                             FilePath = fileItem.FilePath,
                             TrackId = track.TrackId,
@@ -497,7 +518,7 @@ public sealed partial class TrackSelectionControl : UserControl
                         var trackNode = new TreeViewNode { Content = trackItem };
                         fileNode.Children.Add(trackNode);
                         
-                        if (savedTracks.TryGetValue(
+                        if (!isMp4Unsupp && savedTracks.TryGetValue(
                             fileItem.FilePath,
                             out var list) &&
                             list.Contains(track.TrackId))
@@ -510,9 +531,10 @@ public sealed partial class TrackSelectionControl : UserControl
                     var fonts = structure.GetFontAttachments();
                     foreach (var font in fonts)
                     {
+                        string mp4Tag = isMp4Container ? " • ⚠️ [Не поддерживается в MP4]" : "";
                         var trackItem = new TrackNodeItem
                         {
-                            Text = $"Шрифт • {font.FileName} • {font.Size / 1024.0:F1} КБ",
+                            Text = $"Шрифт • {font.FileName} • {font.Size / 1024.0:F1} КБ{mp4Tag}",
                             IconGlyph = "\uE723", // Иконка шрифта/символа A
                             FilePath = fileItem.FilePath,
                             AttachmentId = font.AttachmentId,
@@ -522,7 +544,7 @@ public sealed partial class TrackSelectionControl : UserControl
                         var trackNode = new TreeViewNode { Content = trackItem };
                         fileNode.Children.Add(trackNode);
                         
-                        if (savedAttachments.TryGetValue(
+                        if (!isMp4Container && savedAttachments.TryGetValue(
                             fileItem.FilePath,
                             out var list) &&
                             list.Contains(font.AttachmentId))
