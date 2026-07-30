@@ -288,11 +288,11 @@ public sealed class MkvAssemblyScript(
 
                 if (audioPath != null)
                 {
-                    extraArgsMp4.InsertRange(0, ["-i", audioPath]);
+                    extraArgsMp4.InsertRange(0, ["-i", $"\"{audioPath}\""]);
                 }
                 if (subsPath != null)
                 {
-                    extraArgsMp4.InsertRange(audioPath != null ? 2 : 0, ["-i", subsPath]);
+                    extraArgsMp4.InsertRange(audioPath != null ? 2 : 0, ["-i", $"\"{subsPath}\""]);
                 }
 
                 extraArgsMp4.Add("-map");
