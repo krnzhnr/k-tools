@@ -145,17 +145,34 @@ public sealed class DeeRunner : AbstractProcessRunner
 
             Log.Info($"Раскодирование входного файла во временный WAV ({targetChannels} каналов)...", "DeeRunner");
 
-            var ffmpegArgs = new List<string>
+            var ffmpegArgs = new List<string>();
+            if (targetChannels == 2)
             {
-                "-ac", targetChannels.ToString(),
-                "-y"
-            };
+                // Даунмикс в стерео с коэффициентами HandBrake (обход rematrix_maxval)
+                ffmpegArgs.AddRange(new[] { "-af", AppConstants.FFmpegAudio.StereoDownmixPanFilter, "-y" });
+            }
+            else
+            {
+                ffmpegArgs.AddRange(new[] { "-ac", targetChannels.ToString(), "-y" });
+            }
+
+            Action<ProgressInfo>? decodeProgressCallback = null;
+            if (onProgress != null)
+            {
+                decodeProgressCallback = pInfo =>
+                {
+                    // Этап раскодирования FFmpeg в WAV занимает 0%..30% общего прогресса DEE
+                    double val = (pInfo.Percent / 100.0) * 30.0;
+                    onProgress(val);
+                };
+            }
 
             bool decodeSuccess = await _ffmpegRunner.RunAsync(
                 inputPath,
                 tempWavPath,
                 extraArgs: ffmpegArgs,
                 overwrite: true,
+                onProgress: decodeProgressCallback,
                 cancellationToken: cancellationToken
             );
 
@@ -222,24 +239,24 @@ public sealed class DeeRunner : AbstractProcessRunner
 
                             if (double.TryParse(part, System.Globalization.CultureInfo.InvariantCulture, out double stageProgress))
                             {
-                                double progressVal = 0.0;
+                                double progressVal = 30.0;
                                 if (currentStep == "measuring")
                                 {
                                     double norm = (stageProgress - 25.0) / 75.0;
                                     if (norm < 0) norm = 0;
                                     if (norm > 1) norm = 1;
-                                    progressVal = norm * 15.0;
+                                    progressVal = 30.0 + (norm * 10.0);
                                 }
                                 else if (currentStep == "encoding")
                                 {
                                     double norm = (stageProgress - 25.0) / 75.0;
                                     if (norm < 0) norm = 0;
                                     if (norm > 1) norm = 1;
-                                    progressVal = 15.0 + (norm * 85.0);
+                                    progressVal = 40.0 + (norm * 60.0);
                                 }
                                 else
                                 {
-                                    progressVal = stageProgress * 0.05; // В начале от 0% до 1.25%
+                                    progressVal = 30.0 + (stageProgress * 0.05); // В начале от 30% до 31.25%
                                 }
 
                                 onProgress(progressVal);

@@ -34,11 +34,7 @@ public sealed partial class AudioTransplantControl : UserControl
     public AbstractScript? ActiveScript
     {
         get => _activeScript;
-        set
-        {
-            _activeScript = value;
-            ResetFormState();
-        }
+        set => _activeScript = value;
     }
 
     public AudioTransplantControl()

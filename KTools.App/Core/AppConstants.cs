@@ -352,4 +352,19 @@ public static class AppConstants
         /// </summary>
         public const string Warning = "#F5A623";
     }
+
+    /// <summary>
+    /// Константы для обработки аудио через FFmpeg (даунмикс, ресемплинг).
+    /// </summary>
+    public static class FFmpegAudio
+    {
+        /// <summary>
+        /// Фильтр pan для даунмикса многоканального аудио в стерео с коэффициентами HandBrake.
+        /// Центральный и окружающие каналы подмешиваются с коэффициентом 0.7071 (-3 дБ), LFE отбрасывается.
+        /// Использование фильтра pan обходит автоматическую нормализацию матрицы (rematrix_maxval) в libswresample,
+        /// сохраняя оригинальную громкость фронтальных каналов.
+        /// </summary>
+        public const string StereoDownmixPanFilter =
+            "pan=stereo|FL=FL+0.7071*FC+0.7071*BL+0.7071*SL|FR=FR+0.7071*FC+0.7071*BR+0.7071*SR";
+    }
 }

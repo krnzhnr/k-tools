@@ -820,7 +820,12 @@ public sealed class VideoEncodingScript : AbstractScript
             {
                 ffmpegArgs.AddRange(new[] { "-b:a", GetSettingValue(settings, "audio_bitrate", "320k") });
                 string ac = GetSettingValue(settings, "audio_channels", "Original");
-                if (ac != "Original")
+                if (ac == "2")
+                {
+                    // Даунмикс в стерео с коэффициентами HandBrake (обход rematrix_maxval)
+                    ffmpegArgs.AddRange(new[] { "-af", AppConstants.FFmpegAudio.StereoDownmixPanFilter });
+                }
+                else if (ac != "Original")
                 {
                     ffmpegArgs.AddRange(new[] { "-ac", ac });
                 }

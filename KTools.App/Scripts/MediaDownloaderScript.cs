@@ -58,6 +58,15 @@ public sealed class MediaDownloaderScript : AbstractScript
         ResetCancellation();
         var results = new List<string>();
 
+        if (string.IsNullOrWhiteSpace(filePath) || 
+            !Uri.TryCreate(filePath, UriKind.Absolute, out var validatedUri) || 
+            (validatedUri.Scheme != Uri.UriSchemeHttp && validatedUri.Scheme != Uri.UriSchemeHttps))
+        {
+            _logService.Warn($"Отклонена невалидная ссылка для скачивания: '{filePath}'", "MediaDownloaderScript");
+            results.Add($"❌ Ошибка: Невалидный URL адрес '{filePath}' (поддерживаются только http:// и https://)");
+            return results;
+        }
+
         // Настройки скрипта
         bool downloadSubs = GetSettingValue(settings, "DownloadSubtitles", false);
         bool embedSubs = GetSettingValue(settings, "EmbedSubtitles", true);
