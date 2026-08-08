@@ -226,7 +226,7 @@
 
                             <!-- Аудиофайл -->
                             <StackPanel Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center">
-                                <TextBlock Text="{x:Bind AudioFile.FileName, Mode=OneWay, FallbackValue='—'}" 
+                                <TextBlock Text="{x:Bind AudioDisplayText, Mode=OneWay, FallbackValue='—'}" 
                                            TextTrimming="CharacterEllipsis"
                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                            Style="{ThemeResource BodyTextBlockStyle}" />
@@ -234,7 +234,7 @@
 
                             <!-- Файл субтитров -->
                             <StackPanel Grid.Column="2" Margin="12,0,0,0" VerticalAlignment="Center">
-                                <TextBlock Text="{x:Bind SubsFile.FileName, Mode=OneWay, FallbackValue='—'}" 
+                                <TextBlock Text="{x:Bind SubsDisplayText, Mode=OneWay, FallbackValue='—'}" 
                                            TextTrimming="CharacterEllipsis"
                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                            Style="{ThemeResource BodyTextBlockStyle}" />

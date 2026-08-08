@@ -94,6 +94,54 @@ public sealed class MuxingRowItem : INotifyPropertyChanged
         }
     }
 
+    private string _audioWarning = string.Empty;
+    public string AudioWarning
+    {
+        get => _audioWarning;
+        set
+        {
+            if (_audioWarning != value)
+            {
+                _audioWarning = value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(AudioDisplayText));
+            }
+        }
+    }
+
+    private string _subsWarning = string.Empty;
+    public string SubsWarning
+    {
+        get => _subsWarning;
+        set
+        {
+            if (_subsWarning != value)
+            {
+                _subsWarning = value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(SubsDisplayText));
+            }
+        }
+    }
+
+    public string AudioDisplayText
+    {
+        get
+        {
+            if (AudioFile == null) return "—";
+            return $"{AudioFile.FileName}{AudioWarning}";
+        }
+    }
+
+    public string SubsDisplayText
+    {
+        get
+        {
+            if (SubsFile == null) return "—";
+            return $"{SubsFile.FileName}{SubsWarning}";
+        }
+    }
+
     /// <summary>
     /// Разрешено ли удаление строки из таблицы (разрешено, если все входящие в нее файлы разблокированы для удаления).
     /// </summary>
@@ -403,8 +451,32 @@ public sealed partial class FileListControl : UserControl
             }
         }
 
+        string groupName = _settingsManager.GetSafeGroupName(ActiveScript.Name);
+        string containerChoice = _settingsManager.GetSetting(groupName, "output_container", "MKV");
+        bool isMp4 = containerChoice.Equals("MP4", StringComparison.OrdinalIgnoreCase);
+
         foreach (var row in groups.Values)
         {
+            if (isMp4)
+            {
+                if (row.AudioFile != null)
+                {
+                    string aExt = Path.GetExtension(row.AudioFile.FilePath).ToLowerInvariant();
+                    if (aExt == ".flac" || aExt == ".thd" || aExt == ".truehd" || aExt == ".dts" || aExt == ".dtshd")
+                    {
+                        row.AudioWarning = " ⚠️ [Не поддерживается в MP4]";
+                    }
+                }
+                if (row.SubsFile != null)
+                {
+                    string sExt = Path.GetExtension(row.SubsFile.FilePath).ToLowerInvariant();
+                    if (sExt == ".ass" || sExt == ".ssa")
+                    {
+                        row.SubsWarning = " ⚠️ [Не поддерживается в MP4]";
+                    }
+                }
+            }
+
             _muxingRows.Add(row);
         }
     }

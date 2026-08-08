@@ -269,7 +269,7 @@ public sealed class StreamReplacementScript : AbstractScript
                 bool overwriteSource = GetSettingValue(settings, "overwrite_source", false);
                 bool deleteSource = GetSettingValue(settings, "delete_source", false);
 
-                if (overwriteSource && string.IsNullOrEmpty(outputPath))
+                if (overwriteSource)
                 {
                     ReplaceSourceWithResult(filePath, finalOutputFile, results);
                 }

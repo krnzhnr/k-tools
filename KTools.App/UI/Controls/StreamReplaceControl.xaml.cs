@@ -242,6 +242,16 @@ public sealed partial class StreamReplaceControl : UserControl
     {
         try
         {
+            // Сохраняем ранее выбранные значение для восстановления
+            var savedSelections = new Dictionary<int, ReplacementOption>();
+            foreach (var kvp in _combos)
+            {
+                if (kvp.Value.SelectedItem is ReplacementOption selOpt && !string.IsNullOrEmpty(selOpt.FilePath))
+                {
+                    savedSelections[kvp.Key] = selOpt;
+                }
+            }
+
             _combos.Clear();
             _sourceTracks.Clear();
             ReplacementsStackPanel.Children.Clear();
@@ -332,6 +342,22 @@ public sealed partial class StreamReplaceControl : UserControl
             }
 
             UpdateAllComboBoxOptions();
+
+            // Восстанавливаем сохраненный выбор замен
+            foreach (var kvp in savedSelections)
+            {
+                if (_combos.TryGetValue(kvp.Key, out var combo))
+                {
+                    var saved = kvp.Value;
+                    var matchOpt = combo.Items.Cast<ReplacementOption>().FirstOrDefault(o =>
+                        o.FilePath.Equals(saved.FilePath, StringComparison.OrdinalIgnoreCase) &&
+                        o.SourceTrackId == saved.SourceTrackId);
+                    if (matchOpt != null)
+                    {
+                        combo.SelectedItem = matchOpt;
+                    }
+                }
+            }
         }
         catch (Exception ex)
         {

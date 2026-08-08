@@ -89,6 +89,9 @@ public sealed class FFmpegRunner : AbstractProcessRunner, IFFmpegRunner
         // Буфер для накопления последних строк stderr в случае ошибок
         var stderrLines = new List<string>();
 
+        double effectiveDuration = totalDuration;
+        Log.Info($"Запуск FFmpeg для '{Path.GetFileName(inputPath)}' (Начальная длительность: {effectiveDuration:F2} сек.)", "FFmpegRunner");
+
         var result = await RunProcessAsync(
             "ffmpeg",
             arguments,
@@ -104,10 +107,21 @@ public sealed class FFmpegRunner : AbstractProcessRunner, IFFmpegRunner
                     }
                 }
 
-                // Парсинг прогресса из вывода
-                if (onProgress != null && totalDuration > 0)
+                // Автоматическое обнаружение точной длительности из заголовочного вывода FFmpeg (Duration: HH:MM:SS.ms)
+                if (onProgress != null && effectiveDuration <= 0)
                 {
-                    var progress = FFmpegOutputParser.ParseLine(line, totalDuration, Log);
+                    double parsedHeaderDuration = FFmpegOutputParser.ParseHeaderDuration(line, Log);
+                    if (parsedHeaderDuration > 0)
+                    {
+                        effectiveDuration = parsedHeaderDuration;
+                        Log.Info($"Длительность для '{Path.GetFileName(inputPath)}' переопределена точным заголовком FFmpeg: {effectiveDuration:F2} сек.", "FFmpegRunner");
+                    }
+                }
+
+                // Парсинг прогресса из вывода (вызываем при успешном считывании строки прогресса)
+                if (onProgress != null)
+                {
+                    var progress = FFmpegOutputParser.ParseLine(line, effectiveDuration, Log);
                     if (progress != null)
                     {
                         onProgress(progress);
@@ -149,7 +163,7 @@ public sealed class FFmpegRunner : AbstractProcessRunner, IFFmpegRunner
     /// <returns>Документ JsonDocument со свойствами потоков, или null при сбоях.</returns>
     public async Task<JsonDocument?> GetVideoInfoAsync(string filePath)
     {
-        string arguments = $"-v error -show_entries format=duration:stream=index,codec_name,codec_type,disposition,pix_fmt,width,height,channels:stream_tags -of json \"{filePath}\"";
+        string arguments = $"-v error -analyzeduration 100M -probesize 100M -show_entries format=duration,bit_rate:stream=index,codec_name,codec_type,duration,bit_rate,disposition,pix_fmt,width,height,channels:stream_tags -of json \"{filePath}\"";
         
         var outputLines = new List<string>();
         var errorLines = new List<string>();

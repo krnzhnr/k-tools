@@ -86,15 +86,26 @@ public sealed class MediaProbeService : IMediaProbeService
 
             // Определяем, является ли файл MKV-контейнером
             bool isMkv = extension == ".mkv" || extension == ".mka";
+            MediaStructure? result = isMkv
+                ? await ProbeMkvAsync(filePath)
+                : await ProbeGenericAsync(filePath);
 
-            if (isMkv)
+            // Если первичный метод анализа не смог извлечь длительность (например, сырые потоки DTS/AC3 в ffprobe),
+            // выполняем перекрестную проверку через mkvmerge --identify (и наоборот), так как mkvmerge считывает длительность сырых потоков
+            if (result != null && result.Duration <= 0)
             {
-                return await ProbeMkvAsync(filePath);
+                var altResult = isMkv
+                    ? await ProbeGenericAsync(filePath)
+                    : await ProbeMkvAsync(filePath);
+
+                if (altResult != null && altResult.Duration > 0)
+                {
+                    result.Duration = altResult.Duration;
+                    _logService.Info($"Длительность для '{Path.GetFileName(filePath)}' дообогащена через альтернативный зонд: {result.Duration:F2} сек.", "MediaProbeService");
+                }
             }
-            else
-            {
-                return await ProbeGenericAsync(filePath);
-            }
+
+            return result;
         }
         catch (Exception ex)
         {
@@ -127,8 +138,47 @@ public sealed class MediaProbeService : IMediaProbeService
             containerProp.TryGetProperty("properties", out var containerPropsProp) &&
             containerPropsProp.TryGetProperty("duration", out var durationProp))
         {
-            // Переводим наносекунды в секунды
-            structure.Duration = durationProp.GetInt64() / 1_000_000_000.0;
+            if (durationProp.ValueKind == JsonValueKind.Number)
+            {
+                if (durationProp.TryGetInt64(out long durationNs))
+                {
+                    structure.Duration = durationNs / 1_000_000_000.0;
+                }
+                else if (durationProp.TryGetDouble(out double durationNsDouble))
+                {
+                    structure.Duration = durationNsDouble / 1_000_000_000.0;
+                }
+            }
+            else if (durationProp.ValueKind == JsonValueKind.String &&
+                     double.TryParse(durationProp.GetString(), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double durNsStr))
+            {
+                structure.Duration = durNsStr / 1_000_000_000.0;
+            }
+        }
+
+        // Если длительность контейнера отсутствует, ищем длительность в свойствах дорожек mkvmerge
+        if (structure.Duration <= 0 && root.TryGetProperty("tracks", out var tracksPropMkv) && tracksPropMkv.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var trProp in tracksPropMkv.EnumerateArray())
+            {
+                if (trProp.TryGetProperty("properties", out var trProps) &&
+                    trProps.TryGetProperty("duration", out var trDurProp))
+                {
+                    if (trDurProp.ValueKind == JsonValueKind.Number)
+                    {
+                        if (trDurProp.TryGetInt64(out long dNs))
+                        {
+                            structure.Duration = dNs / 1_000_000_000.0;
+                            break;
+                        }
+                        else if (trDurProp.TryGetDouble(out double dNsDbl))
+                        {
+                            structure.Duration = dNsDbl / 1_000_000_000.0;
+                            break;
+                        }
+                    }
+                }
+            }
         }
 
         // 2. Парсим дорожки
@@ -273,17 +323,72 @@ public sealed class MediaProbeService : IMediaProbeService
         var root = jsonDoc.RootElement;
 
         // 1. Извлекаем длительность из формата
-        if (root.TryGetProperty("format", out var formatProp) &&
-            formatProp.TryGetProperty("duration", out var durationProp))
+        if (root.TryGetProperty("format", out var formatProp))
         {
-            string durStr = durationProp.GetString() ?? "0";
-            if (double.TryParse(durStr, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double durVal))
+            if (formatProp.TryGetProperty("duration", out var durationProp))
             {
-                structure.Duration = durVal;
+                if (durationProp.ValueKind == JsonValueKind.Number && durationProp.TryGetDouble(out double durVal))
+                {
+                    structure.Duration = durVal;
+                }
+                else if (durationProp.ValueKind == JsonValueKind.String)
+                {
+                    string durStr = durationProp.GetString() ?? "0";
+                    if (double.TryParse(durStr, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double durValStr))
+                    {
+                        structure.Duration = durValStr;
+                    }
+                }
             }
         }
 
-        // 2. Парсим дорожки и вложения
+        // 2. Если длительность в формате отсутствует, ищем длительность в свойствах или тегах потоков streams
+        if (structure.Duration <= 0 && root.TryGetProperty("streams", out var streamsPropDuration) && streamsPropDuration.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var stProp in streamsPropDuration.EnumerateArray())
+            {
+                if (stProp.TryGetProperty("duration", out var stDurProp))
+                {
+                    if (stDurProp.ValueKind == JsonValueKind.Number && stDurProp.TryGetDouble(out double stDur))
+                    {
+                        if (stDur > 0)
+                        {
+                            structure.Duration = stDur;
+                            break;
+                        }
+                    }
+                    else if (stDurProp.ValueKind == JsonValueKind.String)
+                    {
+                        string stDurStr = stDurProp.GetString() ?? string.Empty;
+                        if (double.TryParse(stDurStr, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double stDurVal) && stDurVal > 0)
+                        {
+                            structure.Duration = stDurVal;
+                            break;
+                        }
+                    }
+                }
+
+                if (stProp.TryGetProperty("tags", out var tagsProp) && tagsProp.ValueKind == JsonValueKind.Object)
+                {
+                    foreach (var tag in tagsProp.EnumerateObject())
+                    {
+                        if (tag.Name.Equals("DURATION", StringComparison.OrdinalIgnoreCase) ||
+                            tag.Name.StartsWith("DURATION-", StringComparison.OrdinalIgnoreCase))
+                        {
+                            string tagVal = tag.Value.GetString() ?? string.Empty;
+                            if (TimeSpan.TryParse(tagVal, System.Globalization.CultureInfo.InvariantCulture, out var ts) && ts.TotalSeconds > 0)
+                            {
+                                structure.Duration = ts.TotalSeconds;
+                                break;
+                            }
+                        }
+                    }
+                    if (structure.Duration > 0) break;
+                }
+            }
+        }
+
+        // 3. Парсим дорожки и вложения
         if (root.TryGetProperty("streams", out var streamsProp) && streamsProp.ValueKind == JsonValueKind.Array)
         {
             foreach (var stream in streamsProp.EnumerateArray())
@@ -484,3 +589,5 @@ public sealed class MediaProbeService : IMediaProbeService
         }
     }
 }
+
+

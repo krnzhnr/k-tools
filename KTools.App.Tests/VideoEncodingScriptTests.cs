@@ -493,4 +493,49 @@ public class VideoEncodingScriptTests
             if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
         }
     }
+
+    /// <summary>
+    /// Проверяет, что при использовании кодека NVENC HEVC добавляется флаг -tag:v hvc1 для совместимости с MP4.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_NvencHevc_IncludesTagHvc1()
+    {
+        // Arrange
+        string tempSourceFile = Path.GetTempFileName();
+        string tempOutputDir = Path.GetDirectoryName(tempSourceFile) ?? AppContext.BaseDirectory;
+
+        var structure = new MediaStructure { FilePath = tempSourceFile, Duration = 30.0 };
+        structure.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "video", Codec = "h264", Name = "Video" });
+        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile)).ReturnsAsync(structure);
+
+        List<string>? capturedExtraArgs = null;
+        _ffmpegRunnerMock.Setup(r => r.RunAsync(
+            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<List<string>>(), It.IsAny<List<string>>(),
+            It.IsAny<bool>(), It.IsAny<double>(), It.IsAny<Action<ProgressInfo>>(), It.IsAny<CancellationToken>()
+        )).Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken>(
+            (inP, outP, extArgs, inArgs, ovr, dur, prog, ct) => capturedExtraArgs = extArgs
+        ).ReturnsAsync(true);
+
+        var settings = new Dictionary<string, object>
+        {
+            { "encoder", "NVENC (GPU)" },
+            { "lossless", true },
+            { "v_qp", 0 }
+        };
+
+        try
+        {
+            // Act
+            await _script.ExecuteSingleAsync(tempSourceFile, settings, tempOutputDir, (idx, total, status, pct, fps, bit) => { }, 0, 1);
+
+            // Assert
+            capturedExtraArgs.Should().NotBeNull();
+            capturedExtraArgs.Should().Contain("-tag:v");
+            capturedExtraArgs.Should().Contain("hvc1");
+        }
+        finally
+        {
+            if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
+        }
+    }
 }

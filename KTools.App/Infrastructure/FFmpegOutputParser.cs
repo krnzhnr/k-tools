@@ -31,9 +31,9 @@ public record ProgressInfo(
 /// </summary>
 public static class FFmpegOutputParser
 {
-    // Регулярное выражение для извлечения времени (поддерживает разделители точку и запятую)
+    // Регулярное выражение для извлечения времени (поддерживает разделители точку и запятую, опциональную дробную часть и часы любой длины)
     private static readonly Regex TimeRegex = new(
-        @"(?:^|[\s(\[])time=(\d{2}):(\d{2}):(\d{2})[\.\,](\d+)",
+        @"(?:^|[\s(\[])time=(-?\d+):(\d{2}):(\d{2})(?:[\.\,](\d+))?",
         RegexOptions.Compiled
     );
 
@@ -55,6 +55,48 @@ public static class FFmpegOutputParser
         RegexOptions.Compiled
     );
 
+    // Регулярное выражение для извлечения заголовочной длительности (Duration: HH:MM:SS.ms) из вывода FFmpeg
+    private static readonly Regex HeaderDurationRegex = new(
+        @"Duration:\s*(\d+):(\d{2}):(\d{2})(?:[\.\,](\d+))?",
+        RegexOptions.Compiled
+    );
+
+    /// <summary>
+    /// Извлекает общую длительность медиафайла в секундах из заголовочного вывода FFmpeg (строка Duration: HH:MM:SS.ms).
+    /// </summary>
+    /// <param name="line">Строка текстового вывода FFmpeg.</param>
+    /// <param name="logService">Сервис логирования.</param>
+    /// <returns>Длительность в секундах при успешном парсинге, иначе 0.0.</returns>
+    public static double ParseHeaderDuration(string line, ILogService logService)
+    {
+        if (string.IsNullOrWhiteSpace(line) || !line.Contains("Duration:")) return 0.0;
+
+        var match = HeaderDurationRegex.Match(line);
+        if (!match.Success) return 0.0;
+
+        try
+        {
+            int h = Math.Abs(int.Parse(match.Groups[1].Value));
+            int m = int.Parse(match.Groups[2].Value);
+            int s = int.Parse(match.Groups[3].Value);
+            string msStr = match.Groups[4].Value;
+
+            double ms = 0.0;
+            if (!string.IsNullOrEmpty(msStr))
+            {
+                ms = double.Parse(msStr) / Math.Pow(10, msStr.Length);
+            }
+
+            double totalSec = h * 3600 + m * 60 + s + ms;
+            return totalSec;
+        }
+        catch (Exception ex)
+        {
+            logService.DebugLog($"Не удалось распарсить заголовочную длительность: {ex.Message}", "FFmpegOutputParser");
+            return 0.0;
+        }
+    }
+
     /// <summary>
     /// Парсит отдельную строку вывода FFmpeg и вычисляет текущие метрики прогресса.
     /// </summary>
@@ -70,13 +112,17 @@ public static class FFmpegOutputParser
 
         try
         {
-            int h = int.Parse(timeMatch.Groups[1].Value);
+            int h = Math.Abs(int.Parse(timeMatch.Groups[1].Value));
             int m = int.Parse(timeMatch.Groups[2].Value);
             int s = int.Parse(timeMatch.Groups[3].Value);
             string msStr = timeMatch.Groups[4].Value;
             
             // Расчет дробной части миллисекунд с учетом ее длины
-            double ms = double.Parse(msStr) / Math.Pow(10, msStr.Length);
+            double ms = 0.0;
+            if (!string.IsNullOrEmpty(msStr))
+            {
+                ms = double.Parse(msStr) / Math.Pow(10, msStr.Length);
+            }
             double currentTime = h * 3600 + m * 60 + s + ms;
 
             // Расчет процента выполнения

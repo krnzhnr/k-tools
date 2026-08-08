@@ -23,6 +23,7 @@ public class MkvAssemblyScriptTests
     private Mock<IPathManager> _pathManagerMock = null!;
     private Mock<IMkvmergeRunner> _mkvmergeRunnerMock = null!;
     private Mock<IMediaProbeService> _mediaProbeServiceMock = null!;
+    private Mock<IFFmpegRunner> _ffmpegRunnerMock = null!;
     private MkvAssemblyScript _script = null!;
 
     [TestInitialize]
@@ -33,13 +34,15 @@ public class MkvAssemblyScriptTests
         _pathManagerMock = new Mock<IPathManager>();
         _mkvmergeRunnerMock = new Mock<IMkvmergeRunner>();
         _mediaProbeServiceMock = new Mock<IMediaProbeService>();
+        _ffmpegRunnerMock = new Mock<IFFmpegRunner>();
 
         _script = new MkvAssemblyScript(
             _logServiceMock.Object,
             _settingsManagerMock.Object,
             _pathManagerMock.Object,
             _mkvmergeRunnerMock.Object,
-            _mediaProbeServiceMock.Object
+            _mediaProbeServiceMock.Object,
+            _ffmpegRunnerMock.Object
         );
     }
 
@@ -125,6 +128,79 @@ public class MkvAssemblyScriptTests
         // Ожидаемый порядок: видео (0:0), потом новое аудио (1:0), потом встроенное аудио (0:1)
         int orderIdx = capturedExtraArgs.IndexOf("--track-order");
         capturedExtraArgs[orderIdx + 1].Should().Be("0:0,1:0,0:1");
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, true);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Проверяет, что при выборе формата MP4 вызывается FFmpegRunner и отфильтровываются несовместимые файлы (FLAC/ASS).
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_Mp4Container_UsesFFmpegRunnerAndFiltersIncompatibleTracks()
+    {
+        // Arrange
+        string tempDir = Path.Combine(Path.GetTempPath(), "MkvAssembly_Mp4Test_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            string videoPath = Path.Combine(tempDir, "video.mp4");
+            string flacAudioPath = Path.Combine(tempDir, "video.flac");
+            string assSubsPath = Path.Combine(tempDir, "video.ass");
+
+            await File.WriteAllTextAsync(videoPath, "dummy video content");
+            await File.WriteAllTextAsync(flacAudioPath, "dummy flac content");
+            await File.WriteAllTextAsync(assSubsPath, "dummy ass content");
+
+            var settings = new Dictionary<string, object>
+            {
+                { "output_container", "MP4" },
+                { "clean_tracks", true }
+            };
+
+            _ffmpegRunnerMock.Setup(f => f.RunAsync(
+                    It.IsAny<string>(),
+                    It.IsAny<string>(),
+                    It.IsAny<List<string>>(),
+                    It.IsAny<List<string>>(),
+                    It.IsAny<bool>(),
+                    It.IsAny<double>(),
+                    It.IsAny<Action<Infrastructure.ProgressInfo>>(),
+                    It.IsAny<System.Threading.CancellationToken>()
+                ))
+                .ReturnsAsync(true);
+
+            // Act
+            var results = await _script.ExecuteSingleAsync(
+                videoPath,
+                settings,
+                null,
+                (fIdx, total, status, progress, fps, bitrate) => { },
+                0,
+                1
+            );
+
+            // Assert
+            results.Should().NotBeNull();
+            results.Should().Contain(r => r.Contains("FLAC") && r.Contains("пропущен"));
+            results.Should().Contain(r => r.Contains("ASS/SSA") && r.Contains("пропущены"));
+            results.Should().Contain(r => r.Contains("Собран контейнер MP4"));
+            _ffmpegRunnerMock.Verify(f => f.RunAsync(
+                videoPath,
+                It.Is<string>(s => s.EndsWith(".mp4")),
+                It.IsAny<List<string>>(),
+                null,
+                false,
+                0.0,
+                It.IsAny<Action<Infrastructure.ProgressInfo>>(),
+                It.IsAny<System.Threading.CancellationToken>()
+            ), Times.Once);
         }
         finally
         {

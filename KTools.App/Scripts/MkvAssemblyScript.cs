@@ -21,11 +21,13 @@ public sealed class MkvAssemblyScript(
     ISettingsManager settingsManager,
     IPathManager pathManager,
     IMkvmergeRunner mkvmergeRunner,
-    IMediaProbeService mediaProbeService)
+    IMediaProbeService mediaProbeService,
+    IFFmpegRunner ffmpegRunner)
     : AbstractScript(logService, settingsManager, pathManager)
 {
     private readonly IMkvmergeRunner _mkvmergeRunner = mkvmergeRunner ?? throw new System.ArgumentNullException(nameof(mkvmergeRunner));
     private readonly IMediaProbeService _mediaProbeService = mediaProbeService ?? throw new System.ArgumentNullException(nameof(mediaProbeService));
+    private readonly IFFmpegRunner _ffmpegRunner = ffmpegRunner ?? throw new System.ArgumentNullException(nameof(ffmpegRunner));
 
     /// <summary>
     /// Русское название скрипта.
@@ -56,13 +58,21 @@ public sealed class MkvAssemblyScript(
     /// <summary>
     /// Обязательные бинарные зависимости скрипта.
     /// </summary>
-    public override string[] RequiredDependencies => ["mkvtoolnix"];
+    public override string[] RequiredDependencies => ["mkvtoolnix", "ffmpeg"];
 
     /// <summary>
     /// Декларативная схема настроек скрипта.
     /// </summary>
     public override List<SettingField> SettingsSchema =>
     [
+        new SettingField(
+            "output_container",
+            "Формат контейнера",
+            SettingType.Combo,
+            "MKV",
+            "Сборка",
+            options: ["MKV", "MP4"]
+        ),
         new SettingField(
             "subs_title",
             "Заголовок субтитров",
@@ -207,11 +217,15 @@ public sealed class MkvAssemblyScript(
         }
 
         // 4. Формирование путей назначения
+        string containerChoice = GetSettingValue(settings, "output_container", "MKV");
+        bool isMp4 = containerChoice.Equals("MP4", StringComparison.OrdinalIgnoreCase);
+        string targetExt = isMp4 ? ".mp4" : ".mkv";
+
         string targetDir = string.IsNullOrEmpty(outputPath)
             ? directory
             : outputPath;
 
-        string targetFile = Path.Combine(targetDir, $"{stem}.mkv");
+        string targetFile = Path.Combine(targetDir, $"{stem}{targetExt}");
         string finalOutputFile = GetSafeOutputPath(filePath, targetFile, settings);
 
         // 5. Проверка существования выходного файла при отключенной перезаписи
@@ -222,6 +236,140 @@ public sealed class MkvAssemblyScript(
             _logService.Info(skipExist, "MkvAssemblyScript");
             progressCallback(fileIndex, totalCount, $"Пропуск (существует): {Path.GetFileName(finalOutputFile)}", 100.0);
             results.Add(skipExist);
+            return results;
+        }
+
+        // 5a. Обработка сборки контейнера MP4
+        if (isMp4)
+        {
+            if (audioPath != null)
+            {
+                string aExt = Path.GetExtension(audioPath).ToLowerInvariant();
+                if (aExt == ".flac" || aExt == ".thd" || aExt == ".truehd" || aExt == ".dts" || aExt == ".dtshd")
+                {
+                    string warnAudio = $"⚠ [Сборка MP4] Внешний аудиофайл '{Path.GetFileName(audioPath)}' имеет формат {aExt.TrimStart('.').ToUpperInvariant()}, который не поддерживается контейнером MP4, и будет пропущен.";
+                    _logService.Info(warnAudio, "MkvAssemblyScript");
+                    results.Add(warnAudio);
+                    audioPath = null;
+                }
+            }
+
+            if (subsPath != null)
+            {
+                string sExt = Path.GetExtension(subsPath).ToLowerInvariant();
+                if (sExt == ".ass" || sExt == ".ssa")
+                {
+                    string warnSub = $"⚠ [Сборка MP4] Субтитры формата ASS/SSA ({Path.GetFileName(subsPath)}) не поддерживаются контейнером MP4 и будут пропущены.";
+                    _logService.Info(warnSub, "MkvAssemblyScript");
+                    results.Add(warnSub);
+                    subsPath = null;
+                }
+            }
+
+            progressCallback(fileIndex, totalCount, $"Сборка MP4: {stem}...", 0.0);
+
+            using var ctsMp4 = new CancellationTokenSource();
+            var cancelTaskMp4 = Task.Run(async () =>
+            {
+                while (!IsCancelled && !ctsMp4.IsCancellationRequested)
+                {
+                    await Task.Delay(100);
+                }
+                if (IsCancelled)
+                {
+                    ctsMp4.Cancel();
+                }
+            });
+
+            bool mp4Success = false;
+            try
+            {
+                List<string> extraArgsMp4 = ["-c", "copy", "-movflags", "+faststart"];
+
+                if (audioPath != null)
+                {
+                    extraArgsMp4.InsertRange(0, ["-i", $"\"{audioPath}\""]);
+                }
+                if (subsPath != null)
+                {
+                    extraArgsMp4.InsertRange(audioPath != null ? 2 : 0, ["-i", $"\"{subsPath}\""]);
+                }
+
+                extraArgsMp4.Add("-map");
+                extraArgsMp4.Add("0:v");
+
+                if (audioPath != null)
+                {
+                    extraArgsMp4.Add("-map");
+                    extraArgsMp4.Add("1:a");
+                }
+                else if (!cleanTracks)
+                {
+                    extraArgsMp4.Add("-map");
+                    extraArgsMp4.Add("0:a?");
+                }
+
+                if (subsPath != null)
+                {
+                    int subsInputIdx = audioPath != null ? 2 : 1;
+                    extraArgsMp4.Add("-map");
+                    extraArgsMp4.Add($"{subsInputIdx}:s");
+                    extraArgsMp4.Add("-c:s");
+                    extraArgsMp4.Add("mov_text");
+                }
+                else if (!cleanTracks)
+                {
+                    extraArgsMp4.Add("-sn");
+                }
+
+                mp4Success = await _ffmpegRunner.RunAsync(
+                    inputPath: filePath,
+                    outputPath: finalOutputFile,
+                    extraArgs: extraArgsMp4,
+                    overwrite: overwrite,
+                    onProgress: progress =>
+                    {
+                        progressCallback(fileIndex, totalCount, $"Сборка MP4 | {progress.Percent:F1}%", progress.Percent);
+                    },
+                    cancellationToken: ctsMp4.Token
+                );
+            }
+            catch (System.Exception ex)
+            {
+                string runErr = $"❌ Ошибка при сборке MP4 для '{stem}': {ex.Message}";
+                _logService.Exception(ex, runErr, "MkvAssemblyScript");
+                results.Add(runErr);
+            }
+            finally
+            {
+                ctsMp4.Cancel();
+                await cancelTaskMp4;
+            }
+
+            if (IsCancelled)
+            {
+                CleanupIfCancelled(finalOutputFile);
+                string cancelMsg = $"⚠ Сборка отменена пользователем: {Path.GetFileName(finalOutputFile)}";
+                _logService.Info(cancelMsg, "MkvAssemblyScript");
+                results.Add(cancelMsg);
+                return results;
+            }
+
+            if (mp4Success)
+            {
+                progressCallback(fileIndex, totalCount, "Сборка завершена!", 100.0);
+                string successMsg = $"✅ Собран контейнер MP4: {Path.GetFileName(finalOutputFile)}";
+                _logService.Info(successMsg, "MkvAssemblyScript");
+                results.Add(successMsg);
+            }
+            else
+            {
+                CleanupFailedOutputFile(finalOutputFile);
+                string failMsg = $"❌ Ошибка сборки MP4-файла: {Path.GetFileName(finalOutputFile)}";
+                _logService.Error(failMsg, "MkvAssemblyScript");
+                results.Add(failMsg);
+            }
+
             return results;
         }
 

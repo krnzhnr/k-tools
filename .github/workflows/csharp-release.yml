@@ -6,6 +6,11 @@ on:
       - develop
     tags:
       - 'v*'
+    paths-ignore:
+      - '**.md'
+      - '.gitignore'
+      - '.gitattributes'
+      - 'LICENSE'
   workflow_dispatch:
 
 permissions:

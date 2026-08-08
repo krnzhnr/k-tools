@@ -82,7 +82,7 @@ public sealed class AudioDownmixScript : AbstractScript
             "Параметры даунмикса",
             options: new List<string> {
                 "Dolby Encoding Engine (DEE)",
-                "FFmpeg (EBU R128)"
+                "FFmpeg"
             }),
 
         new SettingField(
@@ -321,11 +321,12 @@ public sealed class AudioDownmixScript : AbstractScript
                 isLossless = true;
             }
 
-            // Настройка фильтра EBU R128 в один проход
+            // Даунмикс с коэффициентами HandBrake (center/surround = 0.7071, LFE отброшен).
+            // Фильтр pan обходит автоматическую нормализацию матрицы (rematrix_maxval) в libswresample,
+            // сохраняя оригинальную громкость фронтальных каналов.
             var extraArgs = new List<string>
             {
-                "-ac", "2",
-                "-af", "loudnorm=I=-24:LRA=7:TP=-2.0",
+                "-af", AppConstants.FFmpegAudio.StereoDownmixPanFilter,
                 "-c:a", codec
             };
 
@@ -346,13 +347,25 @@ public sealed class AudioDownmixScript : AbstractScript
                     string speedStr = progressInfo.Speed > 0 
                         ? $"{progressInfo.Speed:F1}x" 
                         : "н/д";
-                    string msg = $"Даунмикс | {progressInfo.Percent:F1}% " +
-                                 $"| Скорость: {speedStr}";
+                    string progressLabel;
+                    if (progressInfo.Percent > 0)
+                    {
+                        progressLabel = $"{progressInfo.Percent:F1}%";
+                    }
+                    else
+                    {
+                        TimeSpan ts = TimeSpan.FromSeconds(progressInfo.TimeSeconds);
+                        progressLabel = ts.Hours > 0 
+                            ? $"{ts.Hours:D2}:{ts.Minutes:D2}:{ts.Seconds:D2}" 
+                            : $"{ts.Minutes:D2}:{ts.Seconds:D2}";
+                    }
+
+                    string msg = $"Даунмикс | {progressLabel} | Скорость: {speedStr}";
                     progressCallback(
                         fileIndex, 
                         totalCount, 
                         msg, 
-                        progressInfo.Percent,
+                        progressInfo.Percent > 0 ? progressInfo.Percent : (double?)null,
                         progressInfo.Fps,
                         progressInfo.Bitrate);
                 },

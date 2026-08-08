@@ -230,9 +230,9 @@ Tasks: desktopicon
 [Run]
 Filename: "{{app}}\\KTools.App.exe"; \\
 Description: "{{cm:LaunchProgram,KTools}}"; \\
-Flags: nowait postinstall skipifsilent
+Flags: nowait postinstall skipifsilent runasoriginaluser
 Filename: "{{app}}\\KTools.App.exe"; \\
-Flags: nowait; Check: IsSilentUpdate
+Flags: nowait runasoriginaluser; Check: IsSilentUpdate
 {run_decoders_line}
 
 [UninstallDelete]
