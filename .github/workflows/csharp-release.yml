@@ -62,15 +62,15 @@ jobs:
             clean_version = tag_name.lstrip("v")
             is_prerelease = False
             release_tag = tag_name
-            release_name = f"KTools v{clean_version}"
+            release_name = f"v{clean_version}"
         else:
             # Сборка для develop/main пре-релиза
             match_base = re.search(r"^#\s*(\d+\.\d+\.\d+)", changelog, re.MULTILINE)
-            base_ver = match_base.group(1) if match_base else "2.0.0"
+            base_ver = match_base.group(1) if match_base else "2.1.0"
             clean_version = f"{base_ver}-preview.{run_num}"
             is_prerelease = True
             release_tag = "pre-release"
-            release_name = f"KTools Pre-Release v{clean_version}"
+            release_name = f"Pre-Release v{clean_version}"
 
         print(f"Version: {clean_version}, Tag: {release_tag}, Prerelease: {is_prerelease}")
 

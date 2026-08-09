@@ -312,8 +312,11 @@
                         Width="160"
                         SelectedIndex="{x:Bind ViewModel.SelectedThemeIndex, Mode=TwoWay}">
                         <ComboBoxItem
+                            Tag="System"
+                            Content="Как в системе" />
+                        <ComboBoxItem
                             Tag="Dark"
-                            Content="Темная" />
+                            Content="Тёмная" />
                         <ComboBoxItem
                             Tag="Light"
                             Content="Светлая" />

@@ -8,6 +8,7 @@ using System.ComponentModel;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Hosting;
 using Microsoft.UI.Xaml.Navigation;
 using Microsoft.Extensions.DependencyInjection;
 using Windows.Storage.Pickers;
@@ -65,6 +66,7 @@ public sealed partial class WorkPanel : Page
 
         SizeChanged += WorkPanel_SizeChanged;
         Unloaded += WorkPanel_Unloaded;
+        Loaded += WorkPanel_Loaded;
     }
 
     /// <summary>
@@ -476,25 +478,26 @@ public sealed partial class WorkPanel : Page
     /// </summary>
     private void WorkPanel_DragOver(object sender, DragEventArgs e)
     {
-        if (ViewModel.IsProcessing)
+        if (ViewModel.IsProcessing || e.Handled)
         {
-            e.AcceptedOperation = Windows.ApplicationModel.DataTransfer.DataPackageOperation.None;
             return;
         }
 
         if (e.DataView.Contains(Windows.ApplicationModel.DataTransfer.StandardDataFormats.StorageItems))
         {
             e.AcceptedOperation = Windows.ApplicationModel.DataTransfer.DataPackageOperation.Copy;
-            e.DragUIOverride.Caption = "Добавить в очередь файлов";
-            e.DragUIOverride.IsCaptionVisible = true;
 
-            // Если пользователь находится не на вкладке "Файлы", переключаем вкладку в момент наведения курсора
-            if (!ReferenceEquals(nvSample.SelectedItem, SamplePage1Item))
+            // Переключаем вкладку на "Файлы" только если пользователь не находится на вкладке специального инструмента (_tracksPageItem), 
+            // где доступны собственные специализированные зоны сброса файлов (Замена потоков, Пересадка аудио).
+            if (!ReferenceEquals(nvSample.SelectedItem, SamplePage1Item) &&
+                (_tracksPageItem == null || !ReferenceEquals(nvSample.SelectedItem, _tracksPageItem)))
             {
                 nvSample.SelectedItem = SamplePage1Item;
                 _logService.DebugLog("Автоматическое переключение на вкладку «Файлы» при наведении мышью с перетаскиваемыми файлами", "WorkPanel");
             }
         }
+
+        e.Handled = true;
     }
 
     /// <summary>
@@ -503,7 +506,8 @@ public sealed partial class WorkPanel : Page
     /// </summary>
     private async void WorkPanel_Drop(object sender, DragEventArgs e)
     {
-        if (ViewModel.IsProcessing) return;
+        if (ViewModel.IsProcessing || e.Handled) return;
+        e.Handled = true;
 
         try
         {
@@ -645,12 +649,24 @@ public sealed partial class WorkPanel : Page
         if (_script == null) return settings;
 
         string settingsGroup = _settingsManager.GetSafeGroupName(_script.Name);
+
+        // 1. Считываем все сохраненные на диске/в памяти настройки текущей группы скрипта
+        var allGroupSettings = _settingsManager.GetAllSettingsInGroup(settingsGroup);
+        foreach (var kvp in allGroupSettings)
+        {
+            settings[kvp.Key] = kvp.Value;
+        }
+
+        // 2. Дополняем/уточняем значениями по умолчанию из схемы
         foreach (var field in _script.GetFullSettingsSchema())
         {
             if (field.Type == SettingType.Subtitle) continue;
 
-            object val = _settingsManager.GetSetting(settingsGroup, field.Key, field.DefaultValue);
-            settings[field.Key] = val;
+            if (!settings.ContainsKey(field.Key))
+            {
+                object val = _settingsManager.GetSetting(settingsGroup, field.Key, field.DefaultValue);
+                settings[field.Key] = val;
+            }
         }
 
         return settings;
@@ -682,7 +698,35 @@ public sealed partial class WorkPanel : Page
     private void WorkPanel_Unloaded(object sender, RoutedEventArgs e)
     {
         SizeChanged -= WorkPanel_SizeChanged;
+        Loaded -= WorkPanel_Loaded;
         ViewModel.PropertyChanged -= OnViewModelPropertyChanged;
+    }
+
+    /// <summary>
+    /// Обработчик события Loaded — инициализирует Composition Visual оверлея нижней панели
+    /// после полного подключения элемента к визуальному дереву и Composition-слою.
+    /// </summary>
+    private void WorkPanel_Loaded(object sender, RoutedEventArgs e)
+    {
+        InitializeOutputOverlayVisual();
+    }
+
+    /// <summary>
+    /// Кешированная ссылка на Composition Visual оверлея нижней панели.
+    /// </summary>
+    private Microsoft.UI.Composition.Visual? _outputOverlayVisual;
+
+    /// <summary>
+    /// Инициализирует и кеширует Composition Visual для OutputPathDropOverlayGrid,
+    /// устанавливая начальную прозрачность через Visual API.
+    /// </summary>
+    private void InitializeOutputOverlayVisual()
+    {
+        if (OutputPathDropOverlayGrid == null) return;
+        if (_outputOverlayVisual != null) return;
+
+        _outputOverlayVisual = ElementCompositionPreview.GetElementVisual(OutputPathDropOverlayGrid);
+        _outputOverlayVisual.Opacity = 0.0f;
     }
 
 
@@ -903,4 +947,173 @@ public sealed partial class WorkPanel : Page
         }
         return null;
     }
+
+    #region Bottom Action Panel Output Path Drag and Drop
+
+    private bool _isOutputPathDropHighlighted = false;
+    private bool _isExtractingDropPathName = false;
+
+    private void SetOutputPathDropHighlight(bool isHighlighted)
+    {
+        if (OutputPathDropOverlayGrid == null) return;
+        if (_isOutputPathDropHighlighted == isHighlighted) return;
+
+        _isOutputPathDropHighlighted = isHighlighted;
+
+        float targetOpacity = isHighlighted ? 0.95f : 0.0f;
+
+        // Гарантируем наличие кешированного Visual
+        if (_outputOverlayVisual == null)
+        {
+            InitializeOutputOverlayVisual();
+        }
+
+        var visual = _outputOverlayVisual;
+        if (visual == null) return;
+
+        var compositor = visual.Compositor;
+
+        if (isHighlighted)
+        {
+            OutputPathDropOverlayGrid.Visibility = Visibility.Visible;
+            visual.Opacity = 0.0f;
+            OutputPathDropOverlay?.SetHighlighted(true);
+        }
+        else
+        {
+            _isExtractingDropPathName = false;
+            OutputPathDropOverlay?.SetHighlighted(false);
+            if (OutputPathDropText != null)
+            {
+                OutputPathDropText.Text = "Папка будет установлена как выходная директория";
+            }
+        }
+
+        // Аппаратно-ускоренная GPU Composition анимация плавного проявления и затухания затемнения
+        var animation = compositor.CreateScalarKeyFrameAnimation();
+        animation.InsertKeyFrame(1.0f, targetOpacity);
+        animation.Duration = TimeSpan.FromMilliseconds(150);
+
+        if (!isHighlighted)
+        {
+            var batch = compositor.CreateScopedBatch(Microsoft.UI.Composition.CompositionBatchTypes.Animation);
+            batch.Completed += (s, e) =>
+            {
+                if (!_isOutputPathDropHighlighted)
+                {
+                    OutputPathDropOverlayGrid.Visibility = Visibility.Collapsed;
+                }
+            };
+            visual.StartAnimation("Opacity", animation);
+            batch.End();
+        }
+        else
+        {
+            visual.StartAnimation("Opacity", animation);
+        }
+    }
+
+    private void BottomActionPanel_DragOver(object sender, DragEventArgs e)
+    {
+        if (ViewModel.IsProcessing)
+        {
+            e.AcceptedOperation = Windows.ApplicationModel.DataTransfer.DataPackageOperation.None;
+            e.Handled = true;
+            return;
+        }
+
+        if (e.DataView.Contains(Windows.ApplicationModel.DataTransfer.StandardDataFormats.StorageItems))
+        {
+            e.AcceptedOperation = Windows.ApplicationModel.DataTransfer.DataPackageOperation.Copy;
+            e.DragUIOverride.Caption = "Назначить выходную папку";
+            e.DragUIOverride.IsCaptionVisible = true;
+            e.DragUIOverride.IsContentVisible = true;
+
+            SetOutputPathDropHighlight(true);
+
+            if (!_isExtractingDropPathName)
+            {
+                _isExtractingDropPathName = true;
+                _ = ExtractDropFolderNameBackgroundAsync(e.DataView);
+            }
+        }
+        else
+        {
+            e.AcceptedOperation = Windows.ApplicationModel.DataTransfer.DataPackageOperation.None;
+        }
+
+        e.Handled = true;
+    }
+
+    private async Task ExtractDropFolderNameBackgroundAsync(Windows.ApplicationModel.DataTransfer.DataPackageView dataView)
+    {
+        try
+        {
+            var items = await dataView.GetStorageItemsAsync();
+            if (items != null && items.Count > 0 && _isOutputPathDropHighlighted)
+            {
+                var firstItem = items[0];
+                string folderName = firstItem is Windows.Storage.StorageFolder folder
+                    ? folder.Name
+                    : Path.GetFileName(Path.GetDirectoryName(firstItem.Path) ?? string.Empty);
+
+                if (!string.IsNullOrWhiteSpace(folderName) && OutputPathDropText != null)
+                {
+                    OutputPathDropText.Text = $"Папка «{folderName}» будет установлена как выходная";
+                }
+            }
+        }
+        catch
+        {
+            // Игнорируем фоновые исключения OLE предпросмотра
+        }
+    }
+
+    private void BottomActionPanel_DragLeave(object sender, DragEventArgs e)
+    {
+        SetOutputPathDropHighlight(false);
+        e.Handled = true;
+    }
+
+    private async void BottomActionPanel_Drop(object sender, DragEventArgs e)
+    {
+        e.Handled = true;
+        SetOutputPathDropHighlight(false);
+
+        if (ViewModel.IsProcessing) return;
+
+        try
+        {
+            if (e.DataView.Contains(Windows.ApplicationModel.DataTransfer.StandardDataFormats.StorageItems))
+            {
+                var items = await e.DataView.GetStorageItemsAsync();
+                if (items != null && items.Count > 0)
+                {
+                    var firstItem = items[0];
+                    string targetFolderPath = string.Empty;
+
+                    if (firstItem is Windows.Storage.StorageFolder folder)
+                    {
+                        targetFolderPath = folder.Path;
+                    }
+                    else if (firstItem is Windows.Storage.StorageFile file)
+                    {
+                        targetFolderPath = Path.GetDirectoryName(file.Path) ?? string.Empty;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(targetFolderPath) && Directory.Exists(targetFolderPath))
+                    {
+                        ViewModel.OutputPath = targetFolderPath;
+                        _logService.Info($"Выходная директория установлена через Drag & Drop нижней панели: '{targetFolderPath}'", "WorkPanel");
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logService.Exception(ex, "Ошибка при установке выходной папки через Drag & Drop нижней панели", "WorkPanel");
+        }
+    }
+
+    #endregion
 }

@@ -14,6 +14,7 @@
     <Grid x:Name="RootGrid" 
           AllowDrop="True" 
           DragOver="RootGrid_DragOver" 
+          DragLeave="RootGrid_DragLeave"
           Drop="RootGrid_Drop"
           Background="Transparent">
         
@@ -44,23 +45,28 @@
                 Padding="24"
                 VerticalAlignment="Stretch"
                 HorizontalAlignment="Stretch">
-            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="12">
-                <SymbolIcon Symbol="OpenFile" 
-                             Foreground="{ThemeResource TextFillColorSecondaryBrush}" 
-                             Width="48" 
-                             Height="48" />
-                <TextBlock x:Name="DragDropPromptTextBlock"
-                            Text="Перетащите файлы сюда или используйте кнопку ниже" 
-                            FontSize="14" 
-                            FontWeight="SemiBold"
-                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                            HorizontalAlignment="Center" />
-                <TextBlock x:Name="DragDropSubPromptTextBlock"
-                            Text="Поддерживаются файлы медиаформатов для выбранного скрипта" 
-                            FontSize="11" 
-                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                            HorizontalAlignment="Center" />
-            </StackPanel>
+            <Grid>
+                <!-- Универсальная окантовка зоны сброса файлов -->
+                <local:DropZoneOverlay x:Name="DropOverlay" Margin="-16" />
+
+                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="16">
+                    <FontIcon Glyph="&#xE8E5;" 
+                              FontSize="51" 
+                              Foreground="{ThemeResource TextFillColorSecondaryBrush}" 
+                              HorizontalAlignment="Center" />
+                    <TextBlock x:Name="DragDropPromptTextBlock"
+                                Text="Перетащите файлы сюда или используйте кнопку ниже" 
+                                FontSize="15" 
+                                FontWeight="SemiBold"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                HorizontalAlignment="Center" />
+                    <TextBlock x:Name="DragDropSubPromptTextBlock"
+                                Text="Поддерживаются файлы медиаформатов для выбранного скрипта" 
+                                FontSize="12" 
+                                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                HorizontalAlignment="Center" />
+                </StackPanel>
+            </Grid>
         </Border>
 
         <!-- Список файлов (Обычный) -->

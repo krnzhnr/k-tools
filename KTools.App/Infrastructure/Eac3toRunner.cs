@@ -44,7 +44,13 @@ public sealed class Eac3toRunner : AbstractProcessRunner, IEac3toRunner
         Action<double>? onProgress = null,
         CancellationToken cancellationToken = default)
     {
-        string arguments = string.Join(" ", args);
+        var finalArgs = new List<string>(args);
+        if (!finalArgs.Exists(a => a.StartsWith("-log=", StringComparison.OrdinalIgnoreCase)))
+        {
+            finalArgs.Add("-log=nul");
+        }
+
+        string arguments = string.Join(" ", finalArgs);
         string workingCwd = workingDir ?? Path.GetDirectoryName(PathManager.GetBinaryPath("eac3to")) ?? AppContext.BaseDirectory;
 
         // Буферы для stdout и stderr
@@ -81,9 +87,6 @@ public sealed class Eac3toRunner : AbstractProcessRunner, IEac3toRunner
             workingDir: workingCwd
         );
 
-        // Очищаем созданные eac3to файлы логов log*.txt
-        CleanupLogs(workingCwd);
-
         string stdoutText = string.Join(Environment.NewLine, stdoutLines);
         string stderrText = string.Join(Environment.NewLine, stderrLines);
 
@@ -95,45 +98,5 @@ public sealed class Eac3toRunner : AbstractProcessRunner, IEac3toRunner
 
         Log.DebugLog($"Вывод eac3to:\n{stdoutText}", "Eac3toRunner");
         return true;
-    }
-
-    /// <summary>
-    /// Удаляет временные файлы логов, автоматически создаваемые eac3to в процессе работы.
-    /// Безопасно удаляет файлы log*.txt, если их содержимое начинается с сигнатуры утилиты.
-    /// </summary>
-    private void CleanupLogs(string directory)
-    {
-        try
-        {
-            if (!Directory.Exists(directory)) return;
-
-            string[] logFiles = Directory.GetFiles(directory, "log*.txt");
-            foreach (string file in logFiles)
-            {
-                try
-                {
-                    // Безопасная проверка: читаем первую строку файла
-                    using (var reader = new StreamReader(file))
-                    {
-                        string? firstLine = reader.ReadLine();
-                        if (firstLine == null || !firstLine.StartsWith("eac3to v", StringComparison.OrdinalIgnoreCase))
-                        {
-                            continue; // Пропускаем чужие файлы
-                        }
-                    }
-
-                    File.Delete(file);
-                    Log.DebugLog($"🗑 Удален лог eac3to: '{Path.GetFileName(file)}'", "Eac3toRunner");
-                }
-                catch (Exception ex)
-                {
-                    Log.Warn($"Не удалось удалить лог eac3to '{Path.GetFileName(file)}': {ex.Message}", "Eac3toRunner");
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            Log.Error($"Ошибка при очистке логов eac3to в папке '{directory}': {ex.Message}", "Eac3toRunner");
-        }
     }
 }

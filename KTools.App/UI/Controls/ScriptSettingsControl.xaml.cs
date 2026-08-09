@@ -91,8 +91,7 @@ public sealed partial class ScriptSettingsControl : UserControl
             {
                 Text = "У этого скрипта нет настраиваемых параметров.",
                 FontSize = 14,
-                Foreground = (Brush)Application.Current.Resources[
-                    "TextFillColorSecondaryBrush"],
+                Style = (Style)Application.Current.Resources["SettingsSecondaryTextBlockStyle"],
                 Margin = new Thickness(0, 24, 0, 0),
                 HorizontalAlignment = HorizontalAlignment.Center
             };
@@ -245,12 +244,7 @@ public sealed partial class ScriptSettingsControl : UserControl
     {
         var cardBorder = new Border
         {
-            Background = (Brush)Application.Current.Resources[
-                "CardBackgroundFillColorDefaultBrush"],
-            BorderBrush = (Brush)Application.Current.Resources[
-                "CardStrokeColorDefaultBrush"],
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(8),
+            Style = (Style)Application.Current.Resources["SettingsGroupCardBorderStyle"],
             Padding = new Thickness(16),
             HorizontalAlignment = HorizontalAlignment.Stretch,
             Margin = new Thickness(0)
@@ -269,8 +263,7 @@ public sealed partial class ScriptSettingsControl : UserControl
             Text = title,
             FontSize = 14,
             FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-            Foreground = (Brush)Application.Current.Resources[
-                "TextFillColorPrimaryBrush"],
+            Style = (Style)Application.Current.Resources["SettingsPrimaryTextBlockStyle"],
             Margin = new Thickness(0, 0, 0, 4)
         };
         cardContentStack.Children.Add(cardTitle);
@@ -289,8 +282,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                     Text = field.Label,
                     FontSize = 13,
                     FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-                    Foreground = (Brush)Application.Current.Resources[
-                        "TextFillColorSecondaryBrush"],
+                    Style = (Style)Application.Current.Resources["SettingsSecondaryTextBlockStyle"],
                     Margin = new Thickness(0, 8, 0, 4)
                 };
                 cardContentStack.Children.Add(subtitle);
@@ -323,8 +315,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                 {
                     Text = field.Label,
                     FontSize = 14,
-                    Foreground = (Brush)Application.Current.Resources[
-                        "TextFillColorPrimaryBrush"],
+                    Style = (Style)Application.Current.Resources["SettingsPrimaryTextBlockStyle"],
                     TextWrapping = TextWrapping.Wrap
                 });
 
@@ -334,8 +325,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                     {
                         Text = field.Comment,
                         FontSize = 12,
-                        Foreground = (Brush)Application.Current.Resources[
-                            "TextFillColorSecondaryBrush"],
+                        Style = (Style)Application.Current.Resources["SettingsSecondaryTextBlockStyle"],
                         TextWrapping = TextWrapping.Wrap
                     });
                 }
@@ -437,8 +427,7 @@ public sealed partial class ScriptSettingsControl : UserControl
             {
                 Text = field.Label,
                 FontSize = 14,
-                Foreground = (Brush)Application.Current.Resources[
-                    "TextFillColorPrimaryBrush"],
+                Style = (Style)Application.Current.Resources["SettingsPrimaryTextBlockStyle"],
                 VerticalAlignment = VerticalAlignment.Center,
                 TextWrapping = TextWrapping.Wrap
             });
@@ -449,8 +438,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                 {
                     Text = field.Comment,
                     FontSize = 12,
-                    Foreground = (Brush)Application.Current.Resources[
-                        "TextFillColorSecondaryBrush"],
+                    Style = (Style)Application.Current.Resources["SettingsSecondaryTextBlockStyle"],
                     TextWrapping = TextWrapping.Wrap
                 });
             }
@@ -642,7 +630,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                 Text = "Предпросмотр переименования",
                 FontSize = 13,
                 FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-                Foreground = (Brush)Application.Current.Resources["TextFillColorPrimaryBrush"],
+                Style = (Style)Application.Current.Resources["SettingsPrimaryTextBlockStyle"],
                 Margin = new Thickness(0, 0, 0, 4)
             };
             cardContentStack.Children.Add(previewTitle);
@@ -768,7 +756,7 @@ public sealed partial class ScriptSettingsControl : UserControl
             Text = field.Label,
             FontSize = 14,
             FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-            Foreground = (Brush)Application.Current.Resources["TextFillColorPrimaryBrush"]
+            Style = (Style)Application.Current.Resources["SettingsPrimaryTextBlockStyle"]
         });
 
         if (!string.IsNullOrEmpty(field.Comment))
@@ -777,7 +765,7 @@ public sealed partial class ScriptSettingsControl : UserControl
             {
                 Text = field.Comment,
                 FontSize = 12,
-                Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"]
+                Style = (Style)Application.Current.Resources["SettingsSecondaryTextBlockStyle"]
             });
         }
         mainStack.Children.Add(labelStack);
@@ -959,7 +947,7 @@ public sealed partial class ScriptSettingsControl : UserControl
             Text = field.Label,
             FontSize = 14,
             FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-            Foreground = (Brush)Application.Current.Resources["TextFillColorPrimaryBrush"],
+            Style = (Style)Application.Current.Resources["SettingsPrimaryTextBlockStyle"],
             TextWrapping = TextWrapping.Wrap
         });
 
@@ -969,7 +957,7 @@ public sealed partial class ScriptSettingsControl : UserControl
             {
                 Text = field.Comment,
                 FontSize = 12,
-                Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
+                Style = (Style)Application.Current.Resources["SettingsSecondaryTextBlockStyle"],
                 TextWrapping = TextWrapping.Wrap
             });
         }
@@ -994,7 +982,7 @@ public sealed partial class ScriptSettingsControl : UserControl
             Text = "Доступные теги (нажмите для добавления):",
             FontSize = 12,
             FontWeight = Microsoft.UI.Text.FontWeights.Medium,
-            Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
+            Style = (Style)Application.Current.Resources["SettingsSecondaryTextBlockStyle"],
             TextWrapping = TextWrapping.Wrap
         };
         mainStack.Children.Add(chipsLabel);
@@ -1054,10 +1042,7 @@ public sealed partial class ScriptSettingsControl : UserControl
         // Панель живого предпросмотра
         var previewBorder = new Border
         {
-            Background = (Brush)Application.Current.Resources["CardBackgroundFillColorSecondaryBrush"],
-            BorderBrush = (Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(4),
+            Style = (Style)Application.Current.Resources["SettingsSecondaryCardBorderStyle"],
             Padding = new Thickness(12, 8, 12, 8),
             Margin = new Thickness(0, 4, 0, 4)
         };
@@ -1068,7 +1053,7 @@ public sealed partial class ScriptSettingsControl : UserControl
             Text = "Предпросмотр имени файла:",
             FontSize = 12,
             FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-            Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
+            Style = (Style)Application.Current.Resources["SettingsSecondaryTextBlockStyle"],
             TextWrapping = TextWrapping.Wrap
         });
 
@@ -1077,7 +1062,7 @@ public sealed partial class ScriptSettingsControl : UserControl
             Text = string.Empty,
             FontSize = 13,
             FontFamily = new FontFamily("Consolas"),
-            Foreground = (Brush)Application.Current.Resources["AccentTextFillColorPrimaryBrush"],
+            Style = (Style)Application.Current.Resources["SettingsAccentTextBlockStyle"],
             TextWrapping = TextWrapping.Wrap
         };
         previewStack.Children.Add(previewTextBlock);
@@ -1421,7 +1406,7 @@ public sealed partial class ScriptSettingsControl : UserControl
         { 
             Text = "Нажмите на шаблон, чтобы скопировать:", 
             FontSize = 12, 
-            Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"], 
+            Style = (Style)Application.Current.Resources["SettingsSecondaryTextBlockStyle"], 
             Margin = new Thickness(0, 0, 0, 8) 
         };
         
@@ -1470,7 +1455,7 @@ public sealed partial class ScriptSettingsControl : UserControl
             { 
                 Text = item.Pattern, 
                 FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, 
-                Foreground = (Brush)Application.Current.Resources["AccentTextFillColorPrimaryBrush"] 
+                Style = (Style)Application.Current.Resources["SettingsAccentTextBlockStyle"] 
             });
             rowStack.Children.Add(new TextBlock { Text = string.IsNullOrEmpty(item.Description) ? "" : $"— {CleanDescription(item.Description)}", FontSize = 12 });
             
@@ -1479,7 +1464,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                 Text = "Скопировано!",
                 FontSize = 12,
                 FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-                Foreground = (Brush)Application.Current.Resources["AccentTextFillColorPrimaryBrush"],
+                Style = (Style)Application.Current.Resources["SettingsAccentTextBlockStyle"],
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
                 Visibility = Visibility.Collapsed
@@ -1538,7 +1523,7 @@ public sealed partial class ScriptSettingsControl : UserControl
         { 
             Text = "Нажмите на шаблон, чтобы скопировать:", 
             FontSize = 12, 
-            Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"], 
+            Style = (Style)Application.Current.Resources["SettingsSecondaryTextBlockStyle"], 
             Margin = new Thickness(0, 0, 0, 8) 
         };
         
@@ -1587,7 +1572,7 @@ public sealed partial class ScriptSettingsControl : UserControl
             { 
                 Text = item.Pattern, 
                 FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, 
-                Foreground = (Brush)Application.Current.Resources["AccentTextFillColorPrimaryBrush"] 
+                Style = (Style)Application.Current.Resources["SettingsAccentTextBlockStyle"] 
             });
             rowStack.Children.Add(new TextBlock { Text = string.IsNullOrEmpty(item.Description) ? "" : $"— {CleanDescription(item.Description)}", FontSize = 12 });
             
@@ -1596,7 +1581,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                 Text = "Скопировано!",
                 FontSize = 12,
                 FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-                Foreground = (Brush)Application.Current.Resources["AccentTextFillColorPrimaryBrush"],
+                Style = (Style)Application.Current.Resources["SettingsAccentTextBlockStyle"],
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
                 Visibility = Visibility.Collapsed
@@ -1671,7 +1656,7 @@ public sealed partial class ScriptSettingsControl : UserControl
             {
                 Text = "Добавьте файлы в очередь, чтобы увидеть предпросмотр переименования",
                 FontSize = 12,
-                Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
+                Style = (Style)Application.Current.Resources["SettingsSecondaryTextBlockStyle"],
                 FontStyle = Windows.UI.Text.FontStyle.Italic,
                 Margin = new Thickness(0, 4, 0, 0)
             });
@@ -1700,7 +1685,7 @@ public sealed partial class ScriptSettingsControl : UserControl
             {
                 Text = "Переименование выключено или шаблон поиска пуст",
                 FontSize = 12,
-                Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
+                Style = (Style)Application.Current.Resources["SettingsSecondaryTextBlockStyle"],
                 FontStyle = Windows.UI.Text.FontStyle.Italic,
                 Margin = new Thickness(0, 4, 0, 0)
             });
@@ -1735,7 +1720,7 @@ public sealed partial class ScriptSettingsControl : UserControl
             {
                 Text = file.FileName,
                 FontSize = 12,
-                Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
+                Style = (Style)Application.Current.Resources["SettingsSecondaryTextBlockStyle"],
                 TextTrimming = TextTrimming.CharacterEllipsis,
                 HorizontalAlignment = HorizontalAlignment.Left
             };
@@ -1746,7 +1731,7 @@ public sealed partial class ScriptSettingsControl : UserControl
             {
                 Text = " ➜ ",
                 FontSize = 12,
-                Foreground = (Brush)Application.Current.Resources["TextFillColorTertiaryBrush"],
+                Style = (Style)Application.Current.Resources["SettingsTertiaryTextBlockStyle"],
                 Margin = new Thickness(8, 0, 8, 0),
                 HorizontalAlignment = HorizontalAlignment.Center
             };
@@ -1775,7 +1760,7 @@ public sealed partial class ScriptSettingsControl : UserControl
             }
             else
             {
-                newText.Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"];
+                newText.Style = (Style)Application.Current.Resources["SettingsSecondaryTextBlockStyle"];
             }
 
             Grid.SetColumn(newText, 2);

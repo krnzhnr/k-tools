@@ -12,6 +12,7 @@ using Windows.Storage.Pickers;
 using WinRT.Interop;
 using KTools_App.Core;
 using KTools_App.Services.Contracts;
+using KTools_App.Scripts;
 
 namespace KTools_App.UI.Controls;
 
@@ -34,7 +35,42 @@ public sealed partial class AudioTransplantControl : UserControl
     public AbstractScript? ActiveScript
     {
         get => _activeScript;
-        set => _activeScript = value;
+        set
+        {
+            _activeScript = value;
+            if (_activeScript is AudioTransplantScript script)
+            {
+                _isUpdatingUi = true;
+                try
+                {
+                    SourcePathTextBox.Text = script.SourceFilePath;
+                    DestPathTextBox.Text = script.DestFilePath;
+                    SubtitlesPathTextBox.Text = script.SubtitlesFilePath;
+
+                    UpdateShiftStatusText(script.ShiftMs);
+                }
+                finally
+                {
+                    _isUpdatingUi = false;
+                }
+
+                if (!string.IsNullOrWhiteSpace(SourcePathTextBox.Text) && File.Exists(SourcePathTextBox.Text.Trim()))
+                {
+                    _ = PopulateSourceTracksAsync(SourcePathTextBox.Text.Trim());
+                }
+
+                if (!string.IsNullOrWhiteSpace(DestPathTextBox.Text) && File.Exists(DestPathTextBox.Text.Trim()))
+                {
+                    string trimmedDest = DestPathTextBox.Text.Trim();
+                    if (_activeScript.FilesQueue.Count == 0 || _activeScript.FilesQueue[0].FilePath != trimmedDest)
+                    {
+                        _activeScript.FilesQueue.Clear();
+                        _activeScript.FilesQueue.Add(new FileQueueItem(trimmedDest));
+                    }
+                    _ = PopulateDestTracksAsync(trimmedDest);
+                }
+            }
+        }
     }
 
     public AudioTransplantControl()
@@ -45,23 +81,8 @@ public sealed partial class AudioTransplantControl : UserControl
         _logService = App.Services.GetRequiredService<ILogService>();
     }
 
-    private T GetSetting<T>(string key, T defaultValue)
-    {
-        if (_activeScript == null) return defaultValue;
-        string group = _settingsManager.GetSafeGroupName(_activeScript.Name);
-        return _settingsManager.GetSetting<T>(group, key, defaultValue);
-    }
-
-    private void SetSetting<T>(string key, T value)
-    {
-        if (_activeScript == null) return;
-        string group = _settingsManager.GetSafeGroupName(_activeScript.Name);
-        _settingsManager.SetSetting<T>(group, key, value);
-        _settingsManager.SaveSettings();
-    }
-
     /// <summary>
-    /// Полный сброс состояния полей формы при запуск/перезапуске скрипта.
+    /// Полный сброс состояния полей формы в памяти при запуске/перезапуске скрипта.
     /// </summary>
     private void ResetFormState()
     {
@@ -80,15 +101,15 @@ public sealed partial class AudioTransplantControl : UserControl
 
             UpdateShiftStatusText(0);
 
-            SetSetting("SourceFile", string.Empty);
-            SetSetting("SubtitlesFile", string.Empty);
-            SetSetting("ShiftMs", 0);
-            SetSetting("SourceTrackIndex", 0);
-            SetSetting("DestTrackIndex", 0);
-
-            if (_activeScript != null)
+            if (_activeScript is AudioTransplantScript script)
             {
-                _activeScript.FilesQueue.Clear();
+                script.SourceFilePath = string.Empty;
+                script.DestFilePath = string.Empty;
+                script.SubtitlesFilePath = string.Empty;
+                script.ShiftMs = 0;
+                script.SourceTrackIndex = 0;
+                script.DestTrackIndex = 0;
+                script.FilesQueue.Clear();
             }
         }
         finally
@@ -104,10 +125,12 @@ public sealed partial class AudioTransplantControl : UserControl
         e.AcceptedOperation = DataPackageOperation.Copy;
         e.DragUIOverride.IsCaptionVisible = true;
         e.DragUIOverride.Caption = "Добавить файл";
+        e.Handled = true;
     }
 
     private async void SourceCard_Drop(object sender, DragEventArgs e)
     {
+        e.Handled = true;
         var files = await GetDroppedFilesAsync(e);
         if (files.Count > 0)
         {
@@ -117,6 +140,7 @@ public sealed partial class AudioTransplantControl : UserControl
 
     private async void DestCard_Drop(object sender, DragEventArgs e)
     {
+        e.Handled = true;
         var files = await GetDroppedFilesAsync(e);
         if (files.Count > 0)
         {
@@ -126,6 +150,7 @@ public sealed partial class AudioTransplantControl : UserControl
 
     private async void SubtitlesCard_Drop(object sender, DragEventArgs e)
     {
+        e.Handled = true;
         var files = await GetDroppedFilesAsync(e);
         if (files.Count > 0)
         {
@@ -214,10 +239,10 @@ public sealed partial class AudioTransplantControl : UserControl
 
     private async void SourcePathTextBox_TextChanged(object sender, TextChangedEventArgs e)
     {
-        if (_isUpdatingUi || _activeScript == null) return;
+        if (_isUpdatingUi || _activeScript is not AudioTransplantScript script) return;
 
         string path = SourcePathTextBox.Text.Trim();
-        SetSetting("SourceFile", path);
+        script.SourceFilePath = path;
 
         if (File.Exists(path))
         {
@@ -254,7 +279,17 @@ public sealed partial class AudioTransplantControl : UserControl
                         ffmpegIndex++;
                     }
 
-                    SourceTrackComboBox.SelectedIndex = 0;
+                    int savedTrackIndex = (_activeScript is AudioTransplantScript script) ? script.SourceTrackIndex : 0;
+                    int selectedIndex = 0;
+                    for (int i = 0; i < SourceTrackComboBox.Items.Count; i++)
+                    {
+                        if (SourceTrackComboBox.Items[i] is ComboBoxItem item && item.Tag is int tagIdx && tagIdx == savedTrackIndex)
+                        {
+                            selectedIndex = i;
+                            break;
+                        }
+                    }
+                    SourceTrackComboBox.SelectedIndex = selectedIndex;
                     return;
                 }
             }
@@ -272,14 +307,15 @@ public sealed partial class AudioTransplantControl : UserControl
 
     private async void DestPathTextBox_TextChanged(object sender, TextChangedEventArgs e)
     {
-        if (_isUpdatingUi || _activeScript == null) return;
+        if (_isUpdatingUi || _activeScript is not AudioTransplantScript script) return;
 
         string path = DestPathTextBox.Text.Trim();
+        script.DestFilePath = path;
 
-        _activeScript.FilesQueue.Clear();
+        script.FilesQueue.Clear();
         if (File.Exists(path))
         {
-            _activeScript.FilesQueue.Add(new FileQueueItem(path));
+            script.FilesQueue.Add(new FileQueueItem(path));
             await PopulateDestTracksAsync(path);
         }
         else
@@ -313,7 +349,17 @@ public sealed partial class AudioTransplantControl : UserControl
                         ffmpegIndex++;
                     }
 
-                    DestTrackComboBox.SelectedIndex = 0;
+                    int savedTrackIndex = (_activeScript is AudioTransplantScript script) ? script.DestTrackIndex : 0;
+                    int selectedIndex = 0;
+                    for (int i = 0; i < DestTrackComboBox.Items.Count; i++)
+                    {
+                        if (DestTrackComboBox.Items[i] is ComboBoxItem item && item.Tag is int tagIdx && tagIdx == savedTrackIndex)
+                        {
+                            selectedIndex = i;
+                            break;
+                        }
+                    }
+                    DestTrackComboBox.SelectedIndex = selectedIndex;
                     return;
                 }
             }
@@ -331,25 +377,25 @@ public sealed partial class AudioTransplantControl : UserControl
 
     private void SubtitlesPathTextBox_TextChanged(object sender, TextChangedEventArgs e)
     {
-        if (_isUpdatingUi || _activeScript == null) return;
-        SetSetting("SubtitlesFile", SubtitlesPathTextBox.Text.Trim());
+        if (_isUpdatingUi || _activeScript is not AudioTransplantScript script) return;
+        script.SubtitlesFilePath = SubtitlesPathTextBox.Text.Trim();
     }
 
     private void SourceTrackComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (_isUpdatingUi || _activeScript == null) return;
+        if (_isUpdatingUi || _activeScript is not AudioTransplantScript script) return;
         if (SourceTrackComboBox.SelectedItem is ComboBoxItem item && item.Tag is int idx)
         {
-            SetSetting("SourceTrackIndex", idx);
+            script.SourceTrackIndex = idx;
         }
     }
 
     private void DestTrackComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (_isUpdatingUi || _activeScript == null) return;
+        if (_isUpdatingUi || _activeScript is not AudioTransplantScript script) return;
         if (DestTrackComboBox.SelectedItem is ComboBoxItem item && item.Tag is int idx)
         {
-            SetSetting("DestTrackIndex", idx);
+            script.DestTrackIndex = idx;
         }
     }
 
@@ -389,10 +435,10 @@ public sealed partial class AudioTransplantControl : UserControl
 
         syncWindow.Closed += (s, args) =>
         {
-            if (syncWindow.IsConfirmed)
+            if (syncWindow.IsConfirmed && _activeScript is AudioTransplantScript script)
             {
                 int userShift = syncWindow.UserShiftMs;
-                SetSetting("ShiftMs", userShift);
+                script.ShiftMs = userShift;
                 UpdateShiftStatusText(userShift);
             }
         };

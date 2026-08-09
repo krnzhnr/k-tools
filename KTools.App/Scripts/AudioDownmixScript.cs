@@ -78,11 +78,11 @@ public sealed class AudioDownmixScript : AbstractScript
             "DownmixMode",
             "Режим даунмикса",
             SettingType.Combo,
-            "Dolby Encoding Engine (DEE)",
+            "FFmpeg",
             "Параметры даунмикса",
             options: new List<string> {
-                "Dolby Encoding Engine (DEE)",
-                "FFmpeg"
+                "FFmpeg",
+                "Dolby Encoding Engine (DEE)"
             }),
 
         new SettingField(
@@ -143,7 +143,7 @@ public sealed class AudioDownmixScript : AbstractScript
         string mode = GetSettingValue(
             settings, 
             "DownmixMode", 
-            "Dolby Encoding Engine (DEE)");
+            "FFmpeg");
         string format = GetSettingValue(
             settings, 
             "OutputFormat", 

@@ -70,7 +70,7 @@ public class SettingsViewModelTests
         viewModel.MaxParallelTasks.Should().Be(4);
         viewModel.DefaultOutputSubfolder.Should().Be("KTools_Result");
         viewModel.UseAutoSubfolder.Should().BeFalse();
-        viewModel.SelectedThemeIndex.Should().Be(0); // Dark = 0
+        viewModel.SelectedThemeIndex.Should().Be(1); // Dark = 1
         viewModel.SelectedBackdropIndex.Should().Be(0); // Mica = 0
     }
 
@@ -114,7 +114,7 @@ public class SettingsViewModelTests
         );
 
         // Act
-        viewModel.SelectedThemeIndex = 1; // Light
+        viewModel.SelectedThemeIndex = 2; // Light
 
         // Assert
         _settingsManagerMock.VerifySet(m => m.Theme = "Light", Times.Once);

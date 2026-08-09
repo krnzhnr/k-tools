@@ -242,9 +242,12 @@ public sealed partial class MainWindow : Window
                 {
                     if (Content is FrameworkElement rootElement)
                     {
-                        rootElement.RequestedTheme = m.NewTheme.Equals("Light", StringComparison.OrdinalIgnoreCase)
-                            ? ElementTheme.Light
-                            : ElementTheme.Dark;
+                        rootElement.RequestedTheme = m.NewTheme.ToLowerInvariant() switch
+                        {
+                            "light" => ElementTheme.Light,
+                            "dark" => ElementTheme.Dark,
+                            _ => ElementTheme.Default
+                        };
                     }
                 });
             });
@@ -329,9 +332,12 @@ public sealed partial class MainWindow : Window
             string theme = _settingsManager.Theme;
             if (Content is FrameworkElement rootElement)
             {
-                rootElement.RequestedTheme = theme.Equals("Light", StringComparison.OrdinalIgnoreCase)
-                    ? ElementTheme.Light
-                    : ElementTheme.Dark;
+                rootElement.RequestedTheme = theme.ToLowerInvariant() switch
+                {
+                    "light" => ElementTheme.Light,
+                    "dark" => ElementTheme.Dark,
+                    _ => ElementTheme.Default
+                };
                 _logService.Info($"Успешно применена сохраненная тема оформления: '{theme}'", "MainWindow");
             }
         }

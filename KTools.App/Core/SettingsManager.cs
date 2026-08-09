@@ -410,6 +410,25 @@ public sealed class SettingsManager : ISettingsManager
     }
 
     /// <summary>
+    /// Получить все сохраненные настройки определенной группы.
+    /// </summary>
+    public Dictionary<string, object> GetAllSettingsInGroup(string group)
+    {
+        lock (_lock)
+        {
+            var result = new Dictionary<string, object>();
+            if (_cache.TryGetValue(group, out var groupDict))
+            {
+                foreach (var kvp in groupDict)
+                {
+                    result[kvp.Key] = kvp.Value;
+                }
+            }
+            return result;
+        }
+    }
+
+    /// <summary>
     /// Инициализировать настройки по умолчанию на основе схемы скрипта.
     /// </summary>
     public void InitializeDefaults(List<AbstractScript> scripts)

@@ -7,6 +7,7 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:viewmodels="using:KTools_App.ViewModels"
     xmlns:controls="using:CommunityToolkit.WinUI.Controls"
+    xmlns:local="using:KTools_App.UI.Controls"
     x:DataType="viewmodels:WorkPanelViewModel"
     AllowDrop="True"
     DragOver="WorkPanel_DragOver"
@@ -157,17 +158,64 @@
         </Grid>
 
         <!-- Фиксированная нижняя панель запуска и прогресса -->
-        <Border Grid.Row="2" 
+        <Border x:Name="BottomActionBorder"
+                Grid.Row="2" 
                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                 BorderThickness="1"
                 Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                 CornerRadius="8"
-                Padding="24,12,24,16">
-            <Grid>
+                Padding="24,12,24,16"
+                AllowDrop="True"
+                DragOver="BottomActionPanel_DragOver"
+                DragLeave="BottomActionPanel_DragLeave"
+                Drop="BottomActionPanel_Drop">
+            <Grid x:Name="BottomActionGrid">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" /> <!-- 1 строка: Статус и Прогресс-бар -->
                     <RowDefinition Height="Auto" /> <!-- 2 строка: Путь, Обзор, Выполнить -->
                 </Grid.RowDefinitions>
+
+                <!-- Оверлей затемнения при перетаскивании целевой папки/файла на нижнюю панель -->
+                <Grid x:Name="OutputPathDropOverlayGrid"
+                      Grid.RowSpan="2"
+                      Canvas.ZIndex="10"
+                      Background="{ThemeResource SolidBackgroundFillColorBaseBrush}"
+                      CornerRadius="8"
+                      Margin="-24,-12,-24,-16"
+                      Visibility="Collapsed"
+                      IsHitTestVisible="False">
+                    
+                    <!-- Универсальная окантовка оверлея по внешнему краю -->
+                    <local:DropZoneOverlay x:Name="OutputPathDropOverlay" Margin="0" />
+
+                    <Grid HorizontalAlignment="Center" 
+                          VerticalAlignment="Center"
+                          Padding="32,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <FontIcon Grid.Column="0"
+                                  Glyph="&#xE8B7;" 
+                                  FontSize="24" 
+                                  Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" 
+                                  VerticalAlignment="Center"
+                                  Margin="0,0,12,0" />
+
+                        <TextBlock Grid.Column="1"
+                                   x:Name="OutputPathDropText"
+                                   Text="Папка будет установлена как выходная директория" 
+                                   FontSize="14" 
+                                   FontWeight="SemiBold"
+                                   TextWrapping="Wrap"
+                                   TextAlignment="Center"
+                                   TextTrimming="CharacterEllipsis"
+                                   MaxLines="2"
+                                   Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+                                   VerticalAlignment="Center" />
+                    </Grid>
+                </Grid>
 
                 <!-- Строка 1: Прогресс-бар и Статус (как в оригинале) -->
                 <StackPanel Grid.Row="0" Margin="0,0,0,12" Spacing="4">

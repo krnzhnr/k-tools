@@ -22,6 +22,7 @@ public class AudioTransplantScriptTests
     private Mock<IPathManager> _pathManagerMock = null!;
     private Mock<IFFmpegRunner> _ffmpegRunnerMock = null!;
     private Mock<IMkvmergeRunner> _mkvmergeRunnerMock = null!;
+    private Mock<IEac3toRunner> _eac3toRunnerMock = null!;
     private Mock<IAudioWaveformService> _waveformServiceMock = null!;
     private Mock<IMediaProbeService> _mediaProbeServiceMock = null!;
     private AudioTransplantScript _script = null!;
@@ -34,6 +35,7 @@ public class AudioTransplantScriptTests
         _pathManagerMock = new Mock<IPathManager>();
         _ffmpegRunnerMock = new Mock<IFFmpegRunner>();
         _mkvmergeRunnerMock = new Mock<IMkvmergeRunner>();
+        _eac3toRunnerMock = new Mock<IEac3toRunner>();
         _waveformServiceMock = new Mock<IAudioWaveformService>();
         _mediaProbeServiceMock = new Mock<IMediaProbeService>();
 
@@ -43,6 +45,7 @@ public class AudioTransplantScriptTests
             _pathManagerMock.Object,
             _ffmpegRunnerMock.Object,
             _mkvmergeRunnerMock.Object,
+            _eac3toRunnerMock.Object,
             _waveformServiceMock.Object,
             _mediaProbeServiceMock.Object
         );
@@ -57,7 +60,7 @@ public class AudioTransplantScriptTests
         _script.Name.Should().Be("Пересадка аудио");
         _script.Category.Should().Be("Аудио");
         _script.IconName.Should().Be(AppConstants.ScriptIcons.AudioTransplant);
-        _script.RequiredDependencies.Should().Contain("ffmpeg").And.Contain("mkvtoolnix");
+        _script.RequiredDependencies.Should().Contain("ffmpeg").And.Contain("mkvtoolnix").And.Contain("eac3to");
     }
 
     /// <summary>

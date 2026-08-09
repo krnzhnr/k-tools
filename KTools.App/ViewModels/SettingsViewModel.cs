@@ -294,10 +294,12 @@ public partial class SettingsViewModel : ThreadSafeViewModel
         DefaultOutputSubfolder = _settingsManager.DefaultOutputSubfolder;
         UseAutoSubfolder = _settingsManager.UseAutoSubfolder;
 
-        SelectedThemeIndex = _settingsManager.Theme
-            .Equals("Light", StringComparison.OrdinalIgnoreCase)
-            ? 1
-            : 0;
+        SelectedThemeIndex = _settingsManager.Theme.ToLowerInvariant() switch
+        {
+            "dark" => 1,
+            "light" => 2,
+            _ => 0
+        };
 
         SelectedBackdropIndex = _settingsManager.BackdropType
             .Equals("Acrylic", StringComparison.OrdinalIgnoreCase)
@@ -369,7 +371,12 @@ public partial class SettingsViewModel : ThreadSafeViewModel
 
     partial void OnSelectedThemeIndexChanged(int value)
     {
-        string newTheme = value == 1 ? "Light" : "Dark";
+        string newTheme = value switch
+        {
+            1 => "Dark",
+            2 => "Light",
+            _ => "System"
+        };
         _settingsManager.Theme = newTheme;
         WeakReferenceMessenger.Default.Send(new ThemeChangedMessage(newTheme));
     }

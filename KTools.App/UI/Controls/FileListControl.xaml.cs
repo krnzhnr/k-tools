@@ -12,6 +12,8 @@ using System.Threading.Tasks;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Animation;
+using Microsoft.UI.Xaml.Hosting;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Storage;
 
@@ -602,22 +604,51 @@ public sealed partial class FileListControl : UserControl
         }
     }
 
+    private void SetFileDropHighlight(bool isHighlighted)
+    {
+        DropOverlay?.SetHighlighted(isHighlighted);
+
+        if (EmptyPanel != null)
+        {
+            if (Application.Current.Resources.TryGetValue(isHighlighted ? "CardBackgroundFillColorSecondaryBrush" : "CardBackgroundFillColorDefaultBrush", out var bgBrush) && bgBrush is Brush bg)
+            {
+                EmptyPanel.Background = bg;
+            }
+        }
+    }
+
     private void RootGrid_DragOver(object sender, DragEventArgs e)
     {
         if (IsProcessing)
         {
             e.AcceptedOperation = DataPackageOperation.None;
+            e.Handled = true;
             return;
         }
 
-        e.AcceptedOperation = DataPackageOperation.Copy;
-        e.DragUIOverride.Caption = "Добавить в K-Tools";
-        e.DragUIOverride.IsCaptionVisible = true;
-        e.DragUIOverride.IsContentVisible = true;
+        if (e.DataView.Contains(StandardDataFormats.StorageItems))
+        {
+            e.AcceptedOperation = DataPackageOperation.Copy;
+            SetFileDropHighlight(true);
+        }
+        else
+        {
+            e.AcceptedOperation = DataPackageOperation.None;
+        }
+
+        e.Handled = true;
+    }
+
+    private void RootGrid_DragLeave(object sender, DragEventArgs e)
+    {
+        SetFileDropHighlight(false);
+        e.Handled = true;
     }
 
     private async void RootGrid_Drop(object sender, DragEventArgs e)
     {
+        e.Handled = true;
+        SetFileDropHighlight(false);
         if (IsProcessing) return;
         try
         {
