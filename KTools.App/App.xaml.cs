@@ -223,10 +223,12 @@ public partial class App : Application
         // Infrastructure-сервисы (Runner'ы)
         services.AddSingleton<IFFmpegRunner, FFmpegRunner>();
         services.AddSingleton<IEac3toRunner, Eac3toRunner>();
-        services.AddSingleton<IMediaProbeService, MediaProbeService>();
         services.AddSingleton<IMkvmergeRunner, MkvmergeRunner>();
-        services.AddSingleton<DeeRunner>();
         services.AddSingleton<QaacRunner>();
+        services.AddSingleton<DeeRunner>();
+        services.AddSingleton<IMediaProbeService, MediaProbeService>();
+        services.AddSingleton<IBitrateAnalyzerService, BitrateAnalyzerService>();
+        services.AddSingleton<IDiskTypeDetectorService, DiskTypeDetectorService>();
         services.AddSingleton<IAudioWaveformService, AudioWaveformService>();
         services.AddSingleton<IAssParser, AssParser>();
 
@@ -239,6 +241,8 @@ public partial class App : Application
         services.AddTransient<Scripts.AudioSpeedScript>();
         services.AddTransient<Scripts.AudioChannelsScript>();
         services.AddTransient<Scripts.AudioTransplantScript>();
+        services.AddTransient<Scripts.BitrateViewerScript>();
+        services.AddTransient<Scripts.MediaDownloaderScript>();
         services.AddTransient<Scripts.MkvAssemblyScript>();
         services.AddTransient<Scripts.StreamManagementScript>();
         services.AddTransient<Scripts.StreamReplacementScript>();

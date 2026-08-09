@@ -523,6 +523,14 @@ public sealed partial class FileListControl : UserControl
         }
     }
 
+    private void OpenBitrateGraphButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button btn && btn.DataContext is FileQueueItem item)
+        {
+            item.OpenBitrateGraph();
+        }
+    }
+
     /// <summary>
     /// Обработчик кнопки удаления строки из таблицы муксинга.
     /// Удаляет видео, аудио и субтитры текущей строки из основной очереди.

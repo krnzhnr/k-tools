@@ -216,6 +216,9 @@ public static class AppConstants
 
         public const string SubtitleShiftName = "Сдвиг субтитров";
         public const string SubtitleShiftDesc = "Изменение тайминга субтитров (ASS, SRT, VTT, SSA) на заданное количество миллисекунд.";
+
+        public const string BitrateViewerName = "Анализ битрейта видео и аудио";
+        public const string BitrateViewerDesc = "Анализ распределения битрейта медиапотоков с интерактивной Win2D GPU-визуализацией.";
     }
 
     /// <summary>

@@ -268,6 +268,42 @@ public sealed class FileQueueItem : INotifyPropertyChanged
     private DownloadSubtitleItem? _selectedSubtitle;
     private string _displayName = string.Empty;
 
+    private Services.Contracts.BitrateAnalysisResult? _bitrateData;
+
+    /// <summary>
+    /// Данные побитового битрейта для открывания GPU-графика Win2D.
+    /// </summary>
+    public Services.Contracts.BitrateAnalysisResult? BitrateData
+    {
+        get => _bitrateData;
+        set
+        {
+            if (_bitrateData != value)
+            {
+                _bitrateData = value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(HasBitrateData));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Флаг наличия результатов анализа битрейта для активизации иконки графика.
+    /// </summary>
+    public bool HasBitrateData => BitrateData != null;
+
+    /// <summary>
+    /// Открыть окно GPU-графика битрейта Win2D для данного файла.
+    /// </summary>
+    public void OpenBitrateGraph()
+    {
+        if (BitrateData != null)
+        {
+            var win = new UI.BitrateViewerWindow(BitrateData);
+            win.Activate();
+        }
+    }
+
     public System.Collections.ObjectModel.ObservableCollection<DownloadFormatItem> AvailableFormats { get; } = new();
     public System.Collections.ObjectModel.ObservableCollection<DownloadSubtitleItem> AvailableSubtitles { get; } = new();
 

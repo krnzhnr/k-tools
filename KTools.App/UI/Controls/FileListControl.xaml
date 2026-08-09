@@ -85,6 +85,7 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
 
                         <!-- Название файла -->
@@ -108,7 +109,7 @@
                                Grid.RowSpan="2" 
                                Width="32" 
                                Height="32" 
-                               Margin="6,6,12,6" 
+                               Margin="6,6,4,6" 
                                VerticalAlignment="Center" 
                                HorizontalAlignment="Center">
                             
@@ -131,8 +132,33 @@
                                          VerticalAlignment="Center" />
                         </Grid>
 
+                        <!-- Кнопка вызова нативного GPU-графика битрейта Win2D -->
+                        <Button Grid.Column="2"
+                                Grid.RowSpan="2"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                Padding="0"
+                                Width="32"
+                                Height="32"
+                                MinWidth="0"
+                                MinHeight="0"
+                                Margin="2,0,4,0"
+                                HorizontalAlignment="Center"
+                                VerticalAlignment="Center"
+                                HorizontalContentAlignment="Center"
+                                VerticalContentAlignment="Center"
+                                Click="OpenBitrateGraphButton_Click"
+                                ToolTipService.ToolTip="Открыть GPU-график битрейта (Win2D)"
+                                Visibility="{x:Bind HasBitrateData, Mode=OneWay}">
+                            <FontIcon FontSize="16" Glyph="&#xE9D2;"
+                                      Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
+                                      HorizontalAlignment="Center"
+                                      VerticalAlignment="Center"
+                                      FontFamily="{ThemeResource SymbolThemeFontFamily}" />
+                        </Button>
+
                         <!-- Кнопка удаления файла из очереди -->
-                        <Button Grid.Column="2" 
+                        <Button Grid.Column="3" 
                                 Grid.RowSpan="2"
                                 x:Name="DeleteButton"
                                 Background="Transparent"
