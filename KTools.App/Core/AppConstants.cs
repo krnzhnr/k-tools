@@ -69,6 +69,14 @@ public static class AppConstants
     };
 
     /// <summary>
+    /// Объединенный список всех поддерживаемых медиафайлов (видео и аудио контейнеров и сырых потоков) с точкой в нижнем регистре.
+    /// </summary>
+    public static readonly IReadOnlySet<string> AllMediaExtensions = new HashSet<string>(
+        VideoContainers.Concat(VideoStreams).Concat(AudioContainers).Concat(AudioStreams),
+        StringComparer.OrdinalIgnoreCase
+    );
+
+    /// <summary>
     /// Множество расширений файлов субтитров с точкой в нижнем регистре.
     /// </summary>
     public static readonly IReadOnlySet<string> SubtitleExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
