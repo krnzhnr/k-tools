@@ -209,3 +209,4 @@ devcert.pfx
 /.vscode
 TEACHING_GUIDES_PLAN.md
 .agents/AGENTS.md
+VIDEO_ENCODER_REFACTORING_PLAN.md

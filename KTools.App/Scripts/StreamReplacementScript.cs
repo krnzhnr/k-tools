@@ -90,45 +90,41 @@ public sealed class StreamReplacementScript : AbstractScript
 
         // 1. Считываем назначения замен из настроек
         var rawReplacements = GetSettingValue<Dictionary<string, object>?>(settings, "replacements", null);
-        if (rawReplacements == null || rawReplacements.Count == 0)
-        {
-            string err = "❌ Ошибка: не назначено ни одной замены для подмены дорожек.";
-            _logService.Error(err, "StreamReplacementScript");
-            progressCallback(fileIndex, totalCount, "Ошибка: нет замен", 0.0);
-            results.Add(err);
-            return results;
-        }
-
-        // Парсим замены в типизированный словарь
+        
         var replacements = new Dictionary<int, ReplacementInfo>();
-        foreach (var kvp in rawReplacements)
+        
+        if (rawReplacements != null && rawReplacements.TryGetValue(filePath, out var fileRepsObj) && fileRepsObj is IDictionary<string, object> fileReps)
         {
-            if (int.TryParse(kvp.Key, out int trackId))
+            // Парсим замены в типизированный словарь для текущего файла
+            foreach (var kvp in fileReps)
             {
-                string? path = null;
-                int srcId = 0;
+                if (int.TryParse(kvp.Key, out int trackId))
+                {
+                    string? path = null;
+                    int srcId = 0;
 
-                if (kvp.Value is System.Text.Json.JsonElement elem)
-                {
-                    if (elem.TryGetProperty("path", out var pathProp)) path = pathProp.GetString();
-                    if (elem.TryGetProperty("src_id", out var srcIdProp)) srcId = srcIdProp.GetInt32();
-                }
-                else if (kvp.Value is Dictionary<string, object> dict)
-                {
-                    if (dict.TryGetValue("path", out var pathVal)) path = pathVal?.ToString();
-                    if (dict.TryGetValue("src_id", out var srcIdVal)) srcId = Convert.ToInt32(srcIdVal);
-                }
+                    if (kvp.Value is System.Text.Json.JsonElement elem)
+                    {
+                        if (elem.TryGetProperty("path", out var pathProp)) path = pathProp.GetString();
+                        if (elem.TryGetProperty("src_id", out var srcIdProp)) srcId = srcIdProp.GetInt32();
+                    }
+                    else if (kvp.Value is Dictionary<string, object> dict)
+                    {
+                        if (dict.TryGetValue("path", out var pathVal)) path = pathVal?.ToString();
+                        if (dict.TryGetValue("src_id", out var srcIdVal)) srcId = Convert.ToInt32(srcIdVal);
+                    }
 
-                if (!string.IsNullOrEmpty(path))
-                {
-                    replacements[trackId] = new ReplacementInfo { Path = path, SrcId = srcId };
+                    if (!string.IsNullOrEmpty(path))
+                    {
+                        replacements[trackId] = new ReplacementInfo { Path = path, SrcId = srcId };
+                    }
                 }
             }
         }
 
         if (replacements.Count == 0)
         {
-            string err = "❌ Ошибка: не удалось разобрать назначения замен.";
+            string err = $"❌ Ошибка: не назначено ни одной замены для подмены дорожек в файле '{Path.GetFileName(filePath)}'.";
             _logService.Error(err, "StreamReplacementScript");
             progressCallback(fileIndex, totalCount, "Ошибка: нет замен", 0.0);
             results.Add(err);
@@ -202,8 +198,17 @@ public sealed class StreamReplacementScript : AbstractScript
             {
                 _logService.Info($"Запуск FFmpeg для подмены дорожек в MP4 '{Path.GetFileName(filePath)}'", "StreamReplacementScript");
                 
-                var ffmpegArgs = PrepareMp4Args(structure.Tracks, replacements);
+                var ffmpegArgs = PrepareMp4Args(structure.Tracks, replacements, out int replacedCount);
                 
+                if (replacedCount == 0)
+                {
+                    string err = $"❌ Ошибка: ни одна из назначенных замен не была передана в финальную команду для '{Path.GetFileName(filePath)}'.";
+                    _logService.Error(err, "StreamReplacementScript");
+                    progressCallback(fileIndex, totalCount, "Ошибка: 0 замен", 0.0);
+                    results.Add(err);
+                    return results;
+                }
+
                 success = await _ffmpegRunner.RunAsync(
                     inputPath: filePath,
                     outputPath: finalOutputFile,
@@ -221,7 +226,16 @@ public sealed class StreamReplacementScript : AbstractScript
             {
                 _logService.Info($"Запуск mkvmerge для подмены дорожек в MKV '{Path.GetFileName(filePath)}'", "StreamReplacementScript");
                 
-                var mkvInputs = PrepareMkvInputs(filePath, structure.Tracks, replacements, out var extraArgs);
+                var mkvInputs = PrepareMkvInputs(filePath, structure.Tracks, replacements, out var extraArgs, out int replacedCount);
+
+                if (replacedCount == 0)
+                {
+                    string err = $"❌ Ошибка: ни одна из назначенных замен не была передана в финальную команду для '{Path.GetFileName(filePath)}'.";
+                    _logService.Error(err, "StreamReplacementScript");
+                    progressCallback(fileIndex, totalCount, "Ошибка: 0 замен", 0.0);
+                    results.Add(err);
+                    return results;
+                }
 
                 success = await _mkvmergeRunner.RunAsync(
                     outputPath: finalOutputFile,
@@ -300,12 +314,13 @@ public sealed class StreamReplacementScript : AbstractScript
     /// <summary>
     /// Формирует аргументы FFmpeg для подмены дорожек в MP4.
     /// </summary>
-    private List<string> PrepareMp4Args(List<MediaTrack> streams, Dictionary<int, ReplacementInfo> replacements)
+    private List<string> PrepareMp4Args(List<MediaTrack> streams, Dictionary<int, ReplacementInfo> replacements, out int replacedCount)
     {
         var extraArgs = new List<string>();
         var extraInputs = new List<string>();
         int inputIdx = 1;
         int outIdx = 0;
+        replacedCount = 0;
 
         foreach (var stream in streams)
         {
@@ -320,6 +335,7 @@ public sealed class StreamReplacementScript : AbstractScript
                 // Переносим метаданные языка и заголовка
                 AddFfmpegMetadata(extraArgs, outIdx, stream);
                 inputIdx++;
+                replacedCount++;
             }
             else
             {
@@ -376,9 +392,11 @@ public sealed class StreamReplacementScript : AbstractScript
         string containerPath,
         List<MediaTrack> allTracks,
         Dictionary<int, ReplacementInfo> replacements,
-        out List<string> extraArgs)
+        out List<string> extraArgs,
+        out int replacedCount)
     {
         var inputs = new List<MkvInputSource>();
+        replacedCount = 0;
 
         // Ограничиваем оригинальный контейнер только незаменяемыми дорожками
         var containerArgs = BuildContainerTracksArgs(allTracks, replacements.Keys.ToHashSet());
@@ -403,6 +421,7 @@ public sealed class StreamReplacementScript : AbstractScript
 
                 trackMap[originalTrackId] = (currentInputIdx, rep.SrcId);
                 currentInputIdx++;
+                replacedCount++;
             }
         }
 

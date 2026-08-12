@@ -40,12 +40,23 @@ public class VideoEncodingScriptTests
         // Инициализируем мок для фонового определения NVENC
         _ffmpegRunnerMock.Setup(r => r.CheckNvencSupportAsync()).ReturnsAsync(true);
 
+        // Инициализируем реестр энкодеров для тестов
+        var encoders = new List<KTools_App.Encoders.IVideoEncoder>
+        {
+            new KTools_App.Encoders.NvencEncoder(),
+            new KTools_App.Encoders.X265Encoder()
+        };
+        var hardwareCacheMock = new Mock<KTools_App.Encoders.IHardwareCapabilityCache>();
+        hardwareCacheMock.Setup(c => c.IsNvencSupported).Returns(true);
+        var registry = new KTools_App.Encoders.VideoEncoderRegistry(encoders, hardwareCacheMock.Object);
+
         _script = new VideoEncodingScript(
             _logServiceMock.Object,
             _settingsManagerMock.Object,
             _pathManagerMock.Object,
             _ffmpegRunnerMock.Object,
-            _mediaProbeServiceMock.Object
+            _mediaProbeServiceMock.Object,
+            registry
         );
     }
 
@@ -236,7 +247,7 @@ public class VideoEncodingScriptTests
             capturedExtraArgs.Should().Contain("-preset");
             capturedExtraArgs.Should().Contain("p5"); // Ожидаем p5
             capturedExtraArgs.Should().Contain("-rc");
-            capturedExtraArgs.Should().Contain("vbr_hq");
+            capturedExtraArgs.Should().Contain("vbr");
             capturedExtraArgs.Should().NotContain("lossless");
         }
         finally
@@ -526,7 +537,8 @@ public class VideoEncodingScriptTests
         try
         {
             // Act
-            await _script.ExecuteSingleAsync(tempSourceFile, settings, tempOutputDir, (idx, total, status, pct, fps, bit) => { }, 0, 1);
+            string targetMp4 = Path.Combine(tempOutputDir, "test_output.mp4");
+            await _script.ExecuteSingleAsync(tempSourceFile, settings, targetMp4, (idx, total, status, pct, fps, bit) => { }, 0, 1);
 
             // Assert
             capturedExtraArgs.Should().NotBeNull();

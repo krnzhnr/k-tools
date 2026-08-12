@@ -74,12 +74,18 @@ public abstract class AbstractScript
     /// </summary>
     public virtual List<SettingField> SettingsSchema => new();
 
+    public virtual List<SettingField> GetSettingsSchema(Dictionary<string, object>? currentSettings = null)
+    {
+        return SettingsSchema;
+    }
+
     /// <summary>
     /// Возвращает полную схему параметров, включая локальные поля переименования.
+    /// Поддерживает динамическое обновление схемы на основе текущих выбранных параметров.
     /// </summary>
-    public List<SettingField> GetFullSettingsSchema()
+    public virtual List<SettingField> GetFullSettingsSchema(Dictionary<string, object>? currentSettings = null)
     {
-        var schema = new List<SettingField>(SettingsSchema);
+        var schema = new List<SettingField>(GetSettingsSchema(currentSettings));
         
         // Добавляем вкладку "Переименование" с полями локального переопределения
         schema.Add(new SettingField(

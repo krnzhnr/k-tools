@@ -167,20 +167,34 @@ public sealed partial class StreamReplaceControl : UserControl
             _logService.Info("Сбор назначенных замен из ComboBox", "StreamReplaceControl");
             foreach (var kvp in _combos)
             {
-                int trackId = kvp.Key;
+                int comboKey = kvp.Key;
                 ComboBox combo = kvp.Value;
 
                 if (combo.SelectedItem is ReplacementOption opt && !string.IsNullOrEmpty(opt.FilePath))
                 {
-                    var repData = new Dictionary<string, object>
+                    string srcFile = combo.Tag?.ToString() ?? string.Empty;
+                    if (string.IsNullOrEmpty(srcFile)) continue;
+
+                    if (!replacements.ContainsKey(srcFile))
                     {
-                        { "path", opt.FilePath },
-                        { "src_id", opt.SourceTrackId }
-                    };
-                    replacements[trackId.ToString()] = repData;
+                        replacements[srcFile] = new Dictionary<string, object>();
+                    }
+
+                    var fileDict = (Dictionary<string, object>)replacements[srcFile];
+
+                    if (_sourceTracks.TryGetValue(comboKey, out var track))
+                    {
+                        int actualTrackId = track.TrackId;
+                        var repData = new Dictionary<string, object>
+                        {
+                            { "path", opt.FilePath },
+                            { "src_id", opt.SourceTrackId }
+                        };
+                        fileDict[actualTrackId.ToString()] = repData;
+                    }
                 }
             }
-            _logService.Info($"Сбор замен завершен. Назначено замен: {replacements.Count}", "StreamReplaceControl");
+            _logService.Info($"Сбор замен завершен. Файлов с заменами: {replacements.Count}", "StreamReplaceControl");
         }
         catch (Exception ex)
         {
@@ -255,9 +269,17 @@ public sealed partial class StreamReplaceControl : UserControl
             var savedSelections = new Dictionary<string, ReplacementOption>();
             foreach (var kvp in _combos)
             {
-                if (kvp.Value.SelectedItem is ReplacementOption selOpt && !string.IsNullOrEmpty(selOpt.FilePath))
+                int comboKey = kvp.Key;
+                ComboBox combo = kvp.Value;
+
+                if (combo.SelectedItem is ReplacementOption selOpt && !string.IsNullOrEmpty(selOpt.FilePath))
                 {
-                    savedSelections[kvp.Key.ToString()] = selOpt;
+                    string srcFile = combo.Tag?.ToString() ?? string.Empty;
+                    if (_sourceTracks.TryGetValue(comboKey, out var track))
+                    {
+                        string compoundKey = $"{srcFile}_{track.TrackId}";
+                        savedSelections[compoundKey] = selOpt;
+                    }
                 }
             }
 
@@ -392,17 +414,24 @@ public sealed partial class StreamReplaceControl : UserControl
             UpdateAllComboBoxOptions();
 
             // Восстанавливаем сохраненный выбор замен
-            foreach (var kvp in savedSelections)
+            foreach (var kvp in _combos)
             {
-                if (int.TryParse(kvp.Key, out int key) && _combos.TryGetValue(key, out var combo))
+                int comboKey = kvp.Key;
+                ComboBox combo = kvp.Value;
+                string srcFile = combo.Tag?.ToString() ?? string.Empty;
+
+                if (_sourceTracks.TryGetValue(comboKey, out var track))
                 {
-                    var saved = kvp.Value;
-                    var matchOpt = combo.Items.Cast<ReplacementOption>().FirstOrDefault(o =>
-                        o.FilePath.Equals(saved.FilePath, StringComparison.OrdinalIgnoreCase) &&
-                        o.SourceTrackId == saved.SourceTrackId);
-                    if (matchOpt != null)
+                    string compoundKey = $"{srcFile}_{track.TrackId}";
+                    if (savedSelections.TryGetValue(compoundKey, out var saved))
                     {
-                        combo.SelectedItem = matchOpt;
+                        var matchOpt = combo.Items.Cast<ReplacementOption>().FirstOrDefault(o =>
+                            o.FilePath.Equals(saved.FilePath, StringComparison.OrdinalIgnoreCase) &&
+                            o.SourceTrackId == saved.SourceTrackId);
+                        if (matchOpt != null)
+                        {
+                            combo.SelectedItem = matchOpt;
+                        }
                     }
                 }
             }

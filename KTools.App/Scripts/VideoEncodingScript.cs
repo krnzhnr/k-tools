@@ -10,6 +10,7 @@ using System.Threading.Tasks;
 
 using KTools_App.Core;
 using KTools_App.Infrastructure;
+using KTools_App.Encoders;
 
 namespace KTools_App.Scripts;
 
@@ -20,59 +21,22 @@ namespace KTools_App.Scripts;
 /// </summary>
 public sealed class VideoEncodingScript : AbstractScript
 {
-    private static bool _isNvencChecked;
-    private static bool _isNvencSupported;
-    private static Task<bool>? _nvencCheckTask;
-    private static readonly object _nvencLock = new();
     private string? _finalOutputFileForCleanup;
     private readonly IFFmpegRunner _ffmpegRunner;
     private readonly IMediaProbeService _mediaProbeService;
+    private readonly VideoEncoderRegistry _encoderRegistry;
 
     public VideoEncodingScript(
         ILogService logService, 
         ISettingsManager settingsManager, IPathManager pathManager,
         IFFmpegRunner ffmpegRunner,
-        IMediaProbeService mediaProbeService)
+        IMediaProbeService mediaProbeService,
+        VideoEncoderRegistry encoderRegistry)
         : base(logService, settingsManager, pathManager)
     {
         _ffmpegRunner = ffmpegRunner ?? throw new ArgumentNullException(nameof(ffmpegRunner));
         _mediaProbeService = mediaProbeService ?? throw new ArgumentNullException(nameof(mediaProbeService));
-
-        lock (_nvencLock)
-        {
-            if (!_isNvencChecked && _nvencCheckTask == null)
-            {
-                _nvencCheckTask = Task.Run(async () =>
-                {
-                    try
-                    {
-                        bool result = await _ffmpegRunner.CheckNvencSupportAsync();
-                        _isNvencSupported = result;
-                        _isNvencChecked = true;
-                        _logService.Info($"Фоновая проверка поддержки NVENC завершена. Результат: {result}", "VideoEncodingScript");
-                        return result;
-                    }
-                    catch (Exception ex)
-                    {
-                        _logService.Exception(ex, "Ошибка при фоновой проверке поддержки NVENC в VideoEncodingScript", "VideoEncodingScript");
-                        _isNvencSupported = false;
-                        _isNvencChecked = true;
-                        return false;
-                    }
-                });
-            }
-        }
-    }
-
-    /// <summary>
-    /// Проверяет поддержку NVENC в фоновом режиме с возвратом кэшированного результата.
-    /// </summary>
-    private bool IsNvencSupported
-    {
-        get
-        {
-            return _isNvencSupported;
-        }
+        _encoderRegistry = encoderRegistry ?? throw new ArgumentNullException(nameof(encoderRegistry));
     }
 
     public override string Name => AppConstants.ScriptMetadata.VideoProcessorName;
@@ -82,387 +46,186 @@ public sealed class VideoEncodingScript : AbstractScript
     public override string[] FileExtensions => AppConstants.VideoContainers.ToArray();
     public override string[] RequiredDependencies => new[] { "ffmpeg" };
 
-    public override List<SettingField> SettingsSchema
+    public override List<SettingField> GetSettingsSchema(Dictionary<string, object>? currentSettings = null)
     {
-        get
+        return GetSettingsSchemaInternal(currentSettings);
+    }
+
+    public override List<SettingField> SettingsSchema => GetSettingsSchemaInternal(null);
+
+    private List<SettingField> GetSettingsSchemaInternal(Dictionary<string, object>? currentSettings)
+    {
+        var availableEncoders = _encoderRegistry.GetAvailableEncoders();
+        string defaultEncoder = availableEncoders.FirstOrDefault()?.DisplayName ?? "x265 (CPU)";
+        var encoderOptions = availableEncoders.Select(e => e.DisplayName).ToList();
+
+        var fields = new List<SettingField>
         {
-            string defaultEncoder = IsNvencSupported ? "NVENC (GPU)" : "x265 (CPU)";
+            // --- Вкладка Видео: Кодирование ---
+            new SettingField(
+                "encoder",
+                "Энкодер",
+                SettingType.Combo,
+                defaultEncoder,
+                "Видео:Кодирование",
+                options: encoderOptions,
+                column: 0,
+                colSpan: 1
+            ),
+            new SettingField(
+                "force_10bit",
+                "Принудительно 10-бит (Main10)",
+                SettingType.Checkbox,
+                false,
+                "Видео:Кодирование",
+                column: 0,
+                colSpan: 2,
+                disableConditions: new List<SettingDisableCondition>
+                {
+                    new("nvenc_codec", "AVC / H.264")
+                }
+            ),
 
-            return new List<SettingField>
+            // --- Вкладка Видео: Битрейт ---
+            new SettingField(
+                "lossless",
+                "Режим Lossless",
+                SettingType.Checkbox,
+                false,
+                "Видео:Битрейт",
+                column: 0,
+                colSpan: 1
+            )
+        };
+
+        // Динамически внедряем настройки от каждого энкодера с передачей текущего контекста
+        foreach (var encoder in availableEncoders)
+        {
+            var encoderFields = encoder.GetEncoderSettings(currentSettings);
+            foreach (var settingField in encoderFields)
             {
-                // --- Вкладка Видео: Энкодер ---
-                new SettingField(
-                    "encoder",
-                    "Энкодер",
-                    SettingType.Combo,
-                    defaultEncoder,
-                    "Видео:Энкодер",
-                    options: new List<string> { "NVENC (GPU)", "x265 (CPU)" },
-                    column: 0,
-                    colSpan: 1
-                ),
-                new SettingField(
-                    "nvenc_preset",
-                    "Пресет NVENC",
-                    SettingType.Combo,
-                    "p7",
-                    "Видео:Энкодер",
-                    options: new List<string> { "p1", "p2", "p3", "p4", "p5", "p6", "p7" },
-                    visibleIfKey: "encoder",
-                    visibleIfValues: new List<string> { "NVENC (GPU)" },
-                    column: 1,
-                    colSpan: 1
-                ),
-                new SettingField(
-                    "cpu_preset",
-                    "Пресет CPU",
-                    SettingType.Combo,
-                    "medium",
-                    "Видео:Энкодер",
-                    options: new List<string> { "ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow" },
-                    visibleIfKey: "encoder",
-                    visibleIfValues: new List<string> { "x265 (CPU)" },
-                    column: 1,
-                    colSpan: 1
-                ),
-                new SettingField(
-                    "force_10bit",
-                    "Принудительно 10-бит (Main10)",
-                    SettingType.Checkbox,
-                    false,
-                    "Видео:Энкодер",
-                    column: 0,
-                    colSpan: 2
-                ),
-
-                // --- Вкладка Видео: Битрейт ---
-                new SettingField(
-                    "lossless",
-                    "Режим Lossless",
-                    SettingType.Checkbox,
-                    false,
-                    "Видео:Битрейт",
-                    column: 0,
-                    colSpan: 1
-                ),
-                new SettingField(
-                    "auto_bitrate",
-                    "Авторасчет битрейта и буфера",
-                    SettingType.Checkbox,
-                    true,
-                    "Видео:Битрейт",
-                    column: 1,
-                    colSpan: 1,
-                    visibilityConditions: new List<SettingVisibilityCondition>
-                    {
-                        new("encoder", "NVENC (GPU)"),
-                        new("nvenc_rc", new List<string> { "cbr", "vbr", "vbr_hq" }),
-                        new("lossless", "False")
-                    }
-                ),
-                new SettingField(
-                    "nvenc_rc",
-                    "Режим битрейта (NVENC)",
-                    SettingType.Combo,
-                    "vbr_hq",
-                    "Видео:Битрейт",
-                    options: new List<string> { "cbr", "vbr", "vbr_hq", "constqp" },
-                    column: 0,
-                    colSpan: 1,
-                    visibilityConditions: new List<SettingVisibilityCondition>
-                    {
-                        new("encoder", "NVENC (GPU)"),
-                        new("lossless", "False")
-                    }
-                ),
-                new SettingField(
-                    "cpu_rc",
-                    "Режим качества (CPU)",
-                    SettingType.Combo,
-                    "CRF",
-                    "Видео:Битрейт",
-                    options: new List<string> { "CRF", "Битрейт (ABR)" },
-                    column: 0,
-                    colSpan: 1,
-                    visibilityConditions: new List<SettingVisibilityCondition>
-                    {
-                        new("encoder", "x265 (CPU)"),
-                        new("lossless", "False")
-                    }
-                ),
-                new SettingField(
-                    "v_bitrate",
-                    "Битрейт видео (кбит/с)",
-                    SettingType.Int,
-                    4000,
-                    "Видео:Битрейт",
-                    comment: "Целевой битрейт видеопотока",
-                    column: 1,
-                    colSpan: 1,
-                    visibilityConditions: new List<SettingVisibilityCondition>
-                    {
-                        new("encoder", "NVENC (GPU)"),
-                        new("nvenc_rc", new List<string> { "cbr", "vbr", "vbr_hq" }),
-                        new("lossless", "False")
-                    }
-                ),
-                new SettingField(
-                    "v_qp",
-                    "QP / Quality (NVENC)",
-                    SettingType.Int,
-                    0,
-                    "Видео:Битрейт",
-                    comment: "Параметр постоянного качества QP (0-51). 0 - без потерь",
-                    column: 1,
-                    colSpan: 1,
-                    visibilityConditions: new List<SettingVisibilityCondition>
-                    {
-                        new("encoder", "NVENC (GPU)"),
-                        new("nvenc_rc", "constqp"),
-                        new("lossless", "False")
-                    }
-                ),
-                new SettingField(
-                    "cpu_crf",
-                    "CRF (x265 CPU)",
-                    SettingType.Int,
-                    23,
-                    "Видео:Битрейт",
-                    comment: "Коэффициент постоянного качества (0-51). Меньше = лучше",
-                    column: 1,
-                    colSpan: 1,
-                    visibilityConditions: new List<SettingVisibilityCondition>
-                    {
-                        new("encoder", "x265 (CPU)"),
-                        new("cpu_rc", "CRF"),
-                        new("lossless", "False")
-                    }
-                ),
-                new SettingField(
-                    "cpu_v_bitrate",
-                    "Битрейт видео (кбит/с)",
-                    SettingType.Int,
-                    4000,
-                    "Видео:Битрейт",
-                    comment: "Целевой битрейт видеопотока",
-                    column: 1,
-                    colSpan: 1,
-                    visibilityConditions: new List<SettingVisibilityCondition>
-                    {
-                        new("encoder", "x265 (CPU)"),
-                        new("cpu_rc", "Битрейт (ABR)"),
-                        new("lossless", "False")
-                    }
-                ),
-                new SettingField(
-                    "min_bitrate",
-                    "Минимальный битрейт (кбит/с)",
-                    SettingType.Int,
-                    4000,
-                    "Видео:Битрейт",
-                    column: 0,
-                    colSpan: 1,
-                    visibilityConditions: new List<SettingVisibilityCondition>
-                    {
-                        new("encoder", "NVENC (GPU)"),
-                        new("nvenc_rc", new List<string> { "cbr", "vbr", "vbr_hq" }),
-                        new("lossless", "False")
-                    }
-                ),
-                new SettingField(
-                    "max_bitrate",
-                    "Максимальный битрейт (кбит/с)",
-                    SettingType.Int,
-                    8000,
-                    "Видео:Битрейт",
-                    column: 1,
-                    colSpan: 1,
-                    visibilityConditions: new List<SettingVisibilityCondition>
-                    {
-                        new("encoder", "NVENC (GPU)"),
-                        new("nvenc_rc", new List<string> { "cbr", "vbr", "vbr_hq" }),
-                        new("lossless", "False")
-                    }
-                ),
-                new SettingField(
-                    "bufsize",
-                    "Размер буфера (кбит)",
-                    SettingType.Int,
-                    16000,
-                    "Видео:Битрейт",
-                    column: 0,
-                    colSpan: 2,
-                    visibilityConditions: new List<SettingVisibilityCondition>
-                    {
-                        new("encoder", "NVENC (GPU)"),
-                        new("nvenc_rc", new List<string> { "cbr", "vbr", "vbr_hq" }),
-                        new("lossless", "False")
-                    }
-                ),
-
-                // --- Вкладка Видео: Фильтры ---
-                new SettingField(
-                    "sub_filters_placeholder",
-                    "Фильтры пока не настроены",
-                    SettingType.Subtitle,
-                    "",
-                    "Видео:Фильтры",
-                    comment: "Здесь будут доступны видеофильтры: ресайз, обрезка чёрных полос и др."
-                ),
-
-                // --- Вкладка Видео: Дополнительно ---
-                new SettingField(
-                    "nv_lookahead",
-                    "Lookahead (NVENC)",
-                    SettingType.Combo,
-                    "32",
-                    "Видео:Расширенные параметры",
-                    options: new List<string> { "Выкл", "8", "16", "24", "32" },
-                    visibleIfKey: "encoder",
-                    visibleIfValues: new List<string> { "NVENC (GPU)" },
-                    column: 0,
-                    colSpan: 1
-                ),
-                new SettingField(
-                    "nv_aq",
-                    "Spatial AQ (NVENC)",
-                    SettingType.Checkbox,
-                    true,
-                    "Видео:Расширенные параметры",
-                    visibleIfKey: "encoder",
-                    visibleIfValues: new List<string> { "NVENC (GPU)" },
-                    column: 1,
-                    colSpan: 1
-                ),
-                new SettingField(
-                    "cpu_tune",
-                    "Tune (x265 CPU)",
-                    SettingType.Combo,
-                    "Нет",
-                    "Видео:Расширенные параметры",
-                    options: new List<string> { "Нет", "grain", "animation", "fastdecode", "zerolatency", "psnr", "ssim" },
-                    visibleIfKey: "encoder",
-                    visibleIfValues: new List<string> { "x265 (CPU)" },
-                    column: 0,
-                    colSpan: 1
-                ),
-                new SettingField(
-                    "cpu_aq_mode",
-                    "AQ Mode (x265 CPU)",
-                    SettingType.Combo,
-                    "2",
-                    "Видео:Расширенные параметры",
-                    options: new List<string> { "0", "1", "2", "3" },
-                    visibleIfKey: "encoder",
-                    visibleIfValues: new List<string> { "x265 (CPU)" },
-                    column: 1,
-                    colSpan: 1
-                ),
-                new SettingField(
-                    "cpu_lookahead",
-                    "Lookahead (x265 CPU)",
-                    SettingType.Combo,
-                    "20",
-                    "Видео:Расширенные параметры",
-                    options: new List<string> { "Выкл", "10", "20", "30", "40" },
-                    visibleIfKey: "encoder",
-                    visibleIfValues: new List<string> { "x265 (CPU)" },
-                    column: 0,
-                    colSpan: 2
-                ),
-
-                // --- Вкладка: Аудио ---
-                new SettingField(
-                    "audio_codec",
-                    "Кодек аудио",
-                    SettingType.Combo,
-                    "copy",
-                    "Аудио",
-                    options: new List<string> { "copy", "aac", "ac3", "flac" },
-                    column: 0,
-                    colSpan: 1
-                ),
-                new SettingField(
-                    "audio_bitrate",
-                    "Битрейт аудио",
-                    SettingType.Combo,
-                    "320k",
-                    "Аудио",
-                    options: new List<string> { "128k", "192k", "256k", "320k", "448k", "640k" },
-                    visibleIfKey: "audio_codec",
-                    visibleIfValues: new List<string> { "aac", "ac3" },
-                    column: 1,
-                    colSpan: 1
-                ),
-                new SettingField(
-                    "audio_channels",
-                    "Каналы",
-                    SettingType.Combo,
-                    "Original",
-                    "Аудио",
-                    options: new List<string> { "Original", "1", "2", "6" },
-                    column: 0,
-                    colSpan: 2,
-                    visibilityConditions: new List<SettingVisibilityCondition>
-                    {
-                        new("audio_codec", "copy", negate: true)
-                    }
-                ),
-                new SettingField(
-                    "audio_lang_priority",
-                    "Приоритет языка аудио",
-                    SettingType.KeywordList,
-                    new List<Dictionary<string, object>>
-                    {
-                        new() { { "word", "rus" }, { "active", true } },
-                        new() { { "word", "jpn" }, { "active", false } },
-                        new() { { "word", "eng" }, { "active", false } }
-                    },
-                    "Аудио",
-                    column: 0,
-                    colSpan: 2
-                ),
-
-                // --- Вкладка: Субтитры ---
-                new SettingField(
-                    "sub_keywords",
-                    "Поиск надписей",
-                    SettingType.KeywordList,
-                    new List<Dictionary<string, object>>
-                    {
-                        new() { { "word", "Надписи" }, { "active", true } }
-                    },
-                    "Субтитры",
-                    column: 0,
-                    colSpan: 2
-                ),
-                new SettingField(
-                    "strip_keywords",
-                    "Удалять теги оформления субтитров",
-                    SettingType.KeywordList,
-                    new List<Dictionary<string, object>>
-                    {
-                        new() { { "word", @"{\fad(500,500)\b1\an3\fnTahoma\fs50\shad3\bord1.3\4c&H000000&\4a&H00&}" }, { "active", false } },
-                        new() { { "word", @"{\fad(500,500)\b1\an3\fnTahoma\fs16.667\shad1\bord0.433\4c&H000000&\4a&H00&}" }, { "active", false } },
-                        new() { { "word", @"{\fad(500,500)\b1\an3\fnTahoma\fs100\shad6\bord2.6\4c&H000000&\4a&H00&}" }, { "active", false } }
-                    },
-                    "Субтитры",
-                    column: 0,
-                    colSpan: 2
-                ),
-
-                // --- Вкладка: Общие ---
-                new SettingField(
-                    "overwrite_source",
-                    "Заменить исходный файл после обработки",
-                    SettingType.Checkbox,
-                    false,
-                    "Общие",
-                    column: 0,
-                    colSpan: 2
-                )
-            };
+                // Добавляем условие видимости, чтобы настройки показывались только когда выбран этот энкодер
+                if (settingField.VisibilityConditions == null)
+                {
+                    settingField.VisibilityConditions = new List<SettingVisibilityCondition>();
+                }
+                
+                settingField.VisibilityConditions.Add(new SettingVisibilityCondition("encoder", encoder.DisplayName));
+                fields.Add(settingField);
+            }
         }
+
+        // --- Вкладка Видео: Фильтры ---
+        fields.Add(
+            new SettingField(
+                "sub_filters_placeholder",
+                "Фильтры пока не настроены",
+                SettingType.Subtitle,
+                "",
+                "Видео:Фильтры",
+                comment: "Здесь будут доступны видеофильтры: ресайз, обрезка чёрных полос и др."
+            )
+        );
+
+        // --- Остальные аудио/субтитры/общие настройки ---
+
+
+
+        fields.AddRange(new List<SettingField>
+        {
+            // --- Вкладка: Аудио ---
+            new SettingField(
+                "audio_codec",
+                "Кодек аудио",
+                SettingType.Combo,
+                "copy",
+                "Аудио",
+                options: new List<string> { "copy", "aac", "ac3", "flac" },
+                column: 0,
+                colSpan: 1
+            ),
+            new SettingField(
+                "audio_bitrate",
+                "Битрейт аудио",
+                SettingType.Combo,
+                "320k",
+                "Аудио",
+                options: new List<string> { "128k", "192k", "256k", "320k", "448k", "640k" },
+                visibleIfKey: "audio_codec",
+                visibleIfValues: new List<string> { "aac", "ac3" },
+                column: 1,
+                colSpan: 1
+            ),
+            new SettingField(
+                "audio_channels",
+                "Каналы",
+                SettingType.Combo,
+                "Original",
+                "Аудио",
+                options: new List<string> { "Original", "1", "2", "6" },
+                column: 0,
+                colSpan: 2,
+                visibilityConditions: new List<SettingVisibilityCondition>
+                {
+                    new("audio_codec", "copy", negate: true)
+                }
+            ),
+            new SettingField(
+                "audio_lang_priority",
+                "Приоритет языка аудио",
+                SettingType.KeywordList,
+                new List<Dictionary<string, object>>
+                {
+                    new() { { "word", "rus" }, { "active", true } },
+                    new() { { "word", "jpn" }, { "active", false } },
+                    new() { { "word", "eng" }, { "active", false } }
+                },
+                "Аудио",
+                column: 0,
+                colSpan: 2
+            ),
+
+            // --- Вкладка: Субтитры ---
+            new SettingField(
+                "sub_keywords",
+                "Поиск надписей",
+                SettingType.KeywordList,
+                new List<Dictionary<string, object>>
+                {
+                    new() { { "word", "Надписи" }, { "active", true } }
+                },
+                "Субтитры",
+                column: 0,
+                colSpan: 2
+            ),
+            new SettingField(
+                "strip_keywords",
+                "Удалять теги оформления субтитров",
+                SettingType.KeywordList,
+                new List<Dictionary<string, object>>
+                {
+                    new() { { "word", @"{\fad(500,500)\b1\an3\fnTahoma\fs50\shad3\bord1.3\4c&H000000&\4a&H00&}" }, { "active", false } },
+                    new() { { "word", @"{\fad(500,500)\b1\an3\fnTahoma\fs16.667\shad1\bord0.433\4c&H000000&\4a&H00&}" }, { "active", false } },
+                    new() { { "word", @"{\fad(500,500)\b1\an3\fnTahoma\fs100\shad6\bord2.6\4c&H000000&\4a&H00&}" }, { "active", false } }
+                },
+                "Субтитры",
+                column: 0,
+                colSpan: 2
+            ),
+
+            // --- Вкладка: Общие ---
+            new SettingField(
+                "overwrite_source",
+                "Заменить исходный файл после обработки",
+                SettingType.Checkbox,
+                false,
+                "Общие",
+                column: 0,
+                colSpan: 2
+            )
+        });
+        
+        return fields;
     }
 
     public override async Task<List<string>> ExecuteSingleAsync(
@@ -700,117 +463,24 @@ public sealed class VideoEncodingScript : AbstractScript
             var ffmpegArgs = new List<string>();
 
             // А) Видеопараметры
-            string encoder = GetSettingValue(settings, "encoder", "x265 (CPU)");
+            string encoderName = GetSettingValue(settings, "encoder", "x265 (CPU)");
             bool force10Bit = GetSettingValue(settings, "force_10bit", false);
-            string pixFmt = force10Bit ? "yuv420p10le" : "yuv420p";
+            bool lossless = GetSettingValue(settings, "lossless", false);
 
-            if (encoder == "NVENC (GPU)")
+            var encoderInstance = _encoderRegistry.GetAvailableEncoders().FirstOrDefault(e => e.DisplayName == encoderName);
+            if (encoderInstance == null)
             {
-                if (pixFmt == "yuv420p10le") pixFmt = "p010le";
-                ffmpegArgs.AddRange(new[] { "-c:v", "hevc_nvenc", "-pix_fmt", pixFmt });
-                ffmpegArgs.AddRange(new[] { "-preset", GetSettingValue(settings, "nvenc_preset", "p7") });
-
-                if (GetSettingValue(settings, "lossless", false))
-                {
-                    int vQp = GetSettingValue(settings, "v_qp", 0);
-                    ffmpegArgs.AddRange(new[] { "-rc", "constqp", "-qp", vQp.ToString(), "-tune", "lossless" });
-                }
-                else
-                {
-                    string rc = GetSettingValue(settings, "nvenc_rc", "vbr_hq");
-                    ffmpegArgs.AddRange(new[] { "-rc", rc });
-
-                    if (rc == "constqp")
-                    {
-                        int vQp = GetSettingValue(settings, "v_qp", 0);
-                        int qp = vQp > 0 ? vQp : 23;
-                        ffmpegArgs.AddRange(new[] { "-qp", qp.ToString() });
-                    }
-                    else
-                    {
-                        int vBr = GetSettingValue(settings, "v_bitrate", 4000);
-                        int minBr = vBr;
-                        int maxBr = vBr * 2;
-                        int bufSize = maxBr * 2;
-
-                        if (!GetSettingValue(settings, "auto_bitrate", true))
-                        {
-                            minBr = GetSettingValue(settings, "min_bitrate", vBr);
-                            maxBr = GetSettingValue(settings, "max_bitrate", vBr * 2);
-                            bufSize = GetSettingValue(settings, "bufsize", maxBr * 2);
-                        }
-
-                        ffmpegArgs.AddRange(new[] {
-                            "-b:v", $"{vBr}k",
-                            "-minrate", $"{minBr}k",
-                            "-maxrate", $"{maxBr}k",
-                            "-bufsize", $"{bufSize}k"
-                        });
-                    }
-
-                    string nvLookahead = GetSettingValue(settings, "nv_lookahead", "32");
-                    if (nvLookahead != "Выкл")
-                    {
-                        ffmpegArgs.AddRange(new[] { "-rc-lookahead", nvLookahead });
-                    }
-                    if (GetSettingValue(settings, "nv_aq", true))
-                    {
-                        ffmpegArgs.AddRange(new[] { "-spatial-aq", "1", "-aq-strength", "15" });
-                    }
-                }
+                throw new InvalidOperationException($"Энкодер '{encoderName}' не найден или не поддерживается оборудованием.");
             }
-            else // x265 CPU
-            {
-                ffmpegArgs.AddRange(new[] { "-c:v", "libx265", "-pix_fmt", pixFmt });
-                ffmpegArgs.AddRange(new[] { "-preset", GetSettingValue(settings, "cpu_preset", "medium") });
 
-                var x265Params = new List<string>();
+            var context = new KTools_App.Encoders.EncoderSharedContext(
+                IsLossless: lossless,
+                Force10Bit: force10Bit,
+                ContainerExtension: Path.GetExtension(outputPath ?? filePath) ?? ".mkv"
+            );
 
-                if (GetSettingValue(settings, "lossless", false))
-                {
-                    x265Params.Add("lossless=1");
-                }
-                else
-                {
-                    string cpuRc = GetSettingValue(settings, "cpu_rc", "CRF");
-                    if (cpuRc == "CRF")
-                    {
-                        int crf = GetSettingValue(settings, "cpu_crf", 23);
-                        ffmpegArgs.AddRange(new[] { "-crf", crf.ToString() });
-                    }
-                    else
-                    {
-                        int vBr = GetSettingValue(settings, "cpu_v_bitrate", 4000);
-                        int maxBr = vBr * 2;
-                        int bufSize = maxBr * 2;
-                        ffmpegArgs.AddRange(new[] {
-                            "-b:v", $"{vBr}k",
-                            "-maxrate", $"{maxBr}k",
-                            "-bufsize", $"{bufSize}k"
-                        });
-                    }
-                }
-
-                string tune = GetSettingValue(settings, "cpu_tune", "Нет");
-                if (tune != "Нет")
-                {
-                    ffmpegArgs.AddRange(new[] { "-tune", tune });
-                }
-
-                x265Params.Add($"aq-mode={GetSettingValue(settings, "cpu_aq_mode", "2")}");
-
-                string cpuLa = GetSettingValue(settings, "cpu_lookahead", "20");
-                if (cpuLa != "Выкл")
-                {
-                    x265Params.Add($"rc-lookahead={cpuLa}");
-                }
-
-                if (x265Params.Count > 0)
-                {
-                    ffmpegArgs.Add("-x265-params");
-                    ffmpegArgs.Add(string.Join(":", x265Params));
-                }
-            }
+            var encoderArgs = encoderInstance.BuildEncoderArguments(settings, context);
+            ffmpegArgs.AddRange(encoderArgs);
 
             // Б) Аудиопараметры
             string audioCodec = GetSettingValue(settings, "audio_codec", "copy");
@@ -843,46 +513,22 @@ public sealed class VideoEncodingScript : AbstractScript
             // Г) Маппинг и общие флаги
             ffmpegArgs.AddRange(new[] {
                 "-map", "0:v:0",
-                "-map", $"0:a:{relAudioIdx}?",
-                "-tag:v", "hvc1",
+                "-map", $"0:a:{relAudioIdx}?"
+            });
+
+            var containerTag = encoderInstance.GetContainerTag(settings, context);
+            if (!string.IsNullOrEmpty(containerTag))
+            {
+                ffmpegArgs.AddRange(new[] { "-tag:v", containerTag });
+            }
+
+            ffmpegArgs.AddRange(new[] {
                 "-movflags", "+faststart",
                 "-map_metadata", "-1"
             });
 
-            // Д) Аппаратное декодирование на входе (CUVID)
-            var inputArgs = new List<string>();
-            if (encoder == "NVENC (GPU)")
-            {
-                var vTracks = structure.GetVideoTracks();
-                if (vTracks.Count > 0)
-                {
-                    string vCodec = vTracks[0].Codec.ToLowerInvariant();
-                    // Проверяем доступные декодеры CUVID
-                    var decoders = await GetAvailableCuvidDecodersAsync(CancellationToken);
-                    string? cuvid = null;
-
-                    var mapping = new Dictionary<string, string>
-                    {
-                        { "h264", "h264_cuvid" },
-                        { "hevc", "hevc_cuvid" },
-                        { "vp8", "vp8_cuvid" },
-                        { "vp9", "vp9_cuvid" },
-                        { "vc1", "vc1_cuvid" },
-                        { "mpeg2video", "mpeg2_cuvid" },
-                        { "mpeg4", "mpeg4_cuvid" }
-                    };
-
-                    if (mapping.TryGetValue(vCodec, out var mappedCuvid) && decoders.Contains(mappedCuvid))
-                    {
-                        cuvid = mappedCuvid;
-                    }
-
-                    if (cuvid != null)
-                    {
-                        inputArgs.AddRange(new[] { "-hwaccel", "cuda", "-c:v", cuvid });
-                    }
-                }
-            }
+            // Д) Аппаратное декодирование на входе
+            var inputArgs = await encoderInstance.BuildInputArgumentsAsync(structure, CancellationToken);
 
             // 8. Запуск процесса кодирования
             _logService.Info($"Запуск FFmpeg для кодирования видео '{Path.GetFileName(filePath)}' в '{Path.GetFileName(finalOutputFile)}'", "VideoEncodingScript");

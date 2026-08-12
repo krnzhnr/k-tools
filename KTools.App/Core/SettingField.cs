@@ -29,7 +29,10 @@ public class SettingField
         bool requiresWarning = false,
         string? warningTitle = null,
         string? warningText = null,
-        List<SettingVisibilityCondition>? visibilityConditions = null)
+        List<SettingVisibilityCondition>? visibilityConditions = null,
+        List<SettingDisableCondition>? disableConditions = null,
+        double? minimum = null,
+        double? maximum = null)
     {
         Key = key ?? throw new ArgumentNullException(nameof(key));
         Label = label ?? throw new ArgumentNullException(nameof(label));
@@ -46,7 +49,20 @@ public class SettingField
         WarningTitle = warningTitle;
         WarningText = warningText;
         VisibilityConditions = visibilityConditions;
+        DisableConditions = disableConditions;
+        Minimum = minimum;
+        Maximum = maximum;
     }
+
+    /// <summary>
+    /// Минимальное допустимое значение для числовых полей ввода (SettingType.Int / Number).
+    /// </summary>
+    public double? Minimum { get; }
+
+    /// <summary>
+    /// Максимальное допустимое значение для числовых полей ввода (SettingType.Int / Number).
+    /// </summary>
+    public double? Maximum { get; }
 
     /// <summary>
     /// Уникальный текстовый идентификатор настройки (ключ в конфигурации).
@@ -106,7 +122,12 @@ public class SettingField
     /// <summary>
     /// Список множественных условий видимости (логическое И), управляющих этим полем.
     /// </summary>
-    public List<SettingVisibilityCondition>? VisibilityConditions { get; }
+    public List<SettingVisibilityCondition>? VisibilityConditions { get; set; }
+
+    /// <summary>
+    /// Список множественных условий отключения (логическое И), управляющих активностью этого поля.
+    /// </summary>
+    public List<SettingDisableCondition>? DisableConditions { get; set; }
 
     /// <summary>
     /// Флаг необходимости показа предупреждающего диалога при выключении чекбокса.
@@ -165,6 +186,47 @@ public sealed class SettingVisibilityCondition
     /// Инициализирует новое условие видимости для одного конкретного значения.
     /// </summary>
     public SettingVisibilityCondition(string key, string value, bool negate = false)
+        : this(key, new List<string> { value }, negate)
+    {
+    }
+}
+
+/// <summary>
+/// Представляет одно условие отключения (disable) параметра в пользовательском интерфейсе.
+/// Позволяет связать активность поля с текущим значением другого параметра.
+/// Все комментарии и документация выполнены на русском языке.
+/// </summary>
+public sealed class SettingDisableCondition
+{
+    /// <summary>
+    /// Ключ управляющего параметра, от которого зависит отключение.
+    /// </summary>
+    public string Key { get; }
+
+    /// <summary>
+    /// Список строковых значений управляющего параметра, при которых условие считается истинным (поле отключается).
+    /// </summary>
+    public List<string> Values { get; }
+
+    /// <summary>
+    /// Если установлено в true, условие инвертируется (поле отключается, если значение НЕ совпадает ни с одним из списка).
+    /// </summary>
+    public bool Negate { get; }
+
+    /// <summary>
+    /// Инициализирует новое условие отключения с списком значений.
+    /// </summary>
+    public SettingDisableCondition(string key, List<string> values, bool negate = false)
+    {
+        Key = key ?? throw new ArgumentNullException(nameof(key));
+        Values = values ?? throw new ArgumentNullException(nameof(values));
+        Negate = negate;
+    }
+
+    /// <summary>
+    /// Инициализирует новое условие отключения для одного конкретного значения.
+    /// </summary>
+    public SettingDisableCondition(string key, string value, bool negate = false)
         : this(key, new List<string> { value }, negate)
     {
     }

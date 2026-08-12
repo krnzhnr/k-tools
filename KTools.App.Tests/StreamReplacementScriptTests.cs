@@ -55,4 +55,65 @@ public class StreamReplacementScriptTests
         _script.Category.Should().Be("Контейнеры");
         _script.IconName.Should().Be(AppConstants.ScriptIcons.StreamReplacement);
     }
+
+    /// <summary>
+    /// Проверяет, что если для файла не назначено ни одной замены, скрипт завершается с ошибкой.
+    /// </summary>
+    [TestMethod]
+    public async System.Threading.Tasks.Task ExecuteSingleAsync_NoReplacements_FailsWithErrorMessage()
+    {
+        // Arrange
+        string testFile = "C:\\test\\video.mp4";
+        var settings = new Dictionary<string, object>();
+
+        // Act
+        var results = await _script.ExecuteSingleAsync(testFile, settings, null, (f, t, m, p, fps, b) => { }, 0, 1);
+
+        // Assert
+        results.Should().ContainSingle();
+        results[0].Should().Contain("❌ Ошибка: не назначено ни одной замены");
+    }
+
+    /// <summary>
+    /// Проверяет, что если ни одна замена не совпала с существующими треками файла, скрипт падает с ошибкой.
+    /// </summary>
+    [TestMethod]
+    public async System.Threading.Tasks.Task ExecuteSingleAsync_TrackIdMismatch_FailsWithErrorMessage()
+    {
+        // Arrange
+        string testFile = "C:\\test\\video.mp4";
+
+        var structure = new MediaStructure { FilePath = testFile, Duration = 100 };
+        structure.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "video" });
+        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(testFile)).ReturnsAsync(structure);
+
+        // Назначаем замену для недействительного track_id = 99 (в файле только 0)
+        var fileReplacements = new Dictionary<string, object>
+        {
+            {
+                "99", new Dictionary<string, object> { { "path", "C:\\test\\audio.m4a" }, { "src_id", 0 } }
+            }
+        };
+        var settings = new Dictionary<string, object>
+        {
+            { "replacements", new Dictionary<string, object> { { testFile, fileReplacements } } }
+        };
+
+        // Act
+        var results = await _script.ExecuteSingleAsync(testFile, settings, null, (f, t, m, p, fps, b) => { }, 0, 1);
+
+        // Assert
+        results.Should().ContainSingle();
+        results[0].Should().Contain("❌ Ошибка: ни одна из назначенных замен не была передана в финальную команду");
+        _ffmpegRunnerMock.Verify(r => r.RunAsync(
+            It.IsAny<string>(),
+            It.IsAny<string>(),
+            It.IsAny<List<string>>(),
+            It.IsAny<List<string>>(),
+            It.IsAny<bool>(),
+            It.IsAny<double>(),
+            It.IsAny<Action<ProgressInfo>>(),
+            It.IsAny<System.Threading.CancellationToken>()
+        ), Times.Never);
+    }
 }

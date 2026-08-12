@@ -12,6 +12,7 @@ using KTools_App.Infrastructure;
 using KTools_App.Services.Contracts;
 using KTools_App.Services.Implementations;
 using KTools_App.ViewModels;
+using KTools_App.Encoders;
 
 namespace KTools_App;
 
@@ -219,6 +220,11 @@ public partial class App : Application
         services.AddSingleton<ISettingsManager, SettingsManager>();
         services.AddSingleton<IDependencyManager, DependencyManager>();
         services.AddSingleton<IScriptRegistry, ScriptRegistry>();
+        
+        services.AddSingleton<IHardwareCapabilityCache, HardwareCapabilityCache>();
+        services.AddSingleton<IVideoEncoder, NvencEncoder>();
+        services.AddSingleton<IVideoEncoder, X265Encoder>();
+        services.AddSingleton<VideoEncoderRegistry>();
 
         // Infrastructure-сервисы (Runner'ы)
         services.AddSingleton<IFFmpegRunner, FFmpegRunner>();
@@ -316,6 +322,7 @@ public partial class App : Application
                 + "настроек по умолчанию...",
                 "App");
             _ = Services.GetRequiredService<IScriptRegistry>().Scripts;
+            _ = Task.Run(() => Services.GetRequiredService<KTools_App.Encoders.IHardwareCapabilityCache>().InitializeAsync());
 
             // Автоматически обновляем ключи контекстного меню в реестре, если интеграция включена
             try

@@ -26,7 +26,6 @@ public sealed partial class ScriptSettingsControl : UserControl
     private AbstractScript? _activeScript;
     private StackPanel? _previewPanel;
     private bool _isPreviewExpanded;
-    private string _previousNvencPreset = "p7";
 
     public ScriptSettingsViewModel ViewModel { get; } = App.Services.GetRequiredService<ScriptSettingsViewModel>();
     private ISettingsManager _settingsManager => App.Services.GetRequiredService<ISettingsManager>();
@@ -40,6 +39,7 @@ public sealed partial class ScriptSettingsControl : UserControl
     }
     private readonly List<GroupVisual> _groups = new();
     private bool _isInternalCheckBoxUpdate;
+    private bool _isInternalNumberBoxUpdate;
 
     public ScriptSettingsControl()
     {
@@ -197,15 +197,6 @@ public sealed partial class ScriptSettingsControl : UserControl
         }
 
         UpdateVisibility(settingsGroup);
-
-        if (script is Scripts.VideoEncodingScript)
-        {
-            bool isLossless = _settingsManager.GetSetting(settingsGroup, "lossless", false);
-            HandleLosslessChange(settingsGroup, isLossless);
-
-            string rcMode = _settingsManager.GetSetting(settingsGroup, "nvenc_rc", "vbr_hq");
-            HandleRcChange(settingsGroup, rcMode);
-        }
     }
 
     /// <summary>
@@ -319,16 +310,15 @@ public sealed partial class ScriptSettingsControl : UserControl
                     TextWrapping = TextWrapping.Wrap
                 });
 
-                if (!string.IsNullOrEmpty(field.Comment))
+                checkContent.Children.Add(new TextBlock
                 {
-                    checkContent.Children.Add(new TextBlock
-                    {
-                        Text = field.Comment,
-                        FontSize = 12,
-                        Style = (Style)Application.Current.Resources["SettingsSecondaryTextBlockStyle"],
-                        TextWrapping = TextWrapping.Wrap
-                    });
-                }
+                    Tag = "FieldComment",
+                    Text = field.Comment ?? string.Empty,
+                    FontSize = 12,
+                    Style = (Style)Application.Current.Resources["SettingsSecondaryTextBlockStyle"],
+                    TextWrapping = TextWrapping.Wrap,
+                    Visibility = string.IsNullOrEmpty(field.Comment) ? Visibility.Collapsed : Visibility.Visible
+                });
 
                 var checkBox = new CheckBox
                 {
@@ -346,17 +336,15 @@ public sealed partial class ScriptSettingsControl : UserControl
                     _settingsManager.SetSetting(
                         settingsGroup, field.Key, true);
                     UpdateVisibility(settingsGroup);
-
+                    if (field.Key == "auto_bitrate")
+                    {
+                        RecalculateAutoBitrate(settingsGroup);
+                    }
+                    else if (field.Key == "lossless")
+                    {
+                        ApplyFastestPresetOnLossless(settingsGroup);
+                    }
                     UpdatePreview();
-
-                    if (field.Key == "lossless")
-                    {
-                        HandleLosslessChange(settingsGroup, true);
-                    }
-                    else if (field.Key == "auto_bitrate")
-                    {
-                        HandleAutoBitrateChange(settingsGroup);
-                    }
                 };
 
                 checkBox.Unchecked += async (s, e) =>
@@ -385,15 +373,6 @@ public sealed partial class ScriptSettingsControl : UserControl
                     UpdateVisibility(settingsGroup);
 
                     UpdatePreview();
-
-                    if (field.Key == "lossless")
-                    {
-                        HandleLosslessChange(settingsGroup, false);
-                    }
-                    else if (field.Key == "auto_bitrate")
-                    {
-                        HandleAutoBitrateChange(settingsGroup);
-                    }
                 };
 
                 cardContentStack.Children.Add(checkBox);
@@ -432,16 +411,15 @@ public sealed partial class ScriptSettingsControl : UserControl
                 TextWrapping = TextWrapping.Wrap
             });
 
-            if (!string.IsNullOrEmpty(field.Comment))
+            textStack.Children.Add(new TextBlock
             {
-                textStack.Children.Add(new TextBlock
-                {
-                    Text = field.Comment,
-                    FontSize = 12,
-                    Style = (Style)Application.Current.Resources["SettingsSecondaryTextBlockStyle"],
-                    TextWrapping = TextWrapping.Wrap
-                });
-            }
+                Tag = "FieldComment",
+                Text = field.Comment ?? string.Empty,
+                FontSize = 12,
+                Style = (Style)Application.Current.Resources["SettingsSecondaryTextBlockStyle"],
+                TextWrapping = TextWrapping.Wrap,
+                Visibility = string.IsNullOrEmpty(field.Comment) ? Visibility.Collapsed : Visibility.Visible
+            });
             
             Grid.SetColumn(textStack, 0);
             rowGrid.Children.Add(textStack);
@@ -536,6 +514,14 @@ public sealed partial class ScriptSettingsControl : UserControl
                         LargeChange = 5,
                         VerticalAlignment = VerticalAlignment.Center
                     };
+                    if (field.Minimum.HasValue)
+                    {
+                        numberBox.Minimum = field.Minimum.Value;
+                    }
+                    if (field.Maximum.HasValue)
+                    {
+                        numberBox.Maximum = field.Maximum.Value;
+                    }
                     numberBox.ValueChanged += (s, e) =>
                     {
                         if (!double.IsNaN(numberBox.Value))
@@ -582,12 +568,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                                 selectedVal);
                             UpdateVisibility(settingsGroup);
 
-                            if (field.Key == "nvenc_rc")
-                            {
-                                HandleRcChange(settingsGroup, selectedVal);
-                                HandleAutoBitrateChange(settingsGroup);
-                            }
-                            
+
                             UpdatePreview();
                         }
                     };
@@ -654,6 +635,78 @@ public sealed partial class ScriptSettingsControl : UserControl
     /// </summary>
     private void UpdateVisibility(string settingsGroup)
     {
+        // 0. Динамическое обновление вариантов ComboBox, подсказок (Comment) и диапазонов от активного контекста энкодера
+        if (_activeScript != null)
+        {
+            var currentSettings = new Dictionary<string, object>();
+            foreach (var item in _generatedElements)
+            {
+                currentSettings[item.Field.Key] = _settingsManager.GetSetting(settingsGroup, item.Field.Key, item.Field.DefaultValue ?? string.Empty);
+            }
+            var dynamicSchema = _activeScript.GetFullSettingsSchema(currentSettings);
+            if (dynamicSchema != null)
+            {
+                foreach (var item in _generatedElements)
+                {
+                    var dynamicField = dynamicSchema.FirstOrDefault(f => f.Key == item.Field.Key);
+                    if (dynamicField != null)
+                    {
+                        if (item.Element is FrameworkElement container)
+                        {
+                            // А. Динамическое обновление текста подсказки (Comment)
+                            var commentBlock = FindChildElement<TextBlock>(container, tb => (string)tb.Tag == "FieldComment");
+                            if (commentBlock != null)
+                            {
+                                commentBlock.Text = dynamicField.Comment ?? string.Empty;
+                                commentBlock.Visibility = string.IsNullOrEmpty(dynamicField.Comment) ? Visibility.Collapsed : Visibility.Visible;
+                            }
+
+                            // Б. Динамическое обновление вариантов ComboBox
+                            if (dynamicField.Type == SettingType.Combo && dynamicField.Options != null && dynamicField.Options.Count > 0)
+                            {
+                                var combo = FindChildElement<ComboBox>(container);
+                                if (combo != null)
+                                {
+                                    var currentItems = combo.Items.Cast<object>().Select(o => o.ToString() ?? "").ToList();
+                                    if (!currentItems.SequenceEqual(dynamicField.Options))
+                                    {
+                                        string currSelected = combo.SelectedItem?.ToString() ?? "";
+                                        combo.Items.Clear();
+                                        foreach (var opt in dynamicField.Options)
+                                        {
+                                            combo.Items.Add(opt);
+                                        }
+                                        if (dynamicField.Options.Contains(currSelected, StringComparer.OrdinalIgnoreCase))
+                                        {
+                                            combo.SelectedItem = dynamicField.Options.First(o => o.Equals(currSelected, StringComparison.OrdinalIgnoreCase));
+                                        }
+                                        else
+                                        {
+                                            string defVal = dynamicField.DefaultValue?.ToString() ?? "";
+                                            string matchedDef = dynamicField.Options.FirstOrDefault(o => o.Equals(defVal, StringComparison.OrdinalIgnoreCase))
+                                                ?? dynamicField.Options.FirstOrDefault() ?? "";
+                                            combo.SelectedItem = matchedDef;
+                                            _settingsManager.SetSetting(settingsGroup, dynamicField.Key, matchedDef);
+                                        }
+                                    }
+                                }
+                            }
+                            // В. Динамическое обновление диапазонов NumberBox (Minimum / Maximum)
+                            else if (dynamicField.Type == SettingType.Int)
+                            {
+                                var numberBox = FindChildElement<NumberBox>(container);
+                                if (numberBox != null)
+                                {
+                                    if (dynamicField.Minimum.HasValue) numberBox.Minimum = dynamicField.Minimum.Value;
+                                    if (dynamicField.Maximum.HasValue) numberBox.Maximum = dynamicField.Maximum.Value;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // 1. Обновляем видимость отдельных элементов настроек
         foreach (var item in _generatedElements)
         {
@@ -662,10 +715,11 @@ public sealed partial class ScriptSettingsControl : UserControl
                 bool isCondVisible = true;
                 foreach (var cond in item.Field.VisibilityConditions)
                 {
+                    object? targetDefVal = _generatedElements.FirstOrDefault(x => x.Field.Key == cond.Key).Field?.DefaultValue;
                     string condValue = _settingsManager.GetSetting(
                         settingsGroup,
                         cond.Key,
-                        string.Empty);
+                        targetDefVal?.ToString() ?? string.Empty);
 
                     bool matches = false;
                     foreach (var val in cond.Values)
@@ -699,10 +753,11 @@ public sealed partial class ScriptSettingsControl : UserControl
                 continue;
             }
 
+            object? visibleIfDefVal = _generatedElements.FirstOrDefault(x => x.Field.Key == item.Field.VisibleIfKey).Field?.DefaultValue;
             string controlValue = _settingsManager.GetSetting(
                 settingsGroup,
                 item.Field.VisibleIfKey,
-                string.Empty);
+                visibleIfDefVal?.ToString() ?? string.Empty);
 
             bool isVisible = false;
             foreach (var val in item.Field.VisibleIfValues)
@@ -715,6 +770,73 @@ public sealed partial class ScriptSettingsControl : UserControl
             }
 
             item.Element.Visibility = isVisible ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        // 1.5. Обработка отключения (DisableConditions)
+        foreach (var item in _generatedElements)
+        {
+            if (item.Field.DisableConditions != null && item.Field.DisableConditions.Count > 0)
+            {
+                bool isDisabled = false;
+                foreach (var cond in item.Field.DisableConditions)
+                {
+                    object? targetDefVal = _generatedElements.FirstOrDefault(x => x.Field.Key == cond.Key).Field?.DefaultValue;
+                    string condValue = _settingsManager.GetSetting(
+                        settingsGroup,
+                        cond.Key,
+                        targetDefVal?.ToString() ?? string.Empty);
+
+                    bool matches = false;
+                    foreach (var val in cond.Values)
+                    {
+                        if (val.Equals(condValue, StringComparison.OrdinalIgnoreCase))
+                        {
+                            matches = true;
+                            break;
+                        }
+                    }
+
+                    if (cond.Negate)
+                    {
+                        matches = !matches;
+                    }
+
+                    if (matches)
+                    {
+                        isDisabled = true;
+                        break;
+                    }
+                }
+                if (item.Element is Control ctrl)
+                {
+                    ctrl.IsEnabled = !isDisabled;
+                }
+                else if (item.Element is Grid grid)
+                {
+                    foreach (var child in grid.Children.OfType<Control>())
+                    {
+                        child.IsEnabled = !isDisabled;
+                    }
+                }
+                item.Element.IsHitTestVisible = !isDisabled;
+                item.Element.Opacity = isDisabled ? 0.5 : 1.0;
+            }
+            else
+            {
+                if (item.Element is Control ctrl)
+                {
+                    ctrl.IsEnabled = true;
+                }
+                else if (item.Element is Grid grid)
+                {
+                    foreach (var child in grid.Children.OfType<Control>())
+                    {
+                        child.IsEnabled = true;
+                    }
+                }
+                item.Element.IsHitTestVisible = true;
+                item.Element.Opacity = 1.0;
+            }
         }
 
         // 2. Обновляем видимость целых групп настроек (StackPanel) и карточек
@@ -759,15 +881,15 @@ public sealed partial class ScriptSettingsControl : UserControl
             Style = (Style)Application.Current.Resources["SettingsPrimaryTextBlockStyle"]
         });
 
-        if (!string.IsNullOrEmpty(field.Comment))
+        labelStack.Children.Add(new TextBlock
         {
-            labelStack.Children.Add(new TextBlock
-            {
-                Text = field.Comment,
-                FontSize = 12,
-                Style = (Style)Application.Current.Resources["SettingsSecondaryTextBlockStyle"]
-            });
-        }
+            Tag = "FieldComment",
+            Text = field.Comment ?? string.Empty,
+            FontSize = 12,
+            Style = (Style)Application.Current.Resources["SettingsSecondaryTextBlockStyle"],
+            TextWrapping = TextWrapping.Wrap,
+            Visibility = string.IsNullOrEmpty(field.Comment) ? Visibility.Collapsed : Visibility.Visible
+        });
         mainStack.Children.Add(labelStack);
 
         // Контейнер для списка строк ключевых слов
@@ -951,16 +1073,15 @@ public sealed partial class ScriptSettingsControl : UserControl
             TextWrapping = TextWrapping.Wrap
         });
 
-        if (!string.IsNullOrEmpty(field.Comment))
+        labelStack.Children.Add(new TextBlock
         {
-            labelStack.Children.Add(new TextBlock
-            {
-                Text = field.Comment,
-                FontSize = 12,
-                Style = (Style)Application.Current.Resources["SettingsSecondaryTextBlockStyle"],
-                TextWrapping = TextWrapping.Wrap
-            });
-        }
+            Tag = "FieldComment",
+            Text = field.Comment ?? string.Empty,
+            FontSize = 12,
+            Style = (Style)Application.Current.Resources["SettingsSecondaryTextBlockStyle"],
+            TextWrapping = TextWrapping.Wrap,
+            Visibility = string.IsNullOrEmpty(field.Comment) ? Visibility.Collapsed : Visibility.Visible
+        });
         mainStack.Children.Add(labelStack);
 
         // Поле ввода шаблона
@@ -1184,207 +1305,93 @@ public sealed partial class ScriptSettingsControl : UserControl
     }
 
     /// <summary>
-    /// Обрабатывает изменение режима Lossless. 
-    /// Если режим включен, пресет nvenc_preset переключается на "p1" и блокируется.
-    /// Если выключен, пресет nvenc_preset разблокируется.
-    /// </summary>
-    private void HandleLosslessChange(string settingsGroup, bool isLossless)
-    {
-        var presetTuple = _generatedElements.FirstOrDefault(x => x.Field.Key == "nvenc_preset");
-        if (presetTuple.Element is Grid grid)
-        {
-            var comboBox = grid.Children.OfType<ComboBox>().FirstOrDefault();
-            if (comboBox != null)
-            {
-                if (isLossless)
-                {
-                    string currentVal = comboBox.SelectedItem as string ?? "p7";
-                    if (currentVal != "p1")
-                    {
-                        _previousNvencPreset = currentVal;
-                    }
-                    comboBox.SelectedItem = "p1";
-                    comboBox.IsEnabled = false;
-                    _settingsManager.SetSetting(settingsGroup, "nvenc_preset", "p1");
-                }
-                else
-                {
-                    comboBox.IsEnabled = true;
-                    comboBox.SelectedItem = _previousNvencPreset;
-                    _settingsManager.SetSetting(settingsGroup, "nvenc_preset", _previousNvencPreset);
-                }
-            }
-        }
-        HandleAutoBitrateChange(settingsGroup);
-    }
-
-    /// <summary>
-    /// Обрабатывает изменение режима управления битрейтом (nvenc_rc).
-    /// Если выбран режим CBR, авторасчет битрейта форсируется в true и блокируется,
-    /// так как в CBR минимальный и максимальный битрейты должны быть равны целевому.
-    /// В остальных режимах выбор авторасчета разблокируется.
-    /// </summary>
-    private void HandleRcChange(string settingsGroup, string rcMode)
-    {
-        var autoBitrateTuple = _generatedElements.FirstOrDefault(x => x.Field.Key == "auto_bitrate");
-        if (autoBitrateTuple.Element is CheckBox checkBox)
-        {
-            if (rcMode.Equals("cbr", StringComparison.OrdinalIgnoreCase))
-            {
-                _isInternalCheckBoxUpdate = true;
-                checkBox.IsChecked = true;
-                _isInternalCheckBoxUpdate = false;
-
-                _settingsManager.SetSetting(settingsGroup, "auto_bitrate", true);
-                checkBox.IsEnabled = false;
-            }
-            else
-            {
-                checkBox.IsEnabled = true;
-            }
-        }
-    }
-
-    /// <summary>
-    /// Обрабатывает изменение параметра авторасчета битрейта (auto_bitrate).
-    /// Блокирует или разблокирует поля min_bitrate, max_bitrate и bufsize.
-    /// </summary>
-    private void HandleAutoBitrateChange(string settingsGroup)
-    {
-        bool isAuto = _settingsManager.GetSetting(settingsGroup, "auto_bitrate", true);
-        string[] dependentKeys = { "min_bitrate", "max_bitrate", "bufsize" };
-
-        foreach (var key in dependentKeys)
-        {
-            var tuple = _generatedElements.FirstOrDefault(x => x.Field.Key == key);
-            if (tuple.Element is Grid grid)
-            {
-                var numberBox = grid.Children.OfType<NumberBox>().FirstOrDefault();
-                if (numberBox != null)
-                {
-                    numberBox.IsEnabled = !isAuto;
-                }
-            }
-        }
-
-        // Если включен авторасчет, производим перерасчет на базе текущего v_bitrate
-        if (isAuto)
-        {
-            RecalculateBitrates(settingsGroup);
-        }
-    }
-
-    /// <summary>
-    /// Производит автоматический расчет битрейтов по формулам:
-    /// min = target, max = target * 2, buf = max * 2.
-    /// Результаты сохраняются в конфигурации и обновляются в UI.
-    /// </summary>
-    private void RecalculateBitrates(string settingsGroup, int? targetBitrate = null)
-    {
-        int vBr = targetBitrate ?? _settingsManager.GetSetting(settingsGroup, "v_bitrate", 4000);
-        string rc = _settingsManager.GetSetting(settingsGroup, "nvenc_rc", "vbr_hq");
-
-        int minBr;
-        int maxBr;
-        int bufSize;
-
-        if (rc.Equals("cbr", StringComparison.OrdinalIgnoreCase))
-        {
-            minBr = vBr;
-            maxBr = vBr;
-            bufSize = vBr * 2;
-        }
-        else
-        {
-            minBr = vBr;
-            maxBr = vBr * 2;
-            bufSize = maxBr * 2;
-        }
-
-        // Сохраняем значения в SettingsManager
-        _settingsManager.SetSetting(settingsGroup, "min_bitrate", minBr);
-        _settingsManager.SetSetting(settingsGroup, "max_bitrate", maxBr);
-        _settingsManager.SetSetting(settingsGroup, "bufsize", bufSize);
-
-        // Обновляем визуальные значения в полях NumberBox на форме
-        UpdateNumberBoxValue("min_bitrate", minBr);
-        UpdateNumberBoxValue("max_bitrate", maxBr);
-        UpdateNumberBoxValue("bufsize", bufSize);
-    }
-
-    /// <summary>
-    /// Вспомогательный метод для программного обновления значения NumberBox в UI.
-    /// </summary>
-    private void UpdateNumberBoxValue(string key, int value)
-    {
-        var tuple = _generatedElements.FirstOrDefault(x => x.Field.Key == key);
-        if (tuple.Element is Grid grid)
-        {
-            var numberBox = grid.Children.OfType<NumberBox>().FirstOrDefault();
-            if (numberBox != null)
-            {
-                numberBox.Value = value;
-            }
-        }
-    }
-
-    /// <summary>
     /// Вызывается при изменении целочисленного параметра в интерфейсе.
-    /// Если изменился v_bitrate при включенном авторасчете, запускается перерасчет.
     /// </summary>
     private void HandleIntSettingChanged(string settingsGroup, string key, int newValue)
     {
+        if (_isInternalNumberBoxUpdate) return;
+
+        _settingsManager.SetSetting(settingsGroup, key, newValue);
+
         if (key == "v_bitrate")
         {
-            bool isAuto = _settingsManager.GetSetting(settingsGroup, "auto_bitrate", true);
-            if (isAuto)
+            bool autoBitrate = _settingsManager.GetSetting(settingsGroup, "auto_bitrate", true);
+            if (autoBitrate)
             {
-                RecalculateBitrates(settingsGroup, newValue);
-            }
-            else
-            {
-                // При ручном вводе корректируем min и max, если они вышли за новые границы целевого битрейта
-                int minBr = _settingsManager.GetSetting(settingsGroup, "min_bitrate", newValue);
-                int maxBr = _settingsManager.GetSetting(settingsGroup, "max_bitrate", newValue);
-
-                if (minBr > newValue)
-                {
-                    _settingsManager.SetSetting(settingsGroup, "min_bitrate", newValue);
-                    UpdateNumberBoxValue("min_bitrate", newValue);
-                }
-                if (maxBr < newValue)
-                {
-                    _settingsManager.SetSetting(settingsGroup, "max_bitrate", newValue);
-                    UpdateNumberBoxValue("max_bitrate", newValue);
-                }
-            }
-        }
-        else if (key == "min_bitrate")
-        {
-            bool isAuto = _settingsManager.GetSetting(settingsGroup, "auto_bitrate", true);
-            if (!isAuto)
-            {
-                int vBr = _settingsManager.GetSetting(settingsGroup, "v_bitrate", 4000);
-                if (newValue > vBr)
-                {
-                    // Минимальный битрейт не может быть больше целевого
-                    _settingsManager.SetSetting(settingsGroup, "min_bitrate", vBr);
-                    UpdateNumberBoxValue("min_bitrate", vBr);
-                }
+                RecalculateAutoBitrate(settingsGroup, newValue);
             }
         }
         else if (key == "max_bitrate")
         {
-            bool isAuto = _settingsManager.GetSetting(settingsGroup, "auto_bitrate", true);
-            if (!isAuto)
+            bool autoBitrate = _settingsManager.GetSetting(settingsGroup, "auto_bitrate", true);
+            if (autoBitrate)
             {
-                int vBr = _settingsManager.GetSetting(settingsGroup, "v_bitrate", 4000);
-                if (newValue < vBr)
+                int bufSize = newValue * 2;
+                UpdateIntSettingAndUI(settingsGroup, "bufsize", bufSize);
+            }
+        }
+
+        UpdateVisibility(settingsGroup);
+    }
+
+    /// <summary>
+    /// Выполняет авторасчет параметров битрейта (min_bitrate, max_bitrate, bufsize) на основе целевого битрейта.
+    /// </summary>
+    public void RecalculateAutoBitrate(string settingsGroup, int? targetBitrate = null)
+    {
+        int vBr = targetBitrate ?? _settingsManager.GetSetting(settingsGroup, "v_bitrate", 4000);
+        int minBr = vBr;
+        int maxBr = vBr * 2;
+        int bufSize = maxBr * 2;
+
+        UpdateIntSettingAndUI(settingsGroup, "min_bitrate", minBr);
+        UpdateIntSettingAndUI(settingsGroup, "max_bitrate", maxBr);
+        UpdateIntSettingAndUI(settingsGroup, "bufsize", bufSize);
+    }
+
+    private void ApplyFastestPresetOnLossless(string settingsGroup)
+    {
+        string currentEncoder = _settingsManager.GetSetting(settingsGroup, "encoder", "NVENC (GPU)");
+        string presetKey = currentEncoder.Contains("NVENC", StringComparison.OrdinalIgnoreCase) ? "nvenc_preset" : "cpu_preset";
+        string fastestPreset = currentEncoder.Contains("NVENC", StringComparison.OrdinalIgnoreCase) ? "p1" : "ultrafast";
+
+        _settingsManager.SetSetting(settingsGroup, presetKey, fastestPreset);
+
+        var targetItem = _generatedElements.FirstOrDefault(x => x.Field.Key == presetKey);
+        if (targetItem.Element != null)
+        {
+            ComboBox? combo = FindChildElement<ComboBox>(targetItem.Element);
+            if (combo != null && combo.Items.Count > 0)
+            {
+                string? matchedOption = combo.Items.Cast<object>()
+                    .Select(o => o.ToString() ?? "")
+                    .FirstOrDefault(o => o.Equals(fastestPreset, StringComparison.OrdinalIgnoreCase));
+                if (matchedOption != null)
                 {
-                    // Максимальный битрейт не может быть меньше целевого
-                    _settingsManager.SetSetting(settingsGroup, "max_bitrate", vBr);
-                    UpdateNumberBoxValue("max_bitrate", vBr);
+                    combo.SelectedItem = matchedOption;
                 }
+            }
+        }
+    }
+
+    private void UpdateIntSettingAndUI(string settingsGroup, string key, int value)
+    {
+        _settingsManager.SetSetting(settingsGroup, key, value);
+
+        var targetItem = _generatedElements.FirstOrDefault(x => x.Field.Key == key);
+        if (targetItem.Element != null)
+        {
+            NumberBox? numBox = targetItem.Element as NumberBox;
+            if (numBox == null && targetItem.Element is Grid grid)
+            {
+                numBox = grid.Children.OfType<NumberBox>().FirstOrDefault();
+            }
+
+            if (numBox != null && Math.Abs(numBox.Value - value) > 0.0001)
+            {
+                _isInternalNumberBoxUpdate = true;
+                numBox.Value = value;
+                _isInternalNumberBoxUpdate = false;
             }
         }
     }
@@ -1807,5 +1814,47 @@ public sealed partial class ScriptSettingsControl : UserControl
         }
 
         _previewPanel.Children.Add(previewStack);
+    }
+
+    private static T? FindChildElement<T>(DependencyObject parent, Func<T, bool>? predicate = null) where T : DependencyObject
+    {
+        if (parent == null) return null;
+
+        if (parent is Panel panel)
+        {
+            foreach (var child in panel.Children)
+            {
+                if (child is T typedChild && (predicate == null || predicate(typedChild)))
+                    return typedChild;
+
+                var result = FindChildElement<T>(child, predicate);
+                if (result != null) return result;
+            }
+        }
+        else if (parent is ContentControl cc && cc.Content is DependencyObject contentDep)
+        {
+            if (contentDep is T typedContent && (predicate == null || predicate(typedContent)))
+                return typedContent;
+
+            var result = FindChildElement<T>(contentDep, predicate);
+            if (result != null) return result;
+        }
+
+        try
+        {
+            int count = VisualTreeHelper.GetChildrenCount(parent);
+            for (int i = 0; i < count; i++)
+            {
+                var child = VisualTreeHelper.GetChild(parent, i);
+                if (child is T typedChild && (predicate == null || predicate(typedChild)))
+                    return typedChild;
+
+                var result = FindChildElement<T>(child, predicate);
+                if (result != null) return result;
+            }
+        }
+        catch { }
+
+        return null;
     }
 }
