@@ -4,9 +4,19 @@ on:
   push:
     branches:
       - main
+      - develop
     paths:
       - 'bin/**'
   workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to checkout dependencies from'
+        required: true
+        default: 'develop'
+        type: choice
+        options:
+          - develop
+          - main
 
 permissions:
   contents: write
@@ -19,6 +29,7 @@ jobs:
     - name: Checkout Repository
       uses: actions/checkout@v4
       with:
+        ref: ${{ inputs.branch || github.ref }}
         lfs: true
 
     - name: Create Tar.XZ Archives
