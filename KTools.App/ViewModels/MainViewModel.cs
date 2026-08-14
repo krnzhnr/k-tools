@@ -73,6 +73,8 @@ public partial class MainViewModel : ThreadSafeViewModel
     /// <summary>
     /// Инициализирует ViewModel главной страницы с внедрением зависимостей.
     /// </summary>
+    private readonly IMediaProbeService _mediaProbeService;
+
     public MainViewModel(
         INavigationService navigationService,
         IScriptRegistry scriptRegistry,
@@ -81,7 +83,8 @@ public partial class MainViewModel : ThreadSafeViewModel
         ILogService logService,
         SettingsViewModel settingsViewModel,
         IDialogService dialogService,
-        IUpdateService updateService)
+        IUpdateService updateService,
+        IMediaProbeService mediaProbeService)
     {
         _navigationService = navigationService;
         _scriptRegistry = scriptRegistry;
@@ -91,6 +94,7 @@ public partial class MainViewModel : ThreadSafeViewModel
         _settingsViewModel = settingsViewModel;
         _dialogService = dialogService;
         _updateService = updateService;
+        _mediaProbeService = mediaProbeService;
 
         InitializeScripts();
         UpdateLogsTabVisibility();
@@ -210,8 +214,8 @@ public partial class MainViewModel : ThreadSafeViewModel
             _ = CheckUpdatesSilentlyAsync();
         }
 
-        // Асинхронно запускаем фоновую проверку обновлений yt-dlp nightly
-        _ = _dependencyManager.CheckAndUpdateYtDlpAsync();
+        // Асинхронно запускаем фоновую проверку обновлений всех зависимостей (yt-dlp, FFmpeg, MKVToolNix и др.)
+        _ = _dependencyManager.CheckAllDependencyUpdatesAsync();
     }
 
     /// <summary>
@@ -454,7 +458,7 @@ public partial class MainViewModel : ThreadSafeViewModel
     /// </summary>
     private void AddFilesToScript(AbstractScript script, List<string> files)
     {
-        var mediaProbeService = App.Services.GetRequiredService<IMediaProbeService>();
+        var mediaProbeService = _mediaProbeService;
         foreach (var file in files)
         {
             // Проверяем поддерживается ли расширение файла выбранным скриптом

@@ -36,7 +36,9 @@ public partial class DependencyVM : ObservableObject
     [NotifyPropertyChangedFor(nameof(InstallButtonVisibility))]
     [NotifyPropertyChangedFor(nameof(UpdateButtonVisibility))]
     [NotifyPropertyChangedFor(nameof(CancelButtonVisibility))]
-    [NotifyPropertyChangedFor(nameof(DeleteButtonVisibility))]
+    [NotifyPropertyChangedFor(nameof(NormalDeleteButtonVisibility))]
+    [NotifyPropertyChangedFor(nameof(SmallDeleteButtonVisibility))]
+    [NotifyPropertyChangedFor(nameof(SizeText))]
     private DependencyStatus _status;
 
     /// <summary>Текущий прогресс скачивания в процентах (0-100).</summary>
@@ -58,11 +60,18 @@ public partial class DependencyVM : ObservableObject
     [NotifyPropertyChangedFor(nameof(StatusText))]
     [NotifyPropertyChangedFor(nameof(StatusColor))]
     [NotifyPropertyChangedFor(nameof(UpdateButtonVisibility))]
-    [NotifyPropertyChangedFor(nameof(DeleteButtonVisibility))]
+    [NotifyPropertyChangedFor(nameof(NormalDeleteButtonVisibility))]
+    [NotifyPropertyChangedFor(nameof(SmallDeleteButtonVisibility))]
+    [NotifyPropertyChangedFor(nameof(SizeText))]
     private bool _isUpdateAvailable;
 
-    /// <summary>Форматированный текст размера компонента.</summary>
-    public string SizeText => $"~{Info.SizeMb:F1} МБ (архив ~{Info.ArchiveSizeMb:F1} МБ)";
+    /// <summary>Строка вывода установленной версии бинарника.</summary>
+    public string InstalledVersion => _dependencyManager.GetInstalledVersion(Info.Key);
+
+    /// <summary>Форматированный текст размера компонента и версии.</summary>
+    public string SizeText => Status == DependencyStatus.Installed && !string.IsNullOrEmpty(InstalledVersion)
+        ? $"Версия: {InstalledVersion}"
+        : $"~{Info.SizeMb:F1} МБ (архив ~{Info.ArchiveSizeMb:F1} МБ)";
 
     /// <summary>Локализованный текст статуса зависимости.</summary>
     public string StatusText => Status switch
@@ -123,9 +132,14 @@ public partial class DependencyVM : ObservableObject
         (Status == DependencyStatus.Downloading || Status == DependencyStatus.Extracting) 
         ? Visibility.Visible : Visibility.Collapsed;
 
-    /// <summary>Определяет видимость кнопки удаления.</summary>
-    public Visibility DeleteButtonVisibility => 
+    /// <summary>Определяет видимость стандартной большой кнопки удаления.</summary>
+    public Visibility NormalDeleteButtonVisibility => 
         (Status == DependencyStatus.Installed && !IsUpdateAvailable) 
+        ? Visibility.Visible : Visibility.Collapsed;
+
+    /// <summary>Определяет видимость маленькой квадратной кнопки удаления рядом с Обновить.</summary>
+    public Visibility SmallDeleteButtonVisibility => 
+        (Status == DependencyStatus.Installed && IsUpdateAvailable) 
         ? Visibility.Visible : Visibility.Collapsed;
 
     /// <summary>Команда установки данной зависимости.</summary>

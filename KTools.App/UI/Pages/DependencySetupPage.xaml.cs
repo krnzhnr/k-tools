@@ -36,39 +36,15 @@ public sealed partial class DependencySetupPage : Page
         ViewModel = App.Services.GetRequiredService<DependencySetupViewModel>();
         InitializeComponent();
         
-        // Подписываемся на изменение состояния ViewModel для синхронизации иконок
-        ViewModel.PropertyChanged += OnViewModelPropertyChanged;
-        
         Unloaded += OnPageUnloaded;
     }
 
     /// <summary>
     /// Вызывается при переходе на эту страницу.
-    /// Настраивает начальный вид кнопки обновления в соответствии с состоянием.
     /// </summary>
     protected override void OnNavigatedTo(NavigationEventArgs e)
     {
         base.OnNavigatedTo(e);
-        UpdateRefreshIcon(ViewModel.IsHomeState);
-    }
-
-    /// <summary>
-    /// Синхронизирует системные иконки WinUI в зависимости от логического состояния.
-    /// </summary>
-    private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
-    {
-        if (e.PropertyName == nameof(DependencySetupViewModel.IsHomeState))
-        {
-            UpdateRefreshIcon(ViewModel.IsHomeState);
-        }
-    }
-
-    /// <summary>
-    /// Меняет символ на кнопке "Проверить" в зависимости от того, все ли обязательные компоненты установлены.
-    /// </summary>
-    private void UpdateRefreshIcon(bool isHomeState)
-    {
-        RefreshIcon.Symbol = isHomeState ? Symbol.Home : Symbol.Refresh;
     }
 
     /// <summary>
@@ -199,7 +175,6 @@ public sealed partial class DependencySetupPage : Page
     /// </summary>
     private void OnPageUnloaded(object sender, RoutedEventArgs e)
     {
-        ViewModel.PropertyChanged -= OnViewModelPropertyChanged;
         ViewModel.Cleanup();
     }
 }

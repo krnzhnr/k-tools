@@ -40,19 +40,6 @@ public class VideoEncoderRegistry
 
     private bool IsEncoderSupported(IVideoEncoder encoder)
     {
-        // Если это NVENC, проверяем наличие поддержки в кэше
-        if (encoder.StableId == "nvenc")
-        {
-            return _hardwareCache.IsNvencSupported;
-        }
-
-        // x265 (CPU) поддерживается всегда
-        if (encoder.StableId == "x265")
-        {
-            return true;
-        }
-
-        // Если энкодер неизвестен реестру в плане требований, считаем его доступным
-        return true;
+        return encoder.IsSupported(_hardwareCache);
     }
 }

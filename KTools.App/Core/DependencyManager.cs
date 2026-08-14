@@ -322,18 +322,99 @@ public class DependencyManager : IDependencyManager
         return dep != null && IsBinaryPresent(dep);
     }
 
-    private bool _ytDlpUpdateAvailable;
+    private readonly Dictionary<string, bool> _updatesAvailable = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> _installedVersionsCache = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Проверяет, доступно ли обновление для указанной зависимости.
     /// </summary>
     public bool IsUpdateAvailable(string key)
     {
-        if (key.Equals("yt-dlp", StringComparison.OrdinalIgnoreCase))
+        lock (_updatesAvailable)
         {
-            return _ytDlpUpdateAvailable;
+            return _updatesAvailable.TryGetValue(key, out bool available) && available;
         }
-        return false;
+    }
+
+    /// <summary>
+    /// Устанавливает имитацию доступности обновления для отладки и тестирования UI.
+    /// </summary>
+    public void SetSimulatedUpdateAvailable(string key, bool available)
+    {
+        lock (_updatesAvailable)
+        {
+            _updatesAvailable[key] = available;
+        }
+        StatusChanged?.Invoke(key, GetStatus(key));
+    }
+
+    /// <summary>
+    /// Определяет и возвращает строку версии установленной зависимости.
+    /// </summary>
+    public string GetInstalledVersion(string key)
+    {
+        if (!IsInstalled(key)) return string.Empty;
+
+        var dep = _registry.FirstOrDefault(d => d.Key.Equals(key, StringComparison.OrdinalIgnoreCase));
+        if (dep == null) return string.Empty;
+
+        string binaryPath = _pathManager.GetBinaryPath(dep.VerifyBinary);
+        if (!File.Exists(binaryPath)) return string.Empty;
+
+        try
+        {
+            if (key.Equals("yt-dlp", StringComparison.OrdinalIgnoreCase))
+            {
+                return _settingsManager.GetSetting("Updates", "YtDlpInstalledVersion", "Nightly");
+            }
+
+            if (key.Equals("node", StringComparison.OrdinalIgnoreCase))
+            {
+                var vi = FileVersionInfo.GetVersionInfo(binaryPath);
+                return string.IsNullOrEmpty(vi.FileVersion) ? "v22.11.0" : $"v{vi.FileVersion}";
+            }
+
+            // Для FFmpeg, MKVToolNix, eac3to вызываем исполняемый файл и извлекаем версию из первой строки вывода
+            string args = key switch
+            {
+                "ffmpeg" => "-version",
+                "mkvtoolnix" => "-V",
+                _ => string.Empty
+            };
+
+            using var process = new Process
+            {
+                StartInfo = new ProcessStartInfo
+                {
+                    FileName = binaryPath,
+                    Arguments = args,
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
+                }
+            };
+
+            process.Start();
+            string line = process.StandardOutput.ReadLine() ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                line = process.StandardError.ReadLine() ?? string.Empty;
+            }
+            process.WaitForExit(2000);
+
+            var match = System.Text.RegularExpressions.Regex.Match(line, @"v?(\d+\.\d+(\.\d+)?)");
+            if (match.Success)
+            {
+                return match.Value;
+            }
+            return line.Length > 20 ? line.Substring(0, 20) : line;
+        }
+        catch (Exception ex)
+        {
+            _logService.Warn($"Не удалось извлечь версию для {key}: {ex.Message}", "DependencyManager");
+            return "Установлено";
+        }
     }
 
     /// <summary>
@@ -369,6 +450,34 @@ public class DependencyManager : IDependencyManager
         }
 
         _logService.Info($"Запущена процедура установки зависимости '{dep.DisplayName}' ({dep.Key})", "DependencyManager");
+
+        // Предварительная проверка доступности бинарных файлов на запись (не заняты ли они другими процессами)
+        string verifyPath = Path.Combine(_binDir, dep.Subfolder, dep.VerifyBinary);
+        if (File.Exists(verifyPath))
+        {
+            try
+            {
+                using (var testStream = new FileStream(verifyPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+                {
+                    // Файл свободно доступен для перезаписи
+                }
+            }
+            catch (IOException ex)
+            {
+                _logService.Warn($"Исполняемый файл '{verifyPath}' заблокирован другим процессом: {ex.Message}", "DependencyManager");
+                InstallFinished?.Invoke(key, false, $"Файл '{dep.VerifyBinary}' заблокирован. Остановите активные задачи кодирования/загрузки в KTools или сторонний процесс, использующий этот файл, и повторите попытку.");
+                lock (_activeDownloads)
+                {
+                    if (_activeDownloads.TryGetValue(key, out var cts))
+                    {
+                        cts.Dispose();
+                        _activeDownloads.Remove(key);
+                    }
+                }
+                return;
+            }
+        }
+
         SetStatus(key, DependencyStatus.Downloading);
         string tempArchivePath = Path.Combine(Path.GetTempPath(), dep.ArchiveName);
 
@@ -884,6 +993,75 @@ public class DependencyManager : IDependencyManager
     }
 
     /// <summary>
+    /// Выполняет фоновую проверку обновлений всех зависимостей (yt-dlp, FFmpeg, MKVToolNix, eac3to) раз в сутки.
+    /// </summary>
+    public async Task CheckAllDependencyUpdatesAsync(bool force = false)
+    {
+        try
+        {
+            string lastCheckStr = _settingsManager.GetSetting("Updates", "LastDepsCheckTime", string.Empty);
+            if (!force && DateTime.TryParse(lastCheckStr, out DateTime lastCheckTime))
+            {
+                if (DateTime.UtcNow - lastCheckTime < TimeSpan.FromDays(1))
+                {
+                    _logService.Info("Проверка обновлений всех зависимостей выполнялась менее 24 часов назад. Пропуск.", "DependencyManager");
+                    return;
+                }
+            }
+
+            _logService.Info("Запуск фоновой проверки обновлений всех зависимостей KTools...", "DependencyManager");
+
+            // 1. Проверяем обновления yt-dlp
+            await CheckAndUpdateYtDlpAsync(force: true);
+
+            // 2. Проверяем остальной набор зависимостей из релиза deps-v1 на GitHub
+            using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/repos/krnzhnr/k-tools/releases/tags/deps-v1");
+            request.Headers.UserAgent.Clear();
+            request.Headers.UserAgent.ParseAdd("K-Tools-DependencyManager-WinUI3");
+
+            using var response = await _httpClient.SendAsync(request);
+            if (response.IsSuccessStatusCode)
+            {
+                string json = await response.Content.ReadAsStringAsync();
+                using var doc = JsonDocument.Parse(json);
+                if (doc.RootElement.TryGetProperty("body", out var bodyProp))
+                {
+                    string body = bodyProp.GetString() ?? string.Empty;
+                    var match = System.Text.RegularExpressions.Regex.Match(body, @"```json:versions\s*(\{[\s\S]*?\})\s*```");
+                    if (match.Success)
+                    {
+                        string jsonVersions = match.Groups[1].Value;
+                        using var verDoc = JsonDocument.Parse(jsonVersions);
+                        foreach (var prop in verDoc.RootElement.EnumerateObject())
+                        {
+                            string key = prop.Name;
+                            string remoteVersion = prop.Value.GetString() ?? string.Empty;
+                            if (string.IsNullOrEmpty(remoteVersion)) continue;
+
+                            string localVer = GetInstalledVersion(key);
+                            if (IsInstalled(key) && !string.IsNullOrEmpty(localVer) && !remoteVersion.Equals(localVer, StringComparison.OrdinalIgnoreCase))
+                            {
+                                lock (_updatesAvailable)
+                                {
+                                    _updatesAvailable[key] = true;
+                                }
+                                _logService.Info($"Обнаружена новая версия для зависимости '{key}': remote={remoteVersion}, local={localVer}", "DependencyManager");
+                                StatusChanged?.Invoke(key, GetStatus(key));
+                            }
+                        }
+                    }
+                }
+            }
+
+            _settingsManager.SetSetting("Updates", "LastDepsCheckTime", DateTime.UtcNow.ToString("o"));
+        }
+        catch (Exception ex)
+        {
+            _logService.Error($"Ошибка при фоновой проверке обновлений зависимостей: {ex.Message}", "DependencyManager");
+        }
+    }
+
+    /// <summary>
     /// Выполняет проверку обновлений для утилиты yt-dlp раз в сутки и обновляет её при необходимости.
     /// </summary>
     public async Task CheckAndUpdateYtDlpAsync(bool force = false)
@@ -946,13 +1124,13 @@ public class DependencyManager : IDependencyManager
 
             if (latestTag.Equals(localVersion, StringComparison.OrdinalIgnoreCase))
             {
-                _ytDlpUpdateAvailable = false;
+                lock (_updatesAvailable) { _updatesAvailable["yt-dlp"] = false; }
                 _logService.Info("Установлена актуальная версия yt-dlp. Обновление не требуется.", "DependencyManager");
                 return;
             }
 
             // Если версии не совпадают, фиксируем наличие обновления и запускаем установку/обновление
-            _ytDlpUpdateAvailable = true;
+            lock (_updatesAvailable) { _updatesAvailable["yt-dlp"] = true; }
             _logService.Info($"Обнаружена новая версия yt-dlp: {latestTag}. Запуск автоматического обновления...", "DependencyManager");
             
             // Запускаем асинхронную установку
@@ -961,7 +1139,7 @@ public class DependencyManager : IDependencyManager
             // Если установка завершилась успехом, сохраняем новую версию в настройки
             if (IsInstalled("yt-dlp"))
             {
-                _ytDlpUpdateAvailable = false;
+                lock (_updatesAvailable) { _updatesAvailable["yt-dlp"] = false; }
                 _settingsManager.SetSetting("Updates", "YtDlpInstalledVersion", latestTag);
                 _logService.Info($"yt-dlp успешно обновлен до версии {latestTag}", "DependencyManager");
             }

@@ -15,6 +15,11 @@ public interface IHardwareCapabilityCache
     bool IsNvencSupported { get; }
 
     /// <summary>
+    /// Возвращает true, если видеокарта и драйвер NVIDIA поддерживают режим Temporal AQ (-temporal-aq 1).
+    /// </summary>
+    bool IsNvencTemporalAqSupported { get; }
+
+    /// <summary>
     /// Асинхронно инициализирует кэш, выполняя необходимые системные проверки.
     /// Должно вызываться один раз при старте приложения.
     /// </summary>

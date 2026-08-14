@@ -77,6 +77,21 @@ public interface IDependencyManager
     bool RemoveDependency(string key);
 
     /// <summary>
+    /// Получить определенную версию установленной зависимости (например "7.1.0" или "v93.0").
+    /// </summary>
+    string GetInstalledVersion(string key);
+
+    /// <summary>
+    /// Выполняет проверку обновлений всех зависимостей (включая FFmpeg, MKVToolNix, eac3to и yt-dlp) раз в сутки.
+    /// </summary>
+    Task CheckAllDependencyUpdatesAsync(bool force = false);
+
+    /// <summary>
+    /// Устанавливает имитацию флага обновления для отладки и проверки UI.
+    /// </summary>
+    void SetSimulatedUpdateAvailable(string key, bool available);
+
+    /// <summary>
     /// Выполняет проверку обновлений для утилиты yt-dlp раз в сутки и обновляет её при необходимости.
     /// </summary>
     /// <param name="force">Принудительно запустить проверку без учёта 24-часового интервала.</param>

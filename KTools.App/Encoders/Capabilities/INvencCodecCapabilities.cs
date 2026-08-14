@@ -35,7 +35,7 @@ public interface INvencCodecCapabilities
     /// <summary>
     /// Возвращает полный список настроек для данного подкодека.
     /// </summary>
-    List<SettingField> GetCodecSettings(Dictionary<string, object>? currentSettings = null);
+    List<SettingField> GetCodecSettings(Dictionary<string, object>? currentSettings = null, IHardwareCapabilityCache? hardwareCache = null);
 
     /// <summary>
     /// Формирует аргументы командной строки FFmpeg для данного подкодека.

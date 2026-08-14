@@ -15,10 +15,17 @@ public class X265Encoder : IVideoEncoder
     private static readonly List<string> RateControlOptions = new() { "CRF", "Битрейт (ABR)" };
     private static readonly List<string> TuneOptions = new() { "Нет", "grain", "animation", "fastdecode", "zerolatency", "psnr", "ssim" };
     private static readonly List<string> AqModeOptions = new() { "0", "1", "2", "3", "4" };
+    private static readonly List<string> BAdaptOptions = new() { "0", "1", "2" };
+    private static readonly List<string> DeblockOptions = new() { "0,0", "-1,-1", "-2,-2", "1,1" };
 
     public string StableId => "x265";
 
-    public string DisplayName => "x265 (CPU)";
+    public string DisplayName => "x265";
+
+    public bool IsSupported(IHardwareCapabilityCache hardwareCache)
+    {
+        return true;
+    }
 
     public string GetFfmpegCodecName(Dictionary<string, object> settings)
     {
@@ -30,12 +37,12 @@ public class X265Encoder : IVideoEncoder
         return context.Force10Bit ? "yuv420p10le" : "yuv420p";
     }
 
-    public List<SettingField> GetEncoderSettings(Dictionary<string, object>? currentSettings = null)
+    public List<SettingField> GetEncoderSettings(Dictionary<string, object>? currentSettings = null, IHardwareCapabilityCache? hardwareCache = null)
     {
         return new List<SettingField>
         {
             new SettingField(
-                "cpu_preset",
+                "x265_preset",
                 "Пресет",
                 SettingType.Combo,
                 "medium",
@@ -46,7 +53,7 @@ public class X265Encoder : IVideoEncoder
                 colSpan: 1
             ),
             new SettingField(
-                "cpu_rc",
+                "x265_rc",
                 "Режим качества",
                 SettingType.Combo,
                 "CRF",
@@ -60,7 +67,7 @@ public class X265Encoder : IVideoEncoder
                 }
             ),
             new SettingField(
-                "cpu_crf",
+                "x265_crf",
                 "CRF / Качество",
                 SettingType.Int,
                 23,
@@ -71,13 +78,13 @@ public class X265Encoder : IVideoEncoder
                 visibilityConditions: new List<SettingVisibilityCondition>
                 {
                     new("lossless", "True", negate: true),
-                    new("cpu_rc", "CRF")
+                    new("x265_rc", "CRF")
                 },
                 minimum: 0,
                 maximum: 51
             ),
             new SettingField(
-                "cpu_v_bitrate",
+                "x265_v_bitrate",
                 "Битрейт видео (кбит/с)",
                 SettingType.Int,
                 4000,
@@ -88,13 +95,13 @@ public class X265Encoder : IVideoEncoder
                 visibilityConditions: new List<SettingVisibilityCondition>
                 {
                     new("lossless", "True", negate: true),
-                    new("cpu_rc", "Битрейт (ABR)")
+                    new("x265_rc", "Битрейт (ABR)")
                 },
                 minimum: 100,
                 maximum: 500000
             ),
             new SettingField(
-                "cpu_tune",
+                "x265_tune",
                 "Tune",
                 SettingType.Combo,
                 "Нет",
@@ -104,7 +111,7 @@ public class X265Encoder : IVideoEncoder
                 colSpan: 1
             ),
             new SettingField(
-                "cpu_aq_mode",
+                "x265_aq_mode",
                 "AQ Mode",
                 SettingType.Combo,
                 "2",
@@ -115,16 +122,106 @@ public class X265Encoder : IVideoEncoder
                 colSpan: 1
             ),
             new SettingField(
-                "cpu_lookahead",
+                "x265_aq_strength",
+                "Сила AQ",
+                SettingType.Float,
+                1.0f,
+                "Видео:Расширенные параметры",
+                comment: "Сила перераспределения битрейта (0.0 - 3.0). Увеличение снижает артефакты на градиентах",
+                column: 0,
+                colSpan: 1,
+                minimum: 0.0,
+                maximum: 3.0
+            ),
+            new SettingField(
+                "x265_lookahead",
                 "RC Lookahead",
                 SettingType.Int,
                 20,
                 "Видео:Расширенные параметры",
                 comment: "Количество кадров анализа вперед (0-250). 0 - отключено, по умолчанию: 20",
-                column: 0,
+                column: 1,
                 colSpan: 1,
                 minimum: 0,
                 maximum: 250
+            ),
+            new SettingField(
+                "x265_bframes",
+                "B-кадры",
+                SettingType.Int,
+                4,
+                "Видео:Расширенные параметры",
+                comment: "Максимальное количество подряд идущих B-кадров (0-16). По умолчанию: 4",
+                column: 0,
+                colSpan: 1,
+                minimum: 0,
+                maximum: 16
+            ),
+            new SettingField(
+                "x265_b_adapt",
+                "Адаптация B-кадров",
+                SettingType.Combo,
+                "2",
+                "Видео:Расширенные параметры",
+                options: BAdaptOptions,
+                comment: "Режим планера B-кадров (0 - выкл, 1 - быстрый, 2 - точный full/trellis)",
+                column: 1,
+                colSpan: 1
+            ),
+            new SettingField(
+                "x265_psy_rd",
+                "Psy-RD",
+                SettingType.Float,
+                2.0f,
+                "Видео:Расширенные параметры",
+                comment: "Сила психовизуальной оптимизации деталей (0.0 - 5.0). 0 - отключено",
+                column: 0,
+                colSpan: 1,
+                minimum: 0.0,
+                maximum: 5.0
+            ),
+            new SettingField(
+                "x265_psy_rdoq",
+                "Psy-RDOQ",
+                SettingType.Float,
+                0.0f,
+                "Видео:Расширенные параметры",
+                comment: "Сила психовизуальной оптимизации при RDO-квантовании (0.0 - 50.0). Сохраняет шумы и текстуры",
+                column: 1,
+                colSpan: 1,
+                minimum: 0.0,
+                maximum: 50.0
+            ),
+            new SettingField(
+                "x265_deblock",
+                "Деблокинг",
+                SettingType.Combo,
+                "0:0",
+                "Видео:Расширенные параметры",
+                options: DeblockOptions,
+                comment: "Смещение деблокирующего фильтра tC:Beta (-1:-1 или -2:-2 для повышения резкости)",
+                column: 0,
+                colSpan: 1
+            ),
+            new SettingField(
+                "x265_no_sao",
+                "Отключить SAO",
+                SettingType.Checkbox,
+                false,
+                "Видео:Расширенные параметры",
+                comment: "Отключает сглаживающий фильтр SAO для сохранения точных текстур и зернистости",
+                column: 1,
+                colSpan: 1
+            ),
+            new SettingField(
+                "x265_no_fast_pskip",
+                "Отключить Fast P-Skip",
+                SettingType.Checkbox,
+                false,
+                "Видео:Расширенные параметры",
+                comment: "Отключает быстрый пропуск P-кадров для предотвращения мелких смазываний движущихся фонов",
+                column: 0,
+                colSpan: 1
             )
         };
     }
@@ -133,7 +230,7 @@ public class X265Encoder : IVideoEncoder
     {
         var args = new List<string>();
         args.AddRange(new[] { "-c:v", GetFfmpegCodecName(settings), "-pix_fmt", GetPixelFormat(context) });
-        args.AddRange(new[] { "-preset", GetSettingValue(settings, "cpu_preset", "medium") });
+        args.AddRange(new[] { "-preset", GetSettingValue(settings, "x265_preset", "medium") });
 
         var x265Params = new List<string>();
 
@@ -143,15 +240,15 @@ public class X265Encoder : IVideoEncoder
         }
         else
         {
-            string cpuRc = GetSettingValue(settings, "cpu_rc", "CRF");
-            if (cpuRc == "CRF")
+            string x265Rc = GetSettingValue(settings, "x265_rc", "CRF");
+            if (x265Rc == "CRF")
             {
-                int crf = GetSettingValue(settings, "cpu_crf", 23);
+                int crf = GetSettingValue(settings, "x265_crf", 23);
                 args.AddRange(new[] { "-crf", crf.ToString() });
             }
             else
             {
-                int vBr = GetSettingValue(settings, "cpu_v_bitrate", 4000);
+                int vBr = GetSettingValue(settings, "x265_v_bitrate", 4000);
                 int maxBr = vBr * 2;
                 int bufSize = maxBr * 2;
                 args.AddRange(new[] {
@@ -162,19 +259,69 @@ public class X265Encoder : IVideoEncoder
             }
         }
 
-        string tune = GetSettingValue(settings, "cpu_tune", "Нет");
+        string tune = GetSettingValue(settings, "x265_tune", "Нет");
         if (tune != "Нет")
         {
             args.AddRange(new[] { "-tune", tune });
         }
 
-        x265Params.Add($"aq-mode={GetSettingValue(settings, "cpu_aq_mode", "2")}");
+        x265Params.Add($"aq-mode={GetSettingValue(settings, "x265_aq_mode", "2")}");
 
-        int cpuLa = GetSettingValue(settings, "cpu_lookahead", 20);
-        if (cpuLa > 0)
+        float aqStrength = GetSettingValue(settings, "x265_aq_strength", 1.0f);
+        if (Math.Abs(aqStrength - 1.0f) > 0.01f)
         {
-            int clampedLa = Math.Clamp(cpuLa, 0, 250);
+            float clampedAqStr = Math.Clamp(aqStrength, 0.0f, 3.0f);
+            x265Params.Add($"aq-strength={clampedAqStr.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)}");
+        }
+
+        int x265La = GetSettingValue(settings, "x265_lookahead", 20);
+        if (x265La != 20)
+        {
+            int clampedLa = Math.Clamp(x265La, 0, 250);
             x265Params.Add($"rc-lookahead={clampedLa}");
+        }
+
+        int bframes = GetSettingValue(settings, "x265_bframes", 4);
+        if (bframes != 4)
+        {
+            int clampedBframes = Math.Clamp(bframes, 0, 16);
+            x265Params.Add($"bframes={clampedBframes}");
+        }
+
+        string bAdapt = GetSettingValue(settings, "x265_b_adapt", "2");
+        if (bAdapt != "2")
+        {
+            x265Params.Add($"b-adapt={bAdapt}");
+        }
+
+        float psyRd = GetSettingValue(settings, "x265_psy_rd", 2.0f);
+        if (Math.Abs(psyRd - 2.0f) > 0.01f)
+        {
+            float clampedPsyRd = Math.Clamp(psyRd, 0.0f, 5.0f);
+            x265Params.Add($"psy-rd={clampedPsyRd.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)}");
+        }
+
+        float psyRdoq = GetSettingValue(settings, "x265_psy_rdoq", 0.0f);
+        if (Math.Abs(psyRdoq - 0.0f) > 0.01f)
+        {
+            float clampedPsyRdoq = Math.Clamp(psyRdoq, 0.0f, 50.0f);
+            x265Params.Add($"psy-rdoq={clampedPsyRdoq.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)}");
+        }
+
+        string deblock = GetSettingValue(settings, "x265_deblock", "0,0").Replace(":", ",");
+        if (deblock != "0,0" && !string.IsNullOrWhiteSpace(deblock))
+        {
+            x265Params.Add($"deblock={deblock}");
+        }
+
+        if (GetSettingValue(settings, "x265_no_sao", false))
+        {
+            x265Params.Add("no-sao=1");
+        }
+
+        if (GetSettingValue(settings, "x265_no_fast_pskip", false))
+        {
+            x265Params.Add("no-fast-pskip=1");
         }
 
         if (x265Params.Count > 0)
@@ -209,6 +356,10 @@ public class X265Encoder : IVideoEncoder
                 if (typeof(T) == typeof(int))
                 {
                     return (T)(object)Convert.ToInt32(val);
+                }
+                if (typeof(T) == typeof(float))
+                {
+                    return (T)(object)Convert.ToSingle(val);
                 }
                 if (typeof(T) == typeof(bool))
                 {

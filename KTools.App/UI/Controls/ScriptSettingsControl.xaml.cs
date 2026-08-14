@@ -27,9 +27,9 @@ public sealed partial class ScriptSettingsControl : UserControl
     private StackPanel? _previewPanel;
     private bool _isPreviewExpanded;
 
-    public ScriptSettingsViewModel ViewModel { get; } = App.Services.GetRequiredService<ScriptSettingsViewModel>();
-    private ISettingsManager _settingsManager => App.Services.GetRequiredService<ISettingsManager>();
-    private IDialogService _dialogService => App.Services.GetRequiredService<IDialogService>();
+    public ScriptSettingsViewModel ViewModel { get; }
+    private readonly ISettingsManager _settingsManager;
+    private readonly IDialogService _dialogService;
 
     private class GroupVisual
     {
@@ -43,6 +43,10 @@ public sealed partial class ScriptSettingsControl : UserControl
 
     public ScriptSettingsControl()
     {
+        ViewModel = App.Services.GetRequiredService<ScriptSettingsViewModel>();
+        _settingsManager = App.Services.GetRequiredService<ISettingsManager>();
+        _dialogService = App.Services.GetRequiredService<IDialogService>();
+
         InitializeComponent();
 
         // Обеспечивает автоматический сброс фокуса с полей ввода при клике на свободную область формы
@@ -500,20 +504,36 @@ public sealed partial class ScriptSettingsControl : UserControl
                     break;
 
                 case SettingType.Int:
+                case SettingType.Float:
+                    bool isFloat = field.Type == SettingType.Float;
+                    double defaultNum = 0;
+                    if (field.DefaultValue is int dInt) defaultNum = dInt;
+                    else if (field.DefaultValue is float dF) defaultNum = dF;
+                    else if (field.DefaultValue is double dD) defaultNum = dD;
+                    else double.TryParse(field.DefaultValue?.ToString(), out defaultNum);
+
+                    double initialVal = isFloat
+                        ? _settingsManager.GetSetting(settingsGroup, field.Key, defaultNum)
+                        : _settingsManager.GetSetting(settingsGroup, field.Key, (int)defaultNum);
+
                     var numberBox = new NumberBox
                     {
-                        Value = _settingsManager.GetSetting(
-                            settingsGroup,
-                            field.Key,
-                            field.DefaultValue is int vInt ? vInt : 0),
+                        Value = initialVal,
                         Width = 160,
                         HorizontalAlignment = HorizontalAlignment.Right,
-                        SpinButtonPlacementMode = 
-                            NumberBoxSpinButtonPlacementMode.Inline,
-                        SmallChange = 1,
-                        LargeChange = 5,
+                        SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Inline,
+                        SmallChange = isFloat ? 0.1 : 1,
+                        LargeChange = isFloat ? 0.5 : 5,
                         VerticalAlignment = VerticalAlignment.Center
                     };
+                    if (isFloat)
+                    {
+                        var formatter = new Windows.Globalization.NumberFormatting.DecimalFormatter
+                        {
+                            FractionDigits = 1
+                        };
+                        numberBox.NumberFormatter = formatter;
+                    }
                     if (field.Minimum.HasValue)
                     {
                         numberBox.Minimum = field.Minimum.Value;
@@ -526,12 +546,20 @@ public sealed partial class ScriptSettingsControl : UserControl
                     {
                         if (!double.IsNaN(numberBox.Value))
                         {
-                            _settingsManager.SetSetting(
-                                settingsGroup,
-                                field.Key,
-                                (int)numberBox.Value);
-                            UpdateVisibility(settingsGroup);
-                            HandleIntSettingChanged(settingsGroup, field.Key, (int)numberBox.Value);
+                            if (isFloat)
+                            {
+                                float valFloat = (float)Math.Round(numberBox.Value, 1);
+                                _settingsManager.SetSetting(settingsGroup, field.Key, valFloat);
+                                UpdateVisibility(settingsGroup);
+                                HandleIntSettingChanged(settingsGroup, field.Key, (int)valFloat);
+                            }
+                            else
+                            {
+                                int valInt = (int)numberBox.Value;
+                                _settingsManager.SetSetting(settingsGroup, field.Key, valInt);
+                                UpdateVisibility(settingsGroup);
+                                HandleIntSettingChanged(settingsGroup, field.Key, valInt);
+                            }
                         }
                     };
                     inputControl = numberBox;
@@ -692,7 +720,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                                 }
                             }
                             // В. Динамическое обновление диапазонов NumberBox (Minimum / Maximum)
-                            else if (dynamicField.Type == SettingType.Int)
+                            else if (dynamicField.Type == SettingType.Int || dynamicField.Type == SettingType.Float)
                             {
                                 var numberBox = FindChildElement<NumberBox>(container);
                                 if (numberBox != null)

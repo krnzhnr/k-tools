@@ -23,6 +23,7 @@ public class HardwareCapabilityCache : IHardwareCapabilityCache
     }
 
     public bool IsNvencSupported { get; private set; }
+    public bool IsNvencTemporalAqSupported { get; private set; }
 
     public async Task InitializeAsync()
     {
@@ -36,6 +37,16 @@ public class HardwareCapabilityCache : IHardwareCapabilityCache
             _logService.Info("Инициализация кэша аппаратных возможностей...", "HardwareCapabilityCache");
             IsNvencSupported = await _ffmpegRunner.CheckNvencSupportAsync();
             _logService.Info($"Поддержка NVENC: {IsNvencSupported}", "HardwareCapabilityCache");
+
+            if (IsNvencSupported)
+            {
+                IsNvencTemporalAqSupported = await CheckNvencTemporalAqAsync();
+                _logService.Info($"Поддержка NVENC Temporal AQ: {IsNvencTemporalAqSupported}", "HardwareCapabilityCache");
+            }
+            else
+            {
+                IsNvencTemporalAqSupported = false;
+            }
             
             _isInitialized = true;
         }
@@ -43,6 +54,19 @@ public class HardwareCapabilityCache : IHardwareCapabilityCache
         {
             _logService.Error($"Ошибка при инициализации кэша аппаратных возможностей: {ex.Message}", "HardwareCapabilityCache");
             IsNvencSupported = false;
+            IsNvencTemporalAqSupported = false;
+        }
+    }
+
+    private async Task<bool> CheckNvencTemporalAqAsync()
+    {
+        try
+        {
+            return await _ffmpegRunner.CheckNvencTemporalAqSupportAsync();
+        }
+        catch
+        {
+            return false;
         }
     }
 }

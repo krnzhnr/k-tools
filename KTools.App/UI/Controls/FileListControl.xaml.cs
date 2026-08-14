@@ -188,10 +188,10 @@ public sealed class MuxingRowItem : INotifyPropertyChanged
 /// </summary>
 public sealed partial class FileListControl : UserControl
 {
-    private ILogService _logService => App.Services.GetRequiredService<ILogService>();
-    private ISettingsManager _settingsManager => App.Services.GetRequiredService<ISettingsManager>();
-    private IMediaProbeService _mediaProbeService => App.Services.GetRequiredService<IMediaProbeService>();
-    private IPathManager _pathManager => App.Services.GetRequiredService<IPathManager>();
+    private readonly ILogService _logService;
+    private readonly ISettingsManager _settingsManager;
+    private readonly IMediaProbeService _mediaProbeService;
+    private readonly IPathManager _pathManager;
 
     private readonly Microsoft.UI.Dispatching.DispatcherQueue _dispatcherQueue = 
         Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
@@ -204,6 +204,11 @@ public sealed partial class FileListControl : UserControl
     /// </summary>
     public FileListControl()
     {
+        _logService = App.Services.GetRequiredService<ILogService>();
+        _settingsManager = App.Services.GetRequiredService<ISettingsManager>();
+        _mediaProbeService = App.Services.GetRequiredService<IMediaProbeService>();
+        _pathManager = App.Services.GetRequiredService<IPathManager>();
+
         InitializeComponent();
         _files.CollectionChanged += OnFilesCollectionChanged;
         FilesListView.ItemsSource = _files;

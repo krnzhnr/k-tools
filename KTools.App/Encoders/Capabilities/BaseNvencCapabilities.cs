@@ -47,9 +47,9 @@ public abstract class BaseNvencCapabilities : INvencCodecCapabilities
     /// <summary>
     /// Возвращает 100% проверенные общие настройки NVENC плюс специфичные настройки подкодека.
     /// </summary>
-    public List<SettingField> GetCodecSettings(Dictionary<string, object>? currentSettings = null)
+    public List<SettingField> GetCodecSettings(Dictionary<string, object>? currentSettings = null, IHardwareCapabilityCache? hardwareCache = null)
     {
-        var fields = GetCommonNvencSettings();
+        var fields = GetCommonNvencSettings(hardwareCache);
         fields.AddRange(GetCodecSpecificSettings(currentSettings));
         return fields;
     }
@@ -162,15 +162,27 @@ public abstract class BaseNvencCapabilities : INvencCodecCapabilities
     protected abstract void AppendCodecSpecificArguments(Dictionary<string, object> settings, EncoderSharedContext context, List<string> args);
 
     /// <summary>
-    /// Возвращает список 100% идентичных общих настроек NVENC.
+    /// Возвращает список 100% общих настроек, присущих ВСЕМ подкодекам NVENC.
     /// </summary>
-    private List<SettingField> GetCommonNvencSettings()
+    protected List<SettingField> GetCommonNvencSettings(IHardwareCapabilityCache? hardwareCache = null)
     {
+        bool temporalAqSupported = hardwareCache?.IsNvencTemporalAqSupported ?? true;
+
+        var temporalAqDisableConditions = new List<SettingDisableCondition>
+        {
+            new("lossless", "True")
+        };
+
+        if (!temporalAqSupported)
+        {
+            temporalAqDisableConditions.Add(new SettingDisableCondition("encoder", "nvenc"));
+        }
+
         return new List<SettingField>
         {
             new SettingField(
                 "nvenc_codec",
-                "Кодек",
+                "Кодек NVENC",
                 SettingType.Combo,
                 CodecName,
                 "Видео:Кодирование",
@@ -180,13 +192,13 @@ public abstract class BaseNvencCapabilities : INvencCodecCapabilities
             ),
             new SettingField(
                 "nvenc_preset",
-                "Пресет",
+                "Пресет скорости",
                 SettingType.Combo,
-                "p7",
+                "p4",
                 "Видео:Кодирование",
                 options: PresetOptions,
-                comment: "Баланс между скоростью кодирования и сжатием/качеством",
-                column: 0,
+                comment: "Баланс между скоростью кодирования и сжатием/качеством (p1 - самый быстрый, p7 - максимальное сжатие)",
+                column: 1,
                 colSpan: 1
             ),
             new SettingField(
@@ -206,11 +218,12 @@ public abstract class BaseNvencCapabilities : INvencCodecCapabilities
             ),
             new SettingField(
                 "nvenc_rc",
-                "Режим битрейта",
+                "Режим управления битрейтом",
                 SettingType.Combo,
                 "vbr",
                 "Видео:Битрейт",
                 options: RateControlOptions,
+                comment: "CBR - постоянный битрейт, VBR - переменный, ConstQP - фиксированное качество",
                 column: 0,
                 colSpan: 1,
                 visibilityConditions: new List<SettingVisibilityCondition>
@@ -316,25 +329,13 @@ public abstract class BaseNvencCapabilities : INvencCodecCapabilities
                 maximum: 1000000
             ),
             new SettingField(
-                "nv_lookahead",
-                "Lookahead",
-                SettingType.Int,
-                32,
-                "Видео:Расширенные параметры",
-                comment: "Количество кадров анализа вперед (0-32). 0 - отключено, 32 - максимум",
-                column: 0,
-                colSpan: 1,
-                minimum: 0,
-                maximum: 32
-            ),
-            new SettingField(
                 "nv_spatial_aq",
                 "Spatial AQ",
                 SettingType.Checkbox,
                 true,
                 "Видео:Расширенные параметры",
-                comment: "Пространственное адаптивное квантование (убирает градиентные полосы)",
-                column: 1,
+                comment: "Пространственное адаптивное квантование (улучшает детали на градиентах и плоских поверхностях)",
+                column: 0,
                 colSpan: 1,
                 disableConditions: new List<SettingDisableCondition>
                 {
@@ -362,26 +363,14 @@ public abstract class BaseNvencCapabilities : INvencCodecCapabilities
                 "nv_temporal_aq",
                 "Temporal AQ",
                 SettingType.Checkbox,
-                true,
+                temporalAqSupported,
                 "Видео:Расширенные параметры",
-                comment: "Временное адаптивное квантование (сохраняет детали в динамике)",
+                comment: temporalAqSupported 
+                    ? "Временное адаптивное квантование (сохраняет детали в динамике)"
+                    : "Не поддерживается вашей видеокартой / драйвером NVIDIA",
                 column: 1,
                 colSpan: 1,
-                disableConditions: new List<SettingDisableCondition>
-                {
-                    new("lossless", "True")
-                }
-            ),
-            new SettingField(
-                "nv_multipass",
-                "Многопроходный режим",
-                SettingType.Combo,
-                "fullres",
-                "Видео:Расширенные параметры",
-                options: MultipassOptions,
-                comment: "Аппаратный 2-проходный анализ (fullres - максимальное качество)",
-                column: 0,
-                colSpan: 1
+                disableConditions: temporalAqDisableConditions
             )
         };
     }

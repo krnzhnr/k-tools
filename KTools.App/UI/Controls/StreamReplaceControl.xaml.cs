@@ -83,8 +83,8 @@ public sealed class ReplacementFileItem
 /// </summary>
 public sealed partial class StreamReplaceControl : UserControl
 {
-    private ILogService _logService => App.Services.GetRequiredService<ILogService>();
-    private IMediaProbeService _mediaProbeService => App.Services.GetRequiredService<IMediaProbeService>();
+    private readonly ILogService _logService;
+    private readonly IMediaProbeService _mediaProbeService;
 
     private readonly Microsoft.UI.Dispatching.DispatcherQueue _dispatcherQueue = 
         Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
@@ -112,6 +112,9 @@ public sealed partial class StreamReplaceControl : UserControl
     /// </summary>
     public StreamReplaceControl()
     {
+        _logService = App.Services.GetRequiredService<ILogService>();
+        _mediaProbeService = App.Services.GetRequiredService<IMediaProbeService>();
+
         InitializeComponent();
         ReplacementFilesListView.ItemsSource = _replacementFiles;
         _replacementFiles.CollectionChanged += OnReplacementFilesChanged;

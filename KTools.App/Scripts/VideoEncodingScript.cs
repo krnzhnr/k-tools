@@ -56,8 +56,9 @@ public sealed class VideoEncodingScript : AbstractScript
     private List<SettingField> GetSettingsSchemaInternal(Dictionary<string, object>? currentSettings)
     {
         var availableEncoders = _encoderRegistry.GetAvailableEncoders();
-        string defaultEncoder = availableEncoders.FirstOrDefault()?.DisplayName ?? "x265 (CPU)";
+        string defaultEncoder = availableEncoders.FirstOrDefault()?.StableId ?? "x265";
         var encoderOptions = availableEncoders.Select(e => e.DisplayName).ToList();
+        var encoderValues = availableEncoders.Select(e => e.StableId).ToList();
 
         var fields = new List<SettingField>
         {
@@ -70,6 +71,16 @@ public sealed class VideoEncodingScript : AbstractScript
                 "Видео:Кодирование",
                 options: encoderOptions,
                 column: 0,
+                colSpan: 1
+            ),
+            new SettingField(
+                "output_container",
+                "Контейнер файла",
+                SettingType.Combo,
+                ".mkv",
+                "Видео:Кодирование",
+                options: new List<string> { ".mkv", ".mp4" },
+                column: 1,
                 colSpan: 1
             ),
             new SettingField(
@@ -110,7 +121,7 @@ public sealed class VideoEncodingScript : AbstractScript
                     settingField.VisibilityConditions = new List<SettingVisibilityCondition>();
                 }
                 
-                settingField.VisibilityConditions.Add(new SettingVisibilityCondition("encoder", encoder.DisplayName));
+                settingField.VisibilityConditions.Add(new SettingVisibilityCondition("encoder", encoder.StableId));
                 fields.Add(settingField);
             }
         }
@@ -126,10 +137,6 @@ public sealed class VideoEncodingScript : AbstractScript
                 comment: "Здесь будут доступны видеофильтры: ресайз, обрезка чёрных полос и др."
             )
         );
-
-        // --- Остальные аудио/субтитры/общие настройки ---
-
-
 
         fields.AddRange(new List<SettingField>
         {
@@ -187,6 +194,15 @@ public sealed class VideoEncodingScript : AbstractScript
 
             // --- Вкладка: Субтитры ---
             new SettingField(
+                "burn_in_subtitles",
+                "Вшивать найденные надписи в видеоряд (Burn-in)",
+                SettingType.Checkbox,
+                true,
+                "Субтитры",
+                column: 0,
+                colSpan: 2
+            ),
+            new SettingField(
                 "sub_keywords",
                 "Поиск надписей",
                 SettingType.KeywordList,
@@ -196,7 +212,11 @@ public sealed class VideoEncodingScript : AbstractScript
                 },
                 "Субтитры",
                 column: 0,
-                colSpan: 2
+                colSpan: 2,
+                visibilityConditions: new List<SettingVisibilityCondition>
+                {
+                    new("burn_in_subtitles", "True")
+                }
             ),
             new SettingField(
                 "strip_keywords",
@@ -210,7 +230,11 @@ public sealed class VideoEncodingScript : AbstractScript
                 },
                 "Субтитры",
                 column: 0,
-                colSpan: 2
+                colSpan: 2,
+                visibilityConditions: new List<SettingVisibilityCondition>
+                {
+                    new("burn_in_subtitles", "True")
+                }
             ),
 
             // --- Вкладка: Общие ---
@@ -312,84 +336,88 @@ public sealed class VideoEncodingScript : AbstractScript
             }
 
             // 4. Поиск и извлечение субтитров для вшивания (burn-in)
-            var subKeywords = GetSettingValue<List<Dictionary<string, object>>?>(settings, "sub_keywords", null);
-            var activeSubKeywords = subKeywords?
-                .Where(d => d.TryGetValue("active", out var act) && SafeGetBool(act))
-                .Select(d => d.TryGetValue("word", out var w) ? SafeGetString(w)?.ToLowerInvariant() : null)
-                .Where(w => w != null)
-                .ToList() ?? new List<string?>();
-
-            var subTracks = structure.GetSubtitleTracks();
-            MediaTrack? targetSubTrack = null;
-
-            // Сначала ищем по ключевым словам в названии трека
-            if (activeSubKeywords.Count > 0)
+            bool burnInSubtitles = GetSettingValue(settings, "burn_in_subtitles", true);
+            if (burnInSubtitles)
             {
-                foreach (var word in activeSubKeywords)
+                var subKeywords = GetSettingValue<List<Dictionary<string, object>>?>(settings, "sub_keywords", null);
+                var activeSubKeywords = subKeywords?
+                    .Where(d => d.TryGetValue("active", out var act) && SafeGetBool(act))
+                    .Select(d => d.TryGetValue("word", out var w) ? SafeGetString(w)?.ToLowerInvariant() : null)
+                    .Where(w => w != null)
+                    .ToList() ?? new List<string?>();
+
+                var subTracks = structure.GetSubtitleTracks();
+                MediaTrack? targetSubTrack = null;
+
+                // Сначала ищем по ключевым словам в названии трека
+                if (activeSubKeywords.Count > 0)
                 {
-                    targetSubTrack = subTracks.FirstOrDefault(t => t.Name.ToLowerInvariant().Contains(word!));
-                    if (targetSubTrack != null) break;
-                }
-            }
-
-            // Если не найдено - ищем default/forced
-            if (targetSubTrack == null)
-            {
-                targetSubTrack = subTracks.FirstOrDefault(t => t.IsDefault || t.IsForced);
-            }
-
-            // Если все еще не найдено - берем первый трек субтитров
-            if (targetSubTrack == null)
-            {
-                targetSubTrack = subTracks.FirstOrDefault();
-            }
-
-            if (targetSubTrack != null)
-            {
-                int relSubIdx = subTracks.ToList().IndexOf(targetSubTrack);
-                tempSubFile = Path.Combine(tempDir, $"subs_{DateTime.Now.Ticks}.ass");
-
-                _logService.Info($"Извлечение субтитров #{targetSubTrack.TrackId} (относительный индекс {relSubIdx}) во временный файл", "VideoEncodingScript");
-                bool extSubSuccess = await _ffmpegRunner.ExtractSubtitleAsync(filePath, relSubIdx, tempSubFile, relative: true);
-
-                if (extSubSuccess && File.Exists(tempSubFile))
-                {
-                    // Очистка субтитров от нежелательных тегов оформления
-                    var stripKeywords = GetSettingValue<List<Dictionary<string, object>>?>(settings, "strip_keywords", null);
-                    var activeStrip = stripKeywords?
-                        .Where(d => d.TryGetValue("active", out var act) && SafeGetBool(act))
-                        .Select(d => d.TryGetValue("word", out var w) ? SafeGetString(w) : null)
-                        .Where(w => w != null)
-                        .ToList() ?? new List<string?>();
-
-                    if (activeStrip.Count > 0)
+                    foreach (var word in activeSubKeywords)
                     {
-                        var lines = File.ReadAllLines(tempSubFile, System.Text.Encoding.UTF8);
-                        var cleanLines = new List<string>();
-                        int removedCount = 0;
-
-                        foreach (var line in lines)
-                        {
-                            bool shouldStrip = activeStrip.Any(word => line.Contains(word!));
-                            if (shouldStrip)
-                            {
-                                removedCount++;
-                                continue;
-                            }
-                            cleanLines.Add(line);
-                        }
-
-                        if (removedCount > 0)
-                        {
-                            File.WriteAllLines(tempSubFile, cleanLines, new System.Text.UTF8Encoding(false));
-                            _logService.Info($"Очистка субтитров: удалено {removedCount} строк оформления", "VideoEncodingScript");
-                        }
+                        targetSubTrack = subTracks.FirstOrDefault(t => t.Name.ToLowerInvariant().Contains(word!));
+                        if (targetSubTrack != null) break;
                     }
                 }
-                else
+
+                // Если не найдено - ищем default/forced
+                if (targetSubTrack == null)
                 {
-                    tempSubFile = null;
-                    _logService.Warn("Не удалось извлечь субтитры для вшивания, кодирование продолжится без них", "VideoEncodingScript");
+                    targetSubTrack = subTracks.FirstOrDefault(t => t.IsDefault || t.IsForced);
+                }
+
+                // Если все еще не найдено - берем первый трек субтитров
+                if (targetSubTrack == null)
+                {
+                    targetSubTrack = subTracks.FirstOrDefault();
+                }
+
+                if (targetSubTrack != null)
+                {
+                    int relSubIdx = subTracks.ToList().IndexOf(targetSubTrack);
+                    tempSubFile = Path.Combine(tempDir, $"subs_{DateTime.Now.Ticks}.ass");
+
+                    _logService.Info($"Извлечение субтитров #{targetSubTrack.TrackId} (относительный индекс {relSubIdx}) во временный файл", "VideoEncodingScript");
+                    bool extSubSuccess = await _ffmpegRunner.ExtractSubtitleAsync(filePath, relSubIdx, tempSubFile, relative: true);
+
+                    if (extSubSuccess && File.Exists(tempSubFile))
+                    {
+                        // Очистка субтитров от нежелательных тегов оформления
+                        var stripKeywords = GetSettingValue<List<Dictionary<string, object>>?>(settings, "strip_keywords", null);
+                        var activeStrip = stripKeywords?
+                            .Where(d => d.TryGetValue("active", out var act) && SafeGetBool(act))
+                            .Select(d => d.TryGetValue("word", out var w) ? SafeGetString(w) : null)
+                            .Where(w => w != null)
+                            .ToList() ?? new List<string?>();
+
+                        if (activeStrip.Count > 0)
+                        {
+                            var lines = File.ReadAllLines(tempSubFile, System.Text.Encoding.UTF8);
+                            var cleanLines = new List<string>();
+                            int removedCount = 0;
+
+                            foreach (var line in lines)
+                            {
+                                bool shouldStrip = activeStrip.Any(word => line.Contains(word!));
+                                if (shouldStrip)
+                                {
+                                    removedCount++;
+                                    continue;
+                                }
+                                cleanLines.Add(line);
+                            }
+
+                            if (removedCount > 0)
+                            {
+                                File.WriteAllLines(tempSubFile, cleanLines, new System.Text.UTF8Encoding(false));
+                                _logService.Info($"Очистка субтитров: удалено {removedCount} строк оформления", "VideoEncodingScript");
+                            }
+                        }
+                    }
+                    else
+                    {
+                        tempSubFile = null;
+                        _logService.Warn("Не удалось извлечь субтитры для вшивания, кодирование продолжится без них", "VideoEncodingScript");
+                    }
                 }
             }
 
@@ -442,8 +470,11 @@ public sealed class VideoEncodingScript : AbstractScript
                 ? Path.GetDirectoryName(filePath) ?? AppContext.BaseDirectory
                 : outputPath;
 
+            string containerExt = GetSettingValue(settings, "output_container", ".mkv");
+            if (!containerExt.StartsWith(".")) containerExt = "." + containerExt;
+
             string stem = Path.GetFileNameWithoutExtension(filePath);
-            string targetFile = Path.Combine(targetDir, $"{stem}.mp4");
+            string targetFile = Path.Combine(targetDir, $"{stem}{containerExt}");
             string finalOutputFile = GetSafeOutputPath(filePath, targetFile, settings);
 
             // Объявляем finalOutputFile на уровне выше, чтобы она была доступна в catch блоке
@@ -463,20 +494,22 @@ public sealed class VideoEncodingScript : AbstractScript
             var ffmpegArgs = new List<string>();
 
             // А) Видеопараметры
-            string encoderName = GetSettingValue(settings, "encoder", "x265 (CPU)");
+            string encoderId = GetSettingValue(settings, "encoder", "x265");
             bool force10Bit = GetSettingValue(settings, "force_10bit", false);
             bool lossless = GetSettingValue(settings, "lossless", false);
 
-            var encoderInstance = _encoderRegistry.GetAvailableEncoders().FirstOrDefault(e => e.DisplayName == encoderName);
+            var encoderInstance = _encoderRegistry.GetEncoderById(encoderId) 
+                ?? _encoderRegistry.GetAvailableEncoders().FirstOrDefault(e => e.DisplayName == encoderId);
+
             if (encoderInstance == null)
             {
-                throw new InvalidOperationException($"Энкодер '{encoderName}' не найден или не поддерживается оборудованием.");
+                throw new InvalidOperationException($"Энкодер '{encoderId}' не найден или не поддерживается оборудованием.");
             }
 
             var context = new KTools_App.Encoders.EncoderSharedContext(
                 IsLossless: lossless,
                 Force10Bit: force10Bit,
-                ContainerExtension: Path.GetExtension(outputPath ?? filePath) ?? ".mkv"
+                ContainerExtension: containerExt
             );
 
             var encoderArgs = encoderInstance.BuildEncoderArguments(settings, context);
@@ -502,7 +535,7 @@ public sealed class VideoEncodingScript : AbstractScript
             }
 
             // В) Вшивание субтитров (burn-in) через фильтры
-            if (tempSubFile != null && File.Exists(tempSubFile))
+            if (burnInSubtitles && tempSubFile != null && File.Exists(tempSubFile))
             {
                 string escapedSubPath = EscapeFilterPath(tempSubFile);
                 string escapedFontsDir = EscapeFilterPath(tempFontsDir);
@@ -522,8 +555,12 @@ public sealed class VideoEncodingScript : AbstractScript
                 ffmpegArgs.AddRange(new[] { "-tag:v", containerTag });
             }
 
+            if (containerExt.Equals(".mp4", StringComparison.OrdinalIgnoreCase))
+            {
+                ffmpegArgs.AddRange(new[] { "-movflags", "+faststart" });
+            }
+
             ffmpegArgs.AddRange(new[] {
-                "-movflags", "+faststart",
                 "-map_metadata", "-1"
             });
 
@@ -534,18 +571,7 @@ public sealed class VideoEncodingScript : AbstractScript
             _logService.Info($"Запуск FFmpeg для кодирования видео '{Path.GetFileName(filePath)}' в '{Path.GetFileName(finalOutputFile)}'", "VideoEncodingScript");
             progressCallback(fileIndex, totalCount, "Кодирование видео...", 0.0);
 
-            using var cts = new CancellationTokenSource();
-            var cancelMonitorTask = Task.Run(async () =>
-            {
-                while (!IsCancelled && !cts.IsCancellationRequested)
-                {
-                    await Task.Delay(100);
-                }
-                if (IsCancelled)
-                {
-                    cts.Cancel();
-                }
-            });
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(CancellationToken);
 
             bool success = false;
             try
@@ -572,8 +598,6 @@ public sealed class VideoEncodingScript : AbstractScript
             }
             finally
             {
-                cts.Cancel();
-                await cancelMonitorTask;
             }
 
             // 9. Обработка результатов

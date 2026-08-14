@@ -296,4 +296,27 @@ public sealed class FFmpegRunner : AbstractProcessRunner, IFFmpegRunner
         Log.Warn("Аппаратная видеокарта NVIDIA не обнаружена в системе через утилиту nvidia-smi", "FFmpegRunner");
         return false;
     }
+
+    /// <summary>
+    /// Проверить поддержку параметра Temporal AQ для NVENC через вывод помощи FFmpeg.
+    /// </summary>
+    public async Task<bool> CheckNvencTemporalAqSupportAsync()
+    {
+        bool supported = false;
+        var result = await RunProcessAsync(
+            "ffmpeg",
+            "-h encoder=hevc_nvenc",
+            onOutputLine: line =>
+            {
+                if (line.Contains("-temporal-aq", StringComparison.OrdinalIgnoreCase))
+                {
+                    supported = true;
+                }
+            },
+            onErrorLine: null,
+            CancellationToken.None
+        );
+
+        return result.IsSuccess && supported;
+    }
 }

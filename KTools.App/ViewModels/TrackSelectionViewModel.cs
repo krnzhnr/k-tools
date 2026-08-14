@@ -55,9 +55,12 @@ public sealed partial class TrackSelectionViewModel : ThreadSafeViewModel
         { "attachments", new() { { "extension", new() }, { "name", new() } } }
     };
 
-    public TrackSelectionViewModel(ILogService logService)
+    public ISettingsManager SettingsManager { get; }
+
+    public TrackSelectionViewModel(ILogService logService, ISettingsManager settingsManager)
     {
         _logService = logService ?? throw new ArgumentNullException(nameof(logService));
+        SettingsManager = settingsManager ?? throw new ArgumentNullException(nameof(settingsManager));
     }
 
     /// <summary>

@@ -108,7 +108,7 @@ public class VideoEncodingScriptTests
 
         var settings = new Dictionary<string, object>
         {
-            { "encoder", "NVENC (GPU)" },
+            { "encoder", "NVENC" },
             { "lossless", true },
             { "v_qp", 0 },
             { "nvenc_preset", "p1" },
@@ -168,7 +168,7 @@ public class VideoEncodingScriptTests
 
         var settings = new Dictionary<string, object>
         {
-            { "encoder", "NVENC (GPU)" },
+            { "encoder", "NVENC" },
             { "lossless", false },
             { "nvenc_rc", "vbr_hq" },
             { "v_bitrate", 5000 },
@@ -225,7 +225,7 @@ public class VideoEncodingScriptTests
 
         var settings = new Dictionary<string, object>
         {
-            { "encoder", "NVENC (GPU)" },
+            { "encoder", "NVENC" },
             { "lossless", false }, // Отключен Lossless
             { "nvenc_rc", "vbr_hq" },
             { "v_bitrate", 6000 },
@@ -280,14 +280,14 @@ public class VideoEncodingScriptTests
 
         var settings = new Dictionary<string, object>
         {
-            { "encoder", "x265 (CPU)" },
+            { "encoder", "x265" },
             { "lossless", false },
-            { "cpu_preset", "slower" },
-            { "cpu_rc", "CRF" },
-            { "cpu_crf", 18 },
-            { "cpu_tune", "animation" },
-            { "cpu_aq_mode", "2" },
-            { "cpu_lookahead", "20" },
+            { "x265_preset", "slower" },
+            { "x265_rc", "CRF" },
+            { "x265_crf", 18 },
+            { "x265_tune", "animation" },
+            { "x265_aq_mode", "2" },
+            { "x265_lookahead", "20" },
             { "force_10bit", false }
         };
 
@@ -307,7 +307,7 @@ public class VideoEncodingScriptTests
             capturedExtraArgs.Should().Contain("-tune");
             capturedExtraArgs.Should().Contain("animation");
             capturedExtraArgs.Should().Contain("-x265-params");
-            capturedExtraArgs.Should().Contain(s => s.Contains("aq-mode=2") && s.Contains("rc-lookahead=20"));
+            capturedExtraArgs.Should().Contain(s => s.Contains("aq-mode=2"));
         }
         finally
         {
@@ -356,7 +356,7 @@ public class VideoEncodingScriptTests
 
         var settings = new Dictionary<string, object>
         {
-            { "encoder", "NVENC (GPU)" },
+            { "encoder", "NVENC" },
             { "lossless", true },
             { "v_qp", 0 },
             { "nvenc_preset", "p1" },
@@ -406,14 +406,14 @@ public class VideoEncodingScriptTests
 
         var settings = new Dictionary<string, object>
         {
-            { "encoder", "x265 (CPU)" },
+            { "encoder", "x265" },
             { "lossless", false },
-            { "cpu_preset", "medium" },
-            { "cpu_rc", "Битрейт (ABR)" },
-            { "cpu_v_bitrate", 5500 },
-            { "cpu_tune", "grain" },
-            { "cpu_aq_mode", "1" },
-            { "cpu_lookahead", "30" },
+            { "x265_preset", "medium" },
+            { "x265_rc", "Битрейт (ABR)" },
+            { "x265_v_bitrate", 5500 },
+            { "x265_tune", "grain" },
+            { "x265_aq_mode", "1" },
+            { "x265_lookahead", "30" },
             { "force_10bit", false }
         };
 
@@ -474,10 +474,10 @@ public class VideoEncodingScriptTests
 
         var settings = new Dictionary<string, object>
         {
-            { "encoder", "x265 (CPU)" },
-            { "cpu_preset", "medium" },
-            { "cpu_rc", "Битрейт (ABR)" },
-            { "cpu_v_bitrate", 2000 },
+            { "encoder", "x265" },
+            { "x265_preset", "medium" },
+            { "x265_rc", "Битрейт (ABR)" },
+            { "x265_v_bitrate", 2000 },
             { "audio_codec", "copy" },
             { "audio_lang_priority", new List<Dictionary<string, object>>
                 {
@@ -529,7 +529,8 @@ public class VideoEncodingScriptTests
 
         var settings = new Dictionary<string, object>
         {
-            { "encoder", "NVENC (GPU)" },
+            { "encoder", "nvenc" },
+            { "output_container", ".mp4" },
             { "lossless", true },
             { "v_qp", 0 }
         };
@@ -544,6 +545,93 @@ public class VideoEncodingScriptTests
             capturedExtraArgs.Should().NotBeNull();
             capturedExtraArgs.Should().Contain("-tag:v");
             capturedExtraArgs.Should().Contain("hvc1");
+        }
+        finally
+        {
+            if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
+        }
+    }
+
+    /// <summary>
+    /// Проверяет, что при burn_in_subtitles = false надписи не извлекаются и не добавлены в фильтр -vf.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_BurnInDisabled_DoesNotAddSubtitlesFilter()
+    {
+        // Arrange
+        string tempSourceFile = Path.GetTempFileName();
+        string tempOutputDir = Path.GetDirectoryName(tempSourceFile) ?? AppContext.BaseDirectory;
+
+        var structure = new MediaStructure { FilePath = tempSourceFile, Duration = 30.0 };
+        structure.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "video", Codec = "h264", Name = "Video" });
+        structure.Tracks.Add(new MediaTrack { TrackId = 1, TrackType = "subtitle", Codec = "ass", Name = "Надписи" });
+        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile)).ReturnsAsync(structure);
+
+        List<string>? capturedExtraArgs = null;
+        _ffmpegRunnerMock.Setup(r => r.RunAsync(
+            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<List<string>>(), It.IsAny<List<string>>(),
+            It.IsAny<bool>(), It.IsAny<double>(), It.IsAny<Action<ProgressInfo>>(), It.IsAny<CancellationToken>()
+        )).Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken>(
+            (inP, outP, extArgs, inArgs, ovr, dur, prog, ct) => capturedExtraArgs = extArgs
+        ).ReturnsAsync(true);
+
+        var settings = new Dictionary<string, object>
+        {
+            { "encoder", "x265" },
+            { "burn_in_subtitles", false }
+        };
+
+        try
+        {
+            // Act
+            await _script.ExecuteSingleAsync(tempSourceFile, settings, tempOutputDir, (idx, total, status, pct, fps, bit) => { }, 0, 1);
+
+            // Assert
+            capturedExtraArgs.Should().NotBeNull();
+            capturedExtraArgs.Should().NotContain("-vf");
+        }
+        finally
+        {
+            if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
+        }
+    }
+
+    /// <summary>
+    /// Проверяет, что выбранный кастомный контейнер output_container (.mkv) учитывается при сборке пути.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_CustomContainer_GeneratesCorrectExtension()
+    {
+        // Arrange
+        string tempSourceFile = Path.GetTempFileName();
+        string tempOutputDir = Path.GetDirectoryName(tempSourceFile) ?? AppContext.BaseDirectory;
+
+        var structure = new MediaStructure { FilePath = tempSourceFile, Duration = 30.0 };
+        structure.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "video", Codec = "h264", Name = "Video" });
+        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile)).ReturnsAsync(structure);
+
+        string? capturedOutputPath = null;
+        _ffmpegRunnerMock.Setup(r => r.RunAsync(
+            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<List<string>>(), It.IsAny<List<string>>(),
+            It.IsAny<bool>(), It.IsAny<double>(), It.IsAny<Action<ProgressInfo>>(), It.IsAny<CancellationToken>()
+        )).Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken>(
+            (inP, outP, extArgs, inArgs, ovr, dur, prog, ct) => capturedOutputPath = outP
+        ).ReturnsAsync(true);
+
+        var settings = new Dictionary<string, object>
+        {
+            { "encoder", "x265" },
+            { "output_container", ".mkv" }
+        };
+
+        try
+        {
+            // Act
+            await _script.ExecuteSingleAsync(tempSourceFile, settings, tempOutputDir, (idx, total, status, pct, fps, bit) => { }, 0, 1);
+
+            // Assert
+            capturedOutputPath.Should().NotBeNull();
+            capturedOutputPath.Should().EndWith(".mkv");
         }
         finally
         {

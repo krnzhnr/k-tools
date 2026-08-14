@@ -568,6 +568,14 @@
                             IsOn="{x:Bind ViewModel.DebugSimulateOldVersion, Mode=TwoWay}" />
                     </community:SettingsCard>
 
+                    <community:SettingsCard Header="Имитировать обновление зависимостей" Description="Включает доступность новых версий для бинарников (FFmpeg, MKVToolNix, yt-dlp) для проверки карточек UI">
+                        <ToggleSwitch
+                            x:Name="SimulateDepUpdateToggle"
+                            OffContent="Выкл"
+                            OnContent="Вкл"
+                            IsOn="{x:Bind ViewModel.DebugSimulateDepUpdate, Mode=TwoWay}" />
+                    </community:SettingsCard>
+
                     <community:SettingsCard Header="Отключить действия обновления" Description="Делает кнопки проверки и скачивания обновлений пустыми (блокирует выполнение)">
                         <ToggleSwitch
                             x:Name="DisableUpdateActionToggle"

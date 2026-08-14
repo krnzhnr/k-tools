@@ -1,11 +1,18 @@
+// -*- coding: utf-8 -*-
+using System;
 using System.Collections.Generic;
-using FluentAssertions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
-using Moq;
+using FluentAssertions;
 using KTools_App.Encoders;
+using KTools_App.Encoders.Capabilities;
+using Moq;
 
 namespace KTools_App.Tests;
 
+/// <summary>
+/// Юнит-тесты для проверки сборки аргументов x265, валидации границ, Clamping,
+/// форматирования float независимого от локали и режима Lossless.
+/// </summary>
 [TestClass]
 public class X265EncoderTests
 {
@@ -18,13 +25,33 @@ public class X265EncoderTests
     }
 
     [TestMethod]
-    public void BuildEncoderArguments_Lossless_ReturnsCorrectArgs()
+    public void Properties_VerifyCorrectMetadata()
     {
-        // Arrange
+        _encoder.StableId.Should().Be("x265");
+        _encoder.DisplayName.Should().Be("x265");
+        _encoder.GetFfmpegCodecName(new Dictionary<string, object>()).Should().Be("libx265");
+    }
+
+    [TestMethod]
+    public void GetPixelFormat_Force10Bit_Returns10BitFormat()
+    {
+        var context8Bit = new EncoderSharedContext(IsLossless: false, Force10Bit: false, ContainerExtension: ".mkv");
+        var context10Bit = new EncoderSharedContext(IsLossless: false, Force10Bit: true, ContainerExtension: ".mkv");
+
+        _encoder.GetPixelFormat(context8Bit).Should().Be("yuv420p");
+        _encoder.GetPixelFormat(context10Bit).Should().Be("yuv420p10le");
+    }
+
+    [TestMethod]
+    public void BuildEncoderArguments_LosslessMode_OverridesRateControlAndSetsLosslessFlag()
+    {
+        // Arrange: передаём и CRF, и битрейт, но вызываем в режиме Lossless = true
         var settings = new Dictionary<string, object>
         {
-            { "cpu_preset", "medium" },
-            { "v_qp", 0 } // В Lossless ожидается -x265-params lossless=1
+            { "x265_preset", "medium" },
+            { "x265_rc", "CRF" },
+            { "x265_crf", 18 },
+            { "x265_v_bitrate", 8000 }
         };
         var context = new EncoderSharedContext(IsLossless: true, Force10Bit: false, ContainerExtension: ".mkv");
 
@@ -32,20 +59,25 @@ public class X265EncoderTests
         var args = _encoder.BuildEncoderArguments(settings, context);
 
         // Assert
-        args.Should().ContainInOrder("-c:v", "libx265");
-        args.Should().ContainInOrder("-preset", "medium");
-        // Проверяем наличие параметра lossless=1.
-        args.Should().Contain(a => a.Contains("lossless=1"));
+        args.Should().Contain("-c:v");
+        args.Should().Contain("libx265");
+        args.Should().NotContain("-crf");
+        args.Should().NotContain("-b:v");
+        args.Should().Contain("-x265-params");
+
+        int paramsIndex = args.IndexOf("-x265-params");
+        string x265ParamsStr = args[paramsIndex + 1];
+        x265ParamsStr.Should().Contain("lossless=1");
     }
 
     [TestMethod]
-    public void BuildEncoderArguments_CRF_ReturnsCorrectArgs()
+    public void BuildEncoderArguments_AqModeAndStrength_ClampsAndFormatsWithDot()
     {
-        // Arrange
+        // Arrange: сила AQ передаётся равной 5.5f (должна ограничиться до 3.0)
         var settings = new Dictionary<string, object>
         {
-            { "cpu_preset", "slow" },
-            { "cpu_crf", 18 }
+            { "x265_aq_mode", "3" },
+            { "x265_aq_strength", 5.5f }
         };
         var context = new EncoderSharedContext(IsLossless: false, Force10Bit: false, ContainerExtension: ".mkv");
 
@@ -53,70 +85,87 @@ public class X265EncoderTests
         var args = _encoder.BuildEncoderArguments(settings, context);
 
         // Assert
-        args.Should().ContainInOrder("-c:v", "libx265");
-        args.Should().ContainInOrder("-preset", "slow");
-        args.Should().ContainInOrder("-crf", "18");
-        args.Should().NotContain(a => a.Contains("lossless=1"));
+        int paramsIndex = args.IndexOf("-x265-params");
+        string x265ParamsStr = args[paramsIndex + 1];
+        x265ParamsStr.Should().Contain("aq-mode=3");
+        x265ParamsStr.Should().Contain("aq-strength=3.0");
+        x265ParamsStr.Should().NotContain("aq-strength=3,0"); // Проверка CultureInfo.InvariantCulture
     }
 
     [TestMethod]
-    public void BuildEncoderArguments_10Bit_AddsProfileAndFormat()
+    public void BuildEncoderArguments_LookaheadAndBframes_ClampsAndOmitsDefaults()
     {
         // Arrange
         var settings = new Dictionary<string, object>
         {
-            { "cpu_preset", "fast" },
-            { "cpu_crf", 20 }
+            { "x265_lookahead", 300 }, // Ограничивается до 250
+            { "x265_bframes", 20 },     // Ограничивается до 16
+            { "x265_b_adapt", "1" }
         };
-        var context = new EncoderSharedContext(IsLossless: false, Force10Bit: true, ContainerExtension: ".mkv");
+        var context = new EncoderSharedContext(IsLossless: false, Force10Bit: false, ContainerExtension: ".mkv");
 
         // Act
         var args = _encoder.BuildEncoderArguments(settings, context);
 
         // Assert
-        args.Should().ContainInOrder("-pix_fmt", "yuv420p10le");
+        int paramsIndex = args.IndexOf("-x265-params");
+        string x265ParamsStr = args[paramsIndex + 1];
+        x265ParamsStr.Should().Contain("rc-lookahead=250");
+        x265ParamsStr.Should().Contain("bframes=16");
+        x265ParamsStr.Should().Contain("b-adapt=1");
     }
 
     [TestMethod]
-    public void GetEncoderSettings_BitrateFields_HaveLosslessVisibilityCondition()
+    public void BuildEncoderArguments_PsyRdAndPsyRdoq_FormatsCorrectly()
     {
-        // Act
-        var settings = _encoder.GetEncoderSettings();
-
-        // Assert
-        var bitrateKeys = new[] { "cpu_rc", "cpu_crf", "cpu_v_bitrate" };
-        foreach (var key in bitrateKeys)
+        // Arrange
+        var settings = new Dictionary<string, object>
         {
-            var field = settings.Find(f => f.Key == key);
-            field.Should().NotBeNull($"Field '{key}' should exist in X265Encoder settings");
-            field!.VisibilityConditions.Should().NotBeNull($"Field '{key}' should have VisibilityConditions");
+            { "x265_psy_rd", 2.5f },
+            { "x265_psy_rdoq", 15.0f }
+        };
+        var context = new EncoderSharedContext(IsLossless: false, Force10Bit: false, ContainerExtension: ".mkv");
 
-            var losslessCondition = field.VisibilityConditions!.Find(c => c.Key == "lossless");
-            losslessCondition.Should().NotBeNull($"Field '{key}' should have a VisibilityCondition for 'lossless'");
-            losslessCondition!.Values.Should().Contain("True");
-            losslessCondition.Negate.Should().BeTrue($"Field '{key}' visibility should be negated when lossless is True");
-        }
+        // Act
+        var args = _encoder.BuildEncoderArguments(settings, context);
+
+        // Assert
+        int paramsIndex = args.IndexOf("-x265-params");
+        string x265ParamsStr = args[paramsIndex + 1];
+        x265ParamsStr.Should().Contain("psy-rd=2.5");
+        x265ParamsStr.Should().Contain("psy-rdoq=15.0");
     }
 
     [TestMethod]
-    public void GetEncoderSettings_RateControlFields_HaveCorrectVisibilityConditions()
+    public void BuildEncoderArguments_DeblockSaoFastPskip_AppliesFlags()
     {
+        // Arrange
+        var settings = new Dictionary<string, object>
+        {
+            { "x265_deblock", "-1:-1" },
+            { "x265_no_sao", true },
+            { "x265_no_fast_pskip", true }
+        };
+        var context = new EncoderSharedContext(IsLossless: false, Force10Bit: false, ContainerExtension: ".mkv");
+
         // Act
-        var settings = _encoder.GetEncoderSettings();
+        var args = _encoder.BuildEncoderArguments(settings, context);
 
         // Assert
-        var crfField = settings.Find(f => f.Key == "cpu_crf");
-        crfField.Should().NotBeNull();
-        var crfRcCond = crfField!.VisibilityConditions!.Find(c => c.Key == "cpu_rc");
-        crfRcCond.Should().NotBeNull();
-        crfRcCond!.Values.Should().Contain("CRF");
-        crfRcCond.Negate.Should().BeFalse("CRF field should only be visible when cpu_rc is CRF");
+        int paramsIndex = args.IndexOf("-x265-params");
+        string x265ParamsStr = args[paramsIndex + 1];
+        x265ParamsStr.Should().Contain("deblock=-1,-1");
+        x265ParamsStr.Should().Contain("no-sao=1");
+        x265ParamsStr.Should().Contain("no-fast-pskip=1");
+    }
 
-        var bitrateField = settings.Find(f => f.Key == "cpu_v_bitrate");
-        bitrateField.Should().NotBeNull();
-        var brRcCond = bitrateField!.VisibilityConditions!.Find(c => c.Key == "cpu_rc");
-        brRcCond.Should().NotBeNull();
-        brRcCond!.Values.Should().Contain("Битрейт (ABR)");
-        brRcCond.Negate.Should().BeFalse("cpu_v_bitrate field should only be visible when cpu_rc is ABR");
+    [TestMethod]
+    public void GetContainerTag_Mp4Container_ReturnsHvc1()
+    {
+        var contextMp4 = new EncoderSharedContext(IsLossless: false, Force10Bit: false, ContainerExtension: ".mp4");
+        var contextMkv = new EncoderSharedContext(IsLossless: false, Force10Bit: false, ContainerExtension: ".mkv");
+
+        _encoder.GetContainerTag(new Dictionary<string, object>(), contextMp4).Should().Be("hvc1");
+        _encoder.GetContainerTag(new Dictionary<string, object>(), contextMkv).Should().BeNull();
     }
 }

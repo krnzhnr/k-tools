@@ -139,12 +139,61 @@ public sealed class AudioEncodingScript : AbstractScript
 
         // 2. Группа "Параметры кодирования"
         new SettingField(
+            "qaac_mode",
+            "Режим кодирования QAAC",
+            SettingType.Combo,
+            "True VBR (-V)",
+            "Экспорт:Параметры кодирования",
+            options: new List<string>
+            {
+                "True VBR (-V)",
+                "Constrained VBR (-v)",
+                "ABR (-a)",
+                "CBR (-c)",
+                "HE AAC (--he)"
+            },
+            visibleIfKey: "target_format",
+            visibleIfValues: new List<string> { "QAAC" }),
+
+        new SettingField(
             "qaac_quality",
-            "Качество QAAC (0-127)",
+            "Качество True VBR [0-127] (-V)",
             SettingType.Combo,
             "127",
             "Экспорт:Параметры кодирования",
-            options: new List<string> { "0", "16", "32", "48", "64", "80", "96", "112", "127" },
+            options: new List<string> { "0", "16", "32", "48", "64", "80", "90", "96", "112", "127" },
+            comment: "Для LC профиля по умолчанию используется -V90",
+            visibleIfKey: "qaac_mode",
+            visibleIfValues: new List<string> { "True VBR (-V)" }),
+
+        new SettingField(
+            "qaac_bitrate",
+            "Битрейт AAC [кбит/с]",
+            SettingType.Combo,
+            "192k",
+            "Экспорт:Параметры кодирования",
+            options: new List<string> { "0 (Авто/Максимальный)", "64k", "96k", "128k", "160k", "192k", "224k", "256k", "320k" },
+            comment: "Для режимов -a, -v, -c значение \"0\" означает наивысший доступный битрейт, который выбирается автоматически",
+            visibleIfKey: "qaac_mode",
+            visibleIfValues: new List<string> { "Constrained VBR (-v)", "ABR (-a)", "CBR (-c)", "HE AAC (--he)" }),
+
+        new SettingField(
+            "qaac_no_delay",
+            "Компенсировать задержку энкодера (--no-delay)",
+            SettingType.Checkbox,
+            false,
+            "Экспорт:Параметры кодирования",
+            comment: "Компенсирует задержку кодировщика путем добавления 960 отсчетов тишины в начало и последующей обрезки 3 кадров AAC. В основном предназначено для решения проблем синхронизации аудио и видео.",
+            visibleIfKey: "target_format",
+            visibleIfValues: new List<string> { "QAAC" }),
+
+        new SettingField(
+            "qaac_limiter",
+            "Применить смарт-лимитер (--limiter)",
+            SettingType.Checkbox,
+            false,
+            "Экспорт:Параметры кодирования",
+            comment: "Применяет интеллектуальный лимитер, который мягко ограничивает участки, где пиковый уровень превышает (или близок к) 0 dBFS.",
             visibleIfKey: "target_format",
             visibleIfValues: new List<string> { "QAAC" }),
 
@@ -303,18 +352,26 @@ public sealed class AudioEncodingScript : AbstractScript
         if (targetFormat.Equals("QAAC", StringComparison.OrdinalIgnoreCase))
         {
             // Случай А: Кодирование через QAAC (True VBR конвейер FFmpeg | QAAC64)
-            string tvbr = GetSettingValue(settings, "qaac_quality", "127");
+            string qaacMode = GetSettingValue(settings, "qaac_mode", "True VBR (-V)");
+            string qaacQuality = GetSettingValue(settings, "qaac_quality", "127");
+            string qaacBitrate = GetSettingValue(settings, "qaac_bitrate", "192k");
+            bool noDelay = GetSettingValue(settings, "qaac_no_delay", false);
+            bool limiter = GetSettingValue(settings, "qaac_limiter", false);
             bool adts = !useM4a;
+
+            string selectedVal = qaacMode.StartsWith("True VBR", StringComparison.OrdinalIgnoreCase)
+                ? qaacQuality
+                : qaacBitrate;
 
             progressCallback(fileIndex, totalCount, "Запуск QAAC...", 0.0);
             _logService.Info(
-                $"Запуск кодирования QAAC для '{originalName}' -> '{outputFileName}'",
+                $"Запуск кодирования QAAC для '{originalName}' -> '{outputFileName}' (Режим: {qaacMode}, Значение: {selectedVal})",
                 "AudioEncodingScript");
 
             var qaacTask = _qaacRunner.RunAsync(
                 inputPath: filePath,
                 outputPath: outputFilePath,
-                tvbr: tvbr,
+                tvbr: qaacQuality,
                 adts: adts,
                 totalDuration: duration,
                 onProgress: progressInfo =>
@@ -323,7 +380,11 @@ public sealed class AudioEncodingScript : AbstractScript
                     string msg = $"Кодирование QAAC | {progressInfo.Percent:F1}% | Скорость: {speedStr}";
                     progressCallback(fileIndex, totalCount, msg, progressInfo.Percent);
                 },
-                cancellationToken: cts.Token);
+                cancellationToken: cts.Token,
+                mode: qaacMode,
+                qualityOrBitrate: selectedVal,
+                noDelay: noDelay,
+                limiter: limiter);
 
             while (!qaacTask.IsCompleted)
             {

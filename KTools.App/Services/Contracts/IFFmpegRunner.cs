@@ -45,4 +45,9 @@ public interface IFFmpegRunner
     /// Проверить поддержку кодирования с аппаратным ускорением NVIDIA NVENC.
     /// </summary>
     Task<bool> CheckNvencSupportAsync();
+
+    /// <summary>
+    /// Проверить поддержку параметра Temporal AQ для NVENC.
+    /// </summary>
+    Task<bool> CheckNvencTemporalAqSupportAsync();
 }

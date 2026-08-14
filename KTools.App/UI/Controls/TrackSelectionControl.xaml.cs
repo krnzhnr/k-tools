@@ -91,9 +91,8 @@ public sealed class TrackNodeItem
 /// </summary>
 public sealed partial class TrackSelectionControl : UserControl
 {
-    public TrackSelectionViewModel ViewModel { get; } = App.Services.GetRequiredService<TrackSelectionViewModel>();
-
-    private ILogService _logService => App.Services.GetRequiredService<ILogService>();
+    public TrackSelectionViewModel ViewModel { get; }
+    private readonly ILogService _logService;
 
     private readonly Microsoft.UI.Dispatching.DispatcherQueue _dispatcherQueue = 
         Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
@@ -127,6 +126,9 @@ public sealed partial class TrackSelectionControl : UserControl
 
     public TrackSelectionControl()
     {
+        ViewModel = App.Services.GetRequiredService<TrackSelectionViewModel>();
+        _logService = App.Services.GetRequiredService<ILogService>();
+
         InitializeComponent();
         Loaded += TrackSelectionControl_Loaded;
         Unloaded += TrackSelectionControl_Unloaded;
@@ -431,12 +433,11 @@ public sealed partial class TrackSelectionControl : UserControl
                     // Определяем, есть ли уже сохраненный выбор для ДАННОГО конкретного файла
                     bool hasSavedForThisFile = savedTracks.ContainsKey(fileItem.FilePath) || savedAttachments.ContainsKey(fileItem.FilePath);
 
-                    var settingsManager = App.Services.GetService<ISettingsManager>();
                     bool isMp4Container = false;
-                    if (ActiveScript is MkvAssemblyScript assemblyScript && settingsManager != null)
+                    if (ActiveScript is MkvAssemblyScript assemblyScript)
                     {
-                        string groupName = settingsManager.GetSafeGroupName(assemblyScript.Name);
-                        string containerChoice = settingsManager.GetSetting(groupName, "output_container", "MKV");
+                        string groupName = ViewModel.SettingsManager.GetSafeGroupName(assemblyScript.Name);
+                        string containerChoice = ViewModel.SettingsManager.GetSetting(groupName, "output_container", "MKV");
                         isMp4Container = containerChoice.Equals("MP4", StringComparison.OrdinalIgnoreCase);
                     }
 

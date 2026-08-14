@@ -122,10 +122,7 @@ public partial class DependencySetupViewModel : ThreadSafeViewModel
             .Any(d => d.Status == DependencyStatus.NotInstalled || d.Status == DependencyStatus.Error);
 
         IsInstallAllEnabled = hasMissing;
-
-        bool hasRequired = _dependencyManager.AreRequiredDependenciesInstalled();
-        IsHomeState = hasRequired;
-        RefreshText = hasRequired ? "На главную" : "Проверить заново";
+        RefreshText = "Проверить обновления";
     }
 
     private DependencyVM? FindViewModel(string key)
@@ -241,20 +238,15 @@ public partial class DependencySetupViewModel : ThreadSafeViewModel
     }
 
     /// <summary>
-    /// Перепроверяет физическое наличие бинарных компонентов на диске.
-    /// Если все обязательные утилиты на месте, перенаправляет пользователя на главный экран.
+    /// Ручная принудительная проверка обновлений всех зависимостей (FFmpeg, MKVToolNix, eac3to, yt-dlp).
     /// </summary>
     [RelayCommand]
-    private void RefreshAll()
+    private async Task RefreshAll()
     {
-        _logService.Info("Ручная перепроверка статусов компонентов", "DependencySetupViewModel");
+        _logService.Info("Запущена ручная проверка обновлений всех зависимостей", "DependencySetupViewModel");
         _dependencyManager.RefreshAllStatuses();
+        await _dependencyManager.CheckAllDependencyUpdatesAsync(force: true);
         LoadDependencies();
-
-        if (_dependencyManager.AreRequiredDependenciesInstalled())
-        {
-            _navigationService.NavigateTo(typeof(HomePage));
-        }
     }
 
     /// <summary>

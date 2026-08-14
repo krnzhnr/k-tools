@@ -38,7 +38,7 @@ public interface IVideoEncoder
     /// Возвращает декларативную схему настроек, специфичных только для данного энкодера.
     /// Поддерживает динамическую генерацию опций и доступных полей на основе текущих настроек (например, выбранного кодека).
     /// </summary>
-    List<SettingField> GetEncoderSettings(Dictionary<string, object>? currentSettings = null);
+    List<SettingField> GetEncoderSettings(Dictionary<string, object>? currentSettings = null, IHardwareCapabilityCache? hardwareCache = null);
 
     /// <summary>
     /// Формирует аргументы кодирования FFmpeg (-c:v ... -preset ... -b:v ...).
@@ -54,4 +54,9 @@ public interface IVideoEncoder
     /// Возвращает тег контейнера (например, "hvc1"). Возвращает null, если тег не требуется.
     /// </summary>
     string? GetContainerTag(Dictionary<string, object> settings, EncoderSharedContext context);
+
+    /// <summary>
+    /// Проверяет, поддерживается ли данный энкодер на текущем аппаратном обеспечении системы.
+    /// </summary>
+    bool IsSupported(IHardwareCapabilityCache hardwareCache);
 }

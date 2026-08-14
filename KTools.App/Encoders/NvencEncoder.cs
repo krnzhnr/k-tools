@@ -31,7 +31,12 @@ public class NvencEncoder : IVideoEncoder
 
     public string StableId => "nvenc";
 
-    public string DisplayName => "NVENC (GPU)";
+    public string DisplayName => "NVENC";
+
+    public bool IsSupported(IHardwareCapabilityCache hardwareCache)
+    {
+        return hardwareCache.IsNvencSupported;
+    }
 
     public string GetFfmpegCodecName(Dictionary<string, object> settings)
     {
@@ -44,10 +49,10 @@ public class NvencEncoder : IVideoEncoder
         return context.Force10Bit ? "p010le" : "yuv420p";
     }
 
-    public List<SettingField> GetEncoderSettings(Dictionary<string, object>? currentSettings = null)
+    public List<SettingField> GetEncoderSettings(Dictionary<string, object>? currentSettings = null, IHardwareCapabilityCache? hardwareCache = null)
     {
         var cap = GetCapabilityProvider(currentSettings);
-        return cap.GetCodecSettings(currentSettings);
+        return cap.GetCodecSettings(currentSettings, hardwareCache);
     }
 
     public List<string> BuildEncoderArguments(Dictionary<string, object> settings, EncoderSharedContext context)
