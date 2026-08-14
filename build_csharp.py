@@ -219,12 +219,10 @@ Flags: ignoreversion recursesubdirs createallsubdirs
 {files_decoders_line}
 
 [Icons]
-Name: "{{group}}\\KTools"; \\
-Filename: "{{app}}\\KTools.App.exe"; \\
-IconFilename: "{{app}}\\AppIcon.ico"
-Name: "{{autodesktop}}\\KTools"; \\
-Filename: "{{app}}\\KTools.App.exe"; \\
-IconFilename: "{{app}}\\AppIcon.ico"; \\
+Name: "{group}\\KTools"; \\
+Filename: "{app}\\KTools.App.exe"
+Name: "{autodesktop}\\KTools"; \\
+Filename: "{app}\\KTools.App.exe"; \\
 Tasks: desktopicon
 
 [Run]
