@@ -348,12 +348,22 @@ public class DependencyManager : IDependencyManager
         StatusChanged?.Invoke(key, GetStatus(key));
     }
 
+    private readonly Dictionary<string, string> _cachedVersions = new();
+
     /// <summary>
     /// Определяет и возвращает строку версии установленной зависимости.
     /// </summary>
     public string GetInstalledVersion(string key)
     {
         if (!IsInstalled(key)) return string.Empty;
+
+        lock (_cachedVersions)
+        {
+            if (_cachedVersions.TryGetValue(key, out var cached) && !string.IsNullOrEmpty(cached))
+            {
+                return cached;
+            }
+        }
 
         var dep = _registry.FirstOrDefault(d => d.Key.Equals(key, StringComparison.OrdinalIgnoreCase));
         if (dep == null) return string.Empty;
@@ -365,20 +375,26 @@ public class DependencyManager : IDependencyManager
         {
             if (key.Equals("yt-dlp", StringComparison.OrdinalIgnoreCase))
             {
-                return _settingsManager.GetSetting("Updates", "YtDlpInstalledVersion", "Nightly");
+                string ver = _settingsManager.GetSetting("Updates", "YtDlpInstalledVersion", "Nightly");
+                lock (_cachedVersions) { _cachedVersions[key] = ver; }
+                return ver;
             }
 
             if (key.Equals("node", StringComparison.OrdinalIgnoreCase))
             {
                 var vi = FileVersionInfo.GetVersionInfo(binaryPath);
-                return string.IsNullOrEmpty(vi.FileVersion) ? "v22.11.0" : $"v{vi.FileVersion}";
+                string ver = string.IsNullOrEmpty(vi.FileVersion) ? "v22.11.0" : $"v{vi.FileVersion}";
+                lock (_cachedVersions) { _cachedVersions[key] = ver; }
+                return ver;
             }
 
             // Для FFmpeg, MKVToolNix, eac3to вызываем исполняемый файл и извлекаем версию из первой строки вывода
+            // Для eac3to обязательно передаем -log=nul для подавления создания eac3to.log
             string args = key switch
             {
                 "ffmpeg" => "-version",
                 "mkvtoolnix" => "-V",
+                "eac3to" => "-log=nul",
                 _ => string.Empty
             };
 
@@ -401,14 +417,15 @@ public class DependencyManager : IDependencyManager
             {
                 line = process.StandardError.ReadLine() ?? string.Empty;
             }
-            process.WaitForExit(2000);
+            process.WaitForExit(1000);
 
             var match = System.Text.RegularExpressions.Regex.Match(line, @"v?(\d+\.\d+(\.\d+)?)");
-            if (match.Success)
+            string result = match.Success ? match.Value : (line.Length > 20 ? line.Substring(0, 20) : line);
+            if (!string.IsNullOrEmpty(result))
             {
-                return match.Value;
+                lock (_cachedVersions) { _cachedVersions[key] = result; }
             }
-            return line.Length > 20 ? line.Substring(0, 20) : line;
+            return result;
         }
         catch (Exception ex)
         {

@@ -41,6 +41,18 @@ public partial class DependencyVM : ObservableObject
     [NotifyPropertyChangedFor(nameof(SizeText))]
     private DependencyStatus _status;
 
+    partial void OnStatusChanged(DependencyStatus value)
+    {
+        if (value == DependencyStatus.Installed)
+        {
+            LoadVersionAsync();
+        }
+        else if (value == DependencyStatus.NotInstalled)
+        {
+            InstalledVersion = string.Empty;
+        }
+    }
+
     /// <summary>Текущий прогресс скачивания в процентах (0-100).</summary>
     [ObservableProperty]
     private int _progress;
@@ -65,8 +77,9 @@ public partial class DependencyVM : ObservableObject
     [NotifyPropertyChangedFor(nameof(SizeText))]
     private bool _isUpdateAvailable;
 
-    /// <summary>Строка вывода установленной версии бинарника.</summary>
-    public string InstalledVersion => _dependencyManager.GetInstalledVersion(Info.Key);
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(SizeText))]
+    private string _installedVersion = string.Empty;
 
     /// <summary>Форматированный текст размера компонента и версии.</summary>
     public string SizeText => Status == DependencyStatus.Installed && !string.IsNullOrEmpty(InstalledVersion)
@@ -174,5 +187,27 @@ public partial class DependencyVM : ObservableObject
 
         RemoveCommand = new RelayCommand(() => 
             _dependencyManager.RemoveDependency(Info.Key));
+
+        LoadVersionAsync();
+    }
+
+    /// <summary>
+    /// Фоновая асинхронная загрузка версии без блокировки UI-потока.
+    /// </summary>
+    public void LoadVersionAsync()
+    {
+        if (Status != DependencyStatus.Installed) return;
+
+        Task.Run(() =>
+        {
+            string ver = _dependencyManager.GetInstalledVersion(Info.Key);
+            if (!string.IsNullOrEmpty(ver) && _dispatcherQueue != null)
+            {
+                _dispatcherQueue.TryEnqueue(() =>
+                {
+                    InstalledVersion = ver;
+                });
+            }
+        });
     }
 }

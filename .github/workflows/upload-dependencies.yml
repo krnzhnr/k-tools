@@ -102,14 +102,7 @@ jobs:
             "qaac" = $qaacVer
         } | ConvertTo-Json -Compress
 
-        $bodyText = @"
-Автоматически упакованные и загруженные бинарные зависимости из Git LFS.
-
-```json:versions
-$jsonMap
-```
-"@
-        # Записываем в output step или env
+        $bodyText = "Автоматически упакованные и загруженные бинарные зависимости из Git LFS.`n`n``````json:versions`n$jsonMap`n``````"
         $bodyText | Out-File -FilePath release_body.txt -Encoding utf8
 
     - name: Create or Update Release deps-v1
