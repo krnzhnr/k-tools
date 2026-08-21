@@ -163,8 +163,11 @@ public sealed class AudioEncodingScript : AbstractScript
             "Экспорт:Параметры кодирования",
             options: new List<string> { "0", "16", "32", "48", "64", "80", "90", "96", "112", "127" },
             comment: "Для LC профиля по умолчанию используется -V90",
-            visibleIfKey: "qaac_mode",
-            visibleIfValues: new List<string> { "True VBR (-V)" }),
+            visibilityConditions: new List<SettingVisibilityCondition>
+            {
+                new("target_format", "QAAC"),
+                new("qaac_mode", "True VBR (-V)")
+            }),
 
         new SettingField(
             "qaac_bitrate",
@@ -174,8 +177,11 @@ public sealed class AudioEncodingScript : AbstractScript
             "Экспорт:Параметры кодирования",
             options: new List<string> { "0 (Авто/Максимальный)", "64k", "96k", "128k", "160k", "192k", "224k", "256k", "320k" },
             comment: "Для режимов -a, -v, -c значение \"0\" означает наивысший доступный битрейт, который выбирается автоматически",
-            visibleIfKey: "qaac_mode",
-            visibleIfValues: new List<string> { "Constrained VBR (-v)", "ABR (-a)", "CBR (-c)", "HE AAC (--he)" }),
+            visibilityConditions: new List<SettingVisibilityCondition>
+            {
+                new("target_format", "QAAC"),
+                new("qaac_mode", new List<string> { "Constrained VBR (-v)", "ABR (-a)", "CBR (-c)", "HE AAC (--he)" })
+            }),
 
         new SettingField(
             "qaac_no_delay",
@@ -204,6 +210,7 @@ public sealed class AudioEncodingScript : AbstractScript
             "320k",
             "Экспорт:Параметры кодирования",
             options: new List<string> { "64k", "96k", "128k", "160k", "192k", "224k", "256k", "320k", "448k", "640k" },
+            comment: "Для формата OGG (Vorbis) битрейт автоматически адаптируется под число каналов (до 224k для моно, до 500k для стерео)",
             visibleIfKey: "target_format",
             visibleIfValues: new List<string> { "MP3", "AAC", "OGG", "AC3", "EAC3", "DTS", "WMA", "OPUS", "ADPCM" }),
 
@@ -308,27 +315,46 @@ public sealed class AudioEncodingScript : AbstractScript
             return results;
         }
 
-        // 6. Считываем длительность медиафайла для расчета прогресса выполнения
+        // 6. Считываем длительность медиафайла и количество каналов для расчета прогресса и валидации кодеков
         double duration = 0.0;
+        int audioChannels = 2;
         try
         {
             var info = await _ffmpegRunner.GetVideoInfoAsync(filePath);
-            if (info != null && info.RootElement.TryGetProperty("format", out var formatProp))
+            if (info != null)
             {
-                if (formatProp.TryGetProperty("duration", out var durProp))
+                if (info.RootElement.TryGetProperty("format", out var formatProp))
                 {
-                    if (durProp.ValueKind == JsonValueKind.String &&
-                        double.TryParse(
-                            durProp.GetString(),
-                            System.Globalization.NumberStyles.Any,
-                            System.Globalization.CultureInfo.InvariantCulture,
-                            out double d))
+                    if (formatProp.TryGetProperty("duration", out var durProp))
                     {
-                        duration = d;
+                        if (durProp.ValueKind == JsonValueKind.String &&
+                            double.TryParse(
+                                durProp.GetString(),
+                                System.Globalization.NumberStyles.Any,
+                                System.Globalization.CultureInfo.InvariantCulture,
+                                out double d))
+                        {
+                            duration = d;
+                        }
+                        else if (durProp.ValueKind == JsonValueKind.Number)
+                        {
+                            duration = durProp.GetDouble();
+                        }
                     }
-                    else if (durProp.ValueKind == JsonValueKind.Number)
+                }
+
+                if (info.RootElement.TryGetProperty("streams", out var streamsProp) && streamsProp.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var s in streamsProp.EnumerateArray())
                     {
-                        duration = durProp.GetDouble();
+                        if (s.TryGetProperty("codec_type", out var ct) && ct.GetString() == "audio")
+                        {
+                            if (s.TryGetProperty("channels", out var chProp) && chProp.TryGetInt32(out int ch) && ch > 0)
+                            {
+                                audioChannels = ch;
+                                break;
+                            }
+                        }
                     }
                 }
             }
@@ -337,12 +363,12 @@ public sealed class AudioEncodingScript : AbstractScript
         {
             _logService.Exception(
                 ex,
-                $"Не удалось прочесть метаданные длительности для '{originalName}': {ex.Message}",
+                $"Не удалось прочесть метаданные для '{originalName}': {ex.Message}",
                 "AudioEncodingScript");
         }
 
         _logService.DebugLog(
-            $"Длительность медиафайла '{originalName}': {duration:F2} сек.",
+            $"Медиафайл '{originalName}': длительность {duration:F2} сек., аудиоканалов: {audioChannels}",
             "AudioEncodingScript");
 
         // 7. Подготавливаем процесс кодирования
@@ -434,6 +460,30 @@ public sealed class AudioEncodingScript : AbstractScript
             else if (LossyFormats.Contains(targetFormat))
             {
                 string bitrate = GetSettingValue(settings, "bitrate", "320k");
+
+                // Для формата OGG (энкодер libvorbis) проверяем лимиты битрейта по каналам:
+                // libvorbis падает с ошибкой -22 (Invalid argument), если для моно указан битрейт > 224k или для стерео > 500k.
+                if (targetFormat.Equals("OGG", StringComparison.OrdinalIgnoreCase))
+                {
+                    int numericBitrate = ParseBitrateKbps(bitrate);
+                    if (audioChannels == 1 && numericBitrate > 224)
+                    {
+                        string adjustedBitrate = "224k";
+                        string note = $"ℹ️ Для моно-аудио в формате OGG (Vorbis) битрейт скорректирован с {bitrate} до максимально допустимого {adjustedBitrate}";
+                        _logService.Info(note, "AudioEncodingScript");
+                        results.Add(note);
+                        bitrate = adjustedBitrate;
+                    }
+                    else if (audioChannels == 2 && numericBitrate > 500)
+                    {
+                        string adjustedBitrate = "448k";
+                        string note = $"ℹ️ Для стерео-аудио в формате OGG (Vorbis) битрейт скорректирован с {bitrate} до максимально допустимого {adjustedBitrate}";
+                        _logService.Info(note, "AudioEncodingScript");
+                        results.Add(note);
+                        bitrate = adjustedBitrate;
+                    }
+                }
+
                 extraArgs.Add("-b:a");
                 extraArgs.Add(bitrate);
             }
@@ -567,5 +617,15 @@ public sealed class AudioEncodingScript : AbstractScript
 
         var (targetExt, _) = ResolveExtension(targetFormat, useM4a);
         return targetExt;
+    }
+
+    /// <summary>
+    /// Извлекает числовое значение битрейта в кбит/с из строки вида "320k" или "192".
+    /// </summary>
+    private static int ParseBitrateKbps(string bitrate)
+    {
+        if (string.IsNullOrWhiteSpace(bitrate)) return 320;
+        string clean = bitrate.Trim().TrimEnd('k', 'K', 'b', 'B', 's', 'S', '/');
+        return int.TryParse(clean, out int val) ? val : 320;
     }
 }

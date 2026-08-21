@@ -24,4 +24,10 @@ public interface IHardwareCapabilityCache
     /// Должно вызываться один раз при старте приложения.
     /// </summary>
     Task InitializeAsync();
+
+    /// <summary>
+    /// Сбрасывает кэш, заставляя повторно выполнить проверки при следующем вызове InitializeAsync.
+    /// Используется, когда изменились условия обнаружения (например, после установки FFmpeg).
+    /// </summary>
+    void Invalidate();
 }

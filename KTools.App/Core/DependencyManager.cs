@@ -8,6 +8,7 @@ using System.Net.Http;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using KTools_App.Encoders;
 using KTools_App.Services.Contracts;
 using SharpCompress.Common;
 using SharpCompress.Compressors.Xz;
@@ -41,6 +42,7 @@ public class DependencyManager : IDependencyManager
     private readonly ILogService _logService;
     private readonly IPathManager _pathManager;
     private readonly ISettingsManager _settingsManager;
+    private readonly IHardwareCapabilityCache _hardwareCache;
 
     private const string DepsReleaseTag = "deps-v1";
     private const string DepsBaseUrl = $"https://github.com/krnzhnr/k-tools/releases/download/{DepsReleaseTag}";
@@ -71,12 +73,14 @@ public class DependencyManager : IDependencyManager
         ILogService logService,
         IPathManager pathManager,
         IHttpClientFactory httpClientFactory,
-        ISettingsManager settingsManager)
+        ISettingsManager settingsManager,
+        IHardwareCapabilityCache hardwareCache)
     {
         _logService = logService ?? throw new ArgumentNullException(nameof(logService));
         _pathManager = pathManager ?? throw new ArgumentNullException(nameof(pathManager));
         _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
         _settingsManager = settingsManager ?? throw new ArgumentNullException(nameof(settingsManager));
+        _hardwareCache = hardwareCache ?? throw new ArgumentNullException(nameof(hardwareCache));
         // Используем метод интеллектуального поиска директории bin
         _binDir = _pathManager.GetBinDirectory();
         _httpClient = _httpClientFactory.CreateClient("DefaultClient");
@@ -646,6 +650,14 @@ public class DependencyManager : IDependencyManager
                 SetStatus(key, DependencyStatus.Installed);
                 _logService.Info($"Зависимость '{dep.DisplayName}' успешно установлена и верифицирована", "DependencyManager");
                 InstallFinished?.Invoke(key, true, string.Empty);
+
+                // После установки FFmpeg повторно определяем аппаратные возможности (NVENC):
+                // кэш мог быть инициализирован, когда бинарник ещё отсутствовал.
+                if (key.Equals("ffmpeg", StringComparison.OrdinalIgnoreCase))
+                {
+                    _hardwareCache.Invalidate();
+                    await _hardwareCache.InitializeAsync();
+                }
             }
             else
             {

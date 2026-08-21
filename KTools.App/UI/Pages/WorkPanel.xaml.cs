@@ -376,7 +376,7 @@ public sealed partial class WorkPanel : Page
             nvSample.SelectedItem = SamplePage1Item;
 
             // Применяем актуальную ориентацию разметки для нового скрипта при его загрузке
-            _isLandscape = ActualWidth > ActualHeight;
+            _isLandscape = IsLandscapeOrientation(ActualWidth, ActualHeight);
             ApplyLayoutOrientation();
 
             // Инициализируем состояние кнопки запуска/отмены в соответствии с текущим состоянием обработки
@@ -794,20 +794,27 @@ public sealed partial class WorkPanel : Page
         }
     }
 
-    /// <summary>
-    /// Обработчик события изменения размера страницы для адаптации верстки под ориентацию экрана.
-    /// </summary>
     private void WorkPanel_SizeChanged(object sender, SizeChangedEventArgs e)
     {
         if (_script == null) return;
 
-        bool newIsLandscape = e.NewSize.Width > e.NewSize.Height;
+        bool newIsLandscape = IsLandscapeOrientation(e.NewSize.Width, e.NewSize.Height);
 
         if (newIsLandscape != _isLandscape)
         {
             _isLandscape = newIsLandscape;
             ApplyLayoutOrientation();
         }
+    }
+
+    /// <summary>
+    /// Проверяет, соответствует ли размер страницы выраженной альбомной ориентации.
+    /// Для активации двухколоночной разметки требуется достаточная ширина (от 900px)
+    /// и выраженное соотношение сторон (ширина больше высоты минимум в 1.25 раза).
+    /// </summary>
+    private static bool IsLandscapeOrientation(double width, double height)
+    {
+        return width >= 900 && height > 0 && (width / height) >= 1.25;
     }
 
     /// <summary>

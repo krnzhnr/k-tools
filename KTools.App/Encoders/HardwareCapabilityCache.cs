@@ -14,6 +14,7 @@ public class HardwareCapabilityCache : IHardwareCapabilityCache
 {
     private readonly IFFmpegRunner _ffmpegRunner;
     private readonly ILogService _logService;
+    private readonly SemaphoreSlim _initLock = new(1, 1);
     private bool _isInitialized = false;
 
     public HardwareCapabilityCache(IFFmpegRunner ffmpegRunner, ILogService logService)
@@ -27,35 +28,53 @@ public class HardwareCapabilityCache : IHardwareCapabilityCache
 
     public async Task InitializeAsync()
     {
-        if (_isInitialized)
-        {
-            return;
-        }
-
+        await _initLock.WaitAsync();
         try
         {
-            _logService.Info("Инициализация кэша аппаратных возможностей...", "HardwareCapabilityCache");
-            IsNvencSupported = await _ffmpegRunner.CheckNvencSupportAsync();
-            _logService.Info($"Поддержка NVENC: {IsNvencSupported}", "HardwareCapabilityCache");
-
-            if (IsNvencSupported)
+            if (_isInitialized)
             {
-                IsNvencTemporalAqSupported = await CheckNvencTemporalAqAsync();
-                _logService.Info($"Поддержка NVENC Temporal AQ: {IsNvencTemporalAqSupported}", "HardwareCapabilityCache");
+                return;
             }
-            else
+
+            try
             {
+                _logService.Info("Инициализация кэша аппаратных возможностей...", "HardwareCapabilityCache");
+                IsNvencSupported = await _ffmpegRunner.CheckNvencSupportAsync();
+                _logService.Info($"Поддержка NVENC: {IsNvencSupported}", "HardwareCapabilityCache");
+
+                if (IsNvencSupported)
+                {
+                    IsNvencTemporalAqSupported = await CheckNvencTemporalAqAsync();
+                    _logService.Info($"Поддержка NVENC Temporal AQ: {IsNvencTemporalAqSupported}", "HardwareCapabilityCache");
+                }
+                else
+                {
+                    IsNvencTemporalAqSupported = false;
+                }
+                
+                _isInitialized = true;
+            }
+            catch (Exception ex)
+            {
+                _logService.Error($"Ошибка при инициализации кэша аппаратных возможностей: {ex.Message}", "HardwareCapabilityCache");
+                IsNvencSupported = false;
                 IsNvencTemporalAqSupported = false;
             }
-            
-            _isInitialized = true;
         }
-        catch (Exception ex)
+        finally
         {
-            _logService.Error($"Ошибка при инициализации кэша аппаратных возможностей: {ex.Message}", "HardwareCapabilityCache");
-            IsNvencSupported = false;
-            IsNvencTemporalAqSupported = false;
+            _initLock.Release();
         }
+    }
+
+    /// <summary>
+    /// Сбрасывает кэш, чтобы при следующем вызове InitializeAsync проверки выполнились заново.
+    /// </summary>
+    public void Invalidate()
+    {
+        _isInitialized = false;
+        IsNvencSupported = false;
+        IsNvencTemporalAqSupported = false;
     }
 
     private async Task<bool> CheckNvencTemporalAqAsync()

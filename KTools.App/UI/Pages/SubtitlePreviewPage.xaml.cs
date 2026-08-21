@@ -61,6 +61,7 @@ public sealed partial class SubtitlePreviewPage : Page
 
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
+        _cachedPatterns = null;
         if (e.PropertyName == nameof(SubtitlePreviewViewModel.SearchText) ||
             e.PropertyName == nameof(SubtitlePreviewViewModel.SubtitleLines))
         {
@@ -340,6 +341,42 @@ public sealed partial class SubtitlePreviewPage : Page
         }
     }
 
+    private static readonly System.Text.RegularExpressions.Regex LineBreakRegex =
+        new(@"(\\N|\\n)", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static readonly System.Text.RegularExpressions.Regex TagRegex =
+        new(@"(\{[^}]*\}|</?[a-z][a-z0-9]*(?:\s+[^>]*?)?>)", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private List<(System.Text.RegularExpressions.Regex Regex, bool OnlyPart)>? _cachedPatterns;
+
+    private List<(System.Text.RegularExpressions.Regex Regex, bool OnlyPart)> GetActivePatterns()
+    {
+        if (_cachedPatterns != null) return _cachedPatterns;
+
+        var list = new List<(System.Text.RegularExpressions.Regex Regex, bool OnlyPart)>();
+        if (ViewModel.TextPatterns != null)
+        {
+            foreach (var patternDict in ViewModel.TextPatterns)
+            {
+                if (patternDict.TryGetValue("active", out var act) && SafeGetBool(patternDict, "active") &&
+                    patternDict.TryGetValue("only_part", out var op) && SafeGetBool(patternDict, "only_part") &&
+                    patternDict.TryGetValue("word", out var p) && p?.ToString() is string pattern && !string.IsNullOrEmpty(pattern))
+                {
+                    try
+                    {
+                        var regex = new System.Text.RegularExpressions.Regex(pattern, System.Text.RegularExpressions.RegexOptions.Compiled);
+                        list.Add((regex, true));
+                    }
+                    catch
+                    {
+                        // Игнорируем некорректные regex
+                    }
+                }
+            }
+        }
+        _cachedPatterns = list;
+        return list;
+    }
+
     /// <summary>
     /// Отрисовывает текст субтитра с подсветкой тегов форматирования, CAPS-реплик и частей, удаляемых регулярными выражениями.
     /// </summary>
@@ -376,46 +413,38 @@ public sealed partial class SubtitlePreviewPage : Page
             nonDeletedChars.Add((text[i], i));
         }
 
-        if (ViewModel.TextPatterns != null)
+        var activePatterns = GetActivePatterns();
+        foreach (var (regex, _) in activePatterns)
         {
-            foreach (var patternDict in ViewModel.TextPatterns)
+            try
             {
-                if (patternDict.TryGetValue("active", out var act) && SafeGetBool(patternDict, "active") &&
-                    patternDict.TryGetValue("only_part", out var op) && SafeGetBool(patternDict, "only_part") &&
-                    patternDict.TryGetValue("word", out var p) && p?.ToString() is string pattern && !string.IsNullOrEmpty(pattern))
+                string activeString = new string(nonDeletedChars.Select(x => x.Char).ToArray());
+                var matches = regex.Matches(activeString);
+                var indicesToRemove = new HashSet<int>();
+                foreach (System.Text.RegularExpressions.Match match in matches)
                 {
-                    try
+                    for (int m = 0; m < match.Length; m++)
                     {
-                        var regex = new System.Text.RegularExpressions.Regex(pattern);
-                        string activeString = new string(nonDeletedChars.Select(x => x.Char).ToArray());
-                        var matches = regex.Matches(activeString);
-                        var indicesToRemove = new HashSet<int>();
-                        foreach (System.Text.RegularExpressions.Match match in matches)
-                        {
-                            for (int m = 0; m < match.Length; m++)
-                            {
-                                indicesToRemove.Add(match.Index + m);
-                            }
-                        }
-
-                        foreach (int idx in indicesToRemove)
-                        {
-                            int originalIndex = nonDeletedChars[idx].OriginalIndex;
-                            isDeletedByRegex[originalIndex] = true;
-                        }
-
-                        nonDeletedChars = nonDeletedChars.Where((x, idx) => !indicesToRemove.Contains(idx)).ToList();
-                    }
-                    catch
-                    {
-                        // Игнорируем некорректные regex
+                        indicesToRemove.Add(match.Index + m);
                     }
                 }
+
+                foreach (int idx in indicesToRemove)
+                {
+                    int originalIndex = nonDeletedChars[idx].OriginalIndex;
+                    isDeletedByRegex[originalIndex] = true;
+                }
+
+                nonDeletedChars = nonDeletedChars.Where((x, idx) => !indicesToRemove.Contains(idx)).ToList();
+            }
+            catch
+            {
+                // Игнорируем некорректные regex
             }
         }
 
         // Разделяем строку по переносам \N и \n с сохранением разделителей
-        string[] lineParts = System.Text.RegularExpressions.Regex.Split(text, @"(\\N|\\n)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        string[] lineParts = LineBreakRegex.Split(text);
         int currentOriginalIndex = 0;
 
         for (int i = 0; i < lineParts.Length; i++)
@@ -436,8 +465,7 @@ public sealed partial class SubtitlePreviewPage : Page
                 bool shouldStripCaps = isCaps && ViewModel.StripCaps;
 
                 // Разделяем на теги форматирования и обычный текст
-                var tagRegex = new System.Text.RegularExpressions.Regex(@"(\{[^}]*\}|</?[a-z][a-z0-9]*(?:\s+[^>]*?)?>)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-                string[] subParts = tagRegex.Split(part);
+                string[] subParts = TagRegex.Split(part);
 
                 for (int j = 0; j < subParts.Length; j++)
                 {
