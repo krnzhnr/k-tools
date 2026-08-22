@@ -49,46 +49,43 @@ public sealed class BitrateAnalyzerService : AbstractProcessRunner, IBitrateAnal
 
         // 1. Получаем структуру медиафайла
         var structure = await _mediaProbeService.ProbeAsync(filePath);
-        if (structure == null)
-        {
-            Log.Error($"Не удалось получить структуру файла '{filePath}'", "BitrateAnalyzerService");
-            return null;
-        }
+        var videoTracks = structure?.GetVideoTracks() ?? (IReadOnlyList<MediaTrack>)Array.Empty<MediaTrack>();
+        var audioTracks = structure?.GetAudioTracks() ?? (IReadOnlyList<MediaTrack>)Array.Empty<MediaTrack>();
 
-        // Ищем первую видеодорожку, если нет — первую аудиодорожку (поддержка аудио и видео форматов)
-        var videoTrack = structure.GetVideoTracks().FirstOrDefault();
-        var audioTrack = structure.GetAudioTracks().FirstOrDefault();
+        var videoTrack = videoTracks.FirstOrDefault();
+        var audioTrack = audioTracks.FirstOrDefault();
 
-        string streamSelector;
-        string codecName;
+        var selectorsToTry = new List<string>();
+        string codecName = "Unknown";
         double fps = 25.0;
+        double duration = structure?.Duration ?? 0.0;
 
         if (videoTrack != null)
         {
-            streamSelector = $"v:{videoTrack.TrackId}";
-            codecName = videoTrack.Codec;
-            // Расчет FPS
-            if (!string.IsNullOrEmpty(videoTrack.Resolution))
-            {
-                // Попытка извлечь кадры в секунду
-            }
+            int relVideoIdx = videoTracks.ToList().IndexOf(videoTrack);
+            selectorsToTry.Add($"v:{relVideoIdx}");
+            selectorsToTry.Add("v:0");
+            selectorsToTry.Add("v");
+            selectorsToTry.Add("0");
+            codecName = !string.IsNullOrEmpty(videoTrack.Codec) ? videoTrack.Codec : "Video";
         }
         else if (audioTrack != null)
         {
-            streamSelector = $"a:{audioTrack.TrackId}";
-            codecName = audioTrack.Codec;
+            int relAudioIdx = audioTracks.ToList().IndexOf(audioTrack);
+            selectorsToTry.Add($"a:{relAudioIdx}");
+            selectorsToTry.Add("a:0");
+            selectorsToTry.Add("a");
+            selectorsToTry.Add("0");
+            codecName = !string.IsNullOrEmpty(audioTrack.Codec) ? audioTrack.Codec : "Audio";
         }
         else
         {
-            Log.Warn($"В файле '{filePath}' не найдено ни видео, ни аудио дорожек", "BitrateAnalyzerService");
-            return null;
+            selectorsToTry.Add("v:0");
+            selectorsToTry.Add("a:0");
+            selectorsToTry.Add("0");
         }
 
-        double duration = structure.Duration;
-
-        // 2. Вызов ffprobe для сбора параметров всех пакетов (packets) выбранного потока
-        string arguments = $"-hide_banner -loglevel quiet -select_streams {streamSelector} " +
-                          $"-show_entries packet=flags,size,pts_time,dts_time -print_format compact \"{filePath}\"";
+        selectorsToTry = selectorsToTry.Distinct().ToList();
 
         var perSecondBits = new Dictionary<int, long>();
         var framePacketsList = new List<FrameBitrateInfo>();
@@ -98,99 +95,140 @@ public sealed class BitrateAnalyzerService : AbstractProcessRunner, IBitrateAnal
 
         progressCallback?.Invoke(5, "Покадровое считывание пакетов...");
 
-        var runResult = await RunProcessAsync(
-            "ffprobe",
-            arguments,
-            onOutputLine: line =>
-            {
-                if (string.IsNullOrWhiteSpace(line) || !line.StartsWith("packet|", StringComparison.Ordinal))
-                    return;
+        // 2. Вызов ffprobe с каскадным перебором селекторов в случае отсутствия пакетов
+        foreach (var streamSelector in selectorsToTry)
+        {
+            if (cancellationToken.IsCancellationRequested) break;
 
-                totalPacketsCount++;
+            perSecondBits.Clear();
+            framePacketsList.Clear();
+            keyframeList.Clear();
+            totalBytesRead = 0;
+            totalPacketsCount = 0;
 
-                // Быстрый zero-allocation парсинг компактной строки: packet|flags=K_|pts_time=0.000000|dts_time=0.000000|size=12345
-                ReadOnlySpan<char> span = line.AsSpan();
-                
-                long size = 0;
-                double pts = -1.0;
-                double dts = -1.0;
-                bool isKey = false;
+            string arguments = $"-hide_banner -loglevel quiet -select_streams {streamSelector} " +
+                              $"-show_entries packet=flags,size,pts_time,dts_time -print_format compact \"{filePath}\"";
 
-                int start = 0;
-                while (start < span.Length)
+            Log.Info($"Попытка чтения пакетов битрейта с селектором '{streamSelector}' для '{Path.GetFileName(filePath)}'", "BitrateAnalyzerService");
+
+            var runResult = await RunProcessAsync(
+                "ffprobe",
+                arguments,
+                onOutputLine: line =>
                 {
-                    int pipeIdx = span.Slice(start).IndexOf('|');
-                    ReadOnlySpan<char> segment = pipeIdx < 0 ? span.Slice(start) : span.Slice(start, pipeIdx);
-                    
-                    int eqIdx = segment.IndexOf('=');
-                    if (eqIdx > 0)
-                    {
-                        ReadOnlySpan<char> key = segment.Slice(0, eqIdx);
-                        ReadOnlySpan<char> val = segment.Slice(eqIdx + 1);
+                    if (string.IsNullOrWhiteSpace(line) || !line.StartsWith("packet|", StringComparison.Ordinal))
+                        return;
 
-                        if (key.Equals("size", StringComparison.Ordinal))
+                    totalPacketsCount++;
+
+                    // Быстрый zero-allocation парсинг компактной строки: packet|flags=K_|pts_time=0.000000|dts_time=0.000000|size=12345
+                    ReadOnlySpan<char> span = line.AsSpan();
+                    
+                    long size = 0;
+                    double pts = -1.0;
+                    double dts = -1.0;
+                    bool isKey = false;
+
+                    int start = 0;
+                    while (start < span.Length)
+                    {
+                        int pipeIdx = span.Slice(start).IndexOf('|');
+                        ReadOnlySpan<char> segment = pipeIdx < 0 ? span.Slice(start) : span.Slice(start, pipeIdx);
+                        
+                        int eqIdx = segment.IndexOf('=');
+                        if (eqIdx > 0)
                         {
-                            long.TryParse(val, NumberStyles.Integer, CultureInfo.InvariantCulture, out size);
-                        }
-                        else if (key.Equals("pts_time", StringComparison.Ordinal))
-                        {
-                            double.TryParse(val, NumberStyles.Float, CultureInfo.InvariantCulture, out pts);
-                        }
-                        else if (key.Equals("dts_time", StringComparison.Ordinal))
-                        {
-                            double.TryParse(val, NumberStyles.Float, CultureInfo.InvariantCulture, out dts);
-                        }
-                        else if (key.Equals("flags", StringComparison.Ordinal))
-                        {
-                            if (val.IndexOf('K') >= 0)
+                            ReadOnlySpan<char> key = segment.Slice(0, eqIdx);
+                            ReadOnlySpan<char> val = segment.Slice(eqIdx + 1);
+
+                            if (key.Equals("size", StringComparison.Ordinal))
                             {
-                                isKey = true;
+                                long.TryParse(val, NumberStyles.Integer, CultureInfo.InvariantCulture, out size);
+                            }
+                            else if (key.Equals("pts_time", StringComparison.Ordinal))
+                            {
+                                double.TryParse(val, NumberStyles.Float, CultureInfo.InvariantCulture, out pts);
+                            }
+                            else if (key.Equals("dts_time", StringComparison.Ordinal))
+                            {
+                                double.TryParse(val, NumberStyles.Float, CultureInfo.InvariantCulture, out dts);
+                            }
+                            else if (key.Equals("flags", StringComparison.Ordinal))
+                            {
+                                if (val.IndexOf('K') >= 0)
+                                {
+                                    isKey = true;
+                                }
                             }
                         }
+
+                        if (pipeIdx < 0) break;
+                        start += pipeIdx + 1;
                     }
 
-                    if (pipeIdx < 0) break;
-                    start += pipeIdx + 1;
-                }
+                    double packetTime = pts >= 0 ? pts : dts;
+                    if (packetTime < 0) return;
 
-                double packetTime = pts >= 0 ? pts : dts;
-                if (packetTime < 0) return;
+                    int secondIndex = (int)Math.Floor(packetTime);
+                    if (secondIndex >= 0)
+                    {
+                        perSecondBits.TryGetValue(secondIndex, out long currentBits);
+                        perSecondBits[secondIndex] = currentBits + (size * 8);
+                    }
 
-                int secondIndex = (int)Math.Floor(packetTime);
-                if (secondIndex >= 0)
-                {
-                    perSecondBits.TryGetValue(secondIndex, out long currentBits);
-                    perSecondBits[secondIndex] = currentBits + (size * 8);
-                }
+                    framePacketsList.Add(new FrameBitrateInfo
+                    {
+                        PtsTime = packetTime,
+                        SizeBytes = size,
+                        IsKeyframe = isKey
+                    });
 
-                framePacketsList.Add(new FrameBitrateInfo
-                {
-                    PtsTime = packetTime,
-                    SizeBytes = size,
-                    IsKeyframe = isKey
-                });
+                    totalBytesRead += size;
 
-                totalBytesRead += size;
+                    if (isKey)
+                    {
+                        keyframeList.Add(packetTime);
+                    }
 
-                if (isKey)
-                {
-                    keyframeList.Add(packetTime);
-                }
+                    if (totalPacketsCount % 500 == 0 && duration > 0)
+                    {
+                        double pct = Math.Min(95.0, 5.0 + (packetTime / duration * 90.0));
+                        progressCallback?.Invoke(pct, $"Анализ пакетов: {packetTime:F1} сек. / {duration:F1} сек.");
+                    }
+                },
+                onErrorLine: null,
+                cancellationToken
+            );
 
-                if (totalPacketsCount % 500 == 0 && duration > 0)
-                {
-                    double pct = Math.Min(95.0, 5.0 + (packetTime / duration * 90.0));
-                    progressCallback?.Invoke(pct, $"Анализ пакетов: {packetTime:F1} сек. / {duration:F1} сек.");
-                }
-            },
-            onErrorLine: null,
-            cancellationToken
-        );
+            if (runResult.IsSuccess && perSecondBits.Count > 0)
+            {
+                Log.Info($"Успешно извлечено {totalPacketsCount} пакетов с селектором '{streamSelector}'", "BitrateAnalyzerService");
+                break;
+            }
+            else
+            {
+                Log.Warn($"Селектор '{streamSelector}' не вернул пакетов (RunSuccess: {runResult.IsSuccess}, Packets: {totalPacketsCount}), проверяем следующий вариант...", "BitrateAnalyzerService");
+            }
+        }
 
-        if (!runResult.IsSuccess || perSecondBits.Count == 0)
+        if (perSecondBits.Count == 0)
         {
-            Log.Error($"Не удалось извлечь пакеты битрейта из файла '{filePath}'", "BitrateAnalyzerService");
+            Log.Error($"Не удалось извлечь пакеты битрейта из файла '{filePath}' (все селекторы вернули 0 пакетов)", "BitrateAnalyzerService");
             return null;
+        }
+
+        if (duration <= 0 && framePacketsList.Count > 0)
+        {
+            duration = framePacketsList.Max(f => f.PtsTime);
+        }
+
+        if (duration > 0 && totalPacketsCount > 1 && videoTrack != null)
+        {
+            double calculatedFps = totalPacketsCount / duration;
+            if (calculatedFps >= 1.0 && calculatedFps <= 360.0)
+            {
+                fps = Math.Round(calculatedFps, 3);
+            }
         }
 
         progressCallback?.Invoke(95, "Расчет статистических показателей...");
