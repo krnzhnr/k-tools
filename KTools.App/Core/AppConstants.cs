@@ -270,37 +270,63 @@ public static class AppConstants
     }
 
     /// <summary>
-    /// Расширения для извлекаемых форматов на основе поля codec из mkvmerge.
+    /// Расширения для извлекаемых форматов на основе поля codec из mkvmerge и ffprobe.
     /// </summary>
     public static readonly IReadOnlyDictionary<string, string> RawExtensions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
     {
+        // Аудио кодеки
         { "AC-3", ".ac3" },
         { "ac3", ".ac3" },
+        { "a52", ".ac3" },
         { "E-AC-3", ".eac3" },
         { "eac3", ".eac3" },
         { "E-AC-3+", ".ec3" },
         { "ec3", ".ec3" },
+        { "E-AC-3 Atmos", ".eac3" },
+        { "E-AC-3 JOC", ".eac3" },
+        { "Dolby Digital Plus", ".eac3" },
+        { "Dolby Digital", ".ac3" },
         { "DTS", ".dts" },
         { "dts-hd", ".dts" },
         { "dtshd", ".dts" },
+        { "dca", ".dts" },
         { "DTS-HD Master Audio", ".dts" },
+        { "DTS-HD High Resolution Audio", ".dts" },
+        { "DTS Express", ".dts" },
+        { "DTS:X", ".dts" },
+        { "DTS-ES", ".dts" },
         { "AAC", ".aac" },
+        { "aac_latm", ".aac" },
         { "Opus", ".opus" },
         { "FLAC", ".flac" },
         { "Vorbis", ".ogg" },
         { "MP3", ".mp3" },
         { "mp2", ".mp3" },
+        { "mp1", ".mp3" },
+        { "MPEG Audio", ".mp3" },
+        { "MPEG Audio Layer 3", ".mp3" },
         { "TrueHD", ".thd" },
         { "thd", ".thd" },
+        { "TrueHD Atmos", ".thd" },
+        { "TrueHD / Dolby Atmos", ".thd" },
+        { "mlp", ".thd" },
         { "PCM", ".wav" },
         { "pcm_bluray", ".wav" },
         { "pcm_s24le", ".wav" },
         { "pcm_s16le", ".wav" },
         { "pcm_s32le", ".wav" },
         { "pcm_f32le", ".wav" },
-        { "MPEG Audio", ".mp3" },
+        { "pcm_u8", ".wav" },
+        { "wavpack", ".wv" },
+        { "wv", ".wv" },
+        { "ape", ".ape" },
+        { "monkeys_audio", ".ape" },
+        { "alac", ".m4a" },
+
+        // Субтитры
         { "SubRip/SRT", ".srt" },
         { "subrip", ".srt" },
+        { "srt", ".srt" },
         { "SubStationAlpha", ".ass" },
         { "ass", ".ass" },
         { "ssa", ".ass" },
@@ -310,23 +336,140 @@ public static class AppConstants
         { "sup", ".sup" },
         { "VobSub", ".idx" },
         { "dvd_subtitle", ".sub" },
+        { "Timed Text", ".ass" },
+        { "WebVTT", ".vtt" },
+        { "vtt", ".vtt" },
+
+        // Видео кодеки (H.264 / AVC)
         { "AVC/H.264/MPEG-4p10", ".h264" },
+        { "MPEG-4p10/AVC/h.264", ".h264" },
         { "H.264", ".h264" },
+        { "h264", ".h264" },
+        { "264", ".h264" },
         { "avc", ".h264" },
+        { "avc1", ".h264" },
+        { "V_MPEG4/ISO/AVC", ".h264" },
+
+        // Видео кодеки (H.265 / HEVC)
         { "HEVC/H.265/MPEG-H", ".h265" },
+        { "MPEGH/HEVC", ".h265" },
         { "H.265", ".h265" },
+        { "h265", ".h265" },
+        { "265", ".h265" },
         { "hevc", ".h265" },
+        { "hev1", ".h265" },
+        { "hvc1", ".h265" },
+        { "V_MPEGH/ISO/HEVC", ".h265" },
+
+        // Прочие видео кодеки
         { "MPEG-1/2 Video", ".m2v" },
+        { "MPEG-1 Video", ".m1v" },
+        { "MPEG-2 Video", ".m2v" },
         { "MPEG-2", ".m2v" },
         { "mpeg2video", ".m2v" },
+        { "mpeg1video", ".m1v" },
+        { "V_MPEG1", ".m1v" },
+        { "V_MPEG2", ".m2v" },
         { "VC-1", ".vc1" },
         { "vc1", ".vc1" },
+        { "wvc1", ".vc1" },
+        { "V_MS/VFW/FOURCC", ".vc1" },
         { "VP8", ".ivf" },
         { "VP9", ".ivf" },
         { "AV1", ".ivf" },
-        { "Timed Text", ".ass" },
-        { "WebVTT", ".ass" }
+        { "av01", ".ivf" },
+        { "mjpeg", ".mjpeg" },
+        { "mjpg", ".mjpeg" }
     };
+
+    /// <summary>
+    /// Интеллектуально определяет расширение файла сырого потока на основе имени кодека и типа дорожки.
+    /// Выполняет точный поиск, нормализацию и анализ ключевых подстрок.
+    /// </summary>
+    /// <param name="codec">Название или идентификатор кодека из метаданных.</param>
+    /// <param name="trackType">Тип дорожки (video, audio, subtitles).</param>
+    /// <returns>Расширение файла с точкой (например, ".h264", ".hevc", ".dts", ".srt" или fallback-контейнер).</returns>
+    public static string ResolveRawExtension(string? codec, string? trackType = null)
+    {
+        if (!string.IsNullOrWhiteSpace(codec))
+        {
+            string cleanCodec = codec.Trim();
+
+            // 1. Прямой поиск в словаре
+            if (RawExtensions.TryGetValue(cleanCodec, out string? directExt))
+            {
+                return directExt;
+            }
+
+            // 2. Нормализованный поиск без точек и спецсимволов
+            string normalized = cleanCodec.ToLowerInvariant().Replace(".", "").Replace("-", "").Replace("_", "").Replace("/", " ");
+
+            // Видео эвристики
+            if (normalized.Contains("h264") || normalized.Contains("avc") || normalized.Contains("mpeg4p10") || normalized.Contains("264"))
+                return ".h264";
+            if (normalized.Contains("hevc") || normalized.Contains("h265") || normalized.Contains("hvc1") || normalized.Contains("hev1") || normalized.Contains("265"))
+                return ".h265";
+            if (normalized.Contains("mpeg2") || normalized.Contains("m2v"))
+                return ".m2v";
+            if (normalized.Contains("mpeg1") || normalized.Contains("m1v"))
+                return ".m1v";
+            if (normalized.Contains("vc1") || normalized.Contains("wvc1"))
+                return ".vc1";
+            if (normalized.Contains("av1") || normalized.Contains("av01") || normalized.Contains("vp9") || normalized.Contains("vp8"))
+                return ".ivf";
+            if (normalized.Contains("mjpeg") || normalized.Contains("mjpg"))
+                return ".mjpeg";
+
+            // Аудио эвристики
+            if (normalized.Contains("truehd") || normalized.Contains("thd") || normalized.Contains("mlp"))
+                return ".thd";
+            if (normalized.Contains("dts"))
+                return ".dts";
+            if (normalized.Contains("eac3") || normalized.Contains("ec3") || normalized.Contains("ddp") || normalized.Contains("plus"))
+                return ".eac3";
+            if (normalized.Contains("ac3") || normalized.Contains("a52"))
+                return ".ac3";
+            if (normalized.Contains("flac"))
+                return ".flac";
+            if (normalized.Contains("alac"))
+                return ".m4a";
+            if (normalized.Contains("opus"))
+                return ".opus";
+            if (normalized.Contains("vorbis"))
+                return ".ogg";
+            if (normalized.Contains("aac"))
+                return ".aac";
+            if (normalized.Contains("mp3") || normalized.Contains("mpegaudio") || normalized.Contains("layer3"))
+                return ".mp3";
+            if (normalized.Contains("pcm") || normalized.Contains("wav"))
+                return ".wav";
+
+            // Субтитры эвристики
+            if (normalized.Contains("subrip") || normalized.Contains("srt"))
+                return ".srt";
+            if (normalized.Contains("ass") || normalized.Contains("ssa") || normalized.Contains("substationalpha"))
+                return ".ass";
+            if (normalized.Contains("pgs") || normalized.Contains("sup") || normalized.Contains("hdmv"))
+                return ".sup";
+            if (normalized.Contains("webvtt") || normalized.Contains("vtt"))
+                return ".vtt";
+            if (normalized.Contains("vobsub"))
+                return ".idx";
+        }
+
+        // Fallback на основе типа дорожки
+        if (!string.IsNullOrWhiteSpace(trackType))
+        {
+            if (trackType.Equals("video", StringComparison.OrdinalIgnoreCase))
+                return ".mkv";
+            if (trackType.Equals("audio", StringComparison.OrdinalIgnoreCase))
+                return ".mka";
+            if (trackType.Equals("subtitles", StringComparison.OrdinalIgnoreCase) || trackType.Equals("subtitle", StringComparison.OrdinalIgnoreCase))
+                return ".mks";
+        }
+
+        return ".bin";
+    }
 
     /// <summary>
     /// Кодеки субтитров, требующие конвертации (не поддерживают прямое копирование).

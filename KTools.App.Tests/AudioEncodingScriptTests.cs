@@ -119,14 +119,15 @@ public class AudioEncodingScriptTests
         List<string>? capturedExtraArgs = null;
         _ffmpegRunnerMock.Setup(r => r.RunAsync(
                 testInput,
-                It.IsAny<string>(),
-                It.IsAny<List<string>>(),
+                It.IsAny<string?>(),
+                It.IsAny<List<string>?>(),
+                It.IsAny<List<string>?>(),
                 It.IsAny<bool>(),
                 It.IsAny<double>(),
-                It.IsAny<Action<FFmpegProgressInfo>>(),
+                It.IsAny<Action<KTools_App.Infrastructure.ProgressInfo>?>(),
                 It.IsAny<System.Threading.CancellationToken>()))
-            .Callback<string, string, List<string>, bool, double, Action<FFmpegProgressInfo>, System.Threading.CancellationToken>(
-                (inPath, outPath, args, ow, dur, cb, ct) => capturedExtraArgs = args)
+            .Callback<string, string?, List<string>?, List<string>?, bool, double, Action<KTools_App.Infrastructure.ProgressInfo>?, System.Threading.CancellationToken>(
+                (inPath, outPath, args, inArgs, ow, dur, cb, ct) => capturedExtraArgs = args)
             .ReturnsAsync(true);
 
         var settings = new Dictionary<string, object>

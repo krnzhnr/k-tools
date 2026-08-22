@@ -383,11 +383,8 @@ public sealed class StreamManagementScript : AbstractScript
     /// </summary>
     private static string GetRawExtension(string codec, string defaultExt)
     {
-        if (AppConstants.RawExtensions.TryGetValue(codec, out var ext))
-        {
-            return ext;
-        }
-        return defaultExt;
+        string ext = AppConstants.ResolveRawExtension(codec);
+        return ext.StartsWith(".") && ext != ".bin" ? ext : defaultExt;
     }
 
     /// <summary>

@@ -419,19 +419,7 @@ public sealed class TrackExtractorScript : AbstractScript
     /// </summary>
     private string GetExtensionForTrack(MediaTrack track)
     {
-        if (AppConstants.RawExtensions.TryGetValue(track.Codec, out string? rawExt))
-        {
-            return rawExt;
-        }
-
-        if (track.TrackType.Equals("video", StringComparison.OrdinalIgnoreCase))
-            return ".mkv";
-        if (track.TrackType.Equals("audio", StringComparison.OrdinalIgnoreCase))
-            return ".mka";
-        if (track.TrackType.Equals("subtitles", StringComparison.OrdinalIgnoreCase))
-            return ".mks";
-
-        return ".bin";
+        return AppConstants.ResolveRawExtension(track.Codec, track.TrackType);
     }
 
     /// <summary>
