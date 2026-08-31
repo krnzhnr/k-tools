@@ -660,12 +660,22 @@ public sealed partial class WorkPanel : Page
         // 2. Дополняем/уточняем значениями по умолчанию из схемы
         foreach (var field in _script.GetFullSettingsSchema())
         {
-            if (field.Type == SettingType.Subtitle) continue;
-
-            if (!settings.ContainsKey(field.Key))
+            if (field.Type != SettingType.Subtitle && !settings.ContainsKey(field.Key))
             {
                 object val = _settingsManager.GetSetting(settingsGroup, field.Key, field.DefaultValue);
                 settings[field.Key] = val;
+            }
+
+            if (field.ChildFields != null && field.ChildFields.Count > 0)
+            {
+                foreach (var child in field.ChildFields)
+                {
+                    if (child.Type != SettingType.Subtitle && !settings.ContainsKey(child.Key))
+                    {
+                        object childVal = _settingsManager.GetSetting(settingsGroup, child.Key, child.DefaultValue);
+                        settings[child.Key] = childVal;
+                    }
+                }
             }
         }
 

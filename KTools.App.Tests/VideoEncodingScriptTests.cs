@@ -638,4 +638,107 @@ public class VideoEncodingScriptTests
             if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
         }
     }
+
+    /// <summary>
+    /// Проверяет наличие всех необходимых полей параметров для фильтра автоматической обрезки в схеме настроек (Expander).
+    /// </summary>
+    [TestMethod]
+    public void SettingsSchema_ContainsAutoCropFields()
+    {
+        // Act
+        var schema = _script.SettingsSchema;
+
+        // Assert
+        var cropEnabled = schema.FirstOrDefault(f => f.Key == "autocrop_enabled");
+        cropEnabled.Should().NotBeNull();
+        cropEnabled!.Type.Should().Be(SettingType.Expander);
+        cropEnabled.Group.Should().Be("Видео:Фильтры");
+        cropEnabled.ChildFields.Should().NotBeNull();
+        cropEnabled.ChildFields.Should().HaveCount(7);
+
+        var cropLimit = cropEnabled.ChildFields.FirstOrDefault(f => f.Key == "autocrop_limit");
+        cropLimit.Should().NotBeNull();
+        cropLimit!.Type.Should().Be(SettingType.Float);
+
+        var cropRound = cropEnabled.ChildFields.FirstOrDefault(f => f.Key == "autocrop_round");
+        cropRound.Should().NotBeNull();
+        cropRound!.Type.Should().Be(SettingType.Int);
+
+        var cropMode = cropEnabled.ChildFields.FirstOrDefault(f => f.Key == "autocrop_mode");
+        cropMode.Should().NotBeNull();
+        cropMode!.Type.Should().Be(SettingType.Combo);
+        cropMode.Options.Should().Contain(new[] { "black", "mvedges" });
+
+        var cropProbe = cropEnabled.ChildFields.FirstOrDefault(f => f.Key == "autocrop_probe_frames");
+        cropProbe.Should().NotBeNull();
+
+        var cropSkip = cropEnabled.ChildFields.FirstOrDefault(f => f.Key == "autocrop_skip_frames");
+        cropSkip.Should().NotBeNull();
+
+        var cropReset = cropEnabled.ChildFields.FirstOrDefault(f => f.Key == "autocrop_reset_frames");
+        cropReset.Should().NotBeNull();
+
+        var cropSeek = cropEnabled.ChildFields.FirstOrDefault(f => f.Key == "autocrop_seek_seconds");
+        cropSeek.Should().NotBeNull();
+    }
+
+    /// <summary>
+    /// Проверяет, что при включенном AutoCrop выполняется вызов DetectCropAsync и формируется фильтр crop в -vf.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_AutoCropEnabled_AppliesCropFilter()
+    {
+        // Arrange
+        string tempSourceFile = Path.GetTempFileName();
+        string tempOutputDir = Path.GetDirectoryName(tempSourceFile) ?? AppContext.BaseDirectory;
+
+        var structure = new MediaStructure { FilePath = tempSourceFile, Duration = 60.0 };
+        structure.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "video", Codec = "h264", Name = "Video" });
+        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile)).ReturnsAsync(structure);
+
+        _ffmpegRunnerMock.Setup(r => r.DetectCropAsync(
+            tempSourceFile,
+            It.IsAny<double>(),
+            It.IsAny<int>(),
+            It.IsAny<double>(),
+            It.IsAny<int>(),
+            It.IsAny<int>(),
+            It.IsAny<int>(),
+            It.IsAny<string>(),
+            It.IsAny<CancellationToken>()
+        )).ReturnsAsync("1920:800:0:140");
+
+        List<string>? capturedExtraArgs = null;
+        _ffmpegRunnerMock.Setup(r => r.RunAsync(
+            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<List<string>>(), It.IsAny<List<string>>(),
+            It.IsAny<bool>(), It.IsAny<double>(), It.IsAny<Action<ProgressInfo>>(), It.IsAny<CancellationToken>()
+        )).Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken>(
+            (inP, outP, extArgs, inArgs, ovr, dur, prog, ct) => capturedExtraArgs = extArgs
+        ).ReturnsAsync(true);
+
+        var settings = new Dictionary<string, object>
+        {
+            { "encoder", "x265" },
+            { "autocrop_enabled", true },
+            { "autocrop_limit", 0.094 },
+            { "autocrop_round", 16 },
+            { "burn_in_subtitles", false }
+        };
+
+        try
+        {
+            // Act
+            await _script.ExecuteSingleAsync(tempSourceFile, settings, tempOutputDir, (idx, total, status, pct, fps, bit) => { }, 0, 1);
+
+            // Assert
+            capturedExtraArgs.Should().NotBeNull();
+            int vfIdx = capturedExtraArgs!.IndexOf("-vf");
+            vfIdx.Should().BeGreaterThanOrEqualTo(0);
+            capturedExtraArgs[vfIdx + 1].Should().Be("crop=1920:800:0:140");
+        }
+        finally
+        {
+            if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
+        }
+    }
 }

@@ -41,5 +41,10 @@ public enum SettingType
     /// <summary>
     /// Статический текстовый блок для визуального разделения групп параметров.
     /// </summary>
-    Subtitle
+    Subtitle,
+
+    /// <summary>
+    /// Раскрывающийся блок настроек (Expander) с переключателем (ToggleSwitch) и вложенными параметрами.
+    /// </summary>
+    Expander
 }

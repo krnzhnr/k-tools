@@ -49,7 +49,7 @@ public abstract class BaseNvencCapabilities : INvencCodecCapabilities
     /// </summary>
     public List<SettingField> GetCodecSettings(Dictionary<string, object>? currentSettings = null, IHardwareCapabilityCache? hardwareCache = null)
     {
-        var fields = GetCommonNvencSettings(hardwareCache);
+        var fields = GetCommonNvencSettings(hardwareCache, currentSettings);
         fields.AddRange(GetCodecSpecificSettings(currentSettings));
         return fields;
     }
@@ -164,7 +164,7 @@ public abstract class BaseNvencCapabilities : INvencCodecCapabilities
     /// <summary>
     /// Возвращает список 100% общих настроек, присущих ВСЕМ подкодекам NVENC.
     /// </summary>
-    protected List<SettingField> GetCommonNvencSettings(IHardwareCapabilityCache? hardwareCache = null)
+    protected List<SettingField> GetCommonNvencSettings(IHardwareCapabilityCache? hardwareCache = null, Dictionary<string, object>? currentSettings = null)
     {
         bool temporalAqSupported = hardwareCache?.IsNvencTemporalAqSupported ?? true;
 
@@ -176,6 +176,12 @@ public abstract class BaseNvencCapabilities : INvencCodecCapabilities
         if (!temporalAqSupported)
         {
             temporalAqDisableConditions.Add(new SettingDisableCondition("encoder", "nvenc"));
+        }
+
+        bool isLossless = false;
+        if (currentSettings != null && currentSettings.TryGetValue("lossless", out var losslessObj))
+        {
+            isLossless = losslessObj is true || (losslessObj is string s && s.Equals("True", StringComparison.OrdinalIgnoreCase));
         }
 
         return new List<SettingField>
@@ -194,7 +200,7 @@ public abstract class BaseNvencCapabilities : INvencCodecCapabilities
                 "nvenc_preset",
                 "Пресет скорости",
                 SettingType.Combo,
-                "p4",
+                isLossless ? "p1" : "p4",
                 "Видео:Кодирование",
                 options: PresetOptions,
                 comment: "Баланс между скоростью кодирования и сжатием/качеством (p1 - самый быстрый, p7 - максимальное сжатие)",

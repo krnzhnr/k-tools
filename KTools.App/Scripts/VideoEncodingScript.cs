@@ -127,16 +127,101 @@ public sealed class VideoEncodingScript : AbstractScript
         }
 
         // --- Вкладка Видео: Фильтры ---
-        fields.Add(
-            new SettingField(
-                "sub_filters_placeholder",
-                "Фильтры пока не настроены",
-                SettingType.Subtitle,
-                "",
-                "Видео:Фильтры",
-                comment: "Здесь будут доступны видеофильтры: ресайз, обрезка чёрных полос и др."
-            )
-        );
+        fields.Add(new SettingField(
+            "autocrop_enabled",
+            "Автоматическая обрезка черных полос",
+            SettingType.Expander,
+            false,
+            "Видео:Фильтры",
+            comment: "Автоматически определяет и удаляет черные полосы (Letterbox / Pillarbox) по краям видеокадра.",
+            headerIconGlyph: "\uE7B5",
+            childFields: new List<SettingField>
+            {
+                new SettingField(
+                    "autocrop_limit",
+                    "Порог черного (limit)",
+                    SettingType.Float,
+                    0.094,
+                    "Видео:Фильтры",
+                    comment: "Порог яркости (от 0.0 до 1.0), ниже которого пиксель считается черным (по умолчанию 0.094 ≈ 24/255).",
+                    column: 0,
+                    colSpan: 1,
+                    minimum: 0.0,
+                    maximum: 1.0
+                ),
+                new SettingField(
+                    "autocrop_round",
+                    "Кратность сторон (round)",
+                    SettingType.Int,
+                    16,
+                    "Видео:Фильтры",
+                    comment: "Значение, которому должны быть кратны ширина и высота после обрезки (обычно 16 или 2).",
+                    column: 1,
+                    colSpan: 1,
+                    minimum: 2,
+                    maximum: 64
+                ),
+                new SettingField(
+                    "autocrop_mode",
+                    "Режим детекции (mode)",
+                    SettingType.Combo,
+                    "black",
+                    "Видео:Фильтры",
+                    options: new List<string> { "black", "mvedges" },
+                    comment: "Режим работы детектора: 'black' — поиск черных пикселей, 'mvedges' — анализ краев и векторов движения.",
+                    column: 0,
+                    colSpan: 1
+                ),
+                new SettingField(
+                    "autocrop_probe_frames",
+                    "Кадров для анализа",
+                    SettingType.Int,
+                    25,
+                    "Видео:Фильтры",
+                    comment: "Количество последовательных кадров видеоряда для предварительного зондирования обрезки.",
+                    column: 1,
+                    colSpan: 1,
+                    minimum: 5,
+                    maximum: 300
+                ),
+                new SettingField(
+                    "autocrop_skip_frames",
+                    "Пропуск кадров детектора (skip)",
+                    SettingType.Int,
+                    2,
+                    "Видео:Фильтры",
+                    comment: "Количество начальных кадров зондирования, пропускаемых детектором FFmpeg (по умолчанию 2).",
+                    column: 0,
+                    colSpan: 1,
+                    minimum: 0,
+                    maximum: 1000
+                ),
+                new SettingField(
+                    "autocrop_reset_frames",
+                    "Сброс детектора (reset)",
+                    SettingType.Int,
+                    0,
+                    "Видео:Фильтры",
+                    comment: "Интервал кадров для сброса/пересчета области обрезки (0 — без сброса).",
+                    column: 1,
+                    colSpan: 1,
+                    minimum: 0,
+                    maximum: 1000
+                ),
+                new SettingField(
+                    "autocrop_seek_seconds",
+                    "Смещение старта анализа (сек)",
+                    SettingType.Float,
+                    10.0,
+                    "Видео:Фильтры",
+                    comment: "Смещение в секундах от начала видео для пропуска вступительных титров/заставок при анализе.",
+                    column: 0,
+                    colSpan: 2,
+                    minimum: 0.0,
+                    maximum: 3600.0
+                )
+            }
+        ));
 
         fields.AddRange(new List<SettingField>
         {
@@ -534,13 +619,57 @@ public sealed class VideoEncodingScript : AbstractScript
                 }
             }
 
-            // В) Вшивание субтитров (burn-in) через фильтры
+            // В) Видеофильтры (Hardsub приоритет 0, AutoCrop приоритет 10)
+            var videoFilters = new List<string>();
+
             if (burnInSubtitles && tempSubFile != null && File.Exists(tempSubFile))
             {
                 string escapedSubPath = EscapeFilterPath(tempSubFile);
                 string escapedFontsDir = EscapeFilterPath(tempFontsDir);
+                videoFilters.Add($"subtitles=filename='{escapedSubPath}':fontsdir='{escapedFontsDir}'");
+            }
+
+            bool autoCropEnabled = GetSettingValue(settings, "autocrop_enabled", false);
+            if (autoCropEnabled)
+            {
+                double cropLimit = GetSettingValue(settings, "autocrop_limit", 0.094);
+                int cropRound = GetSettingValue(settings, "autocrop_round", 16);
+                string cropMode = GetSettingValue(settings, "autocrop_mode", "black");
+                int probeFrames = GetSettingValue(settings, "autocrop_probe_frames", 25);
+                int skipFrames = GetSettingValue(settings, "autocrop_skip_frames", 2);
+                int resetFrames = GetSettingValue(settings, "autocrop_reset_frames", 0);
+                double seekSeconds = GetSettingValue(settings, "autocrop_seek_seconds", 10.0);
+
+                _logService.Info($"Запуск детектора черных полос (cropdetect) для '{Path.GetFileName(filePath)}' (limit={cropLimit:F4}, round={cropRound}, mode={cropMode}, frames={probeFrames}, ss={seekSeconds:F1}s)", "VideoEncodingScript");
+                progressCallback(fileIndex, totalCount, "Анализ черных полос (cropdetect)...", 0.0);
+
+                string? detectedCrop = await _ffmpegRunner.DetectCropAsync(
+                    filePath,
+                    skipSeconds: seekSeconds,
+                    probeFrames: probeFrames,
+                    limit: cropLimit,
+                    round: cropRound,
+                    skip: skipFrames,
+                    reset: resetFrames,
+                    mode: cropMode,
+                    cancellationToken: CancellationToken
+                );
+
+                if (!string.IsNullOrWhiteSpace(detectedCrop))
+                {
+                    _logService.Info($"Определены параметры кадрирования: crop={detectedCrop}", "VideoEncodingScript");
+                    videoFilters.Add($"crop={detectedCrop}");
+                }
+                else
+                {
+                    _logService.Info("Черные полосы не обнаружены или не требуют обрезки", "VideoEncodingScript");
+                }
+            }
+
+            if (videoFilters.Count > 0)
+            {
                 ffmpegArgs.Add("-vf");
-                ffmpegArgs.Add($"subtitles=filename='{escapedSubPath}':fontsdir='{escapedFontsDir}'");
+                ffmpegArgs.Add(string.Join(",", videoFilters));
             }
 
             // Г) Маппинг и общие флаги

@@ -32,12 +32,14 @@ public class SettingField
         List<SettingVisibilityCondition>? visibilityConditions = null,
         List<SettingDisableCondition>? disableConditions = null,
         double? minimum = null,
-        double? maximum = null)
+        double? maximum = null,
+        List<SettingField>? childFields = null,
+        string? headerIconGlyph = null)
     {
         Key = key ?? throw new ArgumentNullException(nameof(key));
         Label = label ?? throw new ArgumentNullException(nameof(label));
         Type = type;
-        DefaultValue = defaultValue ?? string.Empty;
+        DefaultValue = defaultValue ?? (type == SettingType.Expander ? false : string.Empty);
         Group = group ?? "Общие";
         Comment = comment ?? string.Empty;
         Options = options ?? new List<string>();
@@ -52,7 +54,19 @@ public class SettingField
         DisableConditions = disableConditions;
         Minimum = minimum;
         Maximum = maximum;
+        ChildFields = childFields ?? new List<SettingField>();
+        HeaderIconGlyph = headerIconGlyph;
     }
+
+    /// <summary>
+    /// Вложенные дочерние параметры для блоков типа SettingType.Expander.
+    /// </summary>
+    public List<SettingField> ChildFields { get; }
+
+    /// <summary>
+    /// Необязательный глиф иконки (Segoe MDL2 / Fluent) для заголовка экспандера.
+    /// </summary>
+    public string? HeaderIconGlyph { get; }
 
     /// <summary>
     /// Минимальное допустимое значение для числовых полей ввода (SettingType.Int / Number).

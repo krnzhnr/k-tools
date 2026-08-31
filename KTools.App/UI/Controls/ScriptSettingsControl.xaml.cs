@@ -201,6 +201,11 @@ public sealed partial class ScriptSettingsControl : UserControl
         }
 
         UpdateVisibility(settingsGroup);
+
+        if (_settingsManager.GetSetting(settingsGroup, "lossless", false))
+        {
+            ApplyFastestPresetOnLossless(settingsGroup);
+        }
     }
 
     /// <summary>
@@ -385,6 +390,77 @@ public sealed partial class ScriptSettingsControl : UserControl
                 continue;
             }
 
+            if (field.Type == SettingType.Expander)
+            {
+                var expander = new SettingsExpander
+                {
+                    Header = field.Label,
+                    Description = field.Comment ?? string.Empty,
+                    IsExpanded = false,
+                    Padding = new Thickness(16, 12, 16, 12),
+                    HorizontalAlignment = HorizontalAlignment.Stretch,
+                    Margin = new Thickness(0)
+                };
+
+                if (!string.IsNullOrEmpty(field.HeaderIconGlyph))
+                {
+                    expander.HeaderIcon = new FontIcon { Glyph = field.HeaderIconGlyph };
+                }
+
+                bool isExpanderOn = _settingsManager.GetSetting(
+                    settingsGroup,
+                    field.Key,
+                    field.DefaultValue is bool b && b);
+
+                var toggleSwitch = new ToggleSwitch
+                {
+                    OffContent = "Выкл",
+                    OnContent = "Вкл",
+                    IsOn = isExpanderOn,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+
+                expander.Content = toggleSwitch;
+
+                var childCards = new List<SettingsCard>();
+
+                foreach (var childField in field.ChildFields)
+                {
+                    var childInputControl = CreateSettingInputControl(childField, settingsGroup);
+
+                    var childCard = new SettingsCard
+                    {
+                        Header = childField.Label,
+                        Description = childField.Comment ?? string.Empty,
+                        IsEnabled = isExpanderOn,
+                        Padding = new Thickness(16, 12, 16, 12),
+                        Content = childInputControl
+                    };
+
+                    expander.Items.Add(childCard);
+                    childCards.Add(childCard);
+                    _generatedElements.Add((childField, childCard));
+                    groupVisual.Elements.Add(childCard);
+                }
+
+                toggleSwitch.Toggled += (s, e) =>
+                {
+                    bool isOn = toggleSwitch.IsOn;
+                    _settingsManager.SetSetting(settingsGroup, field.Key, isOn);
+                    foreach (var card in childCards)
+                    {
+                        card.IsEnabled = isOn;
+                    }
+                    UpdateVisibility(settingsGroup);
+                    UpdatePreview();
+                };
+
+                cardContentStack.Children.Add(expander);
+                _generatedElements.Add((field, expander));
+                groupVisual.Elements.Add(expander);
+                continue;
+            }
+
             // Нативная строка параметра (метка слева, контрол справа)
             var rowGrid = new Grid
             {
@@ -428,196 +504,7 @@ public sealed partial class ScriptSettingsControl : UserControl
             Grid.SetColumn(textStack, 0);
             rowGrid.Children.Add(textStack);
 
-            FrameworkElement? inputControl = null;
-
-            switch (field.Type)
-            {
-                case SettingType.Text:
-                    var textBox = new TextBox
-                    {
-                        Text = _settingsManager.GetSetting(
-                            settingsGroup,
-                            field.Key,
-                            field.DefaultValue?.ToString() ?? string.Empty),
-                        PlaceholderText = field.PlaceholderText ?? string.Empty,
-                        Width = 250,
-                        HorizontalAlignment = HorizontalAlignment.Right,
-                        VerticalAlignment = VerticalAlignment.Center
-                    };
-                    textBox.TextChanged += (s, e) =>
-                    {
-                        _settingsManager.SetSetting(
-                            settingsGroup, field.Key, textBox.Text);
-                        if (isRenameField)
-                        {
-                            UpdatePreview();
-                        }
-                    };
-                    textBox.LostFocus += (s, e) =>
-                    {
-                        _settingsManager.SetSetting(
-                            settingsGroup, field.Key, textBox.Text);
-                        UpdateVisibility(settingsGroup);
-                        if (isRenameField)
-                        {
-                            UpdatePreview();
-                        }
-                    };
-
-                    if (isRenameField)
-                    {
-                        var containerGrid = new Grid { HorizontalAlignment = HorizontalAlignment.Right };
-                        containerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-                        containerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-
-                        Grid.SetColumn(textBox, 0);
-                        containerGrid.Children.Add(textBox);
-
-                        var helpBtn = new Button
-                        {
-                            Content = "\uE946",
-                            FontFamily = (Microsoft.UI.Xaml.Media.FontFamily)Application.Current.Resources["SymbolThemeFontFamily"],
-                            Margin = new Thickness(8, 0, 0, 0),
-                            Width = 32,
-                            Height = 32,
-                            Padding = new Thickness(0),
-                            VerticalAlignment = VerticalAlignment.Center
-                        };
-                        Grid.SetColumn(helpBtn, 1);
-                        containerGrid.Children.Add(helpBtn);
-
-                        if (field.Key == "LocalRenameSearch")
-                        {
-                            AttachSearchHelpFlyout(helpBtn, textBox);
-                        }
-                        else
-                        {
-                            AttachReplaceHelpFlyout(helpBtn, textBox);
-                        }
-
-                        inputControl = containerGrid;
-                    }
-                    else
-                    {
-                        inputControl = textBox;
-                    }
-                    break;
-
-                case SettingType.Int:
-                case SettingType.Float:
-                    bool isFloat = field.Type == SettingType.Float;
-                    double defaultNum = 0;
-                    if (field.DefaultValue is int dInt) defaultNum = dInt;
-                    else if (field.DefaultValue is float dF) defaultNum = dF;
-                    else if (field.DefaultValue is double dD) defaultNum = dD;
-                    else double.TryParse(field.DefaultValue?.ToString(), out defaultNum);
-
-                    double initialVal = isFloat
-                        ? _settingsManager.GetSetting(settingsGroup, field.Key, defaultNum)
-                        : _settingsManager.GetSetting(settingsGroup, field.Key, (int)defaultNum);
-
-                    var numberBox = new NumberBox
-                    {
-                        Value = initialVal,
-                        Width = 160,
-                        HorizontalAlignment = HorizontalAlignment.Right,
-                        SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Inline,
-                        SmallChange = isFloat ? 0.1 : 1,
-                        LargeChange = isFloat ? 0.5 : 5,
-                        VerticalAlignment = VerticalAlignment.Center
-                    };
-                    if (isFloat)
-                    {
-                        var formatter = new Windows.Globalization.NumberFormatting.DecimalFormatter
-                        {
-                            FractionDigits = 1
-                        };
-                        numberBox.NumberFormatter = formatter;
-                    }
-                    if (field.Minimum.HasValue)
-                    {
-                        numberBox.Minimum = field.Minimum.Value;
-                    }
-                    if (field.Maximum.HasValue)
-                    {
-                        numberBox.Maximum = field.Maximum.Value;
-                    }
-                    numberBox.ValueChanged += (s, e) =>
-                    {
-                        if (!double.IsNaN(numberBox.Value))
-                        {
-                            if (isFloat)
-                            {
-                                float valFloat = (float)Math.Round(numberBox.Value, 1);
-                                _settingsManager.SetSetting(settingsGroup, field.Key, valFloat);
-                                UpdateVisibility(settingsGroup);
-                                HandleIntSettingChanged(settingsGroup, field.Key, (int)valFloat);
-                            }
-                            else
-                            {
-                                int valInt = (int)numberBox.Value;
-                                _settingsManager.SetSetting(settingsGroup, field.Key, valInt);
-                                UpdateVisibility(settingsGroup);
-                                HandleIntSettingChanged(settingsGroup, field.Key, valInt);
-                            }
-                        }
-                    };
-                    inputControl = numberBox;
-                    break;
-
-                case SettingType.Combo:
-                    var comboBox = new ComboBox
-                    {
-                        Width = 160,
-                        HorizontalAlignment = HorizontalAlignment.Right,
-                        VerticalAlignment = VerticalAlignment.Center
-                    };
-                    foreach (var opt in field.Options)
-                    {
-                        comboBox.Items.Add(opt);
-                    }
-                    
-                    string defaultValStr = field.DefaultValue?
-                        .ToString() ?? string.Empty;
-                    string currentSelection = _settingsManager
-                        .GetSetting(
-                            settingsGroup,
-                            field.Key,
-                            defaultValStr);
-                    
-                    comboBox.SelectionChanged += (s, e) =>
-                    {
-                        if (comboBox.SelectedItem != null)
-                        {
-                            string selectedVal = comboBox.SelectedItem.ToString() ?? string.Empty;
-                            _settingsManager.SetSetting(
-                                settingsGroup,
-                                field.Key,
-                                selectedVal);
-                            UpdateVisibility(settingsGroup);
-
-
-                            UpdatePreview();
-                        }
-                    };
-
-                    string matchedOption = field.Options
-                        .FirstOrDefault(opt => opt.Equals(
-                            currentSelection,
-                            StringComparison.OrdinalIgnoreCase))
-                        ?? field.Options.FirstOrDefault()
-                        ?? defaultValStr;
-
-                    comboBox.SelectedItem = matchedOption;
-                    
-                    if (comboBox.SelectedIndex == -1 && 
-                        comboBox.Items.Count > 0)
-                    {
-                        comboBox.SelectedIndex = 0;
-                    }
-                    inputControl = comboBox;
-                    break;
-            }
+            FrameworkElement? inputControl = CreateSettingInputControl(field, settingsGroup);
 
             if (inputControl != null)
             {
@@ -659,6 +546,238 @@ public sealed partial class ScriptSettingsControl : UserControl
     }
 
     /// <summary>
+    /// Создает и возвращает соответствующий элемент ввода для заданного поля настройки (TextBox, NumberBox, ComboBox, ToggleSwitch).
+    /// </summary>
+    private FrameworkElement? CreateSettingInputControl(SettingField field, string settingsGroup)
+    {
+        bool isRenameField = field.Key == "LocalRenameSearch" || field.Key == "LocalRenameReplace";
+        FrameworkElement? inputControl = null;
+
+        switch (field.Type)
+        {
+            case SettingType.Text:
+                var textBox = new TextBox
+                {
+                    Text = _settingsManager.GetSetting(
+                        settingsGroup,
+                        field.Key,
+                        field.DefaultValue?.ToString() ?? string.Empty),
+                    PlaceholderText = field.PlaceholderText ?? string.Empty,
+                    Width = 250,
+                    HorizontalAlignment = HorizontalAlignment.Right,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                textBox.TextChanged += (s, e) =>
+                {
+                    _settingsManager.SetSetting(
+                        settingsGroup, field.Key, textBox.Text);
+                    if (isRenameField)
+                    {
+                        UpdatePreview();
+                    }
+                };
+                textBox.LostFocus += (s, e) =>
+                {
+                    _settingsManager.SetSetting(
+                        settingsGroup, field.Key, textBox.Text);
+                    UpdateVisibility(settingsGroup);
+                    if (isRenameField)
+                    {
+                        UpdatePreview();
+                    }
+                };
+
+                if (isRenameField)
+                {
+                    var containerGrid = new Grid { HorizontalAlignment = HorizontalAlignment.Right };
+                    containerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                    containerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+                    Grid.SetColumn(textBox, 0);
+                    containerGrid.Children.Add(textBox);
+
+                    var helpBtn = new Button
+                    {
+                        Content = "\uE946",
+                        FontFamily = (Microsoft.UI.Xaml.Media.FontFamily)Application.Current.Resources["SymbolThemeFontFamily"],
+                        Margin = new Thickness(8, 0, 0, 0),
+                        Width = 32,
+                        Height = 32,
+                        Padding = new Thickness(0),
+                        VerticalAlignment = VerticalAlignment.Center
+                    };
+                    Grid.SetColumn(helpBtn, 1);
+                    containerGrid.Children.Add(helpBtn);
+
+                    if (field.Key == "LocalRenameSearch")
+                    {
+                        AttachSearchHelpFlyout(helpBtn, textBox);
+                    }
+                    else
+                    {
+                        AttachReplaceHelpFlyout(helpBtn, textBox);
+                    }
+
+                    inputControl = containerGrid;
+                }
+                else
+                {
+                    inputControl = textBox;
+                }
+                break;
+
+            case SettingType.Int:
+            case SettingType.Float:
+                bool isFloat = field.Type == SettingType.Float;
+                double defaultNum = 0;
+                if (field.DefaultValue is int dInt) defaultNum = dInt;
+                else if (field.DefaultValue is float dF) defaultNum = dF;
+                else if (field.DefaultValue is double dD) defaultNum = dD;
+                else double.TryParse(field.DefaultValue?.ToString(), out defaultNum);
+
+                double initialVal = isFloat
+                    ? _settingsManager.GetSetting(settingsGroup, field.Key, defaultNum)
+                    : _settingsManager.GetSetting(settingsGroup, field.Key, (int)defaultNum);
+
+                var numberBox = new NumberBox
+                {
+                    Value = initialVal,
+                    Width = 160,
+                    HorizontalAlignment = HorizontalAlignment.Right,
+                    SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Inline,
+                    SmallChange = isFloat ? 0.1 : 1,
+                    LargeChange = isFloat ? 0.5 : 5,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                if (isFloat)
+                {
+                    var formatter = new Windows.Globalization.NumberFormatting.DecimalFormatter
+                    {
+                        FractionDigits = 1
+                    };
+                    numberBox.NumberFormatter = formatter;
+                }
+                if (field.Minimum.HasValue)
+                {
+                    numberBox.Minimum = field.Minimum.Value;
+                }
+                if (field.Maximum.HasValue)
+                {
+                    numberBox.Maximum = field.Maximum.Value;
+                }
+                numberBox.ValueChanged += (s, e) =>
+                {
+                    if (!double.IsNaN(numberBox.Value))
+                    {
+                        if (isFloat)
+                        {
+                            float valFloat = (float)Math.Round(numberBox.Value, 1);
+                            _settingsManager.SetSetting(settingsGroup, field.Key, valFloat);
+                            UpdateVisibility(settingsGroup);
+                            HandleIntSettingChanged(settingsGroup, field.Key, (int)valFloat);
+                        }
+                        else
+                        {
+                            int valInt = (int)numberBox.Value;
+                            _settingsManager.SetSetting(settingsGroup, field.Key, valInt);
+                            UpdateVisibility(settingsGroup);
+                            HandleIntSettingChanged(settingsGroup, field.Key, valInt);
+                        }
+                    }
+                };
+                inputControl = numberBox;
+                break;
+
+            case SettingType.Combo:
+                var comboBox = new ComboBox
+                {
+                    Width = 160,
+                    HorizontalAlignment = HorizontalAlignment.Right,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                foreach (var opt in field.Options)
+                {
+                    comboBox.Items.Add(opt);
+                }
+                
+                string defaultValStr = field.DefaultValue?
+                    .ToString() ?? string.Empty;
+                if (field.Key == "nvenc_preset" && _settingsManager.GetSetting(settingsGroup, "lossless", false))
+                {
+                    defaultValStr = "p1";
+                }
+                else if (field.Key == "x265_preset" && _settingsManager.GetSetting(settingsGroup, "lossless", false))
+                {
+                    defaultValStr = "ultrafast";
+                }
+
+                string currentSelection = _settingsManager
+                    .GetSetting(
+                        settingsGroup,
+                        field.Key,
+                        defaultValStr);
+                
+                comboBox.SelectionChanged += (s, e) =>
+                {
+                    if (comboBox.SelectedItem != null)
+                    {
+                        string selectedVal = comboBox.SelectedItem.ToString() ?? string.Empty;
+                        _settingsManager.SetSetting(
+                            settingsGroup,
+                            field.Key,
+                            selectedVal);
+                        UpdateVisibility(settingsGroup);
+                        if (field.Key == "encoder" && _settingsManager.GetSetting(settingsGroup, "lossless", false))
+                        {
+                            ApplyFastestPresetOnLossless(settingsGroup);
+                        }
+
+                        UpdatePreview();
+                    }
+                };
+
+                string matchedOption = field.Options
+                    .FirstOrDefault(opt => opt.Equals(
+                        currentSelection,
+                        StringComparison.OrdinalIgnoreCase))
+                    ?? field.Options.FirstOrDefault()
+                    ?? defaultValStr;
+
+                comboBox.SelectedItem = matchedOption;
+                
+                if (comboBox.SelectedIndex == -1 && 
+                    comboBox.Items.Count > 0)
+                {
+                    comboBox.SelectedIndex = 0;
+                }
+                inputControl = comboBox;
+                break;
+
+            case SettingType.Checkbox:
+                var toggle = new ToggleSwitch
+                {
+                    OffContent = "Выкл",
+                    OnContent = "Вкл",
+                    IsOn = _settingsManager.GetSetting(
+                        settingsGroup,
+                        field.Key,
+                        field.DefaultValue is bool b && b),
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                toggle.Toggled += (s, e) =>
+                {
+                    _settingsManager.SetSetting(settingsGroup, field.Key, toggle.IsOn);
+                    UpdateVisibility(settingsGroup);
+                    UpdatePreview();
+                };
+                inputControl = toggle;
+                break;
+        }
+
+        return inputControl;
+    }
+
+    /// <summary>
     /// Обновляет видимость полей настроек и групп на основе управляющих условий VisibleIf.
     /// </summary>
     private void UpdateVisibility(string settingsGroup)
@@ -687,6 +806,16 @@ public sealed partial class ScriptSettingsControl : UserControl
                             {
                                 commentBlock.Text = dynamicField.Comment ?? string.Empty;
                                 commentBlock.Visibility = string.IsNullOrEmpty(dynamicField.Comment) ? Visibility.Collapsed : Visibility.Visible;
+                            }
+                            else if (container is SettingsCard sc)
+                            {
+                                sc.Header = dynamicField.Label;
+                                sc.Description = dynamicField.Comment ?? string.Empty;
+                            }
+                            else if (container is SettingsExpander se)
+                            {
+                                se.Header = dynamicField.Label;
+                                se.Description = dynamicField.Comment ?? string.Empty;
                             }
 
                             // Б. Динамическое обновление вариантов ComboBox
@@ -1379,24 +1508,25 @@ public sealed partial class ScriptSettingsControl : UserControl
 
     private void ApplyFastestPresetOnLossless(string settingsGroup)
     {
-        string currentEncoder = _settingsManager.GetSetting(settingsGroup, "encoder", "NVENC (GPU)");
-        string presetKey = currentEncoder.Contains("NVENC", StringComparison.OrdinalIgnoreCase) ? "nvenc_preset" : "cpu_preset";
-        string fastestPreset = currentEncoder.Contains("NVENC", StringComparison.OrdinalIgnoreCase) ? "p1" : "ultrafast";
+        _settingsManager.SetSetting(settingsGroup, "nvenc_preset", "p1");
+        _settingsManager.SetSetting(settingsGroup, "x265_preset", "ultrafast");
 
-        _settingsManager.SetSetting(settingsGroup, presetKey, fastestPreset);
-
-        var targetItem = _generatedElements.FirstOrDefault(x => x.Field.Key == presetKey);
-        if (targetItem.Element != null)
+        var presetsToSync = new[] { ("nvenc_preset", "p1"), ("x265_preset", "ultrafast") };
+        foreach (var (key, fastest) in presetsToSync)
         {
-            ComboBox? combo = FindChildElement<ComboBox>(targetItem.Element);
-            if (combo != null && combo.Items.Count > 0)
+            var targetItem = _generatedElements.FirstOrDefault(x => x.Field.Key == key);
+            if (targetItem.Element != null)
             {
-                string? matchedOption = combo.Items.Cast<object>()
-                    .Select(o => o.ToString() ?? "")
-                    .FirstOrDefault(o => o.Equals(fastestPreset, StringComparison.OrdinalIgnoreCase));
-                if (matchedOption != null)
+                ComboBox? combo = FindChildElement<ComboBox>(targetItem.Element);
+                if (combo != null && combo.Items.Count > 0)
                 {
-                    combo.SelectedItem = matchedOption;
+                    string? matchedOption = combo.Items.Cast<object>()
+                        .Select(o => o.ToString() ?? "")
+                        .FirstOrDefault(o => o.Equals(fastest, StringComparison.OrdinalIgnoreCase));
+                    if (matchedOption != null && !object.Equals(combo.SelectedItem, matchedOption))
+                    {
+                        combo.SelectedItem = matchedOption;
+                    }
                 }
             }
         }

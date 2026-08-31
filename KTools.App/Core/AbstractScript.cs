@@ -229,11 +229,14 @@ public abstract class AbstractScript
             }
             else if (e.Action == System.Collections.Specialized.NotifyCollectionChangedAction.Reset)
             {
-                SelectedTrackIds.Clear();
-                SelectedAttachmentIds.Clear();
-                _logService.DebugLog(
-                    "Очищен весь сохраненный выбор дорожек в связи со сбросом очереди файлов", 
-                    "AbstractScript");
+                if (SelectedTrackIds.Count > 0 || SelectedAttachmentIds.Count > 0)
+                {
+                    SelectedTrackIds.Clear();
+                    SelectedAttachmentIds.Clear();
+                    _logService.DebugLog(
+                        "Очищен весь сохраненный выбор дорожек в связи со сбросом очереди файлов", 
+                        "AbstractScript");
+                }
             }
         };
     }
@@ -744,17 +747,29 @@ public abstract class AbstractScript
     /// <param name="filePath">Абсолютный путь к неудавшимся выходному файлу.</param>
     protected void CleanupFailedOutputFile(string filePath)
     {
+        if (string.IsNullOrEmpty(filePath)) return;
+
         try
         {
-            if (File.Exists(filePath))
+            for (int attempt = 0; attempt < 6; attempt++)
             {
-                File.Delete(filePath);
-                _logService.DebugLog($"Удален поврежденный выходной файл после сбоя или ошибки: '{Path.GetFileName(filePath)}'", "AbstractScript");
+                if (!File.Exists(filePath)) break;
+                try
+                {
+                    File.Delete(filePath);
+                    _logService.DebugLog($"Удален поврежденный выходной файл после сбоя или ошибки: '{Path.GetFileName(filePath)}'", "AbstractScript");
+                    break;
+                }
+                catch
+                {
+                    if (attempt == 5) throw;
+                    System.Threading.Thread.Sleep(150);
+                }
             }
         }
         catch (Exception ex)
         {
-            _logService.Exception(ex, $"Не удалось очистить поврежденный выходной файл '{filePath}' после сбоя: {ex.Message}", "AbstractScript");
+            _logService.Warn($"Не удалось очистить поврежденный выходной файл '{filePath}' после сбоя: {ex.Message}", "AbstractScript");
         }
     }
 

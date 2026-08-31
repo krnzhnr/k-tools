@@ -39,13 +39,19 @@ public class X265Encoder : IVideoEncoder
 
     public List<SettingField> GetEncoderSettings(Dictionary<string, object>? currentSettings = null, IHardwareCapabilityCache? hardwareCache = null)
     {
+        bool isLossless = false;
+        if (currentSettings != null && currentSettings.TryGetValue("lossless", out var losslessObj))
+        {
+            isLossless = losslessObj is true || (losslessObj is string s && s.Equals("True", StringComparison.OrdinalIgnoreCase));
+        }
+
         return new List<SettingField>
         {
             new SettingField(
                 "x265_preset",
                 "Пресет",
                 SettingType.Combo,
-                "medium",
+                isLossless ? "ultrafast" : "medium",
                 "Видео:Кодирование",
                 options: PresetOptions,
                 comment: "Баланс между скоростью кодирования и сжатием/качеством",

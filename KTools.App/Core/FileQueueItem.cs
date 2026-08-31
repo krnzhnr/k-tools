@@ -242,6 +242,12 @@ public sealed class FileQueueItem : INotifyPropertyChanged
         }
     }
 
+    private static readonly SolidColorBrush CompletedBrush = new(Microsoft.UI.ColorHelper.FromArgb(255, 34, 180, 115)); // Зеленый
+    private static readonly SolidColorBrush FailedBrush = new(Microsoft.UI.ColorHelper.FromArgb(255, 232, 17, 35));     // Красный
+    private static readonly SolidColorBrush CancelledBrush = new(Microsoft.UI.ColorHelper.FromArgb(255, 128, 128, 128)); // Серый
+    private static readonly SolidColorBrush SecondaryFallbackBrush = new(Microsoft.UI.ColorHelper.FromArgb(255, 150, 150, 150)); // Нейтральный вторичный
+    private static readonly SolidColorBrush TertiaryFallbackBrush = new(Microsoft.UI.ColorHelper.FromArgb(255, 120, 120, 120));
+
     /// <summary>
     /// Цвет иконки статуса.
     /// </summary>
@@ -253,13 +259,25 @@ public sealed class FileQueueItem : INotifyPropertyChanged
             {
                 case FileProcessingState.Completed:
                 case FileProcessingState.Skipped:
-                    return new SolidColorBrush(Windows.UI.Color.FromArgb(255, 34, 180, 115)); // Зеленый
+                    return CompletedBrush;
                 case FileProcessingState.Failed:
-                    return new SolidColorBrush(Windows.UI.Color.FromArgb(255, 232, 17, 35));  // Красный
+                    return FailedBrush;
                 case FileProcessingState.Cancelled:
-                    return (Brush)Application.Current.Resources["TextFillColorTertiaryBrush"];
+                    if (Application.Current != null &&
+                        Application.Current.Resources.TryGetValue("TextFillColorTertiaryBrush", out var tertObj) &&
+                        tertObj is Brush tertBrush)
+                    {
+                        return tertBrush;
+                    }
+                    return CancelledBrush;
                 default:
-                    return (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"];
+                    if (Application.Current != null &&
+                        Application.Current.Resources.TryGetValue("TextFillColorSecondaryBrush", out var secObj) &&
+                        secObj is Brush secBrush)
+                    {
+                        return secBrush;
+                    }
+                    return SecondaryFallbackBrush;
             }
         }
     }

@@ -50,4 +50,18 @@ public interface IFFmpegRunner
     /// Проверить поддержку параметра Temporal AQ для NVENC.
     /// </summary>
     Task<bool> CheckNvencTemporalAqSupportAsync();
+
+    /// <summary>
+    /// Выполнить зондирование и автоматическое определение обрезки черных полос (cropdetect).
+    /// </summary>
+    Task<string?> DetectCropAsync(
+        string filePath,
+        double skipSeconds = 0,
+        int probeFrames = 25,
+        double limit = 0.0941176,
+        int round = 16,
+        int skip = 2,
+        int reset = 0,
+        string mode = "black",
+        CancellationToken cancellationToken = default);
 }
