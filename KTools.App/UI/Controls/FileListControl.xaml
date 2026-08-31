@@ -102,13 +102,21 @@
                                    TextTrimming="CharacterEllipsis"
                                    Margin="6,6,12,0"/>
                         
-                        <!-- Размер файла -->
-                        <TextBlock Grid.Column="0"
-                                   Grid.Row="1"
-                                   Text="{x:Bind FileSizeStr}"
-                                   x:Phase="2"
-                                   Style="{ThemeResource BodyTextBlockStyle}"
-                                   Margin="6,0,12,6"/>
+                        <!-- Размер файла и бейджик параметров -->
+                        <StackPanel Grid.Column="0"
+                                    Grid.Row="1"
+                                    Orientation="Horizontal"
+                                    Spacing="8"
+                                    VerticalAlignment="Center"
+                                    Margin="6,0,12,6">
+                            <TextBlock Text="{x:Bind FileSizeStr}"
+                                       x:Phase="2"
+                                       Style="{ThemeResource BodyTextBlockStyle}"
+                                       VerticalAlignment="Center"/>
+                            <local:AccentBadge Text="{x:Bind CropBadgeText, Mode=OneWay}"
+                                               ToolTipService.ToolTip="Автоматическая обрезка черных полос (Crop)"
+                                               VerticalAlignment="Center"/>
+                        </StackPanel>
 
                         <!-- Кольцевой прогресс-бар и иконка статуса -->
                         <Grid Grid.Column="1"

@@ -218,8 +218,11 @@ public abstract class BaseNvencCapabilities : INvencCodecCapabilities
                 colSpan: 2,
                 visibilityConditions: new List<SettingVisibilityCondition>
                 {
-                    new("lossless", "True", negate: true),
                     new("nvenc_rc", "constqp", negate: true)
+                },
+                disableConditions: new List<SettingDisableCondition>
+                {
+                    new("lossless", "True")
                 }
             ),
             new SettingField(
@@ -232,9 +235,9 @@ public abstract class BaseNvencCapabilities : INvencCodecCapabilities
                 comment: "CBR - постоянный битрейт, VBR - переменный, ConstQP - фиксированное качество",
                 column: 0,
                 colSpan: 1,
-                visibilityConditions: new List<SettingVisibilityCondition>
+                disableConditions: new List<SettingDisableCondition>
                 {
-                    new("lossless", "True", negate: true)
+                    new("lossless", "True")
                 }
             ),
             new SettingField(
@@ -248,8 +251,11 @@ public abstract class BaseNvencCapabilities : INvencCodecCapabilities
                 colSpan: 1,
                 visibilityConditions: new List<SettingVisibilityCondition>
                 {
-                    new("lossless", "True", negate: true),
                     new("nvenc_rc", "constqp", negate: true)
+                },
+                disableConditions: new List<SettingDisableCondition>
+                {
+                    new("lossless", "True")
                 },
                 minimum: 100,
                 maximum: 500000
@@ -265,8 +271,11 @@ public abstract class BaseNvencCapabilities : INvencCodecCapabilities
                 colSpan: 1,
                 visibilityConditions: new List<SettingVisibilityCondition>
                 {
-                    new("lossless", "True", negate: true),
                     new("nvenc_rc", "constqp")
+                },
+                disableConditions: new List<SettingDisableCondition>
+                {
+                    new("lossless", "True")
                 },
                 minimum: 0,
                 maximum: 51
@@ -282,12 +291,12 @@ public abstract class BaseNvencCapabilities : INvencCodecCapabilities
                 colSpan: 1,
                 visibilityConditions: new List<SettingVisibilityCondition>
                 {
-                    new("lossless", "True", negate: true),
                     new("nvenc_rc", "constqp", negate: true)
                 },
                 disableConditions: new List<SettingDisableCondition>
                 {
-                    new("auto_bitrate", "True")
+                    new("auto_bitrate", "True"),
+                    new("lossless", "True")
                 },
                 minimum: 0,
                 maximum: 500000
@@ -303,12 +312,12 @@ public abstract class BaseNvencCapabilities : INvencCodecCapabilities
                 colSpan: 1,
                 visibilityConditions: new List<SettingVisibilityCondition>
                 {
-                    new("lossless", "True", negate: true),
                     new("nvenc_rc", "constqp", negate: true)
                 },
                 disableConditions: new List<SettingDisableCondition>
                 {
-                    new("auto_bitrate", "True")
+                    new("auto_bitrate", "True"),
+                    new("lossless", "True")
                 },
                 minimum: 0,
                 maximum: 500000
@@ -324,12 +333,12 @@ public abstract class BaseNvencCapabilities : INvencCodecCapabilities
                 colSpan: 2,
                 visibilityConditions: new List<SettingVisibilityCondition>
                 {
-                    new("lossless", "True", negate: true),
                     new("nvenc_rc", "constqp", negate: true)
                 },
                 disableConditions: new List<SettingDisableCondition>
                 {
-                    new("auto_bitrate", "True")
+                    new("auto_bitrate", "True"),
+                    new("lossless", "True")
                 },
                 minimum: 0,
                 maximum: 1000000

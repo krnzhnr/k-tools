@@ -654,7 +654,7 @@ public class VideoEncodingScriptTests
         cropEnabled!.Type.Should().Be(SettingType.Expander);
         cropEnabled.Group.Should().Be("Видео:Фильтры");
         cropEnabled.ChildFields.Should().NotBeNull();
-        cropEnabled.ChildFields.Should().HaveCount(7);
+        cropEnabled.ChildFields.Should().HaveCount(8);
 
         var cropLimit = cropEnabled.ChildFields.FirstOrDefault(f => f.Key == "autocrop_limit");
         cropLimit.Should().NotBeNull();
@@ -678,8 +678,13 @@ public class VideoEncodingScriptTests
         var cropReset = cropEnabled.ChildFields.FirstOrDefault(f => f.Key == "autocrop_reset_frames");
         cropReset.Should().NotBeNull();
 
-        var cropSeek = cropEnabled.ChildFields.FirstOrDefault(f => f.Key == "autocrop_seek_seconds");
-        cropSeek.Should().NotBeNull();
+        var cropPoints = cropEnabled.ChildFields.FirstOrDefault(f => f.Key == "autocrop_probe_points");
+        cropPoints.Should().NotBeNull();
+        cropPoints!.Type.Should().Be(SettingType.Int);
+
+        var cropTolerance = cropEnabled.ChildFields.FirstOrDefault(f => f.Key == "autocrop_tolerance");
+        cropTolerance.Should().NotBeNull();
+        cropTolerance!.Type.Should().Be(SettingType.Int);
     }
 
     /// <summary>
@@ -693,7 +698,7 @@ public class VideoEncodingScriptTests
         string tempOutputDir = Path.GetDirectoryName(tempSourceFile) ?? AppContext.BaseDirectory;
 
         var structure = new MediaStructure { FilePath = tempSourceFile, Duration = 60.0 };
-        structure.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "video", Codec = "h264", Name = "Video" });
+        structure.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "video", Codec = "h264", Resolution = "1920x1080", Name = "Video" });
         _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile)).ReturnsAsync(structure);
 
         _ffmpegRunnerMock.Setup(r => r.DetectCropAsync(
@@ -735,6 +740,194 @@ public class VideoEncodingScriptTests
             int vfIdx = capturedExtraArgs!.IndexOf("-vf");
             vfIdx.Should().BeGreaterThanOrEqualTo(0);
             capturedExtraArgs[vfIdx + 1].Should().Be("crop=1920:800:0:140");
+        }
+        finally
+        {
+            if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
+        }
+    }
+
+    /// <summary>
+    /// Проверяет установку текста бейджика кадрирования на элементе очереди при обнаружении черных полос.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_AutoCropDetected_SetsCropBadgeOnQueueItem()
+    {
+        // Arrange
+        string tempSourceFile = Path.GetTempFileName();
+        string tempOutputDir = Path.GetDirectoryName(tempSourceFile) ?? AppContext.BaseDirectory;
+
+        var structure = new MediaStructure { FilePath = tempSourceFile, Duration = 60.0 };
+        structure.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "video", Codec = "hevc", Resolution = "1920x1080", Name = "Video" });
+        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile)).ReturnsAsync(structure);
+
+        _ffmpegRunnerMock.Setup(r => r.DetectCropAsync(
+            tempSourceFile,
+            It.IsAny<double>(),
+            It.IsAny<int>(),
+            It.IsAny<double>(),
+            It.IsAny<int>(),
+            It.IsAny<int>(),
+            It.IsAny<int>(),
+            It.IsAny<string>(),
+            It.IsAny<CancellationToken>()
+        )).ReturnsAsync("1920:816:0:132");
+
+        _ffmpegRunnerMock.Setup(r => r.RunAsync(
+            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<List<string>>(), It.IsAny<List<string>>(),
+            It.IsAny<bool>(), It.IsAny<double>(), It.IsAny<Action<ProgressInfo>>(), It.IsAny<CancellationToken>()
+        )).ReturnsAsync(true);
+
+        var queueItem = new FileQueueItem(tempSourceFile);
+        _script.FilesQueue.Add(queueItem);
+
+        var settings = new Dictionary<string, object>
+        {
+            { "encoder", "x265" },
+            { "autocrop_enabled", true },
+            { "burn_in_subtitles", false }
+        };
+
+        try
+        {
+            // Act
+            await _script.ExecuteSingleAsync(tempSourceFile, settings, tempOutputDir, (idx, total, status, pct, fps, bit) => { }, 0, 1);
+
+            // Assert
+            queueItem.CropBadgeText.Should().Be("1920x1080 ➔ 1920x816");
+            queueItem.HasCropBadge.Should().BeTrue();
+        }
+        finally
+        {
+            if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
+        }
+    }
+
+    /// <summary>
+    /// Проверяет отмену микрообрезки по ширине или высоте, если разница не превышает порог tolerance.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_AutoCropTolerance_CancelsMicroCrop()
+    {
+        // Arrange
+        string tempSourceFile = Path.GetTempFileName();
+        string tempOutputDir = Path.GetDirectoryName(tempSourceFile) ?? AppContext.BaseDirectory;
+
+        var structure = new MediaStructure { FilePath = tempSourceFile, Duration = 60.0 };
+        structure.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "video", Codec = "hevc", Resolution = "1920x1080", Name = "Video" });
+        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile)).ReturnsAsync(structure);
+
+        // Имитируем, что детектор отрезал 8px с боков (1904px) и полосы по высоте (800px)
+        _ffmpegRunnerMock.Setup(r => r.DetectCropAsync(
+            tempSourceFile,
+            It.IsAny<double>(),
+            It.IsAny<int>(),
+            It.IsAny<double>(),
+            It.IsAny<int>(),
+            It.IsAny<int>(),
+            It.IsAny<int>(),
+            It.IsAny<string>(),
+            It.IsAny<CancellationToken>()
+        )).ReturnsAsync("1904:800:8:140");
+
+        List<string>? capturedExtraArgs = null;
+        _ffmpegRunnerMock.Setup(r => r.RunAsync(
+            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<List<string>>(), It.IsAny<List<string>>(),
+            It.IsAny<bool>(), It.IsAny<double>(), It.IsAny<Action<ProgressInfo>>(), It.IsAny<CancellationToken>()
+        )).Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken>(
+            (inP, outP, extArgs, inArgs, ovr, dur, prog, ct) => capturedExtraArgs = extArgs
+        ).ReturnsAsync(true);
+
+        var queueItem = new FileQueueItem(tempSourceFile);
+        _script.FilesQueue.Add(queueItem);
+
+        var settings = new Dictionary<string, object>
+        {
+            { "encoder", "x265" },
+            { "autocrop_enabled", true },
+            { "autocrop_tolerance", 16 }, // Порог 16px: разница 1920 - 1904 = 16px должна сброситься в 1920
+            { "burn_in_subtitles", false }
+        };
+
+        try
+        {
+            // Act
+            await _script.ExecuteSingleAsync(tempSourceFile, settings, tempOutputDir, (idx, total, status, pct, fps, bit) => { }, 0, 1);
+
+            // Assert: ширина восстановлена до 1920, центрирование cropX = 0, высота 800 (полосы 140px)
+            capturedExtraArgs.Should().NotBeNull();
+            int vfIdx = capturedExtraArgs!.IndexOf("-vf");
+            vfIdx.Should().BeGreaterThanOrEqualTo(0);
+            capturedExtraArgs[vfIdx + 1].Should().Be("crop=1920:800:0:140");
+            queueItem.CropBadgeText.Should().Be("1920x1080 ➔ 1920x800");
+        }
+        finally
+        {
+            if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
+        }
+    }
+
+    /// <summary>
+    /// Проверяет отмену кадрирования, если в одной из контрольных точек обнаружен полнокадровый фрагмент (IMAX / Open Matte).
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_AutoCropImax_CancelsCropWhenFullScreenDetectedInAnyPoint()
+    {
+        // Arrange
+        string tempSourceFile = Path.GetTempFileName();
+        string tempOutputDir = Path.GetDirectoryName(tempSourceFile) ?? AppContext.BaseDirectory;
+
+        var structure = new MediaStructure { FilePath = tempSourceFile, Duration = 60.0 };
+        structure.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "video", Codec = "hevc", Resolution = "1920x1080", Name = "Video" });
+        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile)).ReturnsAsync(structure);
+
+        // В первой точке (15s) - 1920x800, во второй точке (30s) - IMAX полноэкранный 1920x1080
+        _ffmpegRunnerMock.SetupSequence(r => r.DetectCropAsync(
+            tempSourceFile,
+            It.IsAny<double>(),
+            It.IsAny<int>(),
+            It.IsAny<double>(),
+            It.IsAny<int>(),
+            It.IsAny<int>(),
+            It.IsAny<int>(),
+            It.IsAny<string>(),
+            It.IsAny<CancellationToken>()
+        ))
+        .ReturnsAsync("1920:800:0:140")
+        .ReturnsAsync("1920:1080:0:0")
+        .ReturnsAsync("1920:800:0:140");
+
+        List<string>? capturedExtraArgs = null;
+        _ffmpegRunnerMock.Setup(r => r.RunAsync(
+            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<List<string>>(), It.IsAny<List<string>>(),
+            It.IsAny<bool>(), It.IsAny<double>(), It.IsAny<Action<ProgressInfo>>(), It.IsAny<CancellationToken>()
+        )).Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken>(
+            (inP, outP, extArgs, inArgs, ovr, dur, prog, ct) => capturedExtraArgs = extArgs
+        ).ReturnsAsync(true);
+
+        var queueItem = new FileQueueItem(tempSourceFile);
+        _script.FilesQueue.Add(queueItem);
+
+        var settings = new Dictionary<string, object>
+        {
+            { "encoder", "x265" },
+            { "autocrop_enabled", true },
+            { "autocrop_probe_points", 3 },
+            { "burn_in_subtitles", false }
+        };
+
+        try
+        {
+            // Act
+            await _script.ExecuteSingleAsync(tempSourceFile, settings, tempOutputDir, (idx, total, status, pct, fps, bit) => { }, 0, 1);
+
+            // Assert: кроп не должен применяться вовсе
+            if (capturedExtraArgs != null && capturedExtraArgs.Contains("-vf"))
+            {
+                int vfIdx = capturedExtraArgs.IndexOf("-vf");
+                capturedExtraArgs[vfIdx + 1].Should().NotContain("crop=");
+            }
+            queueItem.HasCropBadge.Should().BeFalse();
         }
         finally
         {

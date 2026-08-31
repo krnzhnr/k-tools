@@ -48,6 +48,7 @@ public sealed class FileQueueItem : INotifyPropertyChanged
     private FileProcessingState _state = FileProcessingState.Pending;
     private bool _isProcessing;
     private MediaStructure? _mediaInfo;
+    private string? _cropBadgeText;
 
     public FileQueueItem(string filePath)
     {
@@ -102,6 +103,29 @@ public sealed class FileQueueItem : INotifyPropertyChanged
             }
         }
     }
+
+    /// <summary>
+    /// Текст бейджика автоматического кропа (например, "1920x1080 ➔ 1920x816").
+    /// Устанавливается скриптом кодирования при детекции обрезки черных полос.
+    /// </summary>
+    public string? CropBadgeText
+    {
+        get => _cropBadgeText;
+        set
+        {
+            if (_cropBadgeText != value)
+            {
+                _cropBadgeText = value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(HasCropBadge));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Флаг наличия текста бейджика кропа для управления видимостью в XAML.
+    /// </summary>
+    public bool HasCropBadge => !string.IsNullOrEmpty(CropBadgeText);
 
     /// <summary>
     /// Текущее состояние обработки файла.

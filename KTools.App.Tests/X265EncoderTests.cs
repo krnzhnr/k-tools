@@ -168,4 +168,62 @@ public class X265EncoderTests
         _encoder.GetContainerTag(new Dictionary<string, object>(), contextMp4).Should().Be("hvc1");
         _encoder.GetContainerTag(new Dictionary<string, object>(), contextMkv).Should().BeNull();
     }
+
+    [TestMethod]
+    public void GetEncoderSettings_BitrateFields_VerifyPresenceAndConditions()
+    {
+        // Act
+        var settings = _encoder.GetEncoderSettings();
+
+        // Assert
+        var rcField = settings.Find(f => f.Key == "x265_rc");
+        rcField.Should().NotBeNull();
+        rcField!.DisableConditions.Should().NotBeNull();
+        rcField.DisableConditions!.Find(c => c.Key == "lossless").Should().NotBeNull();
+
+        var autoBrField = settings.Find(f => f.Key == "x265_auto_bitrate");
+        autoBrField.Should().NotBeNull();
+        autoBrField!.VisibilityConditions.Should().NotBeNull();
+        autoBrField.VisibilityConditions!.Find(c => c.Key == "x265_rc" && c.Values.Contains("Битрейт (ABR)")).Should().NotBeNull();
+
+        var minBrField = settings.Find(f => f.Key == "x265_min_bitrate");
+        minBrField.Should().NotBeNull();
+        minBrField!.DisableConditions.Should().NotBeNull();
+        minBrField.DisableConditions!.Find(c => c.Key == "x265_auto_bitrate").Should().NotBeNull();
+
+        var maxBrField = settings.Find(f => f.Key == "x265_max_bitrate");
+        maxBrField.Should().NotBeNull();
+        maxBrField!.DisableConditions.Should().NotBeNull();
+        maxBrField.DisableConditions!.Find(c => c.Key == "x265_auto_bitrate").Should().NotBeNull();
+
+        var bufField = settings.Find(f => f.Key == "x265_bufsize");
+        bufField.Should().NotBeNull();
+        bufField!.DisableConditions.Should().NotBeNull();
+        bufField.DisableConditions!.Find(c => c.Key == "x265_auto_bitrate").Should().NotBeNull();
+    }
+
+    [TestMethod]
+    public void BuildEncoderArguments_CustomBitrateParameters_PassesMinMaxBufsize()
+    {
+        // Arrange
+        var settings = new Dictionary<string, object>
+        {
+            { "x265_rc", "Битрейт (ABR)" },
+            { "x265_v_bitrate", 6000 },
+            { "x265_auto_bitrate", false },
+            { "x265_min_bitrate", 4500 },
+            { "x265_max_bitrate", 9000 },
+            { "x265_bufsize", 18000 }
+        };
+        var context = new EncoderSharedContext(IsLossless: false, Force10Bit: false, ContainerExtension: ".mkv");
+
+        // Act
+        var args = _encoder.BuildEncoderArguments(settings, context);
+
+        // Assert
+        args.Should().ContainInOrder("-b:v", "6000k");
+        args.Should().ContainInOrder("-minrate", "4500k");
+        args.Should().ContainInOrder("-maxrate", "9000k");
+        args.Should().ContainInOrder("-bufsize", "18000k");
+    }
 }

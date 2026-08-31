@@ -89,7 +89,7 @@ public class NvencEncoderTests
     }
 
     [TestMethod]
-    public void GetEncoderSettings_BitrateFields_HaveLosslessVisibilityCondition()
+    public void GetEncoderSettings_BitrateFields_HaveLosslessDisableCondition()
     {
         // Act
         var settings = _encoder.GetEncoderSettings();
@@ -100,12 +100,11 @@ public class NvencEncoderTests
         {
             var field = settings.Find(f => f.Key == key);
             field.Should().NotBeNull($"Field '{key}' should exist in NvencEncoder settings");
-            field!.VisibilityConditions.Should().NotBeNull($"Field '{key}' should have VisibilityConditions");
+            field!.DisableConditions.Should().NotBeNull($"Field '{key}' should have DisableConditions");
             
-            var losslessCondition = field.VisibilityConditions!.Find(c => c.Key == "lossless");
-            losslessCondition.Should().NotBeNull($"Field '{key}' should have a VisibilityCondition for 'lossless'");
+            var losslessCondition = field.DisableConditions!.Find(c => c.Key == "lossless");
+            losslessCondition.Should().NotBeNull($"Field '{key}' should have a DisableCondition for 'lossless'");
             losslessCondition!.Values.Should().Contain("True");
-            losslessCondition.Negate.Should().BeTrue($"Field '{key}' visibility should be negated when lossless is True");
         }
     }
 

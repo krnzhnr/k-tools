@@ -121,7 +121,7 @@ public sealed class VideoEncodingScript : AbstractScript
                     settingField.VisibilityConditions = new List<SettingVisibilityCondition>();
                 }
                 
-                settingField.VisibilityConditions.Add(new SettingVisibilityCondition("encoder", encoder.StableId));
+                settingField.VisibilityConditions.Add(new SettingVisibilityCondition("encoder", new List<string> { encoder.StableId, encoder.DisplayName }));
                 fields.Add(settingField);
             }
         }
@@ -209,16 +209,28 @@ public sealed class VideoEncodingScript : AbstractScript
                     maximum: 1000
                 ),
                 new SettingField(
-                    "autocrop_seek_seconds",
-                    "Смещение старта анализа (сек)",
-                    SettingType.Float,
-                    10.0,
+                    "autocrop_probe_points",
+                    "Количество точек анализа",
+                    SettingType.Int,
+                    3,
                     "Видео:Фильтры",
-                    comment: "Смещение в секундах от начала видео для пропуска вступительных титров/заставок при анализе.",
+                    comment: "Количество равномерно распределенных по длительности видео контрольных точек для надежного поиска черных полос.",
                     column: 0,
-                    colSpan: 2,
-                    minimum: 0.0,
-                    maximum: 3600.0
+                    colSpan: 1,
+                    minimum: 1,
+                    maximum: 10
+                ),
+                new SettingField(
+                    "autocrop_tolerance",
+                    "Порог микрообрезки (px)",
+                    SettingType.Int,
+                    16,
+                    "Видео:Фильтры",
+                    comment: "Порог допуска (в пикселях). Если с края отрезается меньше указанного значения, размер стороны сохраняется исходным для защиты от ложных срезов.",
+                    column: 1,
+                    colSpan: 1,
+                    minimum: 0,
+                    maximum: 128
                 )
             }
         ));
@@ -638,31 +650,165 @@ public sealed class VideoEncodingScript : AbstractScript
                 int probeFrames = GetSettingValue(settings, "autocrop_probe_frames", 25);
                 int skipFrames = GetSettingValue(settings, "autocrop_skip_frames", 2);
                 int resetFrames = GetSettingValue(settings, "autocrop_reset_frames", 0);
-                double seekSeconds = GetSettingValue(settings, "autocrop_seek_seconds", 10.0);
+                int probePoints = GetSettingValue(settings, "autocrop_probe_points", 3);
+                int tolerance = GetSettingValue(settings, "autocrop_tolerance", 16);
 
-                _logService.Info($"Запуск детектора черных полос (cropdetect) для '{Path.GetFileName(filePath)}' (limit={cropLimit:F4}, round={cropRound}, mode={cropMode}, frames={probeFrames}, ss={seekSeconds:F1}s)", "VideoEncodingScript");
-                progressCallback(fileIndex, totalCount, "Анализ черных полос (cropdetect)...", 0.0);
-
-                string? detectedCrop = await _ffmpegRunner.DetectCropAsync(
-                    filePath,
-                    skipSeconds: seekSeconds,
-                    probeFrames: probeFrames,
-                    limit: cropLimit,
-                    round: cropRound,
-                    skip: skipFrames,
-                    reset: resetFrames,
-                    mode: cropMode,
-                    cancellationToken: CancellationToken
-                );
-
-                if (!string.IsNullOrWhiteSpace(detectedCrop))
+                var videoTrack = structure.GetVideoTracks().FirstOrDefault();
+                int srcW = 0, srcH = 0;
+                string sourceRes = videoTrack?.Resolution ?? string.Empty;
+                if (!string.IsNullOrEmpty(sourceRes))
                 {
-                    _logService.Info($"Определены параметры кадрирования: crop={detectedCrop}", "VideoEncodingScript");
-                    videoFilters.Add($"crop={detectedCrop}");
+                    var resParts = sourceRes.Split('x');
+                    if (resParts.Length == 2)
+                    {
+                        int.TryParse(resParts[0], out srcW);
+                        int.TryParse(resParts[1], out srcH);
+                    }
+                }
+
+                double duration = structure.Duration;
+                var probeOffsets = new List<double>();
+
+                if (duration <= 0 || duration < 5.0 || probePoints <= 1)
+                {
+                    double singleOffset = duration > 0 ? duration / 2.0 : 0.0;
+                    probeOffsets.Add(singleOffset);
                 }
                 else
                 {
-                    _logService.Info("Черные полосы не обнаружены или не требуют обрезки", "VideoEncodingScript");
+                    for (int i = 1; i <= probePoints; i++)
+                    {
+                        probeOffsets.Add(duration * i / (probePoints + 1));
+                    }
+                }
+
+                _logService.Info($"Запуск многоточечного детектора черных полос для '{Path.GetFileName(filePath)}' (точек: {probeOffsets.Count}, limit={cropLimit:F4}, round={cropRound}, tolerance={tolerance}px, mode={cropMode})", "VideoEncodingScript");
+
+                int maxCropW = 0;
+                int maxCropH = 0;
+                int successfulProbes = 0;
+                bool fullScreenDetectedInPoint = false;
+                double fullScreenTimestamp = 0;
+
+                for (int pIdx = 0; pIdx < probeOffsets.Count; pIdx++)
+                {
+                    double seekSec = probeOffsets[pIdx];
+                    progressCallback(fileIndex, totalCount, $"Анализ черных полос (точка {pIdx + 1}/{probeOffsets.Count})...", 0.0);
+
+                    string? pointCrop = await _ffmpegRunner.DetectCropAsync(
+                        filePath,
+                        skipSeconds: seekSec,
+                        probeFrames: probeFrames,
+                        limit: cropLimit,
+                        round: cropRound,
+                        skip: skipFrames,
+                        reset: resetFrames,
+                        mode: cropMode,
+                        cancellationToken: CancellationToken
+                    );
+
+                    if (!string.IsNullOrWhiteSpace(pointCrop))
+                    {
+                        var parts = pointCrop.Split(':');
+                        if (parts.Length >= 2 &&
+                            int.TryParse(parts[0], out int pW) &&
+                            int.TryParse(parts[1], out int pH))
+                        {
+                            successfulProbes++;
+                            _logService.Info($"Контрольная точка {pIdx + 1}/{probeOffsets.Count} ({seekSec:F1}s): определен кадр {pW}x{pH} (crop={pointCrop})", "VideoEncodingScript");
+
+                            if (srcW > 0 && srcH > 0 && pW >= srcW && pH >= srcH)
+                            {
+                                fullScreenDetectedInPoint = true;
+                                fullScreenTimestamp = seekSec;
+                            }
+
+                            if (pW > maxCropW) maxCropW = pW;
+                            if (pH > maxCropH) maxCropH = pH;
+                        }
+                    }
+                    else
+                    {
+                        _logService.Warn($"Контрольная точка {pIdx + 1}/{probeOffsets.Count} ({seekSec:F1}s): детектор не обнаружил область кадрирования (возможно, темная сцена)", "VideoEncodingScript");
+                    }
+                }
+
+                if (successfulProbes > 0 && maxCropW > 0 && maxCropH > 0)
+                {
+                    if (fullScreenDetectedInPoint)
+                    {
+                        _logService.Info($"В контрольной точке {fullScreenTimestamp:F1}s обнаружен полнокадровый фрагмент (IMAX/Open Matte). Кадрирование отменено во избежание обрезки полезного видеоряда.", "VideoEncodingScript");
+                    }
+                    else
+                    {
+                        // 1. Выравнивание кратности cropRound вверх
+                        if (cropRound > 1)
+                        {
+                            maxCropW = ((maxCropW + cropRound - 1) / cropRound) * cropRound;
+                            maxCropH = ((maxCropH + cropRound - 1) / cropRound) * cropRound;
+                        }
+
+                        // 2. Гарантия четности для кодеков YUV420p
+                        if (maxCropW % 2 != 0) maxCropW++;
+                        if (maxCropH % 2 != 0) maxCropH++;
+
+                        if (srcW > 0 && maxCropW > srcW) maxCropW = srcW;
+                        if (srcH > 0 && maxCropH > srcH) maxCropH = srcH;
+
+                        // 3. Фильтр допуска (Tolerance): отмена микрообрезки
+                        int diffW = srcW - maxCropW;
+                        if (srcW > 0 && diffW > 0 && diffW <= tolerance)
+                        {
+                            _logService.Info($"Разница по ширине ({diffW}px) меньше или равна порогу допуска ({tolerance}px). Ширина сброшена в исходные {srcW}px.", "VideoEncodingScript");
+                            maxCropW = srcW;
+                        }
+
+                        int diffH = srcH - maxCropH;
+                        if (srcH > 0 && diffH > 0 && diffH <= tolerance)
+                        {
+                            _logService.Info($"Разница по высоте ({diffH}px) меньше или равна порогу допуска ({tolerance}px). Высота сброшена в исходные {srcH}px.", "VideoEncodingScript");
+                            maxCropH = srcH;
+                        }
+
+                        bool isResolutionChanged = true;
+                        if (srcW > 0 && srcH > 0)
+                        {
+                            isResolutionChanged = maxCropW != srcW || maxCropH != srcH;
+                        }
+
+                        if (isResolutionChanged)
+                        {
+                            // 4. Симметричное центрирование координат
+                            int cropX = srcW > maxCropW ? (srcW - maxCropW) / 2 : 0;
+                            int cropY = srcH > maxCropH ? (srcH - maxCropH) / 2 : 0;
+                            cropX = (cropX / 2) * 2;
+                            cropY = (cropY / 2) * 2;
+
+                            string finalCrop = $"{maxCropW}:{maxCropH}:{cropX}:{cropY}";
+                            _logService.Info($"Итоговые параметры кадрирования: crop={finalCrop}", "VideoEncodingScript");
+                            videoFilters.Add($"crop={finalCrop}");
+
+                            string cropBadgeText = !string.IsNullOrEmpty(sourceRes)
+                                ? $"{sourceRes} ➔ {maxCropW}x{maxCropH}"
+                                : $"{maxCropW}x{maxCropH}";
+
+                            var queueItem = FilesQueue.FirstOrDefault(f =>
+                                f.FilePath.Equals(filePath, StringComparison.OrdinalIgnoreCase));
+                            if (queueItem != null)
+                            {
+                                queueItem.CropBadgeText = cropBadgeText;
+                                _logService.Info($"Установлен бейджик кадрирования для '{Path.GetFileName(filePath)}': {cropBadgeText}", "VideoEncodingScript");
+                            }
+                        }
+                        else
+                        {
+                            _logService.Info("Черные полосы не обнаружены или не требуют обрезки (разрешение сохранено)", "VideoEncodingScript");
+                        }
+                    }
+                }
+                else
+                {
+                    _logService.Warn("Детектор черных полос не смог определить параметры кадрирования ни в одной контрольной точке", "VideoEncodingScript");
                 }
             }
 

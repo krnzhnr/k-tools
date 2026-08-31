@@ -67,9 +67,27 @@ public class X265Encoder : IVideoEncoder
                 options: RateControlOptions,
                 column: 0,
                 colSpan: 1,
+                disableConditions: new List<SettingDisableCondition>
+                {
+                    new("lossless", "True")
+                }
+            ),
+            new SettingField(
+                "x265_auto_bitrate",
+                "Автовычисление границ битрейтов",
+                SettingType.Checkbox,
+                true,
+                "Видео:Битрейт",
+                comment: "Автоматически задает мин/макс битрейт и размер буфера на основе основного битрейта",
+                column: 0,
+                colSpan: 2,
                 visibilityConditions: new List<SettingVisibilityCondition>
                 {
-                    new("lossless", "True", negate: true)
+                    new("x265_rc", "Битрейт (ABR)")
+                },
+                disableConditions: new List<SettingDisableCondition>
+                {
+                    new("lossless", "True")
                 }
             ),
             new SettingField(
@@ -83,8 +101,11 @@ public class X265Encoder : IVideoEncoder
                 colSpan: 1,
                 visibilityConditions: new List<SettingVisibilityCondition>
                 {
-                    new("lossless", "True", negate: true),
                     new("x265_rc", "CRF")
+                },
+                disableConditions: new List<SettingDisableCondition>
+                {
+                    new("lossless", "True")
                 },
                 minimum: 0,
                 maximum: 51
@@ -100,11 +121,80 @@ public class X265Encoder : IVideoEncoder
                 colSpan: 1,
                 visibilityConditions: new List<SettingVisibilityCondition>
                 {
-                    new("lossless", "True", negate: true),
                     new("x265_rc", "Битрейт (ABR)")
+                },
+                disableConditions: new List<SettingDisableCondition>
+                {
+                    new("lossless", "True")
                 },
                 minimum: 100,
                 maximum: 500000
+            ),
+            new SettingField(
+                "x265_min_bitrate",
+                "Мин. битрейт (кбит/с)",
+                SettingType.Int,
+                4000,
+                "Видео:Битрейт",
+                comment: "Минимальный битрейт",
+                column: 0,
+                colSpan: 1,
+                visibilityConditions: new List<SettingVisibilityCondition>
+                {
+                    new("x265_rc", "Битрейт (ABR)")
+                },
+                disableConditions: new List<SettingDisableCondition>
+                {
+                    new("x265_auto_bitrate", "True"),
+                    new("auto_bitrate", "True"),
+                    new("lossless", "True")
+                },
+                minimum: 0,
+                maximum: 500000
+            ),
+            new SettingField(
+                "x265_max_bitrate",
+                "Макс. битрейт (кбит/с)",
+                SettingType.Int,
+                8000,
+                "Видео:Битрейт",
+                comment: "Максимальный битрейт",
+                column: 1,
+                colSpan: 1,
+                visibilityConditions: new List<SettingVisibilityCondition>
+                {
+                    new("x265_rc", "Битрейт (ABR)")
+                },
+                disableConditions: new List<SettingDisableCondition>
+                {
+                    new("x265_auto_bitrate", "True"),
+                    new("auto_bitrate", "True"),
+                    new("lossless", "True")
+                },
+                minimum: 0,
+                maximum: 500000
+            ),
+            new SettingField(
+                "x265_bufsize",
+                "Размер буфера VBV (кбит)",
+                SettingType.Int,
+                16000,
+                "Видео:Битрейт",
+                comment: "Размер VBV буфера",
+                column: 0,
+                colSpan: 2,
+                visibilityConditions: new List<SettingVisibilityCondition>
+                {
+                    new("x265_rc", "Битрейт (ABR)")
+                },
+                disableConditions: new List<SettingDisableCondition>
+                {
+                    new("x265_auto_bitrate", "True"),
+                    new("auto_bitrate", "True"),
+                    new("lossless", "True")
+                },
+                minimum: 0,
+                maximum: 1000000
             ),
             new SettingField(
                 "x265_tune",
@@ -255,13 +345,24 @@ public class X265Encoder : IVideoEncoder
             else
             {
                 int vBr = GetSettingValue(settings, "x265_v_bitrate", 4000);
-                int maxBr = vBr * 2;
-                int bufSize = maxBr * 2;
-                args.AddRange(new[] {
-                    "-b:v", $"{vBr}k",
-                    "-maxrate", $"{maxBr}k",
-                    "-bufsize", $"{bufSize}k"
-                });
+                bool autoBitrate = GetSettingValue(settings, "x265_auto_bitrate", GetSettingValue(settings, "auto_bitrate", true));
+                int minBr = autoBitrate ? vBr : GetSettingValue(settings, "x265_min_bitrate", GetSettingValue(settings, "min_bitrate", 4000));
+                int maxBr = autoBitrate ? vBr * 2 : GetSettingValue(settings, "x265_max_bitrate", GetSettingValue(settings, "max_bitrate", 8000));
+                int bufSize = autoBitrate ? maxBr * 2 : GetSettingValue(settings, "x265_bufsize", GetSettingValue(settings, "bufsize", 16000));
+
+                args.AddRange(new[] { "-b:v", $"{vBr}k" });
+                if (minBr > 0)
+                {
+                    args.AddRange(new[] { "-minrate", $"{minBr}k" });
+                }
+                if (maxBr > 0)
+                {
+                    args.AddRange(new[] { "-maxrate", $"{maxBr}k" });
+                }
+                if (bufSize > 0)
+                {
+                    args.AddRange(new[] { "-bufsize", $"{bufSize}k" });
+                }
             }
         }
 
