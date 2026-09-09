@@ -216,6 +216,47 @@ public sealed class FFmpegRunner : AbstractProcessRunner, IFFmpegRunner
         }
     }
 
+    /// <inheritdoc />
+    public async Task<double> ProbeDurationViaFfmpegAsync(string filePath)
+    {
+        if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
+        {
+            return 0.0;
+        }
+
+        double duration = 0.0;
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+        try
+        {
+            // Запускаем FFmpeg без декодирования данных, опрашивая заголовочную информацию файла
+            string arguments = $"-hide_banner -loglevel info -i \"{filePath}\" -f null -";
+            await RunProcessAsync(
+                "ffmpeg",
+                arguments,
+                onOutputLine: null,
+                onErrorLine: line =>
+                {
+                    if (duration <= 0)
+                    {
+                        double parsed = FFmpegOutputParser.ParseHeaderDuration(line, Log);
+                        if (parsed > 0)
+                        {
+                            duration = parsed;
+                        }
+                    }
+                },
+                cts.Token
+            );
+        }
+        catch (Exception ex)
+        {
+            Log.DebugLog($"Исключение при зондировании длительности через FFmpeg для '{Path.GetFileName(filePath)}': {ex.Message}", "FFmpegRunner");
+        }
+
+        return duration;
+    }
+
     /// <summary>
     /// Извлечь выбранную дорожку субтитров и перекодировать в формат ASS.
     /// </summary>

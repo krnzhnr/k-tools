@@ -365,7 +365,7 @@ public sealed class AudioDownmixScript : AbstractScript
                         fileIndex, 
                         totalCount, 
                         msg, 
-                        progressInfo.Percent > 0 ? progressInfo.Percent : (double?)null,
+                        progressInfo.Percent,
                         progressInfo.Fps,
                         progressInfo.Bitrate);
                 },

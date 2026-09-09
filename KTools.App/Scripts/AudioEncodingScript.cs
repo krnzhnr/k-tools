@@ -23,12 +23,20 @@ public sealed class AudioEncodingScript : AbstractScript
 {
     private readonly IFFmpegRunner _ffmpegRunner;
     private readonly QaacRunner _qaacRunner;
+    private readonly IMediaProbeService _mediaProbeService;
 
-    public AudioEncodingScript(ILogService logService, ISettingsManager settingsManager, IPathManager pathManager, IFFmpegRunner ffmpegRunner, QaacRunner qaacRunner)
+    public AudioEncodingScript(
+        ILogService logService,
+        ISettingsManager settingsManager,
+        IPathManager pathManager,
+        IFFmpegRunner ffmpegRunner,
+        QaacRunner qaacRunner,
+        IMediaProbeService mediaProbeService)
         : base(logService, settingsManager, pathManager)
     {
         _ffmpegRunner = ffmpegRunner ?? throw new ArgumentNullException(nameof(ffmpegRunner));
         _qaacRunner = qaacRunner ?? throw new ArgumentNullException(nameof(qaacRunner));
+        _mediaProbeService = mediaProbeService ?? throw new ArgumentNullException(nameof(mediaProbeService));
     }
 
     // Карта соответствия форматов, их расширений и кодеков FFmpeg
@@ -317,46 +325,69 @@ public sealed class AudioEncodingScript : AbstractScript
 
         // 6. Считываем длительность медиафайла и количество каналов для расчета прогресса и валидации кодеков
         double duration = 0.0;
-        int audioChannels = 2;
+        int audioChannels = 0;
         try
         {
-            var info = await _ffmpegRunner.GetVideoInfoAsync(filePath);
-            if (info != null)
+            var structure = await _mediaProbeService.ProbeAsync(filePath);
+            if (structure != null)
             {
-                if (info.RootElement.TryGetProperty("format", out var formatProp))
+                duration = structure.Duration;
+                var audioTrack = structure.Tracks.FirstOrDefault(t => t.TrackType == "audio");
+                if (audioTrack != null && audioTrack.Channels > 0)
                 {
-                    if (formatProp.TryGetProperty("duration", out var durProp))
+                    audioChannels = audioTrack.Channels;
+                }
+            }
+
+            // Фоллбэк: если MediaProbeService не вернул каналы или длительность, считываем через ffprobe
+            if (audioChannels <= 0 || duration <= 0)
+            {
+                var info = await _ffmpegRunner.GetVideoInfoAsync(filePath);
+                if (info != null)
+                {
+                    if (duration <= 0 && info.RootElement.TryGetProperty("format", out var fmtProp) && fmtProp.TryGetProperty("duration", out var fmtDur))
                     {
-                        if (durProp.ValueKind == JsonValueKind.String &&
-                            double.TryParse(
-                                durProp.GetString(),
-                                System.Globalization.NumberStyles.Any,
-                                System.Globalization.CultureInfo.InvariantCulture,
-                                out double d))
+                        if (fmtDur.ValueKind == JsonValueKind.String && double.TryParse(fmtDur.GetString(), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double fd))
                         {
-                            duration = d;
+                            duration = fd;
                         }
-                        else if (durProp.ValueKind == JsonValueKind.Number)
+                        else if (fmtDur.ValueKind == JsonValueKind.Number)
                         {
-                            duration = durProp.GetDouble();
+                            duration = fmtDur.GetDouble();
                         }
                     }
-                }
 
-                if (info.RootElement.TryGetProperty("streams", out var streamsProp) && streamsProp.ValueKind == JsonValueKind.Array)
-                {
-                    foreach (var s in streamsProp.EnumerateArray())
+                    if (info.RootElement.TryGetProperty("streams", out var streamsProp) && streamsProp.ValueKind == JsonValueKind.Array)
                     {
-                        if (s.TryGetProperty("codec_type", out var ct) && ct.GetString() == "audio")
+                        foreach (var s in streamsProp.EnumerateArray())
                         {
-                            if (s.TryGetProperty("channels", out var chProp) && chProp.TryGetInt32(out int ch) && ch > 0)
+                            if (s.TryGetProperty("codec_type", out var ct) && ct.GetString() == "audio")
                             {
-                                audioChannels = ch;
-                                break;
+                                if (audioChannels <= 0 && s.TryGetProperty("channels", out var chProp) && chProp.TryGetInt32(out int ch) && ch > 0)
+                                {
+                                    audioChannels = ch;
+                                }
+                                if (duration <= 0 && s.TryGetProperty("duration", out var stDur))
+                                {
+                                    if (stDur.ValueKind == JsonValueKind.String && double.TryParse(stDur.GetString(), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double sd))
+                                    {
+                                        duration = sd;
+                                    }
+                                    else if (stDur.ValueKind == JsonValueKind.Number)
+                                    {
+                                        duration = stDur.GetDouble();
+                                    }
+                                }
                             }
                         }
                     }
                 }
+            }
+
+            // По умолчанию принимаем стерео (2 канала), если не удалось определить
+            if (audioChannels <= 0)
+            {
+                audioChannels = 2;
             }
         }
         catch (Exception ex)

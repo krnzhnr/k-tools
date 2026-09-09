@@ -105,6 +105,18 @@ public sealed class MediaProbeService : IMediaProbeService
                 }
             }
 
+            // Дополнительный ультранадежный фоллбэк: если длительность всё ещё не определена (сырые потоки AC3, EAC3, DTS, MP3 VBR без Xing),
+            // запускаем быстрый анализ через заголовочный вывод FFmpeg (Duration: HH:MM:SS.ms)
+            if (result != null && result.Duration <= 0)
+            {
+                double ffmpegHeaderDuration = await _ffmpegRunner.ProbeDurationViaFfmpegAsync(filePath);
+                if (ffmpegHeaderDuration > 0)
+                {
+                    result.Duration = ffmpegHeaderDuration;
+                    _logService.Info($"Длительность для '{Path.GetFileName(filePath)}' определена через заголовочный зонд FFmpeg: {result.Duration:F2} сек.", "MediaProbeService");
+                }
+            }
+
             return result;
         }
         catch (Exception ex)

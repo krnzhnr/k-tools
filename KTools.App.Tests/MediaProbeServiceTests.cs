@@ -52,4 +52,56 @@ public class MediaProbeServiceTests
         // Assert
         result.Should().BeNull();
     }
+
+    /// <summary>
+    /// Проверяет, что при отсутствии длительности в контейнере и потоках ffprobe, сервис обращается к FFmpeg заголовочному зонду.
+    /// </summary>
+    [TestMethod]
+    public async Task ProbeAsync_RawAudioStreamWithoutFormatDuration_FallsBackToFfmpegHeaderProbe()
+    {
+        // Arrange
+        string testPath = Path.GetTempFileName();
+        try
+        {
+            File.WriteAllText(testPath, "dummy media content");
+
+            string jsonNoDuration = """
+            {
+                "format": { "bit_rate": "384000" },
+                "streams": [
+                    {
+                        "index": 0,
+                        "codec_name": "ac3",
+                        "codec_type": "audio",
+                        "channels": 6
+                    }
+                ]
+            }
+            """;
+            var doc = System.Text.Json.JsonDocument.Parse(jsonNoDuration);
+            _ffmpegRunnerMock.Setup(f => f.GetVideoInfoAsync(testPath))
+                .ReturnsAsync(doc);
+            _ffmpegRunnerMock.Setup(f => f.ProbeDurationViaFfmpegAsync(testPath))
+                .ReturnsAsync(245.5);
+
+            var probeService = new MediaProbeService(
+                _logServiceMock.Object,
+                _mkvmergeRunnerMock.Object,
+                _ffmpegRunnerMock.Object,
+                _settingsManagerMock.Object
+            );
+
+            // Act
+            var result = await probeService.ProbeAsync(testPath);
+
+            // Assert
+            result.Should().NotBeNull();
+            result!.Duration.Should().Be(245.5);
+            _ffmpegRunnerMock.Verify(f => f.ProbeDurationViaFfmpegAsync(testPath), Times.Once);
+        }
+        finally
+        {
+            if (File.Exists(testPath)) File.Delete(testPath);
+        }
+    }
 }

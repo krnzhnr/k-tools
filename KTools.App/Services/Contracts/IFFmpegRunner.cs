@@ -32,6 +32,14 @@ public interface IFFmpegRunner
     Task<JsonDocument?> GetVideoInfoAsync(string filePath);
 
     /// <summary>
+    /// Быстро определяет длительность медиафайла в секундах путем считывания заголовочного вывода FFmpeg (Duration: HH:MM:SS.ms).
+    /// Используется как высоконадежный фоллбэк для сырых потоков (AC3, EAC3, DTS, MP3 VBR), где ffprobe возвращает N/A.
+    /// </summary>
+    /// <param name="filePath">Абсолютный путь к исследуемому медиафайлу.</param>
+    /// <returns>Длительность в секундах или 0.0 при невозможности определения.</returns>
+    Task<double> ProbeDurationViaFfmpegAsync(string filePath);
+
+    /// <summary>
     /// Извлечь выбранную дорожку субтитров и перекодировать её в формат ASS.
     /// </summary>
     Task<bool> ExtractSubtitleAsync(string inputFile, int streamIndex, string outputPath, bool relative = false);

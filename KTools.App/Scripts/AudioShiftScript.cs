@@ -20,17 +20,20 @@ public sealed class AudioShiftScript : AbstractScript
 {
     private readonly IFFmpegRunner _ffmpegRunner;
     private readonly IEac3toRunner _eac3toRunner;
+    private readonly IMediaProbeService _mediaProbeService;
 
     public AudioShiftScript(
         ILogService logService,
         ISettingsManager settingsManager,
         IPathManager pathManager,
         IFFmpegRunner ffmpegRunner,
-        IEac3toRunner eac3toRunner)
+        IEac3toRunner eac3toRunner,
+        IMediaProbeService mediaProbeService)
         : base(logService, settingsManager, pathManager)
     {
         _ffmpegRunner = ffmpegRunner ?? throw new ArgumentNullException(nameof(ffmpegRunner));
         _eac3toRunner = eac3toRunner ?? throw new ArgumentNullException(nameof(eac3toRunner));
+        _mediaProbeService = mediaProbeService ?? throw new ArgumentNullException(nameof(mediaProbeService));
     }
 
     /// <summary>
@@ -223,25 +226,10 @@ public sealed class AudioShiftScript : AbstractScript
         double duration = 0.0;
         try
         {
-            var info = await _ffmpegRunner.GetVideoInfoAsync(filePath);
-            if (info != null && info.RootElement.TryGetProperty("format", out var formatProp))
+            var structure = await _mediaProbeService.ProbeAsync(filePath);
+            if (structure != null)
             {
-                if (formatProp.TryGetProperty("duration", out var durProp))
-                {
-                    if (durProp.ValueKind == JsonValueKind.String &&
-                        double.TryParse(
-                            durProp.GetString(),
-                            NumberStyles.Any,
-                            CultureInfo.InvariantCulture,
-                            out double d))
-                    {
-                        duration = d;
-                    }
-                    else if (durProp.ValueKind == JsonValueKind.Number)
-                    {
-                        duration = durProp.GetDouble();
-                    }
-                }
+                duration = structure.Duration;
             }
         }
         catch (Exception ex)
@@ -288,7 +276,7 @@ public sealed class AudioShiftScript : AbstractScript
             onProgress: pct =>
             {
                 string text = $"Обработка сдвига... {pct.Percent:F1}%";
-                progressCallback(fileIndex, totalCount, text, pct.Percent);
+                progressCallback(fileIndex, totalCount, text, pct.Percent, pct.Fps, pct.Bitrate);
             },
             cancellationToken: cts.Token);
 

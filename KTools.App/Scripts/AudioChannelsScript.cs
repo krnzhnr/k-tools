@@ -194,6 +194,11 @@ public sealed class AudioChannelsScript : AbstractScript
                 outputPath: tempInputWavPath,
                 extraArgs: decodeArgs,
                 overwrite: true,
+                onProgress: p =>
+                {
+                    string pLabel = p.Percent > 0 ? $"{p.Percent:F1}%" : $"{p.TimeSeconds:F1} сек";
+                    progressCallback(fileIndex, totalCount, $"Декодирование во временный WAV ({pLabel})...", p.Percent, p.Fps, p.Bitrate);
+                },
                 cancellationToken: decodeCts.Token);
 
             while (!decodeTask.IsCompleted)
