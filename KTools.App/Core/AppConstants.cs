@@ -142,6 +142,7 @@ public static class AppConstants
         public const string AudioTransplant = "\uE8AB";
         public const string Calculator = "\uE1D0";
         public const string MediaDownloader = "\uE128";
+        public const string SpeechRecognition = "\uE8D4";
     }
 
     /// <summary>
@@ -227,6 +228,9 @@ public static class AppConstants
 
         public const string BitrateViewerName = "Анализ битрейта видео и аудио";
         public const string BitrateViewerDesc = "Анализ распределения битрейта медиапотоков с интерактивной Win2D GPU-визуализацией.";
+
+        public const string SpeechRecognitionName = "Распознавание речи";
+        public const string SpeechRecognitionDesc = "Транскрибация речи в текст и субтитры (SRT/VTT/TXT) через Whisper AI с поддержкой GPU.";
     }
 
     /// <summary>

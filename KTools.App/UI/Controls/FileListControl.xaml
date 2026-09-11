@@ -366,6 +366,8 @@
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" />
@@ -427,8 +429,54 @@
                                          VerticalAlignment="Center" />
                         </Grid>
  
-                        <!-- Кнопка удаления из списка -->
+                        <!-- Кнопка повторного запуска скачивания (отображается по завершении или ошибке) -->
                         <Button Grid.Column="2" Grid.RowSpan="2"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                Padding="0"
+                                Width="32"
+                                Height="32"
+                                MinWidth="0"
+                                MinHeight="0"
+                                Margin="0,0,4,0"
+                                HorizontalAlignment="Center"
+                                VerticalAlignment="Center"
+                                HorizontalContentAlignment="Center"
+                                VerticalContentAlignment="Center"
+                                Click="RetryDownloadButton_Click"
+                                ToolTipService.ToolTip="Скачать заново"
+                                Visibility="{x:Bind IsRetryVisible, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+                            <FontIcon FontSize="18" Glyph="&#xE72C;"
+                                      HorizontalAlignment="Center"
+                                      VerticalAlignment="Center"
+                                      Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
+                                      FontFamily="{ThemeResource SymbolThemeFontFamily}" />
+                        </Button>
+
+                        <!-- Кнопка копирования URL-ссылки в буфер обмена -->
+                        <Button Grid.Column="3" Grid.RowSpan="2"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                Padding="0"
+                                Width="32"
+                                Height="32"
+                                MinWidth="0"
+                                MinHeight="0"
+                                Margin="0,0,4,0"
+                                HorizontalAlignment="Center"
+                                VerticalAlignment="Center"
+                                HorizontalContentAlignment="Center"
+                                VerticalContentAlignment="Center"
+                                Click="CopyUrlButton_Click"
+                                ToolTipService.ToolTip="Скопировать ссылку в буфер обмена">
+                            <FontIcon FontSize="18" Glyph="&#xE8C8;"
+                                      HorizontalAlignment="Center"
+                                      VerticalAlignment="Center"
+                                      FontFamily="{ThemeResource SymbolThemeFontFamily}" />
+                        </Button>
+
+                        <!-- Кнопка удаления из списка -->
+                        <Button Grid.Column="4" Grid.RowSpan="2"
                                 Background="Transparent"
                                 BorderThickness="0"
                                 Padding="0"

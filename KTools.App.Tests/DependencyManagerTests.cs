@@ -70,7 +70,7 @@ public class DependencyManagerTests
 
         // Assert
         registry.Should().NotBeNull();
-        registry.Should().HaveCount(7);
+        registry.Should().HaveCount(9);
 
         var ffmpeg = registry.FirstOrDefault(d => d.Key == "ffmpeg");
         ffmpeg.Should().NotBeNull();

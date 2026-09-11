@@ -237,6 +237,8 @@ public partial class App : Application
         services.AddSingleton<IDiskTypeDetectorService, DiskTypeDetectorService>();
         services.AddSingleton<IAudioWaveformService, AudioWaveformService>();
         services.AddSingleton<IAssParser, AssParser>();
+        services.AddSingleton<IWhisperModelManager, WhisperModelManager>();
+        services.AddSingleton<IWhisperRunner, WhisperRunner>();
 
         // Регистрация скриптов обработки медиа
         services.AddTransient<Scripts.MetadataCleanupScript>();
@@ -256,7 +258,7 @@ public partial class App : Application
         services.AddTransient<Scripts.SubtitlesConvertScript>();
         services.AddTransient<Scripts.AudioShiftScript>();
         services.AddTransient<Scripts.SubtitleShiftScript>();
-        services.AddTransient<Scripts.MediaDownloaderScript>();
+        services.AddTransient<Scripts.SpeechRecognitionScript>();
 
         // 2. Регистрация служб приложения
         services.AddSingleton<INavigationService, NavigationService>();

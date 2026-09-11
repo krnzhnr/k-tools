@@ -31,6 +31,7 @@ public static class ShellIntegration
         { AppConstants.ScriptMetadata.TrackExtrName, "container_demux" },
         { AppConstants.ScriptMetadata.AssToVttName, "subtitles_convert" },
         { AppConstants.ScriptMetadata.SubtitleShiftName, "subtitles_shift" },
+        { AppConstants.ScriptMetadata.SpeechRecognitionName, "speech_recognition" },
         { "Загрузка медиа", "media_downloader" }
     };
 

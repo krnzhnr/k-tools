@@ -201,6 +201,38 @@ public class DependencyManager : IDependencyManager
             CustomDownloadUrl = "https://nodejs.org/dist/v22.11.0/node-v22.11.0-win-x64.zip",
             StripTopLevelFolder = true
         });
+
+        _registry.Add(new DependencyInfo
+        {
+            Key = "whisper_cpu",
+            DisplayName = "Whisper (CPU)",
+            Description = "Распознавание речи на процессоре (AVX2)",
+            IconName = "audio",
+            Subfolder = "whisper-cpu",
+            SizeMb = 18.0,
+            ArchiveSizeMb = 8.5,
+            ArchiveName = "whisper-bin-x64.zip",
+            VerifyBinary = "whisper-cli.exe",
+            IsRequired = false,
+            CustomDownloadUrl = "https://github.com/ggml-org/whisper.cpp/releases/download/b5130/whisper-bin-x64.zip",
+            StripTopLevelFolder = true
+        });
+
+        _registry.Add(new DependencyInfo
+        {
+            Key = "whisper_cuda",
+            DisplayName = "Whisper (NVIDIA CUDA)",
+            Description = "Распознавание речи на GPU NVIDIA (CUDA)",
+            IconName = "audio",
+            Subfolder = "whisper-cuda",
+            SizeMb = 675.0,
+            ArchiveSizeMb = 675.0,
+            ArchiveName = "whisper-cublas-12.4.0-bin-x64.zip",
+            VerifyBinary = "whisper-cli.exe",
+            IsRequired = false,
+            CustomDownloadUrl = "https://github.com/ggml-org/whisper.cpp/releases/download/b5130/whisper-cublas-12.4.0-bin-x64.zip",
+            StripTopLevelFolder = true
+        });
     }
 
     /// <summary>
@@ -508,6 +540,17 @@ public class DependencyManager : IDependencyManager
             string downloadUrl = !string.IsNullOrEmpty(dep.CustomDownloadUrl)
                 ? dep.CustomDownloadUrl
                 : $"{DepsBaseUrl}/{dep.ArchiveName}";
+
+            // Для компонентов Whisper динамически получаем актуальный URL релиза с бинарными сборками, если доступен
+            if (key.StartsWith("whisper_", StringComparison.OrdinalIgnoreCase))
+            {
+                string resolvedUrl = await ResolveWhisperDownloadUrlAsync(key, dep.ArchiveName, downloadUrl);
+                if (!string.IsNullOrEmpty(resolvedUrl))
+                {
+                    downloadUrl = resolvedUrl;
+                }
+            }
+
             _logService.Info($"Начало скачивания архива: {downloadUrl} в {tempArchivePath}", "DependencyManager");
             using (var response = await _httpClient.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead))
             {
@@ -561,10 +604,34 @@ public class DependencyManager : IDependencyManager
 
             string destinationFolder = Path.Combine(_binDir, dep.Subfolder);
 
-            // Гарантируем наличие целевых папок
+            // Гарантируем наличие целевых папок и очистку от старых файлов перед новой распаковкой
             try
             {
-                Directory.CreateDirectory(destinationFolder);
+                if (Directory.Exists(destinationFolder))
+                {
+                    // Если папка уже существовала, очищаем её содержимое перед установкой/обновлением,
+                    // чтобы исключить дублирование и накопление устаревших файлов
+                    try
+                    {
+                        var di = new DirectoryInfo(destinationFolder);
+                        foreach (var file in di.GetFiles())
+                        {
+                            try { file.Delete(); } catch { /* Игнорируем заблокированные файлы */ }
+                        }
+                        foreach (var dir in di.GetDirectories())
+                        {
+                            try { dir.Delete(true); } catch { /* Игнорируем вложенные каталоги с блокировками */ }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logService.Warn($"Предупреждение при предварительной очистке папки '{destinationFolder}': {ex.Message}", "DependencyManager");
+                    }
+                }
+                else
+                {
+                    Directory.CreateDirectory(destinationFolder);
+                }
             }
             catch (UnauthorizedAccessException ex)
             {
@@ -1043,6 +1110,9 @@ public class DependencyManager : IDependencyManager
             // 1. Проверяем обновления yt-dlp
             await CheckAndUpdateYtDlpAsync(force: true);
 
+            // 1.1. Проверяем обновления Whisper
+            await CheckAndUpdateWhisperAsync(force: true);
+
             // 2. Проверяем остальной набор зависимостей из релиза deps-v1 на GitHub
             using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/repos/krnzhnr/k-tools/releases/tags/deps-v1");
             request.Headers.UserAgent.Clear();
@@ -1177,5 +1247,163 @@ public class DependencyManager : IDependencyManager
         {
             _logService.Error($"Исключение при проверке обновлений yt-dlp: {ex.Message}", "DependencyManager");
         }
+    }
+
+    /// <summary>
+    /// Выполняет фоновую проверку обновлений whisper.cpp и обновляет установленные рантаймы при обнаружении новой версии на GitHub.
+    /// </summary>
+    /// <param name="force">Принудительно запустить проверку без учёта 24-часового интервала.</param>
+    public async Task CheckAndUpdateWhisperAsync(bool force = false)
+    {
+        // Проверяем, установлен ли хотя бы один рантайм Whisper
+        bool anyWhisperInstalled = IsInstalled("whisper_cpu") || IsInstalled("whisper_cuda");
+        if (!anyWhisperInstalled)
+        {
+            _logService.Info("Проверка обновлений Whisper пропущена, так как ни один рантайм не установлен.", "DependencyManager");
+            return;
+        }
+
+        try
+        {
+            string lastCheckStr = _settingsManager.GetSetting("Updates", "LastWhisperCheckTime", string.Empty);
+            if (!force && DateTime.TryParse(lastCheckStr, out DateTime lastCheckTime))
+            {
+                if (DateTime.UtcNow - lastCheckTime < TimeSpan.FromDays(1))
+                {
+                    _logService.Info("Проверка обновлений Whisper выполнялась менее 24 часов назад. Пропуск.", "DependencyManager");
+                    return;
+                }
+            }
+
+            _logService.Info("Запуск проверки обновлений Whisper с GitHub Releases...", "DependencyManager");
+
+            // Ищем последний релиз в ggml-org/whisper.cpp, содержащий бинарные сборки
+            var (latestTag, _) = await FindLatestWhisperReleaseWithAssetsAsync();
+            if (string.IsNullOrEmpty(latestTag))
+            {
+                _logService.Warn("Не удалось определить релиз Whisper с доступными бинарными сборками.", "DependencyManager");
+                return;
+            }
+
+            _settingsManager.SetSetting("Updates", "LastWhisperCheckTime", DateTime.UtcNow.ToString("o"));
+            string localVersion = _settingsManager.GetSetting("Updates", "WhisperInstalledVersion", string.Empty);
+            _logService.Info($"Последняя доступная версия Whisper: {latestTag}. Локальная версия: {localVersion}", "DependencyManager");
+
+            if (latestTag.Equals(localVersion, StringComparison.OrdinalIgnoreCase))
+            {
+                lock (_updatesAvailable)
+                {
+                    _updatesAvailable["whisper_cpu"] = false;
+                    _updatesAvailable["whisper_cuda"] = false;
+                }
+                _logService.Info("Установлена актуальная версия Whisper. Обновление не требуется.", "DependencyManager");
+                return;
+            }
+
+            // Обновляем те рантаймы, которые установлены
+            string[] whisperKeys = new[] { "whisper_cpu", "whisper_cuda" };
+            foreach (var wKey in whisperKeys)
+            {
+                if (IsInstalled(wKey))
+                {
+                    lock (_updatesAvailable) { _updatesAvailable[wKey] = true; }
+                    _logService.Info($"Обнаружена новая версия Whisper ({latestTag}) для {wKey}. Запуск обновления...", "DependencyManager");
+                    await InstallDependencyAsync(wKey);
+                    lock (_updatesAvailable) { _updatesAvailable[wKey] = false; }
+                }
+            }
+
+            _settingsManager.SetSetting("Updates", "WhisperInstalledVersion", latestTag);
+            _logService.Info($"Рантаймы Whisper успешно обновлены до версии {latestTag}", "DependencyManager");
+        }
+        catch (Exception ex)
+        {
+            _logService.Error($"Исключение при проверке обновлений Whisper: {ex.Message}", "DependencyManager");
+        }
+    }
+
+    /// <summary>
+    /// Динамически находит релиз Whisper на GitHub, в котором прикреплены скомпилированные бинарные архивы.
+    /// </summary>
+    private async Task<(string Tag, JsonElement? AssetsArray)> FindLatestWhisperReleaseWithAssetsAsync()
+    {
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/repos/ggml-org/whisper.cpp/releases?per_page=10");
+            request.Headers.UserAgent.Clear();
+            request.Headers.UserAgent.ParseAdd("K-Tools-DependencyManager-WinUI3");
+
+            using var response = await _httpClient.SendAsync(request);
+            if (!response.IsSuccessStatusCode)
+            {
+                _logService.Warn($"Не удалось запросить список релизов Whisper. Код ответа: {response.StatusCode}", "DependencyManager");
+                return (string.Empty, null);
+            }
+
+            string json = await response.Content.ReadAsStringAsync();
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array)
+            {
+                return (string.Empty, null);
+            }
+
+            foreach (var releaseEl in doc.RootElement.EnumerateArray())
+            {
+                if (releaseEl.TryGetProperty("assets", out var assetsProp) &&
+                    assetsProp.ValueKind == JsonValueKind.Array &&
+                    assetsProp.GetArrayLength() > 0)
+                {
+                    string tag = releaseEl.TryGetProperty("tag_name", out var tProp) ? (tProp.GetString() ?? string.Empty) : string.Empty;
+                    if (!string.IsNullOrEmpty(tag))
+                    {
+                        // Клонируем элемент ассетов для безопасного возврата из using-блока JsonDocument
+                        return (tag, assetsProp.Clone());
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logService.Warn($"Ошибка при поиске релизов Whisper с ассетами: {ex.Message}", "DependencyManager");
+        }
+
+        return (string.Empty, null);
+    }
+
+    /// <summary>
+    /// Разрешает прямую ссылку на скачивание архива Whisper из самого свежего подходящего релиза.
+    /// Если запрос завершается ошибкой или ассет не найден, возвращает исходный fallbackUrl.
+    /// </summary>
+    private async Task<string> ResolveWhisperDownloadUrlAsync(string key, string archiveName, string fallbackUrl)
+    {
+        try
+        {
+            var (tag, assets) = await FindLatestWhisperReleaseWithAssetsAsync();
+            if (assets.HasValue && assets.Value.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var asset in assets.Value.EnumerateArray())
+                {
+                    string name = asset.TryGetProperty("name", out var nProp) ? (nProp.GetString() ?? string.Empty) : string.Empty;
+                    if (string.Equals(name, archiveName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (asset.TryGetProperty("browser_download_url", out var urlProp))
+                        {
+                            string resolved = urlProp.GetString() ?? string.Empty;
+                            if (!string.IsNullOrEmpty(resolved))
+                            {
+                                _logService.Info($"Разрешен динамический URL для {key} ({archiveName}): {resolved} (релиз {tag})", "DependencyManager");
+                                return resolved;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logService.Warn($"Не удалось динамически разрешить URL для {key}: {ex.Message}. Используется URL по умолчанию.", "DependencyManager");
+        }
+
+        return fallbackUrl;
     }
 }

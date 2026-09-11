@@ -159,6 +159,7 @@ public partial class MainViewModel : ThreadSafeViewModel
         AddLegacyTagMapping("script:container_demux", AppConstants.ScriptMetadata.TrackExtrName);
         AddLegacyTagMapping("script:subtitles_convert", AppConstants.ScriptMetadata.AssToVttName);
         AddLegacyTagMapping("script:subtitles_shift", AppConstants.ScriptMetadata.SubtitleShiftName);
+        AddLegacyTagMapping("script:speech_recognition", AppConstants.ScriptMetadata.SpeechRecognitionName);
         AddLegacyTagMapping("script:media_downloader", "Загрузка медиа");
     }
 

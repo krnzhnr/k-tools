@@ -132,7 +132,8 @@ public sealed partial class WorkPanel : Page
     }
 
     private Grid? _urlInputBar;
-    private TextBox? _urlTextBox;
+    private AutoSuggestBox? _urlInputBox;
+    private readonly List<string> _urlHistory = new();
 
     private Grid CreateUrlInputBar()
     {
@@ -145,21 +146,36 @@ public sealed partial class WorkPanel : Page
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
-        _urlTextBox = new TextBox
+        _urlInputBox = new AutoSuggestBox
         {
-            PlaceholderText = "Введите URL-адрес для скачивания (например, с YouTube, SoundCloud)...",
+            PlaceholderText = "Введите или выберите из истории URL-адрес (YouTube, SoundCloud, Rutube)...",
             Height = 36,
-            VerticalAlignment = VerticalAlignment.Center
+            VerticalAlignment = VerticalAlignment.Center,
+            ItemsSource = _urlHistory
         };
-        _urlTextBox.KeyDown += (s, e) =>
+
+        _urlInputBox.QuerySubmitted += (s, e) =>
+        {
+            AddUrlFromInput();
+        };
+
+        _urlInputBox.SuggestionChosen += (s, e) =>
+        {
+            if (e.SelectedItem is string selectedUrl)
+            {
+                _urlInputBox.Text = selectedUrl;
+            }
+        };
+
+        _urlInputBox.KeyDown += (s, e) =>
         {
             if (e.Key == Windows.System.VirtualKey.Enter)
             {
                 AddUrlFromInput();
             }
         };
-        Grid.SetColumn(_urlTextBox, 0);
-        grid.Children.Add(_urlTextBox);
+        Grid.SetColumn(_urlInputBox, 0);
+        grid.Children.Add(_urlInputBox);
 
         var pasteBtn = new Button
         {
@@ -178,7 +194,7 @@ public sealed partial class WorkPanel : Page
                 if (dataPackageView.Contains(Windows.ApplicationModel.DataTransfer.StandardDataFormats.Text))
                 {
                     string text = await dataPackageView.GetTextAsync();
-                    _urlTextBox.Text = text;
+                    _urlInputBox.Text = text.Trim();
                 }
             }
             catch (Exception ex)
@@ -207,12 +223,27 @@ public sealed partial class WorkPanel : Page
 
     private void AddUrlFromInput()
     {
-        if (_urlTextBox == null) return;
-        string url = _urlTextBox.Text.Trim();
+        if (_urlInputBox == null) return;
+        string url = _urlInputBox.Text.Trim();
         if (!string.IsNullOrEmpty(url))
         {
             FileList.AddUrl(url);
-            _urlTextBox.Text = string.Empty;
+
+            // Сохраняем в истории последних введенных ссылок (до 15 записей)
+            if (!_urlHistory.Contains(url, StringComparer.OrdinalIgnoreCase))
+            {
+                _urlHistory.Insert(0, url);
+                if (_urlHistory.Count > 15)
+                {
+                    _urlHistory.RemoveAt(_urlHistory.Count - 1);
+                }
+                _urlInputBox.ItemsSource = null;
+                _urlInputBox.ItemsSource = _urlHistory;
+            }
+
+            // Не затираем ссылку полностью, чтобы пользователю не приходилось копировать её заново
+            // Фокусируем элемент для удобного редактирования или вставки поверх
+            _urlInputBox.Focus(FocusState.Programmatic);
         }
     }
 

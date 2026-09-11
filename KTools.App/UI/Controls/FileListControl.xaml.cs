@@ -530,6 +530,33 @@ public sealed partial class FileListControl : UserControl
         }
     }
 
+    private void CopyUrlButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button btn && btn.DataContext is FileQueueItem item)
+        {
+            try
+            {
+                var package = new Windows.ApplicationModel.DataTransfer.DataPackage();
+                package.SetText(item.FilePath);
+                Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(package);
+                _logService.Info($"Ссылка скопирована в буфер обмена: '{item.FilePath}'", "FileListControl");
+            }
+            catch (Exception ex)
+            {
+                _logService.Exception(ex, "Ошибка при копировании ссылки в буфер обмена", "FileListControl");
+            }
+        }
+    }
+
+    private void RetryDownloadButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button btn && btn.DataContext is FileQueueItem item)
+        {
+            item.ResetStateForRetry();
+            _logService.Info($"Состояние элемента очереди '{item.DisplayName}' сброшено для повторного скачивания.", "FileListControl");
+        }
+    }
+
     private void OpenBitrateGraphButton_Click(object sender, RoutedEventArgs e)
     {
         if (sender is Button btn && btn.DataContext is FileQueueItem item)
@@ -738,9 +765,22 @@ public sealed partial class FileListControl : UserControl
         var item = new FileQueueItem(url);
         
         // Добавляем дефолтные варианты качеств
-        item.AvailableFormats.Add(new DownloadFormatItem { Id = "best_quality", DisplayName = "Наилучшее качество (Видео+Аудио)", FormatArg = "bv*+ba/b" });
-        item.AvailableFormats.Add(new DownloadFormatItem { Id = "best_video", DisplayName = "Только наилучшее видео", FormatArg = "bv*" });
-        item.AvailableFormats.Add(new DownloadFormatItem { Id = "best_audio", DisplayName = "Только наилучший звук", FormatArg = "ba" });
+        item.AvailableFormats.Add(new DownloadFormatItem
+        {
+            Id = "best_quality",
+            DisplayName = "Наилучшее качество (Видео+Аудио)",
+            FormatArg = "bv*+ba/b",
+            IsAudioOnly = false,
+            Height = 99999
+        });
+        item.AvailableFormats.Add(new DownloadFormatItem
+        {
+            Id = "best_audio",
+            DisplayName = "Только звук (Наилучшее качество)",
+            FormatArg = "ba/b",
+            IsAudioOnly = true,
+            Height = 0
+        });
         item.SelectedFormat = item.AvailableFormats[0];
 
         item.AvailableSubtitles.Add(new DownloadSubtitleItem { Code = "none", DisplayName = "Без субтитров" });
@@ -810,91 +850,100 @@ public sealed partial class FileListControl : UserControl
                     }
                 }
 
-                // 2. Parse Formats
+                // 2. Parse Formats с дедупликацией по уникальным разрешениям
                 var tempFormats = new List<DownloadFormatItem>();
-                tempFormats.Add(new DownloadFormatItem { Id = "best_quality", DisplayName = "Наилучшее качество (Видео+Аудио)", FormatArg = "bv*+ba/b" });
-                tempFormats.Add(new DownloadFormatItem { Id = "best_video", DisplayName = "Только наилучшее видео", FormatArg = "bv*" });
-                tempFormats.Add(new DownloadFormatItem { Id = "best_audio", DisplayName = "Только наилучший звук", FormatArg = "ba" });
+                tempFormats.Add(new DownloadFormatItem
+                {
+                    Id = "best_quality",
+                    DisplayName = "Наилучшее качество (Видео+Аудио)",
+                    FormatArg = "bv*+ba/b",
+                    IsAudioOnly = false,
+                    Height = 99999
+                });
+                tempFormats.Add(new DownloadFormatItem
+                {
+                    Id = "best_audio",
+                    DisplayName = "Только звук (Наилучшее качество)",
+                    FormatArg = "ba/b",
+                    IsAudioOnly = true,
+                    Height = 0
+                });
 
                 if (root.TryGetProperty("formats", out var formatsProp) && formatsProp.ValueKind == System.Text.Json.JsonValueKind.Array)
                 {
+                    // Вспомогательный класс для сбора и дедупликации потоков
+                    var videoStreamGroups = new Dictionary<string, (int height, int fps, double tbr, string formatId, string note)>();
+
                     foreach (var format in formatsProp.EnumerateArray())
                     {
                         string formatId = format.TryGetProperty("format_id", out var fid) ? fid.GetString() ?? "" : "";
                         if (string.IsNullOrEmpty(formatId)) continue;
 
-                        string ext = format.TryGetProperty("ext", out var extP) ? extP.GetString() ?? "" : "";
-                        
                         bool hasVideo = format.TryGetProperty("vcodec", out var vcodecProp) && vcodecProp.GetString() != "none";
-                        bool hasAudio = format.TryGetProperty("acodec", out var acodecProp) && acodecProp.GetString() != "none";
-                        
-                        double tbr = 0;
-                        if (format.TryGetProperty("tbr", out var tbrP) && tbrP.ValueKind == System.Text.Json.JsonValueKind.Number)
-                        {
-                            tbr = tbrP.GetDouble();
-                        }
-                        
-                        int fps = 0;
-                        if (format.TryGetProperty("fps", out var fpsP) && fpsP.ValueKind == System.Text.Json.JsonValueKind.Number)
-                        {
-                            fps = (int)Math.Round(fpsP.GetDouble());
-                        }
-                        
+                        if (!hasVideo) continue;
+
                         int height = 0;
                         if (format.TryGetProperty("height", out var hP) && hP.ValueKind == System.Text.Json.JsonValueKind.Number)
                         {
                             height = (int)Math.Round(hP.GetDouble());
                         }
-                        
-                        int width = 0;
-                        if (format.TryGetProperty("width", out var wP) && wP.ValueKind == System.Text.Json.JsonValueKind.Number)
+
+                        if (height <= 0) continue;
+
+                        int fps = 0;
+                        if (format.TryGetProperty("fps", out var fpsP) && fpsP.ValueKind == System.Text.Json.JsonValueKind.Number)
                         {
-                            width = (int)Math.Round(wP.GetDouble());
+                            fps = (int)Math.Round(fpsP.GetDouble());
                         }
 
-                        string vcodec = format.TryGetProperty("vcodec", out var vc) ? vc.GetString() ?? "" : "";
-                        string acodec = format.TryGetProperty("acodec", out var ac) ? ac.GetString() ?? "" : "";
-
-                        if (vcodec.Contains(".")) vcodec = vcodec.Split('.')[0];
-                        if (acodec.Contains(".")) acodec = acodec.Split('.')[0];
-
-                        string disp = "";
-                        string formatArg = formatId;
-
-                        if (hasVideo && hasAudio)
+                        double tbr = 0;
+                        if (format.TryGetProperty("tbr", out var tbrP) && tbrP.ValueKind == System.Text.Json.JsonValueKind.Number)
                         {
-                            disp = $"[Видео+Аудио] {width}x{height} ({ext})";
-                            if (fps > 0) disp += $" - {fps}fps";
-                            if (tbr > 0) disp += $", ~{tbr:F0}k";
-                            disp += $" ({vcodec}/{acodec})";
-                        }
-                        else if (hasVideo)
-                        {
-                            disp = $"[Только видео] {width}x{height} ({ext})";
-                            if (fps > 0) disp += $" - {fps}fps";
-                            if (tbr > 0) disp += $", ~{tbr:F0}k";
-                            disp += $" ({vcodec})";
-
-                            // Добавляем также вариант склеивания этого видеопотока с лучшим звуком
-                            tempFormats.Add(new DownloadFormatItem
-                            {
-                                Id = formatId + "_merged",
-                                DisplayName = $"[Видео+Звук] {width}x{height} ({ext}) + Лучший звук",
-                                FormatArg = $"{formatId}+ba/b"
-                            });
-                        }
-                        else if (hasAudio)
-                        {
-                            disp = $"[Только аудио] {ext}";
-                            if (tbr > 0) disp += $" - ~{tbr:F0}k";
-                            disp += $" ({acodec})";
-                        }
-                        else
-                        {
-                            continue;
+                            tbr = tbrP.GetDouble();
                         }
 
-                        tempFormats.Add(new DownloadFormatItem { Id = formatId, DisplayName = disp, FormatArg = formatArg });
+                        // Нормализуем FPS для группировки: 50-60 -> 60fps, иначе стандарт
+                        int fpsGroup = fps >= 48 ? 60 : 0;
+                        string groupKey = $"{height}p" + (fpsGroup > 0 ? $"_{fpsGroup}fps" : "");
+
+                        // Понятное обозначение разрешения
+                        string resName = height switch
+                        {
+                            >= 2160 => $"4K Ultra HD ({height}p)",
+                            >= 1440 => $"2K Quad HD ({height}p)",
+                            >= 1080 => $"Full HD ({height}p)",
+                            >= 720 => $"HD ({height}p)",
+                            _ => $"{height}p"
+                        };
+
+                        if (fpsGroup > 0)
+                        {
+                            resName += $" {fpsGroup}fps";
+                        }
+
+                        // Сохраняем поток с максимальным битрейтом для данного разрешения
+                        if (!videoStreamGroups.TryGetValue(groupKey, out var existing) || tbr > existing.tbr)
+                        {
+                            videoStreamGroups[groupKey] = (height, fpsGroup, tbr, formatId, resName);
+                        }
+                    }
+
+                    // Сортируем разрешения по убыванию качества (высота, затем fps)
+                    var sortedStreams = videoStreamGroups.Values
+                        .OrderByDescending(v => v.height)
+                        .ThenByDescending(v => v.fps)
+                        .ToList();
+
+                    foreach (var stream in sortedStreams)
+                    {
+                        tempFormats.Add(new DownloadFormatItem
+                        {
+                            Id = $"video_{stream.height}p_{stream.fps}",
+                            DisplayName = stream.note,
+                            FormatArg = $"bv*[height<={stream.height}]+ba/b[height<={stream.height}]/b",
+                            IsAudioOnly = false,
+                            Height = stream.height
+                        });
                     }
                 }
 

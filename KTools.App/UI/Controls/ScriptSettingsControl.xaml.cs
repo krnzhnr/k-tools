@@ -30,6 +30,7 @@ public sealed partial class ScriptSettingsControl : UserControl
     public ScriptSettingsViewModel ViewModel { get; }
     private readonly ISettingsManager _settingsManager;
     private readonly IDialogService _dialogService;
+    private readonly IWhisperModelManager? _whisperModelManager;
 
     private class GroupVisual
     {
@@ -40,14 +41,23 @@ public sealed partial class ScriptSettingsControl : UserControl
     private readonly List<GroupVisual> _groups = new();
     private bool _isInternalCheckBoxUpdate;
     private bool _isInternalNumberBoxUpdate;
+    private static readonly Dictionary<string, string> _lastActiveTabs = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, (Button ActionBtn, ProgressRing Ring, TextBlock PText, Button CancelBtn)> _whisperActionControls = new(StringComparer.OrdinalIgnoreCase);
 
     public ScriptSettingsControl()
     {
         ViewModel = App.Services.GetRequiredService<ScriptSettingsViewModel>();
         _settingsManager = App.Services.GetRequiredService<ISettingsManager>();
         _dialogService = App.Services.GetRequiredService<IDialogService>();
+        _whisperModelManager = App.Services.GetService<IWhisperModelManager>();
 
         InitializeComponent();
+
+        if (_whisperModelManager != null)
+        {
+            _whisperModelManager.DownloadProgressChanged += OnWhisperDownloadProgressChanged;
+            _whisperModelManager.DownloadCompleted += OnWhisperDownloadCompleted;
+        }
 
         // Обеспечивает автоматический сброс фокуса с полей ввода при клике на свободную область формы
         this.PointerPressed += (s, e) =>
@@ -62,7 +72,63 @@ public sealed partial class ScriptSettingsControl : UserControl
             {
                 _activeScript.FilesQueue.CollectionChanged -= OnFilesQueueCollectionChanged;
             }
+
+            if (_whisperModelManager != null)
+            {
+                _whisperModelManager.DownloadProgressChanged -= OnWhisperDownloadProgressChanged;
+                _whisperModelManager.DownloadCompleted -= OnWhisperDownloadCompleted;
+            }
+
+            _whisperActionControls.Clear();
         };
+    }
+
+    private void OnWhisperDownloadProgressChanged(string modelKey, int percent)
+    {
+        App.CurrentMainWindow?.DispatcherQueue?.TryEnqueue(() =>
+        {
+            if (_whisperActionControls.TryGetValue(modelKey, out var ctrl))
+            {
+                ctrl.ActionBtn.IsEnabled = false;
+                ctrl.Ring.Visibility = Visibility.Visible;
+                ctrl.Ring.IsActive = true;
+                ctrl.PText.Visibility = Visibility.Visible;
+                ctrl.PText.Text = $"{percent}%";
+                ctrl.CancelBtn.Visibility = Visibility.Visible;
+            }
+        });
+    }
+
+    private void OnWhisperDownloadCompleted(string modelKey, bool isSuccess, string? failureReason)
+    {
+        App.CurrentMainWindow?.DispatcherQueue?.TryEnqueue(() =>
+        {
+            if (_whisperActionControls.TryGetValue(modelKey, out var ctrl))
+            {
+                ctrl.ActionBtn.IsEnabled = true;
+                ctrl.Ring.IsActive = false;
+                ctrl.Ring.Visibility = Visibility.Collapsed;
+                ctrl.PText.Visibility = Visibility.Collapsed;
+                ctrl.CancelBtn.Visibility = Visibility.Collapsed;
+
+                bool downloaded = _whisperModelManager?.IsModelDownloaded(modelKey) ?? false;
+                UpdateWhisperButtonVisuals(ctrl.ActionBtn, downloaded);
+            }
+
+            if (_activeScript != null)
+            {
+                string settingsGroup = _settingsManager.GetSafeGroupName(_activeScript.Name);
+                if (isSuccess)
+                {
+                    string currentModel = _settingsManager.GetSetting(settingsGroup, "whisper_model", string.Empty);
+                    if (string.IsNullOrWhiteSpace(currentModel) || currentModel.Contains("Нет загруженных", StringComparison.OrdinalIgnoreCase))
+                    {
+                        _settingsManager.SetSetting(settingsGroup, "whisper_model", modelKey);
+                    }
+                }
+                UpdateVisibility(settingsGroup);
+            }
+        });
     }
 
     /// <summary>
@@ -187,15 +253,25 @@ public sealed partial class ScriptSettingsControl : UserControl
                 SettingsNavigationView.MenuItems.Add(navItem);
             }
 
-            // Выбираем первую вкладку по умолчанию
+            // Восстанавливаем ранее активную вкладку для этого скрипта или выбираем первую по умолчанию
             if (SettingsNavigationView.MenuItems.Count > 0)
             {
-                var firstItem = (NavigationViewItem)SettingsNavigationView.MenuItems[0];
-                SettingsNavigationView.SelectedItem = firstItem;
-                string firstTag = firstItem.Tag?.ToString() ?? "";
-                if (_groupContainers.TryGetValue(firstTag, out var firstPanel))
+                NavigationViewItem? targetItem = null;
+                if (_lastActiveTabs.TryGetValue(script.Name, out string? lastTab) && !string.IsNullOrEmpty(lastTab))
                 {
-                    firstPanel.Visibility = Visibility.Visible;
+                    targetItem = SettingsNavigationView.MenuItems
+                        .OfType<NavigationViewItem>()
+                        .FirstOrDefault(i => string.Equals(i.Tag?.ToString(), lastTab, StringComparison.OrdinalIgnoreCase));
+                }
+
+                targetItem ??= (NavigationViewItem)SettingsNavigationView.MenuItems[0];
+                SettingsNavigationView.SelectedItem = targetItem;
+                string activeTag = targetItem.Tag?.ToString() ?? "";
+                foreach (var pair in _groupContainers)
+                {
+                    pair.Value.Visibility = pair.Key.Equals(activeTag, StringComparison.OrdinalIgnoreCase)
+                        ? Visibility.Visible
+                        : Visibility.Collapsed;
                 }
             }
         }
@@ -227,6 +303,11 @@ public sealed partial class ScriptSettingsControl : UserControl
         if (args.SelectedItemContainer is NavigationViewItem selectedItem)
         {
             string tag = selectedItem.Tag?.ToString() ?? string.Empty;
+
+            if (_activeScript != null && !string.IsNullOrEmpty(tag))
+            {
+                _lastActiveTabs[_activeScript.Name] = tag;
+            }
 
             foreach (var pair in _groupContainers)
             {
@@ -641,29 +722,29 @@ public sealed partial class ScriptSettingsControl : UserControl
 
                 var numberBox = new NumberBox
                 {
-                    Value = initialVal,
+                    Value = Math.Round(initialVal, isFloat ? 2 : 0),
                     Width = 160,
                     HorizontalAlignment = HorizontalAlignment.Right,
                     SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Inline,
-                    SmallChange = isFloat ? 0.1 : 1,
-                    LargeChange = isFloat ? 0.5 : 5,
+                    SmallChange = isFloat ? 0.05 : 1,
+                    LargeChange = isFloat ? 0.1 : 5,
                     VerticalAlignment = VerticalAlignment.Center
                 };
                 if (isFloat)
                 {
                     var formatter = new Windows.Globalization.NumberFormatting.DecimalFormatter
                     {
-                        FractionDigits = 1
+                        FractionDigits = 2
                     };
                     numberBox.NumberFormatter = formatter;
                 }
                 if (field.Minimum.HasValue)
                 {
-                    numberBox.Minimum = field.Minimum.Value;
+                    numberBox.Minimum = Math.Round(field.Minimum.Value, 4);
                 }
                 if (field.Maximum.HasValue)
                 {
-                    numberBox.Maximum = field.Maximum.Value;
+                    numberBox.Maximum = Math.Round(field.Maximum.Value, 4);
                 }
                 numberBox.ValueChanged += (s, e) =>
                 {
@@ -671,10 +752,10 @@ public sealed partial class ScriptSettingsControl : UserControl
                     {
                         if (isFloat)
                         {
-                            float valFloat = (float)Math.Round(numberBox.Value, 1);
-                            _settingsManager.SetSetting(settingsGroup, field.Key, valFloat);
+                            double roundedVal = Math.Round(numberBox.Value, 2);
+                            _settingsManager.SetSetting(settingsGroup, field.Key, roundedVal);
                             UpdateVisibility(settingsGroup);
-                            HandleIntSettingChanged(settingsGroup, field.Key, (int)valFloat);
+                            HandleIntSettingChanged(settingsGroup, field.Key, (int)roundedVal);
                         }
                         else
                         {
@@ -772,6 +853,10 @@ public sealed partial class ScriptSettingsControl : UserControl
                 };
                 inputControl = toggle;
                 break;
+
+            case SettingType.WhisperModelAction:
+                inputControl = CreateWhisperModelActionControl(field, settingsGroup);
+                break;
         }
 
         return inputControl;
@@ -828,12 +913,18 @@ public sealed partial class ScriptSettingsControl : UserControl
                                     if (!currentItems.SequenceEqual(dynamicField.Options))
                                     {
                                         string currSelected = combo.SelectedItem?.ToString() ?? "";
+                                        string savedValue = _settingsManager.GetSetting(settingsGroup, dynamicField.Key, currSelected);
                                         combo.Items.Clear();
                                         foreach (var opt in dynamicField.Options)
                                         {
                                             combo.Items.Add(opt);
                                         }
-                                        if (dynamicField.Options.Contains(currSelected, StringComparer.OrdinalIgnoreCase))
+
+                                        if (dynamicField.Options.Contains(savedValue, StringComparer.OrdinalIgnoreCase))
+                                        {
+                                            combo.SelectedItem = dynamicField.Options.First(o => o.Equals(savedValue, StringComparison.OrdinalIgnoreCase));
+                                        }
+                                        else if (dynamicField.Options.Contains(currSelected, StringComparer.OrdinalIgnoreCase))
                                         {
                                             combo.SelectedItem = dynamicField.Options.First(o => o.Equals(currSelected, StringComparison.OrdinalIgnoreCase));
                                         }
@@ -843,7 +934,8 @@ public sealed partial class ScriptSettingsControl : UserControl
                                             string matchedDef = dynamicField.Options.FirstOrDefault(o => o.Equals(defVal, StringComparison.OrdinalIgnoreCase))
                                                 ?? dynamicField.Options.FirstOrDefault() ?? "";
                                             combo.SelectedItem = matchedDef;
-                                            _settingsManager.SetSetting(settingsGroup, dynamicField.Key, matchedDef);
+                                            // Не перезаписываем _settingsManager принудительно, чтобы сохранить выбор пользователя,
+                                            // если нужный элемент временно недоступен или список динамически перестраивается.
                                         }
                                     }
                                 }
@@ -1798,6 +1890,152 @@ public sealed partial class ScriptSettingsControl : UserControl
             result = result.Substring(1).Trim();
         }
         return result;
+    }
+
+    private static void UpdateWhisperButtonVisuals(Button actionButton, bool downloaded)
+    {
+        if (downloaded)
+        {
+            actionButton.Content = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 6,
+                Children =
+                {
+                    new FontIcon { Glyph = "\uE74D", FontSize = 13 },
+                    new TextBlock { Text = "Удалить" }
+                }
+            };
+            actionButton.ClearValue(Button.StyleProperty);
+        }
+        else
+        {
+            actionButton.Content = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 6,
+                Children =
+                {
+                    new FontIcon { Glyph = "\uE896", FontSize = 13 },
+                    new TextBlock { Text = "Загрузить" }
+                }
+            };
+            actionButton.Style = (Style)Application.Current.Resources["AccentButtonStyle"];
+        }
+    }
+
+    /// <summary>
+    /// Создает интерактивный элемент управления для модели Whisper:
+    /// Кнопка «Загрузить» / «Удалить» с отображением ProgressRing, процентов прогресса и кнопкой отмены.
+    /// </summary>
+    private FrameworkElement CreateWhisperModelActionControl(SettingField field, string settingsGroup)
+    {
+        string modelKey = field.DefaultValue?.ToString() ?? field.Key.Replace("whisper_model_action_", "");
+        var container = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+
+        if (_whisperModelManager == null)
+        {
+            return container;
+        }
+
+        bool isDownloaded = _whisperModelManager.IsModelDownloaded(modelKey);
+        bool isDownloading = _whisperModelManager.IsModelDownloading(modelKey);
+        int currentProgress = isDownloading ? _whisperModelManager.GetModelDownloadProgress(modelKey) : 0;
+
+        var actionButton = new Button
+        {
+            MinWidth = 110,
+            Height = 34,
+            VerticalAlignment = VerticalAlignment.Center,
+            IsEnabled = !isDownloading
+        };
+
+        var progressRing = new ProgressRing
+        {
+            Width = 18,
+            Height = 18,
+            IsActive = isDownloading,
+            Visibility = isDownloading ? Visibility.Visible : Visibility.Collapsed,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+
+        var progressText = new TextBlock
+        {
+            Text = $"{currentProgress}%",
+            FontSize = 12,
+            VerticalAlignment = VerticalAlignment.Center,
+            Visibility = isDownloading ? Visibility.Visible : Visibility.Collapsed,
+            Style = (Style)Application.Current.Resources["SettingsSecondaryTextBlockStyle"]
+        };
+
+        var cancelButton = new Button
+        {
+            Content = "\uE711",
+            FontFamily = (Microsoft.UI.Xaml.Media.FontFamily)Application.Current.Resources["SymbolThemeFontFamily"],
+            Width = 34,
+            Height = 34,
+            Padding = new Thickness(0),
+            Visibility = isDownloading ? Visibility.Visible : Visibility.Collapsed,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        ToolTipService.SetToolTip(cancelButton, "Отменить загрузку");
+
+        UpdateWhisperButtonVisuals(actionButton, isDownloaded);
+
+        // Регистрируем элементы управления модели в реестре активных контролов для получения событий прогресса
+        _whisperActionControls[modelKey] = (actionButton, progressRing, progressText, cancelButton);
+
+        cancelButton.Click += (s, e) =>
+        {
+            _whisperModelManager.CancelDownload(modelKey);
+        };
+
+        actionButton.Click += async (s, e) =>
+        {
+            bool currentDownloaded = _whisperModelManager.IsModelDownloaded(modelKey);
+            if (currentDownloaded)
+            {
+                // Подтверждение удаления
+                var modelInfo = _whisperModelManager.GetModelInfo(modelKey);
+                string title = "Удаление модели Whisper";
+                string prompt = $"Вы действительно хотите удалить файл модели '{modelInfo?.DisplayName ?? modelKey}' с диска?";
+
+                bool confirm = await _dialogService.ShowConfirmationAsync(title, prompt, "Удалить", "Отмена");
+                if (confirm)
+                {
+                    _whisperModelManager.DeleteModel(modelKey);
+                    UpdateWhisperButtonVisuals(actionButton, false);
+                    UpdateVisibility(settingsGroup);
+                }
+                return;
+            }
+
+            // Запуск скачивания модели через центральный менеджер
+            actionButton.IsEnabled = false;
+            progressRing.Visibility = Visibility.Visible;
+            progressRing.IsActive = true;
+            progressText.Visibility = Visibility.Visible;
+            progressText.Text = "0%";
+            cancelButton.Visibility = Visibility.Visible;
+
+            _ = Task.Run(async () =>
+            {
+                await _whisperModelManager.DownloadModelAsync(modelKey);
+            });
+        };
+
+        container.Children.Add(progressRing);
+        container.Children.Add(progressText);
+        container.Children.Add(actionButton);
+        container.Children.Add(cancelButton);
+
+        return container;
     }
 
     private void OnFilesQueueCollectionChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)

@@ -247,6 +247,7 @@ public sealed class PathManager : IPathManager
             "deew" => "DEE",
             "dee" => "DEE",
             "qaac64" => "ffmpeg",
+            "whisper-cli" => "whisper-cpu",
             _ => name
         };
     }

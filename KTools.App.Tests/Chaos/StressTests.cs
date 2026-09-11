@@ -63,6 +63,7 @@ public sealed class StressTests
         services.AddSingleton<Scripts.TrackExtractorScript>();
         services.AddSingleton<Scripts.SubtitlesConvertScript>();
         services.AddSingleton<Scripts.SubtitleShiftScript>();
+        services.AddSingleton<Scripts.SpeechRecognitionScript>();
         services.AddSingleton<Scripts.MediaDownloaderScript>();
         services.AddSingleton<Scripts.BitrateViewerScript>();
 
@@ -73,6 +74,10 @@ public sealed class StressTests
         services.AddSingleton(new Mock<IBitrateAnalyzerService>().Object);
         services.AddSingleton(new Mock<IDiskTypeDetectorService>().Object);
         services.AddSingleton(new Mock<IEac3toRunner>().Object);
+        services.AddSingleton(new Mock<IWhisperRunner>().Object);
+        services.AddSingleton(new Mock<IWhisperModelManager>().Object);
+        services.AddSingleton(new Mock<IDependencyManager>().Object);
+        services.AddSingleton(new Mock<IDialogService>().Object);
 
         // Конкретные раннеры — реальные экземпляры с моками зависимостей
         // (sealed-классы; внешние процессы не запускаются при конструировании)
@@ -109,13 +114,14 @@ public sealed class StressTests
             provider.GetRequiredService<Scripts.TrackExtractorScript>(),
             provider.GetRequiredService<Scripts.SubtitlesConvertScript>(),
             provider.GetRequiredService<Scripts.SubtitleShiftScript>(),
+            provider.GetRequiredService<Scripts.SpeechRecognitionScript>(),
             provider.GetRequiredService<Scripts.MediaDownloaderScript>(),
             provider.GetRequiredService<Scripts.BitrateViewerScript>(),
         };
     }
 
     /// <summary>
-    /// Стресс: реестр из всех 17 реальных скриптов инициализируется без
+    /// Стресс: реестр из всех 18 реальных скриптов инициализируется без
     /// исключений, имена уникальны, каждый находим по имени.
     /// </summary>
     [TestMethod]
@@ -167,10 +173,12 @@ public sealed class StressTests
             (Scripts.SubtitlesConvertScript)scripts[13]);
         services.AddSingleton<Scripts.SubtitleShiftScript>(_ =>
             (Scripts.SubtitleShiftScript)scripts[14]);
+        services.AddSingleton<Scripts.SpeechRecognitionScript>(_ =>
+            (Scripts.SpeechRecognitionScript)scripts[15]);
         services.AddSingleton<Scripts.MediaDownloaderScript>(_ =>
-            (Scripts.MediaDownloaderScript)scripts[15]);
+            (Scripts.MediaDownloaderScript)scripts[16]);
         services.AddSingleton<Scripts.BitrateViewerScript>(_ =>
-            (Scripts.BitrateViewerScript)scripts[16]);
+            (Scripts.BitrateViewerScript)scripts[17]);
         services.AddSingleton<IScriptRegistry, ScriptRegistry>();
         var provider = services.BuildServiceProvider();
 
@@ -178,10 +186,10 @@ public sealed class StressTests
         var registry = provider.GetRequiredService<IScriptRegistry>();
 
         // Assert
-        registry.Scripts.Should().HaveCount(17,
-            "все 17 скриптов должны быть зарегистрированы");
+        registry.Scripts.Should().HaveCount(18,
+            "все 18 скриптов должны быть зарегистрированы");
         registry.Scripts.Select(s => s.Name).Distinct(StringComparer.OrdinalIgnoreCase)
-            .Should().HaveCount(17, "имена скриптов обязаны быть уникальны");
+            .Should().HaveCount(18, "имена скриптов обязаны быть уникальны");
 
         // Каждый скрипт находим по собственному имени
         foreach (var script in registry.Scripts)

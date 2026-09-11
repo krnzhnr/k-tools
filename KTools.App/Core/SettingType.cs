@@ -46,5 +46,10 @@ public enum SettingType
     /// <summary>
     /// Раскрывающийся блок настроек (Expander) с переключателем (ToggleSwitch) и вложенными параметрами.
     /// </summary>
-    Expander
+    Expander,
+
+    /// <summary>
+    /// Интерактивная кнопка управления состоянием модели Whisper (Скачать / Удалить / Прогресс с отменой).
+    /// </summary>
+    WhisperModelAction
 }

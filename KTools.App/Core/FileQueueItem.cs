@@ -145,6 +145,7 @@ public sealed class FileQueueItem : INotifyPropertyChanged
                 OnPropertyChanged(nameof(StatusIcon));
                 OnPropertyChanged(nameof(StatusIconBrush));
                 OnPropertyChanged(nameof(IsDeleteEnabled));
+                OnPropertyChanged(nameof(IsRetryVisible));
             }
         }
     }
@@ -236,6 +237,7 @@ public sealed class FileQueueItem : INotifyPropertyChanged
                 _isProcessing = value;
                 OnPropertyChanged();
                 OnPropertyChanged(nameof(IsDeleteEnabled));
+                OnPropertyChanged(nameof(IsRetryVisible));
             }
         }
     }
@@ -244,6 +246,25 @@ public sealed class FileQueueItem : INotifyPropertyChanged
     /// Указывает, разрешено ли удаление данного файла из очереди.
     /// </summary>
     public bool IsDeleteEnabled => !IsProcessing;
+
+    /// <summary>
+    /// Указывает, доступна ли кнопка повторного запуска (после завершения, отмены или ошибки).
+    /// </summary>
+    public bool IsRetryVisible => !IsProcessing && (
+        State == FileProcessingState.Completed ||
+        State == FileProcessingState.Failed ||
+        State == FileProcessingState.Cancelled ||
+        State == FileProcessingState.Skipped);
+
+    /// <summary>
+    /// Сбрасывает состояние элемента для повторного запуска обработки.
+    /// </summary>
+    public void ResetStateForRetry()
+    {
+        Progress = 0.0;
+        Status = "Ожидание";
+        State = FileProcessingState.Pending;
+    }
 
     /// <summary>
     /// Иконка статуса обработки файла.
@@ -445,6 +466,8 @@ public sealed class DownloadFormatItem
     public string Id { get; set; } = "";
     public string DisplayName { get; set; } = "";
     public string FormatArg { get; set; } = "";
+    public bool IsAudioOnly { get; set; }
+    public int Height { get; set; }
 
     public override string ToString() => DisplayName;
 }
