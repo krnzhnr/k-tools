@@ -53,6 +53,8 @@ public class DependencyManager : IDependencyManager
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly HttpClient _httpClient;
     private readonly Dictionary<string, CancellationTokenSource> _activeDownloads = new();
+    private readonly Dictionary<string, int> _downloadProgress = new();
+    private readonly Dictionary<string, string> _downloadSpeed = new();
 
     /// <summary>Событие, возникающее при изменении статуса любой из зависимостей.</summary>
     public event Action<string, DependencyStatus>? StatusChanged;
@@ -249,6 +251,21 @@ public class DependencyManager : IDependencyManager
         {
             foreach (var dep in _registry)
             {
+                // Не сбрасываем статус, если в данный момент для зависимости выполняется скачивание или распаковка
+                if (_statuses.TryGetValue(dep.Key, out var currentStatus) &&
+                    (currentStatus == DependencyStatus.Downloading || currentStatus == DependencyStatus.Extracting))
+                {
+                    continue;
+                }
+
+                lock (_activeDownloads)
+                {
+                    if (_activeDownloads.ContainsKey(dep.Key))
+                    {
+                        continue;
+                    }
+                }
+
                 bool present = IsBinaryPresent(dep);
                 _statuses[dep.Key] = present ? DependencyStatus.Installed : DependencyStatus.NotInstalled;
             }
@@ -356,6 +373,58 @@ public class DependencyManager : IDependencyManager
     {
         var dep = _registry.FirstOrDefault(d => d.Key.Equals(key, StringComparison.OrdinalIgnoreCase));
         return dep != null && IsBinaryPresent(dep);
+    }
+
+    /// <summary>
+    /// Проверяет, выполняются ли в данный момент какие-либо активные операции скачивания или распаковки зависимостей.
+    /// </summary>
+    public bool HasActiveOperations
+    {
+        get
+        {
+            lock (_activeDownloads)
+            {
+                if (_activeDownloads.Count > 0) return true;
+            }
+
+            lock (_statuses)
+            {
+                return _statuses.Values.Any(s => s == DependencyStatus.Downloading || s == DependencyStatus.Extracting);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Получить сохранённый процент скачивания для указанной зависимости (от 0 до 100).
+    /// </summary>
+    public int GetDownloadProgress(string key)
+    {
+        lock (_downloadProgress)
+        {
+            return _downloadProgress.TryGetValue(key, out int prog) ? prog : 0;
+        }
+    }
+
+    /// <summary>
+    /// Получить сохранённую форматированную скорость скачивания для указанной зависимости.
+    /// </summary>
+    public string GetDownloadSpeed(string key)
+    {
+        lock (_downloadSpeed)
+        {
+            return _downloadSpeed.TryGetValue(key, out string? speed) ? (speed ?? string.Empty) : string.Empty;
+        }
+    }
+
+    /// <summary>
+    /// Проверить, находится ли указанная зависимость в процессе активного скачивания.
+    /// </summary>
+    public bool IsDownloading(string key)
+    {
+        lock (_activeDownloads)
+        {
+            return _activeDownloads.ContainsKey(key);
+        }
     }
 
     private readonly Dictionary<string, bool> _updatesAvailable = new(StringComparer.OrdinalIgnoreCase);
@@ -580,6 +649,10 @@ public class DependencyManager : IDependencyManager
                         if (totalBytes.HasValue && totalBytes.Value > 0)
                         {
                             int pct = (int)((totalRead * 100) / totalBytes.Value);
+                            lock (_downloadProgress)
+                            {
+                                _downloadProgress[key] = pct;
+                            }
                             ProgressChanged?.Invoke(key, pct);
                         }
 
@@ -591,6 +664,10 @@ public class DependencyManager : IDependencyManager
                             long bytesDelta = totalRead - lastBytesRead;
                             double speedBytesPerSec = bytesDelta / elapsedSeconds;
                             string formattedSpeed = FormatSpeed(speedBytesPerSec);
+                            lock (_downloadSpeed)
+                            {
+                                _downloadSpeed[key] = formattedSpeed;
+                            }
                             SpeedUpdated?.Invoke(key, formattedSpeed);
 
                             lastBytesRead = totalRead;
@@ -762,6 +839,16 @@ public class DependencyManager : IDependencyManager
                     cts.Dispose();
                     _activeDownloads.Remove(key);
                 }
+            }
+
+            lock (_downloadProgress)
+            {
+                _downloadProgress.Remove(key);
+            }
+
+            lock (_downloadSpeed)
+            {
+                _downloadSpeed.Remove(key);
             }
         }
     }

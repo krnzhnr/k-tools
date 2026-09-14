@@ -142,10 +142,17 @@ public class WindowManagementTests
     {
         // Arrange / Act — репрессионная сетка сигнатуры конструктора MainWindow:
         // изменение DI-контракта окна не должно пройти молча
-        var ctor = typeof(MainWindow).GetConstructor(new[] { typeof(Services.Contracts.ILogService), typeof(Services.Contracts.ISettingsManager) });
+        var ctor = typeof(MainWindow).GetConstructor(new[]
+        {
+            typeof(Services.Contracts.ILogService),
+            typeof(Services.Contracts.ISettingsManager),
+            typeof(Services.Contracts.IDependencyManager),
+            typeof(Services.Contracts.IDialogService),
+            typeof(Services.Contracts.IScriptRegistry)
+        });
 
         // Assert
-        ctor.Should().NotBeNull("MainWindow обязан принимать (ILogService, ISettingsManager) через DI");
+        ctor.Should().NotBeNull("MainWindow обязан принимать (ILogService, ISettingsManager, IDependencyManager, IDialogService, IScriptRegistry) через DI");
     }
 
     [TestMethod]

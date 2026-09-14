@@ -517,6 +517,7 @@ public sealed partial class WorkPanel : Page
         if (e.DataView.Contains(Windows.ApplicationModel.DataTransfer.StandardDataFormats.StorageItems))
         {
             e.AcceptedOperation = Windows.ApplicationModel.DataTransfer.DataPackageOperation.Copy;
+            e.DragUIOverride.IsCaptionVisible = false;
 
             // Переключаем вкладку на "Файлы" только если пользователь не находится на вкладке специального инструмента (_tracksPageItem), 
             // где доступны собственные специализированные зоны сброса файлов (Замена потоков, Пересадка аудио).

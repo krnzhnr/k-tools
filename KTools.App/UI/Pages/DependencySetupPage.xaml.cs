@@ -35,8 +35,6 @@ public sealed partial class DependencySetupPage : Page
     {
         ViewModel = App.Services.GetRequiredService<DependencySetupViewModel>();
         InitializeComponent();
-        
-        Unloaded += OnPageUnloaded;
     }
 
     /// <summary>
@@ -167,14 +165,5 @@ public sealed partial class DependencySetupPage : Page
             list.AddRange(FindVisualChildren<T>(child));
         }
         return list;
-    }
-
-    /// <summary>
-    /// Вызывается при выгрузке страницы из визуального дерева.
-    /// Освобождает системные подписки во ViewModel.
-    /// </summary>
-    private void OnPageUnloaded(object sender, RoutedEventArgs e)
-    {
-        ViewModel.Cleanup();
     }
 }

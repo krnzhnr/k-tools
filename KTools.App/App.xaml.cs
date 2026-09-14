@@ -273,7 +273,7 @@ public partial class App : Application
         services.AddTransient<WorkPanelViewModel>();
         services.AddSingleton<SettingsViewModel>();
         services.AddTransient<LogViewModel>();
-        services.AddTransient<DependencySetupViewModel>();
+        services.AddSingleton<DependencySetupViewModel>();
         services.AddTransient<TrackSelectionViewModel>();
         services.AddTransient<ScriptSettingsViewModel>();
 

@@ -294,12 +294,8 @@ public class DependencySetupViewModelTests
 
     /// <summary>
     /// Проверяет распределение обязательных и необязательных зависимостей по коллекциям.
-    /// [Ignore]: непустой реестр приводит к созданию DependencyVM, чей конструктор
-    /// (DependencyVM.cs:173) вызывает DispatcherQueue.GetForCurrentThread() без try/catch
-    /// и падает в headless-тестах с COMException 0x80040154. Требует XAML-среды.
     /// </summary>
     [TestMethod]
-    [Ignore("DependencyVM.cs:173 требует DispatcherQueue (WinAppSDK runtime не инициализирован в testhost: COMException 0x80040154). Активировать при наличии XAML-хостинга.")]
     public void Constructor_MixedRegistry_SplitsRequiredAndOptional()
     {
         // Arrange
@@ -323,10 +319,8 @@ public class DependencySetupViewModelTests
     /// Проверяет полную цепочку событий IDependencyManager для одной зависимости:
     /// StatusChanged обновляет статус VM, ProgressChanged — прогресс, SpeedUpdated — скорость,
     /// InstallFinished с ошибкой — ErrorMessage.
-    /// [Ignore]: требует создания DependencyVM (см. комментарий класса).
     /// </summary>
     [TestMethod]
-    [Ignore("DependencyVM.cs:173 требует DispatcherQueue (WinAppSDK runtime не инициализирован в testhost: COMException 0x80040154). Активировать при наличии XAML-хостинга.")]
     public void ManagerEvents_RaisedInSequence_UpdateDependencyViewModel()
     {
         // Arrange
@@ -349,12 +343,10 @@ public class DependencySetupViewModelTests
 
     /// <summary>
     /// Проверяет, что InstallFinished при установленных обязательных зависимостях
-    /// автоматически перенаправляет на HomePage.
-    /// [Ignore]: требует создания DependencyVM (см. комментарий класса).
+    /// больше НЕ перенаправляет автоматически на HomePage (пользователь остаётся на вкладке зависимостей).
     /// </summary>
     [TestMethod]
-    [Ignore("DependencyVM.cs:173 требует DispatcherQueue (WinAppSDK runtime не инициализирован в testhost: COMException 0x80040154). Активировать при наличии XAML-хостинга.")]
-    public void OnInstallFinished_AllRequiredInstalled_NavigatesToHomePage()
+    public void OnInstallFinished_AllRequiredInstalled_DoesNotNavigateToHomePage()
     {
         // Arrange
         SetupRegistry((CreateDependency("ffmpeg", isRequired: true, DependencyStatus.Installed), DependencyStatus.Installed));
@@ -365,18 +357,13 @@ public class DependencySetupViewModelTests
         _dependencyManagerMock.Raise(d => d.InstallFinished += null, "ffmpeg", true, string.Empty);
 
         // Assert
-        _navigationMock.Verify(n => n.NavigateTo(typeof(HomePage), It.IsAny<object?>()), Times.Once);
-        _logServiceMock.Verify(
-            l => l.Info(It.Is<string>(s => s.Contains("Перенаправление на главную")), It.IsAny<string>()),
-            Times.Once);
+        _navigationMock.Verify(n => n.NavigateTo(typeof(HomePage), It.IsAny<object?>()), Times.Never);
     }
 
     /// <summary>
     /// Проверяет пакетную установку только отсутствующих/ошибочных зависимостей.
-    /// [Ignore]: требует создания DependencyVM (см. комментарий класса).
     /// </summary>
     [TestMethod]
-    [Ignore("DependencyVM.cs:173 требует DispatcherQueue (WinAppSDK runtime не инициализирован в testhost: COMException 0x80040154). Активировать при наличии XAML-хостинга.")]
     public async Task InstallAllCommand_MixedStatuses_InstallsOnlyMissing()
     {
         // Arrange
@@ -400,10 +387,8 @@ public class DependencySetupViewModelTests
 
     /// <summary>
     /// Проверяет команды установки/отмены/удаления для конкретной DependencyVM.
-    /// [Ignore]: требует создания DependencyVM (см. комментарий класса).
     /// </summary>
     [TestMethod]
-    [Ignore("DependencyVM.cs:173 требует DispatcherQueue (WinAppSDK runtime не инициализирован в testhost: COMException 0x80040154). Активировать при наличии XAML-хостинга.")]
     public async Task Commands_WithValidDependency_CallManagerWithCorrectKey()
     {
         // Arrange

@@ -661,6 +661,7 @@ public sealed partial class FileListControl : UserControl
         if (e.DataView.Contains(StandardDataFormats.StorageItems))
         {
             e.AcceptedOperation = DataPackageOperation.Copy;
+            e.DragUIOverride.IsCaptionVisible = false;
             SetFileDropHighlight(true);
         }
         else

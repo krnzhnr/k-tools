@@ -92,11 +92,23 @@ public sealed partial class MainWindow : Window
     private SubclassProc? _subclassProcDelegate;
     private readonly ILogService _logService;
     private readonly ISettingsManager _settingsManager;
+    private readonly IDependencyManager _dependencyManager;
+    private readonly IDialogService _dialogService;
+    private readonly IScriptRegistry _scriptRegistry;
+    private bool _isForcedClose;
 
-    public MainWindow(ILogService logService, ISettingsManager settingsManager)
+    public MainWindow(
+        ILogService logService,
+        ISettingsManager settingsManager,
+        IDependencyManager dependencyManager,
+        IDialogService dialogService,
+        IScriptRegistry scriptRegistry)
     {
         _logService = logService ?? throw new ArgumentNullException(nameof(logService));
         _settingsManager = settingsManager ?? throw new ArgumentNullException(nameof(settingsManager));
+        _dependencyManager = dependencyManager ?? throw new ArgumentNullException(nameof(dependencyManager));
+        _dialogService = dialogService ?? throw new ArgumentNullException(nameof(dialogService));
+        _scriptRegistry = scriptRegistry ?? throw new ArgumentNullException(nameof(scriptRegistry));
 
         try
         {
@@ -260,6 +272,48 @@ public sealed partial class MainWindow : Window
                     ApplyBackdrop(m.NewBackdrop);
                 });
             });
+
+            // Перехват закрытия окна: если идут активные операции скачивания или обработки файлов,
+            // запрашиваем подтверждение пользователя через модальный диалог.
+            AppWindow.Closing += async (sender, args) =>
+            {
+                if (_isForcedClose) return;
+
+                bool isDownloading = _dependencyManager.HasActiveOperations;
+                bool isProcessing = ActiveProcessTracker.HasActiveProcesses || _scriptRegistry.Scripts.Any(s => s.IsProcessing);
+
+                if (isDownloading || isProcessing)
+                {
+                    args.Cancel = true;
+
+                    _logService.Warn(
+                        $"Пользователь попытался закрыть приложение во время активных операций (Скачивание: {isDownloading}, Обработка: {isProcessing}). Отображение диалога подтверждения.",
+                        "MainWindow");
+
+                    string reason = isDownloading && isProcessing
+                        ? "В данный момент выполняется загрузка/распаковка компонентов и активная обработка файлов."
+                        : isDownloading
+                            ? "В данный момент выполняется загрузка или распаковка компонентов зависимостей."
+                            : "В данный момент выполняется активная обработка медиафайлов.";
+
+                    bool shouldExit = await _dialogService.ShowConfirmationAsync(
+                        "Подтверждение выхода",
+                        $"{reason} Принудительное закрытие приложения прервёт текущие процессы и может привести к повреждению файлов.\n\nВы действительно хотите прервать работу и выйти?",
+                        "Выйти",
+                        "Остаться");
+
+                    if (shouldExit)
+                    {
+                        _logService.Info("Пользователь подтвердил принудительный выход из приложения во время активных операций.", "MainWindow");
+                        _isForcedClose = true;
+                        Close();
+                    }
+                    else
+                    {
+                        _logService.Info("Пользователь отменил закрытие приложения, фоновые операции продолжаются.", "MainWindow");
+                    }
+                }
+            };
 
             // Подписка на событие закрытия окна для гарантированного завершения процесса приложения
             Closed += (sender, args) =>

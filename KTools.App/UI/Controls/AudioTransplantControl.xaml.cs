@@ -123,8 +123,7 @@ public sealed partial class AudioTransplantControl : UserControl
     private void Card_DragOver(object sender, DragEventArgs e)
     {
         e.AcceptedOperation = DataPackageOperation.Copy;
-        e.DragUIOverride.IsCaptionVisible = true;
-        e.DragUIOverride.Caption = "Добавить файл";
+        e.DragUIOverride.IsCaptionVisible = false;
         e.Handled = true;
     }
 

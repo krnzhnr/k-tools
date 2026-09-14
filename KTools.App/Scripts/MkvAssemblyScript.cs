@@ -148,70 +148,31 @@ public sealed class MkvAssemblyScript(
         bool cleanTracks = GetSettingValue(settings, "clean_tracks", true);
         bool positionBeforeBuiltin = GetSettingValue(settings, "position_before_builtin", false);
 
-        // 3. Сканируем папку на наличие сопутствующих аудио- и субтитровых файлов с тем же именем (stem)
+        // 3. Поиск сопутствующих аудио- и субтитровых файлов строго в очереди файлов пользователя (FilesQueue) по совпадению stem
         string? audioPath = null;
         string? subsPath = null;
 
-        // 3a. Сканируем папку видеофайла на наличие сопутствующих файлов с тем же stem
-        if (!string.IsNullOrEmpty(directory))
+        foreach (var queueItem in FilesQueue)
         {
-            try
+            if (queueItem.FilePath == filePath)
             {
-                var siblingFiles = Directory.GetFiles(directory, $"{stem}.*");
-                foreach (var sibling in siblingFiles)
-                {
-                    string siblingExt = Path.GetExtension(sibling).ToLowerInvariant();
-                    if (siblingExt == ext)
-                    {
-                        continue; // Пропускаем сам видеофайл
-                    }
-
-                    if (audioPath == null && (AppConstants.AudioContainers.Contains(siblingExt) || AppConstants.AudioStreams.Contains(siblingExt)))
-                    {
-                        audioPath = sibling;
-                        _logService.Info($"Найден сопутствующий аудиофайл: '{Path.GetFileName(sibling)}'", "MkvAssemblyScript");
-                    }
-                    else if (subsPath == null && AppConstants.SubtitleExtensions.Contains(siblingExt))
-                    {
-                        subsPath = sibling;
-                        _logService.Info($"Найден сопутствующий файл субтитров: '{Path.GetFileName(sibling)}'", "MkvAssemblyScript");
-                    }
-                }
+                continue; // Пропускаем сам видеофайл
             }
-            catch (System.Exception ex)
-            {
-                string scanErr = $"❌ Ошибка сканирования папки на наличие сопутствующих файлов: {ex.Message}";
-                _logService.Exception(ex, scanErr, "MkvAssemblyScript");
-                results.Add(scanErr);
-                return results;
-            }
-        }
 
-        // 3b. Дополнительно проверяем очередь файлов на наличие сопутствующих файлов из других директорий
-        if (audioPath == null || subsPath == null)
-        {
-            foreach (var queueItem in FilesQueue)
+            string qExt = Path.GetExtension(queueItem.FilePath).ToLowerInvariant();
+            string qStem = Path.GetFileNameWithoutExtension(queueItem.FilePath);
+
+            if (qStem.Equals(stem, System.StringComparison.OrdinalIgnoreCase))
             {
-                if (queueItem.FilePath == filePath)
+                if (audioPath == null && (AppConstants.AudioContainers.Contains(qExt) || AppConstants.AudioStreams.Contains(qExt)))
                 {
-                    continue; // Пропускаем сам видеофайл
+                    audioPath = queueItem.FilePath;
+                    _logService.Info($"Найден сопутствующий аудиофайл в очереди: '{Path.GetFileName(queueItem.FilePath)}'", "MkvAssemblyScript");
                 }
-
-                string qExt = Path.GetExtension(queueItem.FilePath).ToLowerInvariant();
-                string qStem = Path.GetFileNameWithoutExtension(queueItem.FilePath);
-
-                if (qStem.Equals(stem, System.StringComparison.OrdinalIgnoreCase))
+                else if (subsPath == null && AppConstants.SubtitleExtensions.Contains(qExt))
                 {
-                    if (audioPath == null && (AppConstants.AudioContainers.Contains(qExt) || AppConstants.AudioStreams.Contains(qExt)))
-                    {
-                        audioPath = queueItem.FilePath;
-                        _logService.Info($"Найден сопутствующий аудиофайл в очереди: '{Path.GetFileName(queueItem.FilePath)}'", "MkvAssemblyScript");
-                    }
-                    else if (subsPath == null && AppConstants.SubtitleExtensions.Contains(qExt))
-                    {
-                        subsPath = queueItem.FilePath;
-                        _logService.Info($"Найден сопутствующий файл субтитров в очереди: '{Path.GetFileName(queueItem.FilePath)}'", "MkvAssemblyScript");
-                    }
+                    subsPath = queueItem.FilePath;
+                    _logService.Info($"Найден сопутствующий файл субтитров в очереди: '{Path.GetFileName(queueItem.FilePath)}'", "MkvAssemblyScript");
                 }
             }
         }

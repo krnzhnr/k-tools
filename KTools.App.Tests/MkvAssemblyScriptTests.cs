@@ -164,6 +164,10 @@ public class MkvAssemblyScriptTests
                 { "clean_tracks", true }
             };
 
+            _script.FilesQueue.Add(new FileQueueItem(videoPath));
+            _script.FilesQueue.Add(new FileQueueItem(flacAudioPath));
+            _script.FilesQueue.Add(new FileQueueItem(assSubsPath));
+
             _ffmpegRunnerMock.Setup(f => f.RunAsync(
                     It.IsAny<string>(),
                     It.IsAny<string>(),
@@ -201,6 +205,76 @@ public class MkvAssemblyScriptTests
                 It.IsAny<Action<Infrastructure.ProgressInfo>>(),
                 It.IsAny<System.Threading.CancellationToken>()
             ), Times.Once);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, true);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Проверяет, что файлы на диске рядом с видео игнорируются, если они не добавлены явно в очередь пользователем.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_SiblingsOnDiskNotInQueue_AreIgnored()
+    {
+        // Arrange
+        string tempDir = Path.Combine(Path.GetTempPath(), "MkvAssembly_SiblingsTest_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            string videoPath = Path.Combine(tempDir, "video.mkv");
+            string siblingMka = Path.Combine(tempDir, "video.mka");
+            string siblingAss = Path.Combine(tempDir, "video.ass");
+
+            File.WriteAllText(videoPath, "");
+            File.WriteAllText(siblingMka, "");
+            File.WriteAllText(siblingAss, "");
+
+            // В очередь добавляем ТОЛЬКО видеофайл
+            _script.FilesQueue.Add(new FileQueueItem(videoPath));
+
+            var settings = new Dictionary<string, object>
+            {
+                { "clean_tracks", true }
+            };
+
+            _settingsManagerMock.Setup(s => s.GetSetting("General", "OverwriteExisting", false))
+                .Returns(true);
+
+            List<MkvInputSource>? capturedInputs = null;
+            _mkvmergeRunnerMock.Setup(m => m.RunAsync(
+                    It.IsAny<string>(),
+                    It.IsAny<List<MkvInputSource>>(),
+                    It.IsAny<string>(),
+                    It.IsAny<List<string>>(),
+                    It.IsAny<Action<double>>(),
+                    It.IsAny<System.Threading.CancellationToken>()
+                ))
+                .Callback<string, List<MkvInputSource>, string, List<string>, Action<double>, System.Threading.CancellationToken>(
+                    (outPath, inputs, title, extraArgs, onProgress, ct) => capturedInputs = inputs)
+                .ReturnsAsync(true);
+
+            // Act
+            var results = await _script.ExecuteSingleAsync(
+                videoPath,
+                settings,
+                null,
+                (fIdx, total, status, progress, fps, bitrate) => { },
+                0,
+                1
+            );
+
+            // Assert
+            results.Should().NotBeNull();
+            capturedInputs.Should().NotBeNull();
+            // Должен быть только один вход — само видео, без сопутствующих файлов с диска
+            capturedInputs!.Should().HaveCount(1);
+            capturedInputs[0].Path.Should().Be(videoPath);
         }
         finally
         {

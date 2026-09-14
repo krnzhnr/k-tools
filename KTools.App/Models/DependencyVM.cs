@@ -170,11 +170,20 @@ public partial class DependencyVM : ObservableObject
     /// <summary>Инициализирует новый экземпляр ViewModel для зависимости.</summary>
     public DependencyVM(DependencyInfo info, IDependencyManager dependencyManager)
     {
-        _dispatcherQueue = DispatcherQueue.GetForCurrentThread();
+        try
+        {
+            _dispatcherQueue = DispatcherQueue.GetForCurrentThread();
+        }
+        catch
+        {
+            _dispatcherQueue = null;
+        }
         Info = info;
         _dependencyManager = dependencyManager ?? throw new ArgumentNullException(nameof(dependencyManager));
         _status = _dependencyManager.GetStatus(info.Key);
         _isUpdateAvailable = _dependencyManager.IsUpdateAvailable(info.Key);
+        _progress = _dependencyManager.GetDownloadProgress(info.Key);
+        _speed = _dependencyManager.GetDownloadSpeed(info.Key);
 
         InstallCommand = new AsyncRelayCommand(async () => 
             await _dependencyManager.InstallDependencyAsync(Info.Key));

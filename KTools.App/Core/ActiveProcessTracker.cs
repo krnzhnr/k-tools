@@ -15,6 +15,29 @@ public static class ActiveProcessTracker
     private static readonly ConcurrentDictionary<int, Process> _activeProcesses = new();
 
     /// <summary>
+    /// Проверяет, имеются ли в данный момент активные незавершенные системные процессы в трекере.
+    /// </summary>
+    public static bool HasActiveProcesses
+    {
+        get
+        {
+            if (_activeProcesses.IsEmpty) return false;
+            foreach (var p in _activeProcesses.Values)
+            {
+                try
+                {
+                    if (!p.HasExited) return true;
+                }
+                catch
+                {
+                    // Игнорируем ошибки доступа к статусу процесса
+                }
+            }
+            return false;
+        }
+    }
+
+    /// <summary>
     /// Регистрирует запущенный процесс в реестре отслеживания.
     /// </summary>
     /// <param name="process">Объект процесса для регистрации.</param>

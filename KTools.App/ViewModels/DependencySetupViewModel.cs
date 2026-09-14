@@ -169,21 +169,6 @@ public partial class DependencySetupViewModel : ThreadSafeViewModel
                 vm.ErrorMessage = errorMsg;
             }
             UpdateUIStates();
-            CheckAndRedirectToHome();
-        }
-    }
-
-    /// <summary>
-    /// Выполняет автоматический переход на домашний экран, если все критические зависимости установлены.
-    /// </summary>
-    private void CheckAndRedirectToHome()
-    {
-        if (_dependencyManager.AreRequiredDependenciesInstalled())
-        {
-            _logService.Info(
-                "Все обязательные компоненты успешно установлены. Перенаправление на главную страницу.",
-                "DependencySetupViewModel");
-            _navigationService.NavigateTo(typeof(HomePage));
         }
     }
 
