@@ -460,7 +460,8 @@ public class DependencyManager : IDependencyManager
     /// </summary>
     public string GetInstalledVersion(string key)
     {
-        if (!IsInstalled(key)) return string.Empty;
+        bool isQaac = key.Equals("qaac", StringComparison.OrdinalIgnoreCase);
+        if (!isQaac && !IsInstalled(key)) return string.Empty;
 
         lock (_cachedVersions)
         {
@@ -471,10 +472,10 @@ public class DependencyManager : IDependencyManager
         }
 
         var dep = _registry.FirstOrDefault(d => d.Key.Equals(key, StringComparison.OrdinalIgnoreCase));
-        if (dep == null) return string.Empty;
+        if (dep == null && !isQaac) return string.Empty;
 
-        string binaryPath = _pathManager.GetBinaryPath(dep.VerifyBinary);
-        if (!File.Exists(binaryPath)) return string.Empty;
+        string binaryPath = dep != null ? _pathManager.GetBinaryPath(dep.VerifyBinary) : string.Empty;
+        if (!isQaac && !File.Exists(binaryPath)) return string.Empty;
 
         try
         {
@@ -491,6 +492,41 @@ public class DependencyManager : IDependencyManager
                 string ver = string.IsNullOrEmpty(vi.FileVersion) ? "v22.11.0" : $"v{vi.FileVersion}";
                 lock (_cachedVersions) { _cachedVersions[key] = ver; }
                 return ver;
+            }
+
+            // Для qaac вызываем qaac64.exe --check
+            if (key.Equals("qaac", StringComparison.OrdinalIgnoreCase))
+            {
+                string qaacPath = _pathManager.GetBinaryPath("qaac64.exe");
+                if (!File.Exists(qaacPath)) return string.Empty;
+
+                using var qaacProc = new Process
+                {
+                    StartInfo = new ProcessStartInfo
+                    {
+                        FileName = qaacPath,
+                        Arguments = "--check",
+                        UseShellExecute = false,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        CreateNoWindow = true
+                    }
+                };
+                qaacProc.Start();
+                string qLine = qaacProc.StandardOutput.ReadLine() ?? string.Empty;
+                if (string.IsNullOrWhiteSpace(qLine))
+                {
+                    qLine = qaacProc.StandardError.ReadLine() ?? string.Empty;
+                }
+                qaacProc.WaitForExit(1000);
+
+                var qMatch = System.Text.RegularExpressions.Regex.Match(qLine, @"qaac\s+(\d+\.\d+(\.\d+)?)");
+                string qResult = qMatch.Success ? qMatch.Groups[1].Value : (qLine.Length > 20 ? qLine.Substring(0, 20) : qLine);
+                if (!string.IsNullOrEmpty(qResult))
+                {
+                    lock (_cachedVersions) { _cachedVersions[key] = qResult; }
+                }
+                return qResult;
             }
 
             // Для FFmpeg, MKVToolNix, eac3to вызываем исполняемый файл и извлекаем версию из первой строки вывода
@@ -524,8 +560,9 @@ public class DependencyManager : IDependencyManager
             }
             process.WaitForExit(1000);
 
-            var match = System.Text.RegularExpressions.Regex.Match(line, @"v?(\d+\.\d+(\.\d+)?)");
-            string result = match.Success ? match.Value : (line.Length > 20 ? line.Substring(0, 20) : line);
+            var match = System.Text.RegularExpressions.Regex.Match(line, @"v?(\d+(\.\d+)+)");
+            string result = match.Success ? match.Groups[1].Value : (line.Length > 20 ? line.Substring(0, 20) : line);
+            result = result.TrimStart('v', 'V').Trim();
             if (!string.IsNullOrEmpty(result))
             {
                 lock (_cachedVersions) { _cachedVersions[key] = result; }
@@ -791,6 +828,18 @@ public class DependencyManager : IDependencyManager
             RefreshAllStatuses();
             if (IsInstalled(key))
             {
+                lock (_cachedVersions)
+                {
+                    _cachedVersions.Remove(key);
+                    if (key.Equals("ffmpeg", StringComparison.OrdinalIgnoreCase))
+                    {
+                        _cachedVersions.Remove("qaac");
+                    }
+                }
+                lock (_updatesAvailable)
+                {
+                    _updatesAvailable[key] = false;
+                }
                 SetStatus(key, DependencyStatus.Installed);
                 _logService.Info($"Зависимость '{dep.DisplayName}' успешно установлена и верифицирована", "DependencyManager");
                 InstallFinished?.Invoke(key, true, string.Empty);
@@ -1088,6 +1137,19 @@ public class DependencyManager : IDependencyManager
         }
 
         string folderPath = Path.Combine(_binDir, dep.Subfolder);
+        lock (_cachedVersions)
+        {
+            _cachedVersions.Remove(key);
+            if (key.Equals("ffmpeg", StringComparison.OrdinalIgnoreCase))
+            {
+                _cachedVersions.Remove("qaac");
+            }
+        }
+        lock (_updatesAvailable)
+        {
+            _updatesAvailable[key] = false;
+        }
+
         if (!Directory.Exists(folderPath))
         {
             _logService.Warn($"Папка зависимости '{dep.DisplayName}' не обнаружена на диске. Сброс статуса в NotInstalled", "DependencyManager");
@@ -1218,22 +1280,99 @@ public class DependencyManager : IDependencyManager
                     {
                         string jsonVersions = match.Groups[1].Value;
                         using var verDoc = JsonDocument.Parse(jsonVersions);
+                        var remoteVersions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                         foreach (var prop in verDoc.RootElement.EnumerateObject())
                         {
                             string key = prop.Name;
-                            string remoteVersion = prop.Value.GetString() ?? string.Empty;
-                            if (string.IsNullOrEmpty(remoteVersion)) continue;
+                            string remoteVersion = string.Empty;
 
-                            string localVer = GetInstalledVersion(key);
-                            if (IsInstalled(key) && !string.IsNullOrEmpty(localVer) && !remoteVersion.Equals(localVer, StringComparison.OrdinalIgnoreCase))
+                            if (prop.Value.ValueKind == JsonValueKind.String)
                             {
-                                lock (_updatesAvailable)
-                                {
-                                    _updatesAvailable[key] = true;
-                                }
-                                _logService.Info($"Обнаружена новая версия для зависимости '{key}': remote={remoteVersion}, local={localVer}", "DependencyManager");
-                                StatusChanged?.Invoke(key, GetStatus(key));
+                                remoteVersion = prop.Value.GetString() ?? string.Empty;
                             }
+                            else if (prop.Value.ValueKind == JsonValueKind.Array)
+                            {
+                                foreach (var item in prop.Value.EnumerateArray())
+                                {
+                                    if (item.ValueKind == JsonValueKind.String)
+                                    {
+                                        remoteVersion = item.GetString() ?? string.Empty;
+                                        break;
+                                    }
+                                }
+                            }
+
+                            if (!string.IsNullOrEmpty(remoteVersion))
+                            {
+                                remoteVersions[key] = remoteVersion;
+                            }
+                        }
+
+                        // Проверяем FFmpeg (+ QAAC): обновление доступно, если отличается версия FFmpeg или версия QAAC
+                        if (IsInstalled("ffmpeg"))
+                        {
+                            bool ffmpegUpdate = false;
+                            string localFfmpegVer = GetInstalledVersion("ffmpeg").TrimStart('v', 'V').Trim();
+                            if (remoteVersions.TryGetValue("ffmpeg", out var remoteFfmpeg) &&
+                                !string.IsNullOrEmpty(localFfmpegVer))
+                            {
+                                string cleanRemoteFfmpeg = remoteFfmpeg.TrimStart('v', 'V').Trim();
+                                if (!cleanRemoteFfmpeg.Equals(localFfmpegVer, StringComparison.OrdinalIgnoreCase))
+                                {
+                                    ffmpegUpdate = true;
+                                    _logService.Info($"Обнаружена новая версия FFmpeg: remote={remoteFfmpeg}, local={localFfmpegVer}", "DependencyManager");
+                                }
+                            }
+
+                            string localQaacVer = GetInstalledVersion("qaac").TrimStart('v', 'V').Trim();
+                            if (remoteVersions.TryGetValue("qaac", out var remoteQaac) &&
+                                !string.IsNullOrEmpty(localQaacVer))
+                            {
+                                string cleanRemoteQaac = remoteQaac.TrimStart('v', 'V').Trim();
+                                if (!cleanRemoteQaac.Equals(localQaacVer, StringComparison.OrdinalIgnoreCase))
+                                {
+                                    ffmpegUpdate = true;
+                                    _logService.Info($"Обнаружена новая версия QAAC: remote={remoteQaac}, local={localQaacVer}", "DependencyManager");
+                                }
+                            }
+
+                            lock (_updatesAvailable)
+                            {
+                                _updatesAvailable["ffmpeg"] = ffmpegUpdate;
+                            }
+                            StatusChanged?.Invoke("ffmpeg", GetStatus("ffmpeg"));
+                        }
+
+                        // Проверяем остальные зависимости из манифеста
+                        foreach (var kvp in remoteVersions)
+                        {
+                            string depKey = kvp.Key;
+                            if (depKey.Equals("ffmpeg", StringComparison.OrdinalIgnoreCase) ||
+                                depKey.Equals("qaac", StringComparison.OrdinalIgnoreCase))
+                            {
+                                continue;
+                            }
+
+                            if (!IsInstalled(depKey))
+                            {
+                                continue;
+                            }
+
+                            string localVer = GetInstalledVersion(depKey).TrimStart('v', 'V').Trim();
+                            string remoteVer = kvp.Value.TrimStart('v', 'V').Trim();
+                            bool hasUpdate = !string.IsNullOrEmpty(localVer) &&
+                                !remoteVer.Equals(localVer, StringComparison.OrdinalIgnoreCase);
+
+                            lock (_updatesAvailable)
+                            {
+                                _updatesAvailable[depKey] = hasUpdate;
+                            }
+
+                            if (hasUpdate)
+                            {
+                                _logService.Info($"Обнаружена новая версия для '{depKey}': remote={kvp.Value}, local={localVer}", "DependencyManager");
+                            }
+                            StatusChanged?.Invoke(depKey, GetStatus(depKey));
                         }
                     }
                 }

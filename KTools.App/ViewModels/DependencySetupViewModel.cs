@@ -164,9 +164,15 @@ public partial class DependencySetupViewModel : ThreadSafeViewModel
         var vm = FindViewModel(key);
         if (vm != null)
         {
+            vm.IsUpdateAvailable = _dependencyManager.IsUpdateAvailable(key);
             if (!success)
             {
                 vm.ErrorMessage = errorMsg;
+            }
+            else
+            {
+                vm.ErrorMessage = string.Empty;
+                vm.LoadVersionAsync();
             }
             UpdateUIStates();
         }

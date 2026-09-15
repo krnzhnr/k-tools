@@ -43,6 +43,7 @@ public partial class DependencyVM : ObservableObject
 
     partial void OnStatusChanged(DependencyStatus value)
     {
+        IsUpdateAvailable = _dependencyManager.IsUpdateAvailable(Info.Key);
         if (value == DependencyStatus.Installed)
         {
             LoadVersionAsync();
@@ -210,12 +211,19 @@ public partial class DependencyVM : ObservableObject
         Task.Run(() =>
         {
             string ver = _dependencyManager.GetInstalledVersion(Info.Key);
-            if (!string.IsNullOrEmpty(ver) && _dispatcherQueue != null)
+            if (!string.IsNullOrEmpty(ver))
             {
-                _dispatcherQueue.TryEnqueue(() =>
+                if (_dispatcherQueue != null)
+                {
+                    _dispatcherQueue.TryEnqueue(() =>
+                    {
+                        InstalledVersion = ver;
+                    });
+                }
+                else
                 {
                     InstalledVersion = ver;
-                });
+                }
             }
         });
     }
