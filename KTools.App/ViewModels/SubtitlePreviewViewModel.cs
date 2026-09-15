@@ -181,6 +181,98 @@ public sealed class PatternItemViewModel : ObservableObject
 }
 
 /// <summary>
+/// Представляет элемент карточки файла субтитров для обзорного экрана предпросмотра.
+/// </summary>
+public sealed class SubtitleFileCardItem : ObservableObject
+{
+    private int _totalLines;
+    private int _activeLines;
+    private int _deletedLines;
+
+    /// <summary>
+    /// Полный путь к файлу субтитров.
+    /// </summary>
+    public string FilePath { get; }
+
+    /// <summary>
+    /// Отображаемое имя файла.
+    /// </summary>
+    public string FileName { get; }
+
+    /// <summary>
+    /// Общее количество реплик в файле.
+    /// </summary>
+    public int TotalLines
+    {
+        get => _totalLines;
+        set
+        {
+            if (SetProperty(ref _totalLines, value))
+            {
+                OnPropertyChanged(nameof(DescriptionText));
+                OnPropertyChanged(nameof(StatusBadgeText));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Количество активных (включенных) реплик в файле.
+    /// </summary>
+    public int ActiveLines
+    {
+        get => _activeLines;
+        set
+        {
+            if (SetProperty(ref _activeLines, value))
+            {
+                OnPropertyChanged(nameof(DescriptionText));
+                OnPropertyChanged(nameof(StatusBadgeText));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Количество исключенных (удаленных) реплик в файле.
+    /// </summary>
+    public int DeletedLines
+    {
+        get => _deletedLines;
+        set
+        {
+            if (SetProperty(ref _deletedLines, value))
+            {
+                OnPropertyChanged(nameof(DescriptionText));
+                OnPropertyChanged(nameof(StatusBadgeText));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Текстовое описание статистики реплик для отображения в Description карточки SettingsCard.
+    /// </summary>
+    public string DescriptionText =>
+        $"Всего реплик: {TotalLines} • Активных: {ActiveLines} • Исключено: {DeletedLines}";
+
+    /// <summary>
+    /// Краткий текст для правого бейджа карточки.
+    /// </summary>
+    public string StatusBadgeText =>
+        DeletedLines > 0 ? $"-{DeletedLines}" : $"{TotalLines}";
+
+    /// <summary>
+    /// Инициализирует новый экземпляр карточки файла субтитров.
+    /// </summary>
+    public SubtitleFileCardItem(string filePath, int totalLines, int activeLines, int deletedLines)
+    {
+        FilePath = filePath ?? string.Empty;
+        FileName = string.IsNullOrEmpty(filePath) ? string.Empty : Path.GetFileName(filePath);
+        _totalLines = totalLines;
+        _activeLines = activeLines;
+        _deletedLines = deletedLines;
+    }
+}
+
+/// <summary>
 /// Представляет модель строки субтитров для отображения в списке предпросмотра.
 /// </summary>
 public sealed class SubtitlePreviewLine : ObservableObject
@@ -710,6 +802,18 @@ public sealed partial class SubtitlePreviewViewModel : ThreadSafeViewModel
     public partial bool StripCaps { get; set; }
 
     /// <summary>
+    /// Список карточек файлов субтитров для обзорного экрана предпросмотра.
+    /// </summary>
+    public ObservableRangeCollection<SubtitleFileCardItem> FileCards { get; } = new();
+
+    /// <summary>
+    /// Указывает, активен ли детальный просмотр строк (конкретного файла или всех файлов).
+    /// Если false — отображается обзорный экран с карточками файлов.
+    /// </summary>
+    [ObservableProperty]
+    public partial bool IsDetailedViewActive { get; set; }
+
+    /// <summary>
     /// Путь к выбранному файлу субтитров для фильтрации предпросмотра (null для всех файлов).
     /// </summary>
     [ObservableProperty]
@@ -865,6 +969,7 @@ public sealed partial class SubtitlePreviewViewModel : ThreadSafeViewModel
         if (e.PropertyName == nameof(SubtitlePreviewLine.IsChecked))
         {
             OnPropertyChanged(nameof(SubtitleLines));
+            UpdateFileCards();
         }
     }
 
@@ -982,6 +1087,82 @@ public sealed partial class SubtitlePreviewViewModel : ThreadSafeViewModel
         UpdateFilteredStyles();
         UpdateFilteredEffects();
         UpdateFilteredLines();
+        UpdateFileCards();
+    }
+
+    /// <summary>
+    /// Пересчитать статистику строк в карточках файлов.
+    /// </summary>
+    public void UpdateFileCards()
+    {
+        var fileGroups = SubtitleLines.GroupBy(l => l.FilePath, StringComparer.OrdinalIgnoreCase).ToList();
+        var existingDict = FileCards.ToDictionary(c => c.FilePath, StringComparer.OrdinalIgnoreCase);
+        var newCardList = new List<SubtitleFileCardItem>();
+
+        foreach (var group in fileGroups)
+        {
+            string path = group.Key;
+            int total = group.Count();
+            int active = group.Count(l => l.IsChecked);
+            int deleted = total - active;
+
+            if (existingDict.TryGetValue(path, out var card))
+            {
+                card.TotalLines = total;
+                card.ActiveLines = active;
+                card.DeletedLines = deleted;
+                newCardList.Add(card);
+            }
+            else
+            {
+                newCardList.Add(new SubtitleFileCardItem(path, total, active, deleted));
+            }
+        }
+
+        FileCards.ReplaceRange(newCardList);
+        OnPropertyChanged(nameof(TotalLinesCount));
+        OnPropertyChanged(nameof(TotalActiveLinesCount));
+        OnPropertyChanged(nameof(TotalDeletedLinesCount));
+        OnPropertyChanged(nameof(AllFilesDescriptionText));
+    }
+
+    /// <summary>
+    /// Общее количество всех строк во всех загруженных файлах.
+    /// </summary>
+    public int TotalLinesCount => SubtitleLines.Count;
+
+    /// <summary>
+    /// Общее количество активных строк во всех файлах.
+    /// </summary>
+    public int TotalActiveLinesCount => SubtitleLines.Count(l => l.IsChecked);
+
+    /// <summary>
+    /// Общее количество исключенных строк во всех файлах.
+    /// </summary>
+    public int TotalDeletedLinesCount => TotalLinesCount - TotalActiveLinesCount;
+
+    /// <summary>
+    /// Описание сводной статистики для карточки «Все файлы».
+    /// </summary>
+    public string AllFilesDescriptionText =>
+        $"Всего файлов: {FileCards.Count} • Реплик: {TotalLinesCount} • Активных: {TotalActiveLinesCount} • Исключено: {TotalDeletedLinesCount}";
+
+    /// <summary>
+    /// Открыть детальный просмотр реплик для конкретного файла (или всех файлов, если filePath == null).
+    /// </summary>
+    /// <param name="filePath">Путь к файлу субтитров или null для показа всех файлов.</param>
+    public void OpenFileDetail(string? filePath)
+    {
+        SelectedFilePath = filePath;
+        IsDetailedViewActive = true;
+    }
+
+    /// <summary>
+    /// Вернуться из детального просмотра к списку карточек файлов.
+    /// </summary>
+    public void BackToFilesHub()
+    {
+        IsDetailedViewActive = false;
     }
 
     /// <summary>
@@ -1117,6 +1298,7 @@ public sealed partial class SubtitlePreviewViewModel : ThreadSafeViewModel
 
         OnPropertyChanged(nameof(SubtitleLines));
         UpdateFilteredLines();
+        UpdateFileCards();
     }
 
     /// <summary>
