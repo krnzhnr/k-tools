@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="KTools_App.UI.BitrateViewerWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:canvas="using:Microsoft.Graphics.Canvas.UI.Xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    Title="Интерактивный анализ битрейта (Win2D GPU)"
+    mc:Ignorable="d">
+
+    <Grid Padding="20,10,20,20" RowSpacing="15">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- Нативный контрол TitleBar для бесшовной интеграции с Mica/Acrylic -->
+        <TitleBar x:Name="AppTitleBar" Title="Интерактивный анализ битрейта (Win2D GPU)" Grid.Row="0" Margin="-20,-10,-20,0" />
+
+        <!-- Шапка окна с метриками -->
+        <Grid Grid.Row="1" ColumnSpacing="15">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <StackPanel Grid.Column="0" Spacing="4">
+                <TextBlock x:Name="TitleTextBlock" Text="Анализ битрейта" Style="{StaticResource TitleTextBlockStyle}" TextTrimming="CharacterEllipsis" />
+                <TextBlock x:Name="SubtitleTextBlock" Text="Загрузка данных..." Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+            </StackPanel>
+
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                <Border Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}" CornerRadius="6" Padding="10,6">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <TextBlock Text="Средний:" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" />
+                        <TextBlock x:Name="MeanTextBlock" Text="0 Mbps" FontWeight="Bold" FontSize="12" Foreground="#00E5FF" />
+                    </StackPanel>
+                </Border>
+                <Border Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}" CornerRadius="6" Padding="10,6">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <TextBlock Text="Макс:" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" />
+                        <TextBlock x:Name="MaxTextBlock" Text="0 Mbps" FontWeight="Bold" FontSize="12" Foreground="#FF4081" />
+                    </StackPanel>
+                </Border>
+                <Border Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}" CornerRadius="6" Padding="10,6">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <TextBlock Text="Мин:" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" />
+                        <TextBlock x:Name="MinTextBlock" Text="0 Mbps" FontWeight="Bold" FontSize="12" Foreground="#7C4DFF" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </Grid>
+
+        <!-- Область нативного GPU-графика Win2D Direct2D -->
+        <Border Grid.Row="2" CornerRadius="8" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderThickness="1" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" Padding="10">
+            <Grid>
+                <canvas:CanvasControl x:Name="GraphCanvas"
+                                      CreateResources="GraphCanvas_CreateResources"
+                                      Draw="GraphCanvas_Draw"
+                                      PointerWheelChanged="Canvas_PointerWheelChanged"
+                                      PointerPressed="Canvas_PointerPressed"
+                                      PointerMoved="Canvas_PointerMoved"
+                                      PointerReleased="Canvas_PointerReleased" />
+
+                <!-- Индикатор загрузки -->
+                <ProgressRing x:Name="LoadingRing" IsActive="False" Width="40" Height="40" HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Grid>
+        </Border>
+
+        <!-- Панель управления масштабом и выгрузкой -->
+        <Grid Grid.Row="3">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8">
+                <Button Content="Сбросить масштаб" Click="OnResetZoomClick" />
+                <TextBlock x:Name="HoverInfoTextBlock" Text="Наведите курсор на график для инспекции..." VerticalAlignment="Center" Margin="15,0,0,0" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" />
+            </StackPanel>
+
+            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="10">
+                <Button Content="Сохранить PNG" Click="OnSavePngClick" />
+                <Button Content="Закрыть" Click="OnCloseClick" Style="{StaticResource AccentButtonStyle}" Width="100" />
+            </StackPanel>
+        </Grid>
+    </Grid>
+</Window>

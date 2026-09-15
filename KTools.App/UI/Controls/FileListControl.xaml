@@ -14,6 +14,7 @@
     <Grid x:Name="RootGrid" 
           AllowDrop="True" 
           DragOver="RootGrid_DragOver" 
+          DragLeave="RootGrid_DragLeave"
           Drop="RootGrid_Drop"
           Background="Transparent">
         
@@ -44,23 +45,28 @@
                 Padding="24"
                 VerticalAlignment="Stretch"
                 HorizontalAlignment="Stretch">
-            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="12">
-                <SymbolIcon Symbol="OpenFile" 
-                             Foreground="{ThemeResource TextFillColorSecondaryBrush}" 
-                             Width="48" 
-                             Height="48" />
-                <TextBlock x:Name="DragDropPromptTextBlock"
-                            Text="Перетащите файлы сюда или используйте кнопку ниже" 
-                            FontSize="14" 
-                            FontWeight="SemiBold"
-                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                            HorizontalAlignment="Center" />
-                <TextBlock x:Name="DragDropSubPromptTextBlock"
-                            Text="Поддерживаются файлы медиаформатов для выбранного скрипта" 
-                            FontSize="11" 
-                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                            HorizontalAlignment="Center" />
-            </StackPanel>
+            <Grid>
+                <!-- Универсальная окантовка зоны сброса файлов -->
+                <local:DropZoneOverlay x:Name="DropOverlay" Margin="-16" />
+
+                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="16">
+                    <FontIcon Glyph="&#xE8E5;" 
+                              FontSize="51" 
+                              Foreground="{ThemeResource TextFillColorSecondaryBrush}" 
+                              HorizontalAlignment="Center" />
+                    <TextBlock x:Name="DragDropPromptTextBlock"
+                                Text="Перетащите файлы сюда или используйте кнопку ниже" 
+                                FontSize="15" 
+                                FontWeight="SemiBold"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                HorizontalAlignment="Center" />
+                    <TextBlock x:Name="DragDropSubPromptTextBlock"
+                                Text="Поддерживаются файлы медиаформатов для выбранного скрипта" 
+                                FontSize="12" 
+                                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                HorizontalAlignment="Center" />
+                </StackPanel>
+            </Grid>
         </Border>
 
         <!-- Список файлов (Обычный) -->
@@ -85,6 +91,7 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
 
                         <!-- Название файла -->
@@ -95,20 +102,28 @@
                                    TextTrimming="CharacterEllipsis"
                                    Margin="6,6,12,0"/>
                         
-                        <!-- Размер файла -->
-                        <TextBlock Grid.Column="0"
-                                   Grid.Row="1"
-                                   Text="{x:Bind FileSizeStr}"
-                                   x:Phase="2"
-                                   Style="{ThemeResource BodyTextBlockStyle}"
-                                   Margin="6,0,12,6"/>
+                        <!-- Размер файла и бейджик параметров -->
+                        <StackPanel Grid.Column="0"
+                                    Grid.Row="1"
+                                    Orientation="Horizontal"
+                                    Spacing="8"
+                                    VerticalAlignment="Center"
+                                    Margin="6,0,12,6">
+                            <TextBlock Text="{x:Bind FileSizeStr}"
+                                       x:Phase="2"
+                                       Style="{ThemeResource BodyTextBlockStyle}"
+                                       VerticalAlignment="Center"/>
+                            <local:AccentBadge Text="{x:Bind CropBadgeText, Mode=OneWay}"
+                                               ToolTipService.ToolTip="Автоматическая обрезка черных полос (Crop)"
+                                               VerticalAlignment="Center"/>
+                        </StackPanel>
 
                         <!-- Кольцевой прогресс-бар и иконка статуса -->
                         <Grid Grid.Column="1"
                                Grid.RowSpan="2" 
                                Width="32" 
                                Height="32" 
-                               Margin="6,6,12,6" 
+                               Margin="6,6,4,6" 
                                VerticalAlignment="Center" 
                                HorizontalAlignment="Center">
                             
@@ -131,8 +146,33 @@
                                          VerticalAlignment="Center" />
                         </Grid>
 
+                        <!-- Кнопка вызова нативного GPU-графика битрейта Win2D -->
+                        <Button Grid.Column="2"
+                                Grid.RowSpan="2"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                Padding="0"
+                                Width="32"
+                                Height="32"
+                                MinWidth="0"
+                                MinHeight="0"
+                                Margin="2,0,4,0"
+                                HorizontalAlignment="Center"
+                                VerticalAlignment="Center"
+                                HorizontalContentAlignment="Center"
+                                VerticalContentAlignment="Center"
+                                Click="OpenBitrateGraphButton_Click"
+                                ToolTipService.ToolTip="Открыть GPU-график битрейта (Win2D)"
+                                Visibility="{x:Bind HasBitrateData, Mode=OneWay}">
+                            <FontIcon FontSize="16" Glyph="&#xE9D2;"
+                                      Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
+                                      HorizontalAlignment="Center"
+                                      VerticalAlignment="Center"
+                                      FontFamily="{ThemeResource SymbolThemeFontFamily}" />
+                        </Button>
+
                         <!-- Кнопка удаления файла из очереди -->
-                        <Button Grid.Column="2" 
+                        <Button Grid.Column="3" 
                                 Grid.RowSpan="2"
                                 x:Name="DeleteButton"
                                 Background="Transparent"
@@ -326,6 +366,8 @@
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" />
@@ -387,8 +429,54 @@
                                          VerticalAlignment="Center" />
                         </Grid>
  
-                        <!-- Кнопка удаления из списка -->
+                        <!-- Кнопка повторного запуска скачивания (отображается по завершении или ошибке) -->
                         <Button Grid.Column="2" Grid.RowSpan="2"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                Padding="0"
+                                Width="32"
+                                Height="32"
+                                MinWidth="0"
+                                MinHeight="0"
+                                Margin="0,0,4,0"
+                                HorizontalAlignment="Center"
+                                VerticalAlignment="Center"
+                                HorizontalContentAlignment="Center"
+                                VerticalContentAlignment="Center"
+                                Click="RetryDownloadButton_Click"
+                                ToolTipService.ToolTip="Скачать заново"
+                                Visibility="{x:Bind IsRetryVisible, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+                            <FontIcon FontSize="18" Glyph="&#xE72C;"
+                                      HorizontalAlignment="Center"
+                                      VerticalAlignment="Center"
+                                      Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
+                                      FontFamily="{ThemeResource SymbolThemeFontFamily}" />
+                        </Button>
+
+                        <!-- Кнопка копирования URL-ссылки в буфер обмена -->
+                        <Button Grid.Column="3" Grid.RowSpan="2"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                Padding="0"
+                                Width="32"
+                                Height="32"
+                                MinWidth="0"
+                                MinHeight="0"
+                                Margin="0,0,4,0"
+                                HorizontalAlignment="Center"
+                                VerticalAlignment="Center"
+                                HorizontalContentAlignment="Center"
+                                VerticalContentAlignment="Center"
+                                Click="CopyUrlButton_Click"
+                                ToolTipService.ToolTip="Скопировать ссылку в буфер обмена">
+                            <FontIcon FontSize="18" Glyph="&#xE8C8;"
+                                      HorizontalAlignment="Center"
+                                      VerticalAlignment="Center"
+                                      FontFamily="{ThemeResource SymbolThemeFontFamily}" />
+                        </Button>
+
+                        <!-- Кнопка удаления из списка -->
+                        <Button Grid.Column="4" Grid.RowSpan="2"
                                 Background="Transparent"
                                 BorderThickness="0"
                                 Padding="0"

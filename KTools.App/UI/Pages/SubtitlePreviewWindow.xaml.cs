@@ -72,9 +72,12 @@ public sealed class SubtitlePreviewWindow : Window
             string theme = App.Services.GetRequiredService<ISettingsManager>().Theme;
             if (Content is FrameworkElement rootElement)
             {
-                rootElement.RequestedTheme = theme.Equals("Light", StringComparison.OrdinalIgnoreCase)
-                    ? ElementTheme.Light
-                    : ElementTheme.Dark;
+                rootElement.RequestedTheme = theme.ToLowerInvariant() switch
+                {
+                    "light" => ElementTheme.Light,
+                    "dark" => ElementTheme.Dark,
+                    _ => ElementTheme.Default
+                };
             }
         }
         catch (Exception ex)

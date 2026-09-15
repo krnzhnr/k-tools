@@ -23,10 +23,29 @@ public sealed class AudioTransplantScript : AbstractScript
 {
     private readonly IFFmpegRunner _ffmpegRunner;
     private readonly IMkvmergeRunner _mkvmergeRunner;
+    private readonly IEac3toRunner _eac3toRunner;
     private readonly IAudioWaveformService _waveformService;
     private readonly IMediaProbeService _mediaProbeService;
 
     private const double AacPrimingDelayMs = 21.333333333333332; // 1024 / 48000 * 1000
+
+    /// <summary>Сессионный путь к исходному аудио (в памяти до перезапуска приложения).</summary>
+    public string SourceFilePath { get; set; } = string.Empty;
+
+    /// <summary>Сессионный путь к целевому видео (в памяти до перезапуска приложения).</summary>
+    public string DestFilePath { get; set; } = string.Empty;
+
+    /// <summary>Сессионный путь к файлу субтитров (в памяти до перезапуска приложения).</summary>
+    public string SubtitlesFilePath { get; set; } = string.Empty;
+
+    /// <summary>Сессионный индекс дорожки источника.</summary>
+    public int SourceTrackIndex { get; set; } = 0;
+
+    /// <summary>Сессионный индекс целевой дорожки.</summary>
+    public int DestTrackIndex { get; set; } = 0;
+
+    /// <summary>Сессионный сдвиг в миллисекундах.</summary>
+    public int ShiftMs { get; set; } = 0;
 
     public AudioTransplantScript(
         ILogService logService,
@@ -34,12 +53,14 @@ public sealed class AudioTransplantScript : AbstractScript
         IPathManager pathManager,
         IFFmpegRunner ffmpegRunner,
         IMkvmergeRunner mkvmergeRunner,
+        IEac3toRunner eac3toRunner,
         IAudioWaveformService waveformService,
         IMediaProbeService mediaProbeService)
         : base(logService, settingsManager, pathManager)
     {
         _ffmpegRunner = ffmpegRunner ?? throw new ArgumentNullException(nameof(ffmpegRunner));
         _mkvmergeRunner = mkvmergeRunner ?? throw new ArgumentNullException(nameof(mkvmergeRunner));
+        _eac3toRunner = eac3toRunner ?? throw new ArgumentNullException(nameof(eac3toRunner));
         _waveformService = waveformService ?? throw new ArgumentNullException(nameof(waveformService));
         _mediaProbeService = mediaProbeService ?? throw new ArgumentNullException(nameof(mediaProbeService));
     }
@@ -60,7 +81,7 @@ public sealed class AudioTransplantScript : AbstractScript
     public override string[] FileExtensions => AppConstants.VideoContainers.ToArray();
 
     /// <inheritdoc />
-    public override string[] RequiredDependencies => new[] { "ffmpeg", "mkvtoolnix" };
+    public override string[] RequiredDependencies => new[] { "ffmpeg", "mkvtoolnix", "eac3to" };
 
     /// <inheritdoc />
     public override bool UseCustomWidget => false;
@@ -69,43 +90,7 @@ public sealed class AudioTransplantScript : AbstractScript
     public override bool SupportsParallel => false; // Только последовательно для диалогов UI
 
     /// <inheritdoc />
-    public override List<SettingField> SettingsSchema => new()
-    {
-        new SettingField(
-            "SourceFile",
-            "Исходный файл пересаживаемой аудиодорожки (путь)",
-            SettingType.Text,
-            "",
-            "Источники"),
-
-        new SettingField(
-            "SourceTrackIndex",
-            "Индекс аудиодорожки источника",
-            SettingType.Int,
-            0,
-            "Источники"),
-
-        new SettingField(
-            "DestTrackIndex",
-            "Индекс дорожки целевого видео (для выравнивания)",
-            SettingType.Int,
-            0,
-            "Источники"),
-
-        new SettingField(
-            "ShiftMs",
-            "Пользовательский сдвиг (мс)",
-            SettingType.Int,
-            0,
-            "Синхронизация"),
-
-        new SettingField(
-            "UseVisualSync",
-            "Запустить окно графической синхронизации (Win2D)",
-            SettingType.Checkbox,
-            true,
-            "Синхронизация")
-    };
+    public override List<SettingField> SettingsSchema => new();
 
     /// <inheritdoc />
     public override async Task<List<string>> ExecuteSingleAsync(
@@ -121,62 +106,87 @@ public sealed class AudioTransplantScript : AbstractScript
 
         _logService.Info($"Начало пересадки аудиодорожки в файл: '{destFileName}'", "AudioTransplantScript");
 
-        string sourceFilePath = GetSettingValue(settings, "SourceFile", "");
+        string sourceFilePath = GetSettingValue(settings, "SourceFile", SourceFilePath);
+        if (string.IsNullOrWhiteSpace(sourceFilePath)) sourceFilePath = SourceFilePath;
+
         if (string.IsNullOrWhiteSpace(sourceFilePath) || !File.Exists(sourceFilePath))
         {
             throw new FileNotFoundException($"Файл-источник пересаживаемого аудио не найден: '{sourceFilePath}'");
         }
 
-        int sourceTrackIndex = GetSettingValue(settings, "SourceTrackIndex", 0);
-        int destTrackIndex = GetSettingValue(settings, "DestTrackIndex", 0);
-        int userShiftMs = GetSettingValue(settings, "ShiftMs", 0);
+        int sourceTrackIndex = GetSettingValue(settings, "SourceTrackIndex", SourceTrackIndex);
+        int destTrackIndex = GetSettingValue(settings, "DestTrackIndex", DestTrackIndex);
+        int userShiftMs = GetSettingValue(settings, "ShiftMs", ShiftMs);
 
         // 2. Рассчитываем итоговый физический сдвиг с учетом вычитания задержки AAC (21.33 мс)
         double actualOffsetMs = userShiftMs - AacPrimingDelayMs;
         _logService.Info($"Пользовательский сдвиг: {userShiftMs} мс. Математическая компенсация AAC (-21.33 мс). Фактический сдвиг: {actualOffsetMs:F2} мс.", "AudioTransplantScript");
 
-        // 3. Формируем путь кодированного временного AAC-файла
-        string tempAacPath = Path.Combine(Path.GetTempPath(), $"transplant_{Guid.NewGuid():N}.aac");
+        // 3. Извлечение и прямоточный физический сдвиг аудиопотока через eac3to
+        string sourceExt = Path.GetExtension(sourceFilePath).TrimStart('.');
+        if (string.IsNullOrEmpty(sourceExt)) sourceExt = "ac3";
+
+        string tempShiftedPath = Path.Combine(Path.GetTempPath(), $"transplant_{Guid.NewGuid():N}.{sourceExt}");
 
         try
         {
-            progressCallback(fileIndex, totalCount, "Кодирование и сдвиг аудио в AAC 256k...", 30.0);
-
-            // Формируем цепочку фильтров для сдвига
-            var filterParts = new List<string> { "aresample=resampler=soxr:out_sample_rate=48000" };
+            progressCallback(fileIndex, totalCount, "Извлечение и прямоточный сдвиг аудио (eac3to Bitstream)...", 30.0);
 
             int roundedOffsetMs = (int)Math.Round(actualOffsetMs);
-            if (roundedOffsetMs > 0)
-            {
-                filterParts.Add($"adelay=delays={roundedOffsetMs}:all=1");
-            }
-            else if (roundedOffsetMs < 0)
-            {
-                double startSec = Math.Abs(actualOffsetMs) / 1000.0;
-                filterParts.Add($"atrim=start={startSec.ToString("F4", CultureInfo.InvariantCulture)}");
-                filterParts.Add("asetpts=PTS-STARTPTS");
-            }
+            string shiftArg = roundedOffsetMs >= 0 ? $"+{roundedOffsetMs}ms" : $"{roundedOffsetMs}ms";
 
-            string filterChain = string.Join(",", filterParts);
-
-            var ffmpegExtraArgs = new List<string>
+            // eac3to дорожка 1-indexed (если исходный файл моно-дорожка, иначе добавляем 1 к 0-indexed индексу)
+            int eac3TrackNum = sourceTrackIndex + 1;
+            var eac3toArgs = new List<string>
             {
-                "-map", $"0:a:{sourceTrackIndex}",
-                "-vsync", "cfr",
-                "-af", filterChain,
-                "-c:a", "aac",
-                "-b:a", "256k"
+                $"\"{sourceFilePath}\"",
+                $"{eac3TrackNum}:\"{tempShiftedPath}\"",
+                shiftArg,
+                "-silence",
+                "-progressnumbers",
+                "-log=nul"
             };
 
-            bool ffmpegSuccess = await _ffmpegRunner.RunAsync(
-                inputPath: sourceFilePath,
-                outputPath: tempAacPath,
-                extraArgs: ffmpegExtraArgs,
-                overwrite: true);
+            bool eac3Success = await _eac3toRunner.RunAsync(eac3toArgs);
 
-            if (!ffmpegSuccess || !File.Exists(tempAacPath))
+            // Резервный вариант, если eac3to не смог распарсить контейнер: используем FFmpeg для извлечения сырого потока с прямоточным копированием
+            if (!eac3Success || !File.Exists(tempShiftedPath))
             {
-                throw new InvalidOperationException("Не удалось извлечь и закодировать пересаживаемое аудио в AAC.");
+                _logService.Warn("Прямой сдвиг трека через eac3to не завершился успешно. Запуск резервной обработки через FFmpeg...", "AudioTransplantScript");
+
+                string tempRawPath = Path.Combine(Path.GetTempPath(), $"transplant_raw_{Guid.NewGuid():N}.{sourceExt}");
+                var ffmpegDemuxArgs = new List<string>
+                {
+                    "-map", $"0:a:{sourceTrackIndex}",
+                    "-c:a", "copy"
+                };
+
+                bool ffmpegDemuxSuccess = await _ffmpegRunner.RunAsync(
+                    inputPath: sourceFilePath,
+                    outputPath: tempRawPath,
+                    extraArgs: ffmpegDemuxArgs,
+                    overwrite: true);
+
+                if (ffmpegDemuxSuccess && File.Exists(tempRawPath))
+                {
+                    var fallbackEacArgs = new List<string>
+                    {
+                        $"\"{tempRawPath}\"",
+                        $"\"{tempShiftedPath}\"",
+                        shiftArg,
+                        "-silence",
+                        "-progressnumbers",
+                        "-log=nul"
+                    };
+
+                    eac3Success = await _eac3toRunner.RunAsync(fallbackEacArgs);
+                    if (File.Exists(tempRawPath)) File.Delete(tempRawPath);
+                }
+            }
+
+            if (!eac3Success || !File.Exists(tempShiftedPath))
+            {
+                throw new InvalidOperationException("Не удалось выполнить прямоточный физический сдвиг пересаживаемой аудиодорожки через eac3to.");
             }
 
             progressCallback(fileIndex, totalCount, "Мультиплексирование в MKV (mkvmerge)...", 70.0);
@@ -188,7 +198,7 @@ public sealed class AudioTransplantScript : AbstractScript
 
             var mkvInputs = new List<MkvInputSource>
             {
-                new MkvInputSource(tempAacPath, new List<string>
+                new MkvInputSource(tempShiftedPath, new List<string>
                 {
                     "--language", "0:rus",
                     "--default-track-flag", "0:yes",
@@ -197,7 +207,8 @@ public sealed class AudioTransplantScript : AbstractScript
             };
 
             // Вшивание внешних субтитров (если указаны)
-            string subtitlesFile = GetSettingValue(settings, "SubtitlesFile", "");
+            string subtitlesFile = GetSettingValue(settings, "SubtitlesFile", SubtitlesFilePath);
+            if (string.IsNullOrWhiteSpace(subtitlesFile)) subtitlesFile = SubtitlesFilePath;
             if (!string.IsNullOrWhiteSpace(subtitlesFile) && File.Exists(subtitlesFile))
             {
                 mkvInputs.Add(new MkvInputSource(subtitlesFile, new List<string>
@@ -259,12 +270,12 @@ public sealed class AudioTransplantScript : AbstractScript
         }
         finally
         {
-            // Очистка временного AAC файла
-            if (File.Exists(tempAacPath))
+            // Очистка временного прямоточного аудиофайла
+            if (File.Exists(tempShiftedPath))
             {
                 try
                 {
-                    File.Delete(tempAacPath);
+                    File.Delete(tempShiftedPath);
                 }
                 catch { }
             }

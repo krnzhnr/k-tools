@@ -133,20 +133,35 @@ public sealed class FFmpegRunner : AbstractProcessRunner, IFFmpegRunner
 
         if (!result.IsSuccess)
         {
-            string lastErrors = string.Join(Environment.NewLine, stderrLines);
-            Log.Error($"Ошибка выполнения FFmpeg (Код: {result.ExitCode}). Последние строки stderr:\n{lastErrors}", "FFmpegRunner");
+            if (!cancellationToken.IsCancellationRequested)
+            {
+                string lastErrors = string.Join(Environment.NewLine, stderrLines);
+                Log.Error($"Ошибка выполнения FFmpeg (Код: {result.ExitCode}). Последние строки stderr:\n{lastErrors}", "FFmpegRunner");
+            }
             
             // Физически удаляем поврежденный выходной файл при сбое выполнения процесса
-            if (!string.IsNullOrEmpty(outputPath) && File.Exists(outputPath))
+            if (!string.IsNullOrEmpty(outputPath))
             {
-                try
+                for (int attempt = 0; attempt < 6; attempt++)
                 {
-                    File.Delete(outputPath);
-                    Log.DebugLog($"Удален поврежденный выходной файл после сбоя FFmpeg: '{Path.GetFileName(outputPath)}'", "FFmpegRunner");
-                }
-                catch (Exception deleteEx)
-                {
-                    Log.Exception(deleteEx, $"Не удалось удалить поврежденный выходной файл '{outputPath}' после сбоя FFmpeg: {deleteEx.Message}", "FFmpegRunner");
+                    if (!File.Exists(outputPath)) break;
+                    try
+                    {
+                        File.Delete(outputPath);
+                        Log.DebugLog($"Удален поврежденный выходной файл после остановки FFmpeg: '{Path.GetFileName(outputPath)}'", "FFmpegRunner");
+                        break;
+                    }
+                    catch (Exception deleteEx)
+                    {
+                        if (attempt == 5)
+                        {
+                            Log.Warn($"Не удалось удалить поврежденный выходной файл '{outputPath}' после остановки FFmpeg: {deleteEx.Message}", "FFmpegRunner");
+                        }
+                        else
+                        {
+                            await Task.Delay(150);
+                        }
+                    }
                 }
             }
             
@@ -199,6 +214,47 @@ public sealed class FFmpegRunner : AbstractProcessRunner, IFFmpegRunner
             Log.Exception(ex, $"Ошибка парсинга JSON от ffprobe для файла '{filePath}'", "FFmpegRunner");
             return null;
         }
+    }
+
+    /// <inheritdoc />
+    public async Task<double> ProbeDurationViaFfmpegAsync(string filePath)
+    {
+        if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
+        {
+            return 0.0;
+        }
+
+        double duration = 0.0;
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+        try
+        {
+            // Запускаем FFmpeg без декодирования данных, опрашивая заголовочную информацию файла
+            string arguments = $"-hide_banner -loglevel info -i \"{filePath}\" -f null -";
+            await RunProcessAsync(
+                "ffmpeg",
+                arguments,
+                onOutputLine: null,
+                onErrorLine: line =>
+                {
+                    if (duration <= 0)
+                    {
+                        double parsed = FFmpegOutputParser.ParseHeaderDuration(line, Log);
+                        if (parsed > 0)
+                        {
+                            duration = parsed;
+                        }
+                    }
+                },
+                cts.Token
+            );
+        }
+        catch (Exception ex)
+        {
+            Log.DebugLog($"Исключение при зондировании длительности через FFmpeg для '{Path.GetFileName(filePath)}': {ex.Message}", "FFmpegRunner");
+        }
+
+        return duration;
     }
 
     /// <summary>
@@ -295,5 +351,107 @@ public sealed class FFmpegRunner : AbstractProcessRunner, IFFmpegRunner
 
         Log.Warn("Аппаратная видеокарта NVIDIA не обнаружена в системе через утилиту nvidia-smi", "FFmpegRunner");
         return false;
+    }
+
+    /// <summary>
+    /// Проверить поддержку параметра Temporal AQ для NVENC через вывод помощи FFmpeg.
+    /// </summary>
+    public async Task<bool> CheckNvencTemporalAqSupportAsync()
+    {
+        bool supported = false;
+        var result = await RunProcessAsync(
+            "ffmpeg",
+            "-h encoder=hevc_nvenc",
+            onOutputLine: line =>
+            {
+                if (line.Contains("-temporal-aq", StringComparison.OrdinalIgnoreCase))
+                {
+                    supported = true;
+                }
+            },
+            onErrorLine: null,
+            CancellationToken.None
+        );
+
+        return result.IsSuccess && supported;
+    }
+
+    /// <summary>
+    /// Выполнить зондирование и автоматическое определение обрезки черных полос (cropdetect).
+    /// </summary>
+    public async Task<string?> DetectCropAsync(
+        string filePath,
+        double skipSeconds = 0,
+        int probeFrames = 25,
+        double limit = 0.0941176,
+        int round = 16,
+        int skip = 2,
+        int reset = 0,
+        string mode = "black",
+        CancellationToken cancellationToken = default)
+    {
+        int safeSkip = skip;
+        if (safeSkip >= probeFrames)
+        {
+            safeSkip = Math.Max(0, Math.Min(2, probeFrames - 1));
+        }
+
+        string limitStr = limit.ToString("0.######", System.Globalization.CultureInfo.InvariantCulture);
+        string cropdetectFilter = $"cropdetect=limit={limitStr}:round={round}:skip={safeSkip}:reset={reset}:mode={mode}";
+        
+        var argsList = new List<string>
+        {
+            "-hide_banner",
+            "-nostats"
+        };
+
+        if (skipSeconds > 0)
+        {
+            argsList.Add("-ss");
+            argsList.Add(skipSeconds.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture));
+        }
+
+        argsList.AddRange(new[]
+        {
+            "-i", $"\"{filePath}\"",
+            "-vframes", probeFrames.ToString(),
+            "-vf", cropdetectFilter,
+            "-f", "null",
+            "-"
+        });
+
+        string arguments = string.Join(" ", argsList);
+        string? lastDetectedCrop = null;
+        var cropRegex = new System.Text.RegularExpressions.Regex(@"crop=([0-9]+:[0-9]+:[0-9]+:[0-9]+)", System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        var result = await RunProcessAsync(
+            "ffmpeg",
+            arguments,
+            onOutputLine: line =>
+            {
+                var match = cropRegex.Match(line);
+                if (match.Success)
+                {
+                    lastDetectedCrop = match.Groups[1].Value;
+                }
+            },
+            onErrorLine: line =>
+            {
+                var match = cropRegex.Match(line);
+                if (match.Success)
+                {
+                    lastDetectedCrop = match.Groups[1].Value;
+                }
+            },
+            cancellationToken
+        );
+
+        if (!result.IsSuccess && lastDetectedCrop == null)
+        {
+            Log.Warn($"cropdetect не смог определить параметры обрезки для '{Path.GetFileName(filePath)}' (Код выхода: {result.ExitCode})", "FFmpegRunner");
+            return null;
+        }
+
+        return lastDetectedCrop;
     }
 }

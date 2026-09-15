@@ -12,6 +12,7 @@ using KTools_App.Infrastructure;
 using KTools_App.Services.Contracts;
 using KTools_App.Services.Implementations;
 using KTools_App.ViewModels;
+using KTools_App.Encoders;
 
 namespace KTools_App;
 
@@ -219,16 +220,25 @@ public partial class App : Application
         services.AddSingleton<ISettingsManager, SettingsManager>();
         services.AddSingleton<IDependencyManager, DependencyManager>();
         services.AddSingleton<IScriptRegistry, ScriptRegistry>();
+        
+        services.AddSingleton<IHardwareCapabilityCache, HardwareCapabilityCache>();
+        services.AddSingleton<IVideoEncoder, NvencEncoder>();
+        services.AddSingleton<IVideoEncoder, X265Encoder>();
+        services.AddSingleton<VideoEncoderRegistry>();
 
         // Infrastructure-сервисы (Runner'ы)
         services.AddSingleton<IFFmpegRunner, FFmpegRunner>();
         services.AddSingleton<IEac3toRunner, Eac3toRunner>();
-        services.AddSingleton<IMediaProbeService, MediaProbeService>();
         services.AddSingleton<IMkvmergeRunner, MkvmergeRunner>();
-        services.AddSingleton<DeeRunner>();
         services.AddSingleton<QaacRunner>();
+        services.AddSingleton<DeeRunner>();
+        services.AddSingleton<IMediaProbeService, MediaProbeService>();
+        services.AddSingleton<IBitrateAnalyzerService, BitrateAnalyzerService>();
+        services.AddSingleton<IDiskTypeDetectorService, DiskTypeDetectorService>();
         services.AddSingleton<IAudioWaveformService, AudioWaveformService>();
         services.AddSingleton<IAssParser, AssParser>();
+        services.AddSingleton<IWhisperModelManager, WhisperModelManager>();
+        services.AddSingleton<IWhisperRunner, WhisperRunner>();
 
         // Регистрация скриптов обработки медиа
         services.AddTransient<Scripts.MetadataCleanupScript>();
@@ -239,6 +249,8 @@ public partial class App : Application
         services.AddTransient<Scripts.AudioSpeedScript>();
         services.AddTransient<Scripts.AudioChannelsScript>();
         services.AddTransient<Scripts.AudioTransplantScript>();
+        services.AddTransient<Scripts.BitrateViewerScript>();
+        services.AddTransient<Scripts.MediaDownloaderScript>();
         services.AddTransient<Scripts.MkvAssemblyScript>();
         services.AddTransient<Scripts.StreamManagementScript>();
         services.AddTransient<Scripts.StreamReplacementScript>();
@@ -246,7 +258,7 @@ public partial class App : Application
         services.AddTransient<Scripts.SubtitlesConvertScript>();
         services.AddTransient<Scripts.AudioShiftScript>();
         services.AddTransient<Scripts.SubtitleShiftScript>();
-        services.AddTransient<Scripts.MediaDownloaderScript>();
+        services.AddTransient<Scripts.SpeechRecognitionScript>();
 
         // 2. Регистрация служб приложения
         services.AddSingleton<INavigationService, NavigationService>();
@@ -261,7 +273,7 @@ public partial class App : Application
         services.AddTransient<WorkPanelViewModel>();
         services.AddSingleton<SettingsViewModel>();
         services.AddTransient<LogViewModel>();
-        services.AddTransient<DependencySetupViewModel>();
+        services.AddSingleton<DependencySetupViewModel>();
         services.AddTransient<TrackSelectionViewModel>();
         services.AddTransient<ScriptSettingsViewModel>();
 
@@ -312,6 +324,7 @@ public partial class App : Application
                 + "настроек по умолчанию...",
                 "App");
             _ = Services.GetRequiredService<IScriptRegistry>().Scripts;
+            _ = Task.Run(() => Services.GetRequiredService<KTools_App.Encoders.IHardwareCapabilityCache>().InitializeAsync());
 
             // Автоматически обновляем ключи контекстного меню в реестре, если интеграция включена
             try

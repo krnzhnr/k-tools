@@ -22,6 +22,7 @@ public class AudioEncodingScriptTests
     private Mock<ISettingsManager> _settingsManagerMock = null!;
     private Mock<IPathManager> _pathManagerMock = null!;
     private Mock<IFFmpegRunner> _ffmpegRunnerMock = null!;
+    private Mock<IMediaProbeService> _mediaProbeServiceMock = null!;
     private QaacRunner _qaacRunner = null!;
     private AudioEncodingScript _script = null!;
 
@@ -32,6 +33,7 @@ public class AudioEncodingScriptTests
         _settingsManagerMock = new Mock<ISettingsManager>();
         _pathManagerMock = new Mock<IPathManager>();
         _ffmpegRunnerMock = new Mock<IFFmpegRunner>();
+        _mediaProbeServiceMock = new Mock<IMediaProbeService>();
         _qaacRunner = new QaacRunner(_logServiceMock.Object, _pathManagerMock.Object);
 
         _script = new AudioEncodingScript(
@@ -39,7 +41,8 @@ public class AudioEncodingScriptTests
             _settingsManagerMock.Object,
             _pathManagerMock.Object,
             _ffmpegRunnerMock.Object,
-            _qaacRunner
+            _qaacRunner,
+            _mediaProbeServiceMock.Object
         );
     }
 
@@ -51,5 +54,177 @@ public class AudioEncodingScriptTests
     {
         _script.Category.Should().Be("Аудио");
         _script.IconName.Should().Be(AppConstants.ScriptIcons.AudioEncoding);
+    }
+
+    /// <summary>
+    /// Проверяет, что все параметры QAAC содержат условие видимости только для формата QAAC.
+    /// </summary>
+    [TestMethod]
+    public void SettingsSchema_QaacFields_RequireQaacTargetFormat()
+    {
+        var schema = _script.SettingsSchema;
+
+        // Поле режима QAAC должно зависеть от формата QAAC
+        var modeField = schema.Find(f => f.Key == "qaac_mode");
+        modeField.Should().NotBeNull();
+        modeField!.VisibleIfKey.Should().Be("target_format");
+        modeField.VisibleIfValues.Should().Contain("QAAC");
+
+        // Поле качества True VBR должно иметь составное условие с target_format == QAAC
+        var qualityField = schema.Find(f => f.Key == "qaac_quality");
+        qualityField.Should().NotBeNull();
+        qualityField!.VisibilityConditions.Should().NotBeNull();
+        qualityField.VisibilityConditions!.Should().Contain(c => c.Key == "target_format" && c.Values.Contains("QAAC"));
+        qualityField.VisibilityConditions!.Should().Contain(c => c.Key == "qaac_mode" && c.Values.Contains("True VBR (-V)"));
+
+        // Поле битрейта QAAC должно иметь составное условие с target_format == QAAC
+        var bitrateField = schema.Find(f => f.Key == "qaac_bitrate");
+        bitrateField.Should().NotBeNull();
+        bitrateField!.VisibilityConditions.Should().NotBeNull();
+        bitrateField.VisibilityConditions!.Should().Contain(c => c.Key == "target_format" && c.Values.Contains("QAAC"));
+        bitrateField.VisibilityConditions!.Should().Contain(c => c.Key == "qaac_mode");
+
+        // Чекбоксы no_delay и limiter также должны зависеть от QAAC
+        var noDelayField = schema.Find(f => f.Key == "qaac_no_delay");
+        noDelayField.Should().NotBeNull();
+        noDelayField!.VisibleIfKey.Should().Be("target_format");
+        noDelayField.VisibleIfValues.Should().Contain("QAAC");
+
+        var limiterField = schema.Find(f => f.Key == "qaac_limiter");
+        limiterField.Should().NotBeNull();
+        limiterField!.VisibleIfKey.Should().Be("target_format");
+        limiterField.VisibleIfValues.Should().Contain("QAAC");
+    }
+
+    /// <summary>
+    /// Проверяет, что для моно-аудио в формате OGG битрейт 320k автоматически корректируется до 224k.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_OggMono_AdjustsBitrateTo224k()
+    {
+        // Arrange
+        string testInput = "C:\\test\\mono_input.wav";
+        string jsonInfo = """
+        {
+            "format": { "duration": "10.0" },
+            "streams": [
+                {
+                    "codec_type": "audio",
+                    "channels": 1
+                }
+            ]
+        }
+        """;
+        var doc = System.Text.Json.JsonDocument.Parse(jsonInfo);
+        _ffmpegRunnerMock.Setup(r => r.GetVideoInfoAsync(testInput))
+            .ReturnsAsync(doc);
+
+        List<string>? capturedExtraArgs = null;
+        _ffmpegRunnerMock.Setup(r => r.RunAsync(
+                testInput,
+                It.IsAny<string?>(),
+                It.IsAny<List<string>?>(),
+                It.IsAny<List<string>?>(),
+                It.IsAny<bool>(),
+                It.IsAny<double>(),
+                It.IsAny<Action<KTools_App.Infrastructure.ProgressInfo>?>(),
+                It.IsAny<System.Threading.CancellationToken>()))
+            .Callback<string, string?, List<string>?, List<string>?, bool, double, Action<KTools_App.Infrastructure.ProgressInfo>?, System.Threading.CancellationToken>(
+                (inPath, outPath, args, inArgs, ow, dur, cb, ct) => capturedExtraArgs = args)
+            .ReturnsAsync(true);
+
+        var settings = new Dictionary<string, object>
+        {
+            { "target_format", "OGG" },
+            { "bitrate", "320k" }
+        };
+
+        // Act
+        var results = await _script.ExecuteSingleAsync(
+            testInput,
+            settings,
+            "C:\\test\\out",
+            (idx, total, msg, pct, fps, br) => { },
+            1,
+            1);
+
+        // Assert
+        capturedExtraArgs.Should().NotBeNull();
+        capturedExtraArgs.Should().Contain("-b:a");
+        int bIndex = capturedExtraArgs!.IndexOf("-b:a");
+        capturedExtraArgs[bIndex + 1].Should().Be("224k");
+
+        results.Should().Contain(r => r.Contains("224k") && r.Contains("моно"));
+    }
+
+    /// <summary>
+    /// Проверяет, что длительность, полученная через IMediaProbeService, успешно передается в FFmpegRunner и прогресс вычисляется.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_WithMediaProbeDuration_PassesDurationToFFmpeg()
+    {
+        // Arrange
+        string testInput = "C:\\test\\audio.ac3";
+        _mediaProbeServiceMock.Setup(m => m.ProbeAsync(testInput))
+            .ReturnsAsync(new MediaStructure
+            {
+                FilePath = testInput,
+                Duration = 120.0,
+                Tracks =
+                {
+                    new() { TrackId = 0, TrackType = "audio", Channels = 6 }
+                }
+            });
+
+        double capturedTotalDuration = 0.0;
+        Action<ProgressInfo>? capturedProgress = null;
+
+        _ffmpegRunnerMock.Setup(r => r.RunAsync(
+                testInput,
+                It.IsAny<string?>(),
+                It.IsAny<List<string>?>(),
+                It.IsAny<List<string>?>(),
+                It.IsAny<bool>(),
+                It.IsAny<double>(),
+                It.IsAny<Action<ProgressInfo>?>(),
+                It.IsAny<System.Threading.CancellationToken>()))
+            .Callback<string, string?, List<string>?, List<string>?, bool, double, Action<ProgressInfo>?, System.Threading.CancellationToken>(
+                (inPath, outPath, args, inArgs, ow, dur, cb, ct) =>
+                {
+                    capturedTotalDuration = dur;
+                    capturedProgress = cb;
+                })
+            .ReturnsAsync(true);
+
+        var settings = new Dictionary<string, object>
+        {
+            { "target_format", "AC3" },
+            { "bitrate", "640k" }
+        };
+
+        double? reportedPercent = null;
+        string? reportedBitrate = null;
+
+        // Act
+        var results = await _script.ExecuteSingleAsync(
+            testInput,
+            settings,
+            "C:\\test\\out",
+            (idx, total, msg, pct, fps, br) =>
+            {
+                reportedPercent = pct;
+                reportedBitrate = br;
+            },
+            0,
+            1);
+
+        // Симулируем вызов обратного вызова прогресса из FFmpegRunner
+        capturedProgress.Should().NotBeNull();
+        capturedProgress!(new ProgressInfo(60.0, 50.0, null, "640kbits/s", 10.0, "00:06"));
+
+        // Assert
+        capturedTotalDuration.Should().Be(120.0);
+        reportedPercent.Should().Be(50.0);
+        reportedBitrate.Should().Be("640kbits/s");
     }
 }

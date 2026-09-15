@@ -140,4 +140,51 @@ public class TrackExtractorScriptTests
         var result4 = methodInfo.Invoke(_script, new object[] { "Movie", trackEmpty, ".srt", "{original} [{lang}] [{id}] [{title}] [{codec}]", "" }) as string;
         result4.Should().Be("Movie [track01] [srt].srt");
     }
+
+    /// <summary>
+    /// Проверяет правильность определения расширений для сырых потоков видео, аудио и субтитров.
+    /// </summary>
+    [TestMethod]
+    public void ResolveRawExtension_VariousCodecs_ShouldReturnCorrectExtension()
+    {
+        // H.264 / AVC
+        AppConstants.ResolveRawExtension("h264", "video").Should().Be(".h264");
+        AppConstants.ResolveRawExtension("H.264", "video").Should().Be(".h264");
+        AppConstants.ResolveRawExtension("MPEG-4p10/AVC/h.264", "video").Should().Be(".h264");
+        AppConstants.ResolveRawExtension("AVC/H.264/MPEG-4p10", "video").Should().Be(".h264");
+        AppConstants.ResolveRawExtension("avc1", "video").Should().Be(".h264");
+        AppConstants.ResolveRawExtension("V_MPEG4/ISO/AVC", "video").Should().Be(".h264");
+
+        // HEVC
+        AppConstants.ResolveRawExtension("hevc", "video").Should().Be(".h265");
+        AppConstants.ResolveRawExtension("h265", "video").Should().Be(".h265");
+        AppConstants.ResolveRawExtension("HEVC/H.265/MPEG-H", "video").Should().Be(".h265");
+        AppConstants.ResolveRawExtension("hev1", "video").Should().Be(".h265");
+
+        // MPEG-2, VC-1, AV1
+        AppConstants.ResolveRawExtension("mpeg2video", "video").Should().Be(".m2v");
+        AppConstants.ResolveRawExtension("vc1", "video").Should().Be(".vc1");
+        AppConstants.ResolveRawExtension("av1", "video").Should().Be(".ivf");
+
+        // Аудио кодеки
+        AppConstants.ResolveRawExtension("TrueHD Atmos", "audio").Should().Be(".thd");
+        AppConstants.ResolveRawExtension("DTS-HD Master Audio", "audio").Should().Be(".dts");
+        AppConstants.ResolveRawExtension("DTS-HD High Resolution Audio", "audio").Should().Be(".dts");
+        AppConstants.ResolveRawExtension("E-AC-3 Atmos", "audio").Should().Be(".eac3");
+        AppConstants.ResolveRawExtension("ac3", "audio").Should().Be(".ac3");
+        AppConstants.ResolveRawExtension("flac", "audio").Should().Be(".flac");
+        AppConstants.ResolveRawExtension("opus", "audio").Should().Be(".opus");
+        AppConstants.ResolveRawExtension("pcm_s24le", "audio").Should().Be(".wav");
+
+        // Субтитры
+        AppConstants.ResolveRawExtension("SubRip/SRT", "subtitles").Should().Be(".srt");
+        AppConstants.ResolveRawExtension("hdmv_pgs_subtitle", "subtitles").Should().Be(".sup");
+        AppConstants.ResolveRawExtension("SubStationAlpha", "subtitles").Should().Be(".ass");
+        AppConstants.ResolveRawExtension("webvtt", "subtitles").Should().Be(".vtt");
+
+        // Неизвестный формат (fallback)
+        AppConstants.ResolveRawExtension("unknown_custom_codec", "video").Should().Be(".mkv");
+        AppConstants.ResolveRawExtension("unknown_custom_codec", "audio").Should().Be(".mka");
+        AppConstants.ResolveRawExtension("unknown_custom_codec", "subtitles").Should().Be(".mks");
+    }
 }

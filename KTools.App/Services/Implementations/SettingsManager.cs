@@ -395,6 +395,15 @@ public sealed class SettingsManager : ISettingsManager
                 _cache[group] = groupDict;
             }
 
+            if (groupDict.TryGetValue(key, out var existingValue))
+            {
+                if (Equals(existingValue, value) || 
+                    (existingValue != null && value != null && string.Equals(existingValue.ToString(), value.ToString(), StringComparison.Ordinal)))
+                {
+                    return;
+                }
+            }
+
             if (value == null)
             {
                 groupDict.Remove(key);
@@ -406,6 +415,25 @@ public sealed class SettingsManager : ISettingsManager
 
             _logService.Info($"Изменён параметр [{group}/{key}] -> '{value}'", "SettingsManager");
             SaveSettings();
+        }
+    }
+
+    /// <summary>
+    /// Получить все сохраненные настройки определенной группы.
+    /// </summary>
+    public Dictionary<string, object> GetAllSettingsInGroup(string group)
+    {
+        lock (_lock)
+        {
+            var result = new Dictionary<string, object>();
+            if (_cache.TryGetValue(group, out var groupDict))
+            {
+                foreach (var kvp in groupDict)
+                {
+                    result[kvp.Key] = kvp.Value;
+                }
+            }
+            return result;
         }
     }
 
@@ -520,15 +548,22 @@ public sealed class SettingsManager : ISettingsManager
                 string groupName = GetSafeGroupName(script.Name);
                 foreach (var field in script.SettingsSchema)
                 {
-                    if (field.Type == SettingType.Subtitle)
-                    {
-                        continue;
-                    }
-
-                    if (!HasSetting(groupName, field.Key))
+                    if (field.Type != SettingType.Subtitle && !HasSetting(groupName, field.Key))
                     {
                         SetSettingInternal(groupName, field.Key, field.DefaultValue);
                         modified = true;
+                    }
+
+                    if (field.ChildFields != null && field.ChildFields.Count > 0)
+                    {
+                        foreach (var child in field.ChildFields)
+                        {
+                            if (child.Type != SettingType.Subtitle && !HasSetting(groupName, child.Key))
+                            {
+                                SetSettingInternal(groupName, child.Key, child.DefaultValue);
+                                modified = true;
+                            }
+                        }
                     }
                 }
 
@@ -541,6 +576,16 @@ public sealed class SettingsManager : ISettingsManager
                         if (field.Type != SettingType.Subtitle)
                         {
                             validKeys.Add(field.Key);
+                        }
+                        if (field.ChildFields != null && field.ChildFields.Count > 0)
+                        {
+                            foreach (var child in field.ChildFields)
+                            {
+                                if (child.Type != SettingType.Subtitle)
+                                {
+                                    validKeys.Add(child.Key);
+                                }
+                            }
                         }
                     }
 

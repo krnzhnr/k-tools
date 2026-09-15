@@ -19,11 +19,21 @@ namespace KTools_App.Scripts;
 public sealed class AudioShiftScript : AbstractScript
 {
     private readonly IFFmpegRunner _ffmpegRunner;
+    private readonly IEac3toRunner _eac3toRunner;
+    private readonly IMediaProbeService _mediaProbeService;
 
-    public AudioShiftScript(ILogService logService, ISettingsManager settingsManager, IPathManager pathManager, IFFmpegRunner ffmpegRunner)
+    public AudioShiftScript(
+        ILogService logService,
+        ISettingsManager settingsManager,
+        IPathManager pathManager,
+        IFFmpegRunner ffmpegRunner,
+        IEac3toRunner eac3toRunner,
+        IMediaProbeService mediaProbeService)
         : base(logService, settingsManager, pathManager)
     {
         _ffmpegRunner = ffmpegRunner ?? throw new ArgumentNullException(nameof(ffmpegRunner));
+        _eac3toRunner = eac3toRunner ?? throw new ArgumentNullException(nameof(eac3toRunner));
+        _mediaProbeService = mediaProbeService ?? throw new ArgumentNullException(nameof(mediaProbeService));
     }
 
     /// <summary>
@@ -56,7 +66,7 @@ public sealed class AudioShiftScript : AbstractScript
     /// <summary>
     /// Список внешних зависимостей.
     /// </summary>
-    public override string[] RequiredDependencies => new[] { "ffmpeg" };
+    public override string[] RequiredDependencies => new[] { "ffmpeg", "eac3to" };
 
     /// <summary>
     /// Поддерживает ли скрипт параллельную обработку файлов.
@@ -85,11 +95,11 @@ public sealed class AudioShiftScript : AbstractScript
 
         new SettingField(
             "OutputFormat",
-            "Формат вывода (Lossless)",
+            "Формат и режим вывода",
             SettingType.Combo,
-            "FLAC",
+            "eac3to Bitstream (Без перекодирования)",
             "Настройки экспорта",
-            options: new List<string> { "FLAC", "WAV" })
+            options: new List<string> { "eac3to Bitstream (Без перекодирования)", "FLAC (FFmpeg Lossless)", "WAV (FFmpeg PCM)" })
     };
 
     /// <summary>
@@ -111,48 +121,21 @@ public sealed class AudioShiftScript : AbstractScript
 
         int shiftMs = GetSettingValue(settings, "ShiftMs", 1000);
         string direction = GetSettingValue(settings, "ShiftDirection", "Вперед");
-        string format = GetSettingValue(settings, "OutputFormat", "FLAC");
+        string format = GetSettingValue(settings, "OutputFormat", "eac3to Bitstream (Без перекодирования)");
 
-        _logService.Info($"Параметры обработки: сдвиг {shiftMs} мс, направление: {direction}, формат: {format}", "AudioShiftScript");
+        _logService.Info($"Параметры обработки: сдвиг {shiftMs} мс, направление: {direction}, режим: {format}", "AudioShiftScript");
 
-        // 1. Получение длительности аудиофайла для отслеживания прогресса
-        double duration = 0.0;
-        try
-        {
-            var info = await _ffmpegRunner.GetVideoInfoAsync(filePath);
-            if (info != null && info.RootElement.TryGetProperty("format", out var formatProp))
-            {
-                if (formatProp.TryGetProperty("duration", out var durProp))
-                {
-                    if (durProp.ValueKind == JsonValueKind.String &&
-                        double.TryParse(
-                            durProp.GetString(),
-                            NumberStyles.Any,
-                            CultureInfo.InvariantCulture,
-                            out double d))
-                    {
-                        duration = d;
-                    }
-                    else if (durProp.ValueKind == JsonValueKind.Number)
-                    {
-                        duration = durProp.GetDouble();
-                    }
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            _logService.Exception(ex, $"Не удалось прочесть метаданные длительности для '{originalName}': {ex.Message}", "AudioShiftScript");
-        }
-
-        _logService.DebugLog($"Длительность аудиофайла '{originalName}': {duration:F2} сек.", "AudioShiftScript");
-
-        // 2. Определение пути к выходному файлу
+        // 1. Определение пути к выходному файлу
         string targetDir = string.IsNullOrEmpty(outputPath)
             ? Path.GetDirectoryName(filePath) ?? AppContext.BaseDirectory
             : outputPath;
 
-        string ext = format.ToLowerInvariant();
+        bool isPassthrough = format.StartsWith("eac3to", StringComparison.OrdinalIgnoreCase);
+        string inputExt = Path.GetExtension(filePath).TrimStart('.');
+        string ext = isPassthrough
+            ? inputExt
+            : (format.Contains("FLAC", StringComparison.OrdinalIgnoreCase) ? "flac" : "wav");
+
         string outputName = $"{Path.GetFileNameWithoutExtension(filePath)}_shifted.{ext}";
         string outputFilePath = Path.Combine(targetDir, outputName);
         outputFilePath = GetSafeOutputPath(filePath, outputFilePath, settings);
@@ -168,37 +151,119 @@ public sealed class AudioShiftScript : AbstractScript
             return results;
         }
 
-        // 3. Формирование аргументов FFmpeg
+        int signedShiftMs = direction == "Назад" ? -Math.Abs(shiftMs) : Math.Abs(shiftMs);
+
+        // 2. Обработка через eac3to Bitstream (без перекодирования)
+        if (isPassthrough)
+        {
+            progressCallback(fileIndex, totalCount, "Запуск eac3to прямоточного сдвига (Bitstream)...", 10.0);
+
+            string shiftArg = signedShiftMs >= 0 ? $"+{signedShiftMs}ms" : $"{signedShiftMs}ms";
+            var eac3toArgs = new List<string>
+            {
+                $"\"{filePath}\"",
+                $"\"{outputFilePath}\"",
+                shiftArg,
+                "-silence",
+                "-progressnumbers",
+                "-log=nul"
+            };
+
+            using var ctsEac3 = new CancellationTokenSource();
+            var eac3Task = _eac3toRunner.RunAsync(
+                args: eac3toArgs,
+                onProgress: pct =>
+                {
+                    string text = $"Сдвиг eac3to... {pct:F1}%";
+                    progressCallback(fileIndex, totalCount, text, pct);
+                },
+                cancellationToken: ctsEac3.Token);
+
+            while (!eac3Task.IsCompleted)
+            {
+                if (IsCancelled)
+                {
+                    ctsEac3.Cancel();
+                    break;
+                }
+                await Task.Delay(200);
+            }
+
+            bool eac3Success = false;
+            try
+            {
+                eac3Success = await eac3Task;
+            }
+            catch (Exception ex)
+            {
+                _logService.Exception(ex, $"Ошибка обработки файла '{originalName}' через eac3to: {ex.Message}", "AudioShiftScript");
+            }
+
+            if (IsCancelled || !eac3Success || !File.Exists(outputFilePath))
+            {
+                CleanupFailedOutputFile(outputFilePath);
+                if (IsCancelled)
+                {
+                    results.Add($"⚠ Отменено: {outputName}");
+                    _logService.Info($"Обработка файла '{originalName}' отменена пользователем.", "AudioShiftScript");
+                }
+                else
+                {
+                    results.Add($"❌ Ошибка обработки файла для {originalName}");
+                    _logService.Error($"Не удалось выполнить прямоточный сдвиг аудио для '{filePath}'. Проверьте логи eac3to.", "AudioShiftScript");
+                }
+                progressCallback(fileIndex, totalCount, "Ошибка или отмена", 100.0);
+                return results;
+            }
+
+            _logService.Info($"Прямоточный сдвиг аудио через eac3to успешно выполнен: '{outputFilePath}'", "AudioShiftScript");
+            progressCallback(fileIndex, totalCount, "Завершено", 100.0);
+            results.Add($"✔ Сдвиг аудио (Bitstream) выполнен успешно: {outputName}");
+            return results;
+        }
+
+        // 3. Получение длительности для FFmpeg Lossless
+        double duration = 0.0;
+        try
+        {
+            var structure = await _mediaProbeService.ProbeAsync(filePath);
+            if (structure != null)
+            {
+                duration = structure.Duration;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logService.Exception(ex, $"Не удалось прочесть метаданные длительности для '{originalName}': {ex.Message}", "AudioShiftScript");
+        }
+
+        // 4. Формирование аргументов FFmpeg
         var extraArgs = new List<string>();
 
         if (direction == "Вперед")
         {
-            // Задержка аудио: adelay
             extraArgs.Add("-af");
             extraArgs.Add($"adelay={shiftMs}:all=1");
         }
         else
         {
-            // Опережение аудио: atrim и сброс PTS
             double shiftSec = shiftMs / 1000.0;
             string shiftSecStr = shiftSec.ToString("F3", CultureInfo.InvariantCulture);
             extraArgs.Add("-af");
             extraArgs.Add($"atrim=start={shiftSecStr},asetpts=PTS-STARTPTS");
         }
 
-        // Задаем кодек в зависимости от lossless формата
-        if (format == "FLAC")
+        if (ext == "flac")
         {
             extraArgs.Add("-c:a");
             extraArgs.Add("flac");
         }
-        else // WAV
+        else
         {
             extraArgs.Add("-c:a");
             extraArgs.Add("pcm_s16le");
         }
 
-        // 4. Асинхронный запуск FFmpeg
         progressCallback(fileIndex, totalCount, "Запуск FFmpeg обработки...", 0.0);
         using var cts = new CancellationTokenSource();
 
@@ -211,7 +276,7 @@ public sealed class AudioShiftScript : AbstractScript
             onProgress: pct =>
             {
                 string text = $"Обработка сдвига... {pct.Percent:F1}%";
-                progressCallback(fileIndex, totalCount, text, pct.Percent);
+                progressCallback(fileIndex, totalCount, text, pct.Percent, pct.Fps, pct.Bitrate);
             },
             cancellationToken: cts.Token);
 

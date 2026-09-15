@@ -1,21 +1,24 @@
-using KTools_App.Services.Contracts;
 // -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using KTools_App.Core;
+using KTools_App.Services.Contracts;
 
 namespace KTools_App.Scripts;
 
 /// <summary>
-/// Скрипт очистки метаданных видеофайлов через FFmpeg.
-/// Полностью удаляет все метаданные и теги, копируя видео и аудио потоки без перекодирования.
+/// Скрипт очистки метаданных и тегов из любых медиафайлов через FFmpeg.
+/// Полностью удаляет все глобальные теги и метаданные потоков без перекодирования исходного содержимого.
 /// </summary>
 public sealed class MetadataCleanupScript : AbstractScript
 {
+    private readonly IFFmpegRunner _ffmpegRunner;
+    private readonly IMediaProbeService _mediaProbeService;
+
     /// <summary>
     /// Русское название скрипта.
     /// </summary>
@@ -37,9 +40,9 @@ public sealed class MetadataCleanupScript : AbstractScript
     public override string IconName => AppConstants.ScriptIcons.MetadataCleanup;
 
     /// <summary>
-    /// Поддерживаемые расширения медиафайлов.
+    /// Поддерживаемые расширения всех видео и аудио медиафайлов, поддерживаемых FFmpeg.
     /// </summary>
-    public override string[] FileExtensions => AppConstants.VideoContainers.ToArray();
+    public override string[] FileExtensions => AppConstants.AllMediaExtensions.ToArray();
 
     /// <summary>
     /// Обязательные зависимости скрипта.
@@ -51,13 +54,34 @@ public sealed class MetadataCleanupScript : AbstractScript
     /// </summary>
     public override List<SettingField> SettingsSchema => new()
     {
-        new SettingField("Suffix", "Суффикс выходного файла", SettingType.Text, "_cl", "Общие"),
-        new SettingField("DeleteOriginal", "Удалить исходный файл", SettingType.Checkbox, false, "Общие")
+        new SettingField(
+            "overwrite_source",
+            "Подменить оригинал финальным файлом",
+            SettingType.Checkbox,
+            false,
+            "Вывод"
+        ),
+        new SettingField(
+            "delete_source",
+            "Удалить оригинал после обработки",
+            SettingType.Checkbox,
+            false,
+            "Вывод",
+            visibleIfKey: "overwrite_source",
+            visibleIfValues: new List<string> { "False" }
+        )
     };
 
-    public MetadataCleanupScript(ILogService logService, ISettingsManager settingsManager, IPathManager pathManager)
+    public MetadataCleanupScript(
+        ILogService logService,
+        ISettingsManager settingsManager,
+        IPathManager pathManager,
+        IFFmpegRunner ffmpegRunner,
+        IMediaProbeService mediaProbeService)
         : base(logService, settingsManager, pathManager)
     {
+        _ffmpegRunner = ffmpegRunner ?? throw new ArgumentNullException(nameof(ffmpegRunner));
+        _mediaProbeService = mediaProbeService ?? throw new ArgumentNullException(nameof(mediaProbeService));
     }
 
     /// <summary>
@@ -74,155 +98,144 @@ public sealed class MetadataCleanupScript : AbstractScript
         ResetCancellation();
         var results = new List<string>();
 
-        // Извлекаем настройки
-        string suffix = GetSettingValue(settings, "Suffix", "_cl");
-        bool deleteOriginal = GetSettingValue(
-            settings, "DeleteOriginal", false);
+        _logService.Info($"Начало очистки метаданных для файла '{Path.GetFileName(filePath)}'", "MetadataCleanupScript");
 
         string originalName = Path.GetFileNameWithoutExtension(filePath);
         string ext = Path.GetExtension(filePath);
-        string baseOutputName = $"{originalName}{suffix}{ext}";
 
-        // Определяем директорию сохранения
-        string targetDir = string.IsNullOrEmpty(outputPath) 
-            ? Path.GetDirectoryName(filePath) ?? AppContext.BaseDirectory 
+        // Определяем целевую директорию
+        string targetDir = string.IsNullOrEmpty(outputPath)
+            ? Path.GetDirectoryName(filePath) ?? AppContext.BaseDirectory
             : outputPath;
 
-        string targetOutputFilePath = Path.Combine(targetDir, baseOutputName);
-        string outputFilePath = GetSafeOutputPath(filePath, targetOutputFilePath, settings);
-        string outputName = Path.GetFileName(outputFilePath);
+        string targetOutputFile = Path.Combine(targetDir, $"{originalName}{ext}");
+        string finalOutputFile = GetSafeOutputPath(filePath, targetOutputFile, settings);
+        string outputName = Path.GetFileName(finalOutputFile);
 
-        // Проверяем, существует ли файл
         bool overwrite = _settingsManager.GetSetting("General", "OverwriteExisting", false);
-        if (File.Exists(outputFilePath) && !overwrite)
+        if (File.Exists(finalOutputFile) && !overwrite)
         {
-            progressCallback(fileIndex, totalCount, $"Пропуск (существует): {outputName}", 100.0);
-            results.Add($"⏭ ПРОПУСК (файл существует): {outputName}");
+            string skipMsg = $"⏭ ПРОПУСК (файл существует): {outputName}";
+            _logService.Info(skipMsg, "MetadataCleanupScript");
+            progressCallback(fileIndex, totalCount, $"Пропущен (существует): {outputName}", 100.0);
+            results.Add(skipMsg);
             return results;
         }
 
-        // Поиск бинарника FFmpeg
-        string ffmpegPath = _pathManager.GetBinaryPath("ffmpeg");
-        bool hasFfmpeg = File.Exists(ffmpegPath);
-
-        if (!hasFfmpeg)
-        {
-            // Если FFmpeg не найден на диске, плавно откатываемся на симуляцию
-            progressCallback(fileIndex, totalCount, "Запуск симуляции (FFmpeg отсутствует)...", 0.0);
-            for (int i = 1; i <= 10; i++)
-            {
-                if (IsCancelled) break;
-                await Task.Delay(150);
-                progressCallback(fileIndex, totalCount, $"Очистка метаданных (симуляция)... {i * 10}%", i * 10.0);
-            }
-
-            if (IsCancelled)
-            {
-                results.Add($"⚠ Отменено: {outputName}");
-                return results;
-            }
-
-            // Создаем пустой файл для симуляции
-            try
-            {
-                File.WriteAllText(outputFilePath, "Имитация файла без метаданных.");
-                results.Add($"✅ Очищены метаданные (Имитация): {outputName}");
-                if (deleteOriginal && File.Exists(filePath))
-                {
-                    File.Delete(filePath);
-                    results.Add($"🗑 Удален исходник: {Path.GetFileName(filePath)}");
-                }
-            }
-            catch (Exception ex)
-            {
-                results.Add($"❌ Ошибка записи результата: {ex.Message}");
-            }
-            return results;
-        }
-
-        // Запуск реального процесса FFmpeg
-        progressCallback(fileIndex, totalCount, "Запуск FFmpeg...", 0.0);
-
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = ffmpegPath,
-            Arguments = $"-y -i \"{filePath}\" -map_metadata -1 -c:v copy -c:a copy \"{outputFilePath}\"",
-            CreateNoWindow = true,
-            UseShellExecute = false,
-            RedirectStandardError = true,
-            RedirectStandardOutput = true
-        };
-
+        // Пробуем получить длительность для расчета прогресса
+        double? duration = null;
         try
         {
-            using var process = new Process { StartInfo = startInfo };
-            process.Start();
-            ActiveProcessTracker.Register(process);
-
-            try
+            var mediaInfo = await _mediaProbeService.ProbeAsync(filePath);
+            if (mediaInfo != null && mediaInfo.Duration > 0)
             {
-                // Читаем stderr для логирования и отслеживания завершения (FFmpeg пишет логи в stderr)
-                var errorReaderTask = Task.Run(async () =>
-                {
-                    while (!process.StandardError.EndOfStream)
-                    {
-                        string? line = await process.StandardError.ReadLineAsync();
-                        if (IsCancelled)
-                        {
-                            try { process.Kill(); } catch (Exception killEx) { _logService.Warn($"Не удалось принудительно завершить ffmpeg при отмене: {killEx.Message}", "MetadataCleanupScript"); }
-                            break;
-                        }
-                    }
-                });
-
-                await Task.WhenAny(process.WaitForExitAsync(), errorReaderTask);
-
-                if (IsCancelled)
-                {
-                    // При отмене удаляем временный файл
-                    if (File.Exists(outputFilePath))
-                    {
-                        try { File.Delete(outputFilePath); } catch (Exception deleteEx) { _logService.Warn($"Не удалось удалить временный файл после отмены: {deleteEx.Message}", "MetadataCleanupScript"); }
-                    }
-                    results.Add($"⚠ Отменено: {outputName}");
-                    return results;
-                }
-
-                if (process.ExitCode == 0)
-                {
-                    progressCallback(fileIndex, totalCount, $"Успешно завершено!", 100.0);
-                    results.Add($"✅ Очищены метаданные: {outputName}");
-
-                    if (deleteOriginal)
-                    {
-                        try
-                        {
-                            File.Delete(filePath);
-                            results.Add($"🗑 Удален исходник: {Path.GetFileName(filePath)}");
-                        }
-                        catch (Exception ex)
-                        {
-                            results.Add($"⚠ Не удалось удалить исходник: {ex.Message}");
-                        }
-                    }
-                }
-                else
-                {
-                    CleanupFailedOutputFile(outputFilePath);
-                    results.Add($"❌ Ошибка обработки FFmpeg (Код: {process.ExitCode}) для {Path.GetFileName(filePath)}");
-                }
-            }
-            finally
-            {
-                ActiveProcessTracker.Unregister(process);
+                duration = mediaInfo.Duration;
             }
         }
         catch (Exception ex)
         {
-            CleanupFailedOutputFile(outputFilePath);
-            results.Add($"❌ Критическая ошибка FFmpeg: {ex.Message}");
+            _logService.Warn($"Не удалось заранее определить длительность медиафайла: {ex.Message}", "MetadataCleanupScript");
+        }
+
+        progressCallback(fileIndex, totalCount, $"Очистка метаданных {originalName}...", 0.0);
+
+        using var cts = new CancellationTokenSource();
+        var cancelMonitorTask = Task.Run(async () =>
+        {
+            while (!IsCancelled && !cts.IsCancellationRequested)
+            {
+                await Task.Delay(100);
+            }
+            if (IsCancelled)
+            {
+                cts.Cancel();
+            }
+        });
+
+        bool success = false;
+        try
+        {
+            // Формируем аргументы FFmpeg для очистки всех тегов и копирования всех потоков (-map 0 -map_metadata -1 -c copy)
+            var ffmpegArgs = new List<string>
+            {
+                "-map", "0",
+                "-map_metadata", "-1",
+                "-map_metadata:s", "-1",
+                "-c", "copy"
+            };
+
+            success = await _ffmpegRunner.RunAsync(
+                inputPath: filePath,
+                outputPath: finalOutputFile,
+                extraArgs: ffmpegArgs,
+                overwrite: overwrite,
+                totalDuration: duration ?? 0.0,
+                onProgress: progress =>
+                {
+                    progressCallback(fileIndex, totalCount, $"Очистка метаданных | {progress.Percent:F1}% | Скорость: {(progress.Speed.HasValue ? $"{progress.Speed.Value:F1}x" : "н/д")}", progress.Percent, progress.Fps, progress.Bitrate);
+                },
+                cancellationToken: cts.Token
+            );
+        }
+        catch (Exception ex)
+        {
+            string runErr = $"❌ Критическая ошибка при очистке метаданных для '{originalName}': {ex.Message}";
+            _logService.Exception(ex, $"Исключение при очистке метаданных для '{filePath}': {ex.Message}", "MetadataCleanupScript");
+            results.Add(runErr);
+        }
+        finally
+        {
+            cts.Cancel();
+            await cancelMonitorTask;
+        }
+
+        if (IsCancelled)
+        {
+            CleanupIfCancelled(finalOutputFile);
+            string cancelMsg = $"⚠ Обработка отменена пользователем: {outputName}";
+            _logService.Info(cancelMsg, "MetadataCleanupScript");
+            results.Add(cancelMsg);
+            return results;
+        }
+
+        try
+        {
+            if (success)
+            {
+                progressCallback(fileIndex, totalCount, "Завершено!", 100.0);
+                string successMsg = $"✅ Очищены метаданные: {outputName}";
+                _logService.Info(successMsg, "MetadataCleanupScript");
+                results.Add(successMsg);
+
+                bool overwriteSource = GetSettingValue(settings, "overwrite_source", false);
+                bool deleteSource = GetSettingValue(settings, "delete_source", false);
+
+                if (overwriteSource && string.IsNullOrEmpty(outputPath))
+                {
+                    ReplaceSourceWithResult(filePath, finalOutputFile, results);
+                }
+                else if (deleteSource)
+                {
+                    DeleteSource(filePath, results);
+                }
+            }
+            else
+            {
+                CleanupFailedOutputFile(finalOutputFile);
+                string failMsg = $"❌ ОШИБКА очистки метаданных: {Path.GetFileName(filePath)}";
+                _logService.Error(failMsg, "MetadataCleanupScript");
+                results.Add(failMsg);
+            }
+        }
+        catch (Exception ex)
+        {
+            CleanupFailedOutputFile(finalOutputFile);
+            string errorMsg = $"❌ Ошибка выполнения скрипта для {Path.GetFileName(filePath)}: {ex.Message}";
+            results.Add(errorMsg);
+            _logService.Exception(ex, $"Ошибка при очистке метаданных для '{originalName}': {ex.Message}", "MetadataCleanupScript");
         }
 
         return results;
     }
 }
+

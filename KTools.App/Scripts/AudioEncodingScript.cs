@@ -23,12 +23,20 @@ public sealed class AudioEncodingScript : AbstractScript
 {
     private readonly IFFmpegRunner _ffmpegRunner;
     private readonly QaacRunner _qaacRunner;
+    private readonly IMediaProbeService _mediaProbeService;
 
-    public AudioEncodingScript(ILogService logService, ISettingsManager settingsManager, IPathManager pathManager, IFFmpegRunner ffmpegRunner, QaacRunner qaacRunner)
+    public AudioEncodingScript(
+        ILogService logService,
+        ISettingsManager settingsManager,
+        IPathManager pathManager,
+        IFFmpegRunner ffmpegRunner,
+        QaacRunner qaacRunner,
+        IMediaProbeService mediaProbeService)
         : base(logService, settingsManager, pathManager)
     {
         _ffmpegRunner = ffmpegRunner ?? throw new ArgumentNullException(nameof(ffmpegRunner));
         _qaacRunner = qaacRunner ?? throw new ArgumentNullException(nameof(qaacRunner));
+        _mediaProbeService = mediaProbeService ?? throw new ArgumentNullException(nameof(mediaProbeService));
     }
 
     // Карта соответствия форматов, их расширений и кодеков FFmpeg
@@ -139,12 +147,67 @@ public sealed class AudioEncodingScript : AbstractScript
 
         // 2. Группа "Параметры кодирования"
         new SettingField(
+            "qaac_mode",
+            "Режим кодирования QAAC",
+            SettingType.Combo,
+            "True VBR (-V)",
+            "Экспорт:Параметры кодирования",
+            options: new List<string>
+            {
+                "True VBR (-V)",
+                "Constrained VBR (-v)",
+                "ABR (-a)",
+                "CBR (-c)",
+                "HE AAC (--he)"
+            },
+            visibleIfKey: "target_format",
+            visibleIfValues: new List<string> { "QAAC" }),
+
+        new SettingField(
             "qaac_quality",
-            "Качество QAAC (0-127)",
+            "Качество True VBR [0-127] (-V)",
             SettingType.Combo,
             "127",
             "Экспорт:Параметры кодирования",
-            options: new List<string> { "0", "16", "32", "48", "64", "80", "96", "112", "127" },
+            options: new List<string> { "0", "16", "32", "48", "64", "80", "90", "96", "112", "127" },
+            comment: "Для LC профиля по умолчанию используется -V90",
+            visibilityConditions: new List<SettingVisibilityCondition>
+            {
+                new("target_format", "QAAC"),
+                new("qaac_mode", "True VBR (-V)")
+            }),
+
+        new SettingField(
+            "qaac_bitrate",
+            "Битрейт AAC [кбит/с]",
+            SettingType.Combo,
+            "192k",
+            "Экспорт:Параметры кодирования",
+            options: new List<string> { "0 (Авто/Максимальный)", "64k", "96k", "128k", "160k", "192k", "224k", "256k", "320k" },
+            comment: "Для режимов -a, -v, -c значение \"0\" означает наивысший доступный битрейт, который выбирается автоматически",
+            visibilityConditions: new List<SettingVisibilityCondition>
+            {
+                new("target_format", "QAAC"),
+                new("qaac_mode", new List<string> { "Constrained VBR (-v)", "ABR (-a)", "CBR (-c)", "HE AAC (--he)" })
+            }),
+
+        new SettingField(
+            "qaac_no_delay",
+            "Компенсировать задержку энкодера (--no-delay)",
+            SettingType.Checkbox,
+            false,
+            "Экспорт:Параметры кодирования",
+            comment: "Компенсирует задержку кодировщика путем добавления 960 отсчетов тишины в начало и последующей обрезки 3 кадров AAC. В основном предназначено для решения проблем синхронизации аудио и видео.",
+            visibleIfKey: "target_format",
+            visibleIfValues: new List<string> { "QAAC" }),
+
+        new SettingField(
+            "qaac_limiter",
+            "Применить смарт-лимитер (--limiter)",
+            SettingType.Checkbox,
+            false,
+            "Экспорт:Параметры кодирования",
+            comment: "Применяет интеллектуальный лимитер, который мягко ограничивает участки, где пиковый уровень превышает (или близок к) 0 dBFS.",
             visibleIfKey: "target_format",
             visibleIfValues: new List<string> { "QAAC" }),
 
@@ -155,6 +218,7 @@ public sealed class AudioEncodingScript : AbstractScript
             "320k",
             "Экспорт:Параметры кодирования",
             options: new List<string> { "64k", "96k", "128k", "160k", "192k", "224k", "256k", "320k", "448k", "640k" },
+            comment: "Для формата OGG (Vorbis) битрейт автоматически адаптируется под число каналов (до 224k для моно, до 500k для стерео)",
             visibleIfKey: "target_format",
             visibleIfValues: new List<string> { "MP3", "AAC", "OGG", "AC3", "EAC3", "DTS", "WMA", "OPUS", "ADPCM" }),
 
@@ -259,41 +323,83 @@ public sealed class AudioEncodingScript : AbstractScript
             return results;
         }
 
-        // 6. Считываем длительность медиафайла для расчета прогресса выполнения
+        // 6. Считываем длительность медиафайла и количество каналов для расчета прогресса и валидации кодеков
         double duration = 0.0;
+        int audioChannels = 0;
         try
         {
-            var info = await _ffmpegRunner.GetVideoInfoAsync(filePath);
-            if (info != null && info.RootElement.TryGetProperty("format", out var formatProp))
+            var structure = await _mediaProbeService.ProbeAsync(filePath);
+            if (structure != null)
             {
-                if (formatProp.TryGetProperty("duration", out var durProp))
+                duration = structure.Duration;
+                var audioTrack = structure.Tracks.FirstOrDefault(t => t.TrackType == "audio");
+                if (audioTrack != null && audioTrack.Channels > 0)
                 {
-                    if (durProp.ValueKind == JsonValueKind.String &&
-                        double.TryParse(
-                            durProp.GetString(),
-                            System.Globalization.NumberStyles.Any,
-                            System.Globalization.CultureInfo.InvariantCulture,
-                            out double d))
+                    audioChannels = audioTrack.Channels;
+                }
+            }
+
+            // Фоллбэк: если MediaProbeService не вернул каналы или длительность, считываем через ffprobe
+            if (audioChannels <= 0 || duration <= 0)
+            {
+                var info = await _ffmpegRunner.GetVideoInfoAsync(filePath);
+                if (info != null)
+                {
+                    if (duration <= 0 && info.RootElement.TryGetProperty("format", out var fmtProp) && fmtProp.TryGetProperty("duration", out var fmtDur))
                     {
-                        duration = d;
+                        if (fmtDur.ValueKind == JsonValueKind.String && double.TryParse(fmtDur.GetString(), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double fd))
+                        {
+                            duration = fd;
+                        }
+                        else if (fmtDur.ValueKind == JsonValueKind.Number)
+                        {
+                            duration = fmtDur.GetDouble();
+                        }
                     }
-                    else if (durProp.ValueKind == JsonValueKind.Number)
+
+                    if (info.RootElement.TryGetProperty("streams", out var streamsProp) && streamsProp.ValueKind == JsonValueKind.Array)
                     {
-                        duration = durProp.GetDouble();
+                        foreach (var s in streamsProp.EnumerateArray())
+                        {
+                            if (s.TryGetProperty("codec_type", out var ct) && ct.GetString() == "audio")
+                            {
+                                if (audioChannels <= 0 && s.TryGetProperty("channels", out var chProp) && chProp.TryGetInt32(out int ch) && ch > 0)
+                                {
+                                    audioChannels = ch;
+                                }
+                                if (duration <= 0 && s.TryGetProperty("duration", out var stDur))
+                                {
+                                    if (stDur.ValueKind == JsonValueKind.String && double.TryParse(stDur.GetString(), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double sd))
+                                    {
+                                        duration = sd;
+                                    }
+                                    else if (stDur.ValueKind == JsonValueKind.Number)
+                                    {
+                                        duration = stDur.GetDouble();
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
+            }
+
+            // По умолчанию принимаем стерео (2 канала), если не удалось определить
+            if (audioChannels <= 0)
+            {
+                audioChannels = 2;
             }
         }
         catch (Exception ex)
         {
             _logService.Exception(
                 ex,
-                $"Не удалось прочесть метаданные длительности для '{originalName}': {ex.Message}",
+                $"Не удалось прочесть метаданные для '{originalName}': {ex.Message}",
                 "AudioEncodingScript");
         }
 
         _logService.DebugLog(
-            $"Длительность медиафайла '{originalName}': {duration:F2} сек.",
+            $"Медиафайл '{originalName}': длительность {duration:F2} сек., аудиоканалов: {audioChannels}",
             "AudioEncodingScript");
 
         // 7. Подготавливаем процесс кодирования
@@ -303,18 +409,26 @@ public sealed class AudioEncodingScript : AbstractScript
         if (targetFormat.Equals("QAAC", StringComparison.OrdinalIgnoreCase))
         {
             // Случай А: Кодирование через QAAC (True VBR конвейер FFmpeg | QAAC64)
-            string tvbr = GetSettingValue(settings, "qaac_quality", "127");
+            string qaacMode = GetSettingValue(settings, "qaac_mode", "True VBR (-V)");
+            string qaacQuality = GetSettingValue(settings, "qaac_quality", "127");
+            string qaacBitrate = GetSettingValue(settings, "qaac_bitrate", "192k");
+            bool noDelay = GetSettingValue(settings, "qaac_no_delay", false);
+            bool limiter = GetSettingValue(settings, "qaac_limiter", false);
             bool adts = !useM4a;
+
+            string selectedVal = qaacMode.StartsWith("True VBR", StringComparison.OrdinalIgnoreCase)
+                ? qaacQuality
+                : qaacBitrate;
 
             progressCallback(fileIndex, totalCount, "Запуск QAAC...", 0.0);
             _logService.Info(
-                $"Запуск кодирования QAAC для '{originalName}' -> '{outputFileName}'",
+                $"Запуск кодирования QAAC для '{originalName}' -> '{outputFileName}' (Режим: {qaacMode}, Значение: {selectedVal})",
                 "AudioEncodingScript");
 
             var qaacTask = _qaacRunner.RunAsync(
                 inputPath: filePath,
                 outputPath: outputFilePath,
-                tvbr: tvbr,
+                tvbr: qaacQuality,
                 adts: adts,
                 totalDuration: duration,
                 onProgress: progressInfo =>
@@ -323,7 +437,11 @@ public sealed class AudioEncodingScript : AbstractScript
                     string msg = $"Кодирование QAAC | {progressInfo.Percent:F1}% | Скорость: {speedStr}";
                     progressCallback(fileIndex, totalCount, msg, progressInfo.Percent);
                 },
-                cancellationToken: cts.Token);
+                cancellationToken: cts.Token,
+                mode: qaacMode,
+                qualityOrBitrate: selectedVal,
+                noDelay: noDelay,
+                limiter: limiter);
 
             while (!qaacTask.IsCompleted)
             {
@@ -373,6 +491,30 @@ public sealed class AudioEncodingScript : AbstractScript
             else if (LossyFormats.Contains(targetFormat))
             {
                 string bitrate = GetSettingValue(settings, "bitrate", "320k");
+
+                // Для формата OGG (энкодер libvorbis) проверяем лимиты битрейта по каналам:
+                // libvorbis падает с ошибкой -22 (Invalid argument), если для моно указан битрейт > 224k или для стерео > 500k.
+                if (targetFormat.Equals("OGG", StringComparison.OrdinalIgnoreCase))
+                {
+                    int numericBitrate = ParseBitrateKbps(bitrate);
+                    if (audioChannels == 1 && numericBitrate > 224)
+                    {
+                        string adjustedBitrate = "224k";
+                        string note = $"ℹ️ Для моно-аудио в формате OGG (Vorbis) битрейт скорректирован с {bitrate} до максимально допустимого {adjustedBitrate}";
+                        _logService.Info(note, "AudioEncodingScript");
+                        results.Add(note);
+                        bitrate = adjustedBitrate;
+                    }
+                    else if (audioChannels == 2 && numericBitrate > 500)
+                    {
+                        string adjustedBitrate = "448k";
+                        string note = $"ℹ️ Для стерео-аудио в формате OGG (Vorbis) битрейт скорректирован с {bitrate} до максимально допустимого {adjustedBitrate}";
+                        _logService.Info(note, "AudioEncodingScript");
+                        results.Add(note);
+                        bitrate = adjustedBitrate;
+                    }
+                }
+
                 extraArgs.Add("-b:a");
                 extraArgs.Add(bitrate);
             }
@@ -506,5 +648,15 @@ public sealed class AudioEncodingScript : AbstractScript
 
         var (targetExt, _) = ResolveExtension(targetFormat, useM4a);
         return targetExt;
+    }
+
+    /// <summary>
+    /// Извлекает числовое значение битрейта в кбит/с из строки вида "320k" или "192".
+    /// </summary>
+    private static int ParseBitrateKbps(string bitrate)
+    {
+        if (string.IsNullOrWhiteSpace(bitrate)) return 320;
+        string clean = bitrate.Trim().TrimEnd('k', 'K', 'b', 'B', 's', 'S', '/');
+        return int.TryParse(clean, out int val) ? val : 320;
     }
 }

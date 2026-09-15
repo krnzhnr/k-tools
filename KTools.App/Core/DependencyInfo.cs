@@ -102,6 +102,7 @@ public class DependencyInfo
         "eac3to_decoders" => new SolidColorBrush(ColorHelper.FromArgb(0x33, 0x28, 0xCA, 0xC6)), // Бирюзовый
         "yt-dlp" => new SolidColorBrush(AppConstants.CategoryColors.NetworkBg),
         "node" => new SolidColorBrush(AppConstants.CategoryColors.NetworkBg),
+        "whisper_cpu" or "whisper_cuda" => new SolidColorBrush(AppConstants.CategoryColors.SubtitlesBg),
         _ => new SolidColorBrush(ColorHelper.FromArgb(0x33, 0xFF, 0xFF, 0xFF))
     };
 
@@ -117,6 +118,7 @@ public class DependencyInfo
         "eac3to_decoders" => new SolidColorBrush(ColorHelper.FromArgb(0xFF, 0x28, 0xCA, 0xC6)),
         "yt-dlp" => new SolidColorBrush(AppConstants.CategoryColors.NetworkFg),
         "node" => new SolidColorBrush(AppConstants.CategoryColors.NetworkFg),
+        "whisper_cpu" or "whisper_cuda" => new SolidColorBrush(AppConstants.CategoryColors.SubtitlesFg),
         _ => new SolidColorBrush(ColorHelper.FromArgb(0xFF, 0xFF, 0xFF, 0xFF))
     };
 }

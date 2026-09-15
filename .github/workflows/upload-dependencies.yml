@@ -4,9 +4,19 @@ on:
   push:
     branches:
       - main
+      - develop
     paths:
       - 'bin/**'
   workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to checkout dependencies from'
+        required: true
+        default: 'develop'
+        type: choice
+        options:
+          - develop
+          - main
 
 permissions:
   contents: write
@@ -19,6 +29,7 @@ jobs:
     - name: Checkout Repository
       uses: actions/checkout@v4
       with:
+        ref: ${{ inputs.branch || github.ref }}
         lfs: true
 
     - name: Create Tar.XZ Archives
@@ -46,12 +57,60 @@ jobs:
         Archive-Folder "DEE" "dee.tar.xz"
         Archive-Folder "eac3to_decoders" "eac3to_decoders.tar.xz"
 
+    - name: Detect Binary Versions
+      id: detect_versions
+      shell: pwsh
+      run: |
+        function Get-ExeVersion([string]$exePath, [string]$arg) {
+            if (-not (Test-Path $exePath)) { return "N/A" }
+            try {
+                $pinfo = New-Object System.Diagnostics.ProcessStartInfo
+                $pinfo.FileName = (Resolve-Path $exePath).Path
+                $pinfo.Arguments = $arg
+                $pinfo.RedirectStandardOutput = $true
+                $pinfo.RedirectStandardError = $true
+                $pinfo.UseShellExecute = $false
+                $pinfo.CreateNoWindow = $true
+
+                $p = [System.Diagnostics.Process]::Start($pinfo)
+                $out = $p.StandardOutput.ReadLine()
+                if ([string]::IsNullOrWhiteSpace($out)) {
+                    $out = $p.StandardError.ReadLine()
+                }
+                $p.WaitForExit(3000)
+
+                if ($out -match 'v?(\d+\.\d+(\.\d+)?)') {
+                    return $Matches[1]
+                }
+                return $out
+            } catch {
+                return "Unknown"
+            }
+        }
+
+        $ffmpegVer = Get-ExeVersion "bin/ffmpeg/kt-ffmpeg.exe" "-version"
+        $mkvVer    = Get-ExeVersion "bin/mkvtoolnix/mkvmerge.exe" "-V"
+        $eacVer    = Get-ExeVersion "bin/eac3to/eac3to.exe" ""
+        $qaacVer   = Get-ExeVersion "bin/ffmpeg/qaac64.exe" ""
+
+        Write-Host "Detected versions: FFmpeg=$ffmpegVer, MKVToolNix=$mkvVer, eac3to=$eacVer, QAAC=$qaacVer"
+
+        $jsonMap = @{
+            "ffmpeg" = $ffmpegVer
+            "mkvtoolnix" = $mkvVer
+            "eac3to" = $eacVer
+            "qaac" = $qaacVer
+        } | ConvertTo-Json -Compress
+
+        $bodyText = "Автоматически упакованные и загруженные бинарные зависимости из Git LFS.`n`n``````json:versions`n$jsonMap`n``````"
+        $bodyText | Out-File -FilePath release_body.txt -Encoding utf8
+
     - name: Create or Update Release deps-v1
       uses: softprops/action-gh-release@v2
       with:
         tag_name: deps-v1
         name: "K-Tools External Dependencies"
-        body: "Автоматически упакованные и загруженные бинарные зависимости из Git LFS."
+        body_path: release_body.txt
         prerelease: false
         make_latest: false
         files: temp_archives/*.tar.xz

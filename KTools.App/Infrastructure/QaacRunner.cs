@@ -48,7 +48,11 @@ public sealed class QaacRunner
         List<string>? extraArgs = null,
         double totalDuration = 0.0,
         Action<ProgressInfo>? onProgress = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string mode = "True VBR (-V)",
+        string qualityOrBitrate = "127",
+        bool noDelay = false,
+        bool limiter = false)
     {
         string qaacPath = _pathManager.GetBinaryPath("qaac64");
         string ffmpegPath = _pathManager.GetBinaryPath("ffmpeg");
@@ -70,7 +74,7 @@ public sealed class QaacRunner
         }
 
         _logService.Info(
-            $"Начало кодирования QAAC (TVBR: {tvbr}) для файла: '{Path.GetFileName(inputPath)}'", 
+            $"Начало кодирования QAAC (Режим: {mode}, Значение: {qualityOrBitrate}, no-delay: {noDelay}, limiter: {limiter}) для файла: '{Path.GetFileName(inputPath)}'", 
             "QaacRunner");
 
         // 1. Создаем изолированную временную папку для обхода ограничений AppContainer (WinUI 3 MSIX)
@@ -137,8 +141,52 @@ public sealed class QaacRunner
         {
             qaacArgsList.Add("--adts");
         }
-        qaacArgsList.Add("--tvbr");
-        qaacArgsList.Add(tvbr);
+
+        if (noDelay)
+        {
+            qaacArgsList.Add("--no-delay");
+        }
+
+        if (limiter)
+        {
+            qaacArgsList.Add("--limiter");
+        }
+
+        // Очищаем значение битрейта если выбран с суффиксом " (Авто/Максимальный)"
+        string cleanVal = qualityOrBitrate;
+        if (cleanVal.Contains(" "))
+        {
+            cleanVal = cleanVal.Split(' ')[0];
+        }
+
+        if (mode.StartsWith("Constrained VBR", StringComparison.OrdinalIgnoreCase))
+        {
+            qaacArgsList.Add("-v");
+            qaacArgsList.Add(cleanVal);
+        }
+        else if (mode.StartsWith("ABR", StringComparison.OrdinalIgnoreCase))
+        {
+            qaacArgsList.Add("-a");
+            qaacArgsList.Add(cleanVal);
+        }
+        else if (mode.StartsWith("CBR", StringComparison.OrdinalIgnoreCase))
+        {
+            qaacArgsList.Add("-c");
+            qaacArgsList.Add(cleanVal);
+        }
+        else if (mode.StartsWith("HE AAC", StringComparison.OrdinalIgnoreCase))
+        {
+            qaacArgsList.Add("--he");
+            qaacArgsList.Add("-v");
+            qaacArgsList.Add(cleanVal);
+        }
+        else
+        {
+            // По умолчанию True VBR (-V)
+            qaacArgsList.Add("-V");
+            qaacArgsList.Add(cleanVal);
+        }
+
         qaacArgsList.Add("-"); // Вход из stdin
         qaacArgsList.Add("-o");
         qaacArgsList.Add($"\"{outputPath}\"");

@@ -132,6 +132,20 @@ public partial class SettingsViewModel : ThreadSafeViewModel
     public partial bool DebugSimulateOldVersion { get; set; }
 
     /// <summary>
+    /// Флаг имитации доступности обновлений зависимостей для проверки UI.
+    /// </summary>
+    [ObservableProperty]
+    public partial bool DebugSimulateDepUpdate { get; set; }
+
+    partial void OnDebugSimulateDepUpdateChanged(bool value)
+    {
+        _dependencyManager.SetSimulatedUpdateAvailable("ffmpeg", value);
+        _dependencyManager.SetSimulatedUpdateAvailable("mkvtoolnix", value);
+        _dependencyManager.SetSimulatedUpdateAvailable("yt-dlp", value);
+        _logService.Info($"[Debug] Имитация обновления зависимостей установлена в state={value}", "SettingsViewModel");
+    }
+
+    /// <summary>
     /// Флаг отключения действия кнопок обновления и скачивания (имитация пустышек).
     /// </summary>
     [ObservableProperty]
@@ -251,6 +265,8 @@ public partial class SettingsViewModel : ThreadSafeViewModel
     [ObservableProperty]
     public partial bool IsContextMenuEnabled { get; set; }
 
+    private readonly IDependencyManager _dependencyManager;
+
     /// <summary>
     /// Инициализирует новый экземпляр SettingsViewModel с внедрением зависимостей.
     /// </summary>
@@ -260,7 +276,8 @@ public partial class SettingsViewModel : ThreadSafeViewModel
         IUpdateService updateService,
         ILogService logService,
         IPathManager pathManager,
-        IScriptRegistry scriptRegistry)
+        IScriptRegistry scriptRegistry,
+        IDependencyManager dependencyManager)
     {
         _settingsManager = settingsManager ?? throw new ArgumentNullException(nameof(settingsManager));
         _dialogService = dialogService ?? throw new ArgumentNullException(nameof(dialogService));
@@ -268,6 +285,7 @@ public partial class SettingsViewModel : ThreadSafeViewModel
         _logService = logService ?? throw new ArgumentNullException(nameof(logService));
         _pathManager = pathManager ?? throw new ArgumentNullException(nameof(pathManager));
         _scriptRegistry = scriptRegistry ?? throw new ArgumentNullException(nameof(scriptRegistry));
+        _dependencyManager = dependencyManager ?? throw new ArgumentNullException(nameof(dependencyManager));
 
         UpdateStatusText = "Обновления не проверялись";
         DefaultOutputSubfolder = "KTools_Result";
@@ -294,10 +312,12 @@ public partial class SettingsViewModel : ThreadSafeViewModel
         DefaultOutputSubfolder = _settingsManager.DefaultOutputSubfolder;
         UseAutoSubfolder = _settingsManager.UseAutoSubfolder;
 
-        SelectedThemeIndex = _settingsManager.Theme
-            .Equals("Light", StringComparison.OrdinalIgnoreCase)
-            ? 1
-            : 0;
+        SelectedThemeIndex = _settingsManager.Theme.ToLowerInvariant() switch
+        {
+            "dark" => 1,
+            "light" => 2,
+            _ => 0
+        };
 
         SelectedBackdropIndex = _settingsManager.BackdropType
             .Equals("Acrylic", StringComparison.OrdinalIgnoreCase)
@@ -369,7 +389,12 @@ public partial class SettingsViewModel : ThreadSafeViewModel
 
     partial void OnSelectedThemeIndexChanged(int value)
     {
-        string newTheme = value == 1 ? "Light" : "Dark";
+        string newTheme = value switch
+        {
+            1 => "Dark",
+            2 => "Light",
+            _ => "System"
+        };
         _settingsManager.Theme = newTheme;
         WeakReferenceMessenger.Default.Send(new ThemeChangedMessage(newTheme));
     }

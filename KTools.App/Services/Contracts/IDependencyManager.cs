@@ -77,9 +77,44 @@ public interface IDependencyManager
     bool RemoveDependency(string key);
 
     /// <summary>
+    /// Получить определенную версию установленной зависимости (например "7.1.0" или "v93.0").
+    /// </summary>
+    string GetInstalledVersion(string key);
+
+    /// <summary>
+    /// Выполняет проверку обновлений всех зависимостей (включая FFmpeg, MKVToolNix, eac3to и yt-dlp) раз в сутки.
+    /// </summary>
+    Task CheckAllDependencyUpdatesAsync(bool force = false);
+
+    /// <summary>
+    /// Устанавливает имитацию флага обновления для отладки и проверки UI.
+    /// </summary>
+    void SetSimulatedUpdateAvailable(string key, bool available);
+
+    /// <summary>
     /// Выполняет проверку обновлений для утилиты yt-dlp раз в сутки и обновляет её при необходимости.
     /// </summary>
     /// <param name="force">Принудительно запустить проверку без учёта 24-часового интервала.</param>
     /// <returns>Асинхронная задача проверки/обновления.</returns>
     Task CheckAndUpdateYtDlpAsync(bool force = false);
+
+    /// <summary>
+    /// Проверяет, выполняются ли в данный момент какие-либо активные операции скачивания или распаковки зависимостей.
+    /// </summary>
+    bool HasActiveOperations { get; }
+
+    /// <summary>
+    /// Получить сохранённый процент скачивания для указанной зависимости (от 0 до 100).
+    /// </summary>
+    int GetDownloadProgress(string key);
+
+    /// <summary>
+    /// Получить сохранённую форматированную скорость скачивания для указанной зависимости.
+    /// </summary>
+    string GetDownloadSpeed(string key);
+
+    /// <summary>
+    /// Проверить, находится ли указанная зависимость в процессе активного скачивания.
+    /// </summary>
+    bool IsDownloading(string key);
 }

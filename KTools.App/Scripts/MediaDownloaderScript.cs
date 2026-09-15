@@ -32,14 +32,22 @@ public sealed class MediaDownloaderScript : AbstractScript
 
     public override List<SettingField> SettingsSchema => new()
     {
-        new SettingField("DownloadSubtitles", "Скачивать субтитры", SettingType.Checkbox, false, "Общие"),
-        new SettingField("EmbedSubtitles", "Встраивать субтитры в видео (контейнер MKV)", SettingType.Checkbox, true, "Общие",
+        new SettingField("VideoContainer", "Контейнер видео", SettingType.Combo, "Авто", "Формат сохранения",
+            comment: "Целевой видеоконтейнер при объединении видео и аудиодорожек",
+            options: new List<string> { "Авто", "MP4", "MKV" }),
+        new SettingField("AudioFormat", "Формат аудио", SettingType.Combo, "Исходный", "Формат сохранения",
+            comment: "Формат сохранения аудиофайлов при выборе только звуковой дорожки",
+            options: new List<string> { "Исходный", "MP3 (320k)", "M4A (AAC)", "FLAC", "Opus" }),
+        new SettingField("ForceOverwrite", "Перезаписывать существующие файлы", SettingType.Checkbox, false, "Формат сохранения",
+            comment: "Принудительно скачивать и перезаписывать медиафайлы при повторном запуске"),
+        new SettingField("DownloadSubtitles", "Скачивать субтитры", SettingType.Checkbox, false, "Субтитры"),
+        new SettingField("EmbedSubtitles", "Встраивать субтитры в видео", SettingType.Checkbox, true, "Субтитры",
             visibleIfKey: "DownloadSubtitles",
             visibleIfValues: new List<string> { "True" }),
-        new SettingField("CleanSubtitles", "Очищать и форматировать субтитры (WebVTT)", SettingType.Checkbox, true, "Общие",
+        new SettingField("CleanSubtitles", "Очищать и форматировать субтитры (WebVTT)", SettingType.Checkbox, true, "Субтитры",
             visibleIfKey: "DownloadSubtitles",
             visibleIfValues: new List<string> { "True" }),
-        new SettingField("AdditionalArgs", "Дополнительные аргументы yt-dlp", SettingType.Text, string.Empty, "Общие")
+        new SettingField("AdditionalArgs", "Дополнительные аргументы yt-dlp", SettingType.Text, string.Empty, "Дополнительно")
     };
 
     public MediaDownloaderScript(ILogService logService, ISettingsManager settingsManager, IPathManager pathManager)
@@ -68,6 +76,9 @@ public sealed class MediaDownloaderScript : AbstractScript
         }
 
         // Настройки скрипта
+        string videoContainer = GetSettingValue(settings, "VideoContainer", "Авто");
+        string audioFormatSetting = GetSettingValue(settings, "AudioFormat", "Исходный");
+        bool forceOverwrite = GetSettingValue(settings, "ForceOverwrite", false) || _settingsManager.OverwriteExisting;
         bool downloadSubs = GetSettingValue(settings, "DownloadSubtitles", false);
         bool embedSubs = GetSettingValue(settings, "EmbedSubtitles", true);
         bool cleanSubs = GetSettingValue(settings, "CleanSubtitles", true);
@@ -76,6 +87,7 @@ public sealed class MediaDownloaderScript : AbstractScript
         // Получаем информацию о качестве и субтитрах для данной ссылки
         var queueItem = FilesQueue.FirstOrDefault(f => f.FilePath == filePath);
         string formatArgValue = queueItem?.SelectedFormat?.FormatArg ?? "bv*+ba/b";
+        bool isAudioOnly = queueItem?.SelectedFormat?.IsAudioOnly ?? (formatArgValue == "ba" || formatArgValue == "ba/b");
         string subtitleCode = queueItem?.SelectedSubtitle?.Code ?? "none";
         string displayName = queueItem?.DisplayName ?? filePath;
 
@@ -112,10 +124,15 @@ public sealed class MediaDownloaderScript : AbstractScript
             $"-f \"{formatArgValue}\"",
             $"--paths \"{targetDir}\"",
             // Переименовываем скачиваемый файл по стандартному шаблону названия
-            "--output \"%(title)s.%(ext)s\""
+            "--output \"%(title)s.%(ext)s\"",
+            // Оптимизация стабильности при блокировках и сбросах сети (ТСПУ / обрывы SSL)
+            "--http-chunk-size 10M",
+            "--concurrent-fragments 4",
+            "--retries 25",
+            "--fragment-retries 25"
         };
 
-        if (_settingsManager.OverwriteExisting)
+        if (forceOverwrite)
         {
             args.Add("--force-overwrites");
         }
@@ -123,6 +140,49 @@ public sealed class MediaDownloaderScript : AbstractScript
         {
             args.Add("--no-force-overwrites");
         }
+
+        // Централизованное управление форматом сохранения:
+        if (isAudioOnly)
+        {
+            // Для аудио: извлечение в указанный пользователем формат
+            switch (audioFormatSetting)
+            {
+                case "MP3 (320k)":
+                    args.Add("--extract-audio");
+                    args.Add("--audio-format mp3");
+                    args.Add("--audio-quality 0");
+                    break;
+                case "M4A (AAC)":
+                    args.Add("--extract-audio");
+                    args.Add("--audio-format m4a");
+                    break;
+                case "FLAC":
+                    args.Add("--extract-audio");
+                    args.Add("--audio-format flac");
+                    break;
+                case "Opus":
+                    args.Add("--extract-audio");
+                    args.Add("--audio-format opus");
+                    break;
+                default:
+                    // "Исходный" - оставляем оригинальный аудиопоток без транскодирования
+                    break;
+            }
+        }
+        else
+        {
+            // Для видео: централизованный выбор контейнера
+            if (videoContainer.Equals("MP4", StringComparison.OrdinalIgnoreCase))
+            {
+                args.Add("--merge-output-format mp4");
+                args.Add("--remux-video mp4");
+            }
+            else if (videoContainer.Equals("MKV", StringComparison.OrdinalIgnoreCase))
+            {
+                args.Add("--merge-output-format mkv");
+            }
+        }
+
         // Обработка субтитров
         if (downloadSubs)
         {
@@ -139,10 +199,17 @@ public sealed class MediaDownloaderScript : AbstractScript
                 args.Add($"--sub-langs \"{subtitleCode}\"");
             }
 
-            if (subtitleCode != "none" && embedSubs)
+            if (subtitleCode != "none" && embedSubs && !isAudioOnly)
             {
                 args.Add("--embed-subs");
-                args.Add("--merge-output-format mkv");
+                // Если не задан MP4 принудительно, используем универсальный MKV для субтитров
+                if (!videoContainer.Equals("MP4", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!args.Contains("--merge-output-format mkv"))
+                    {
+                        args.Add("--merge-output-format mkv");
+                    }
+                }
             }
         }
 

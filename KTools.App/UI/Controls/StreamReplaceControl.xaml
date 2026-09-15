@@ -34,14 +34,19 @@
                 <ColumnDefinition Width="1*" /> <!-- Правая: Список файлов-замен -->
             </Grid.ColumnDefinitions>
 
-            <!-- Левая колонка: Назначение замен -->
+            <!-- Левая колонка: Назначение замен (с поддержкой Drag and Drop исходных файлов) -->
             <Border Grid.Column="0"
+                    x:Name="TargetAssignmentsCardBorder"
                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                     BorderThickness="1"
                     Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                     CornerRadius="8"
                     Padding="16"
                     Margin="0,0,12,0"
+                    AllowDrop="True"
+                    DragOver="TargetCard_DragOver"
+                    DragLeave="TargetCard_DragLeave"
+                    Drop="TargetCard_Drop"
                     VerticalAlignment="Stretch">
                 
                 <Grid>
@@ -49,6 +54,9 @@
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
+
+                    <!-- Универсальная окантовка зоны сброса файлов для назначения замен -->
+                    <local:DropZoneOverlay x:Name="TargetDropOverlay" Grid.RowSpan="2" Margin="-8" />
 
                     <TextBlock Text="Назначение замен" 
                                FontWeight="SemiBold" 
@@ -60,12 +68,20 @@
                                 Grid.Row="1"
                                 VerticalAlignment="Center"
                                 HorizontalAlignment="Center"
-                                Spacing="12">
+                                Spacing="8">
                         <ProgressRing x:Name="TracksProgressRing" IsActive="False" Visibility="Collapsed" Width="32" Height="32" />
+                        <FontIcon x:Name="TracksEmptyIcon"
+                                  Glyph="&#xE8E5;" 
+                                  FontSize="28" 
+                                  Foreground="{ThemeResource TextFillColorSecondaryBrush}" 
+                                  HorizontalAlignment="Center" />
                         <TextBlock x:Name="TracksEmptyText"
-                                   Text="Добавьте исходный файл на вкладке «Файлы»" 
+                                   Text="Перетащите сюда исходные файлы или добавьте их на вкладке «Файлы»." 
                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                   FontSize="13" />
+                                   TextWrapping="Wrap"
+                                   FontSize="12"
+                                   HorizontalAlignment="Center"
+                                   TextAlignment="Center" />
                     </StackPanel>
 
                     <!-- Список дорожек оригинального контейнера с ComboBox для выбора замен -->
@@ -78,13 +94,18 @@
                 </Grid>
             </Border>
 
-            <!-- Правая колонка: Файлы для подмены -->
+            <!-- Правая колонка: Файлы для подмены (с поддержкой Drag and Drop) -->
             <Border Grid.Column="1"
+                    x:Name="ReplacementFilesCardBorder"
                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                     BorderThickness="1"
                     Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                     CornerRadius="8"
                     Padding="16"
+                    AllowDrop="True"
+                    DragOver="ReplacementCard_DragOver"
+                    DragLeave="ReplacementCard_DragLeave"
+                    Drop="ReplacementCard_Drop"
                     VerticalAlignment="Stretch">
                 
                 <Grid>
@@ -94,6 +115,9 @@
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
 
+                    <!-- Универсальная окантовка зоны сброса файлов -->
+                    <local:DropZoneOverlay x:Name="DropOverlay" Grid.RowSpan="3" Margin="-8" />
+
                     <TextBlock Text="Файлы для подмены" 
                                FontWeight="SemiBold" 
                                FontSize="14" 
@@ -102,14 +126,22 @@
                     <!-- Список добавленных файлов-замен -->
                     <Grid Grid.Row="1" Margin="0,0,0,12">
                         <!-- Пустое состояние: список пуст -->
-                        <TextBlock x:Name="ReplacementsEmptyText"
-                                   Text="Список файлов для подмены пуст. Добавьте файлы кнопкой ниже." 
-                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                   TextWrapping="Wrap"
-                                   FontSize="12"
-                                   HorizontalAlignment="Center"
-                                   VerticalAlignment="Center"
-                                   TextAlignment="Center" />
+                        <StackPanel x:Name="ReplacementsEmptyState"
+                                    HorizontalAlignment="Center"
+                                    VerticalAlignment="Center"
+                                    Spacing="8">
+                            <FontIcon Glyph="&#xE8E5;" 
+                                      FontSize="28" 
+                                      Foreground="{ThemeResource TextFillColorSecondaryBrush}" 
+                                      HorizontalAlignment="Center" />
+                            <TextBlock x:Name="ReplacementsEmptyText"
+                                       Text="Перетащите сюда файлы для подмены или добавьте их кнопкой ниже." 
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       TextWrapping="Wrap"
+                                       FontSize="12"
+                                       HorizontalAlignment="Center"
+                                       TextAlignment="Center" />
+                        </StackPanel>
 
                         <ListView x:Name="ReplacementFilesListView"
                                   SelectionMode="None"

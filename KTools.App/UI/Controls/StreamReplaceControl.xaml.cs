@@ -10,8 +10,11 @@ using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Hosting;
 using Microsoft.UI.Text;
 using Windows.Storage;
+using Windows.ApplicationModel.DataTransfer;
 
 using KTools_App.Core;
 using KTools_App.Scripts;
@@ -80,8 +83,8 @@ public sealed class ReplacementFileItem
 /// </summary>
 public sealed partial class StreamReplaceControl : UserControl
 {
-    private ILogService _logService => App.Services.GetRequiredService<ILogService>();
-    private IMediaProbeService _mediaProbeService => App.Services.GetRequiredService<IMediaProbeService>();
+    private readonly ILogService _logService;
+    private readonly IMediaProbeService _mediaProbeService;
 
     private readonly Microsoft.UI.Dispatching.DispatcherQueue _dispatcherQueue = 
         Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
@@ -109,6 +112,9 @@ public sealed partial class StreamReplaceControl : UserControl
     /// </summary>
     public StreamReplaceControl()
     {
+        _logService = App.Services.GetRequiredService<ILogService>();
+        _mediaProbeService = App.Services.GetRequiredService<IMediaProbeService>();
+
         InitializeComponent();
         ReplacementFilesListView.ItemsSource = _replacementFiles;
         _replacementFiles.CollectionChanged += OnReplacementFilesChanged;
@@ -164,20 +170,34 @@ public sealed partial class StreamReplaceControl : UserControl
             _logService.Info("Сбор назначенных замен из ComboBox", "StreamReplaceControl");
             foreach (var kvp in _combos)
             {
-                int trackId = kvp.Key;
+                int comboKey = kvp.Key;
                 ComboBox combo = kvp.Value;
 
                 if (combo.SelectedItem is ReplacementOption opt && !string.IsNullOrEmpty(opt.FilePath))
                 {
-                    var repData = new Dictionary<string, object>
+                    string srcFile = combo.Tag?.ToString() ?? string.Empty;
+                    if (string.IsNullOrEmpty(srcFile)) continue;
+
+                    if (!replacements.ContainsKey(srcFile))
                     {
-                        { "path", opt.FilePath },
-                        { "src_id", opt.SourceTrackId }
-                    };
-                    replacements[trackId.ToString()] = repData;
+                        replacements[srcFile] = new Dictionary<string, object>();
+                    }
+
+                    var fileDict = (Dictionary<string, object>)replacements[srcFile];
+
+                    if (_sourceTracks.TryGetValue(comboKey, out var track))
+                    {
+                        int actualTrackId = track.TrackId;
+                        var repData = new Dictionary<string, object>
+                        {
+                            { "path", opt.FilePath },
+                            { "src_id", opt.SourceTrackId }
+                        };
+                        fileDict[actualTrackId.ToString()] = repData;
+                    }
                 }
             }
-            _logService.Info($"Сбор замен завершен. Назначено замен: {replacements.Count}", "StreamReplaceControl");
+            _logService.Info($"Сбор замен завершен. Файлов с заменами: {replacements.Count}", "StreamReplaceControl");
         }
         catch (Exception ex)
         {
@@ -228,27 +248,41 @@ public sealed partial class StreamReplaceControl : UserControl
     private void OnReplacementFilesChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
         bool hasReplacements = _replacementFiles.Count > 0;
-        ReplacementsEmptyText.Visibility = hasReplacements ? Visibility.Collapsed : Visibility.Visible;
+        if (ReplacementsEmptyState != null)
+        {
+            ReplacementsEmptyState.Visibility = hasReplacements ? Visibility.Collapsed : Visibility.Visible;
+        }
         ReplacementFilesListView.Visibility = hasReplacements ? Visibility.Visible : Visibility.Collapsed;
+
+        // Если есть добавленные файлы для подмены — скрываем обычный фоновый пунктир (он появится только при наведении Drag & Drop)
+        DropOverlay?.SetVisible(!hasReplacements);
 
         // При любом изменении списка замен обновляем ComboBox-ы в карточке назначений
         UpdateAllComboBoxOptions();
     }
 
     /// <summary>
-    /// Перестраивает интерфейс сопоставления дорожек исходного контейнера.
+    /// Перестраивает интерфейс сопоставления дорожек исходных контейнеров (с поддержкой пакетной обработки нескольких файлов).
     /// </summary>
     private void RebuildUI()
     {
         try
         {
-            // Сохраняем ранее выбранные значение для восстановления
-            var savedSelections = new Dictionary<int, ReplacementOption>();
+            // Сохраняем ранее выбранные значения замен (ключ: filePath_trackId)
+            var savedSelections = new Dictionary<string, ReplacementOption>();
             foreach (var kvp in _combos)
             {
-                if (kvp.Value.SelectedItem is ReplacementOption selOpt && !string.IsNullOrEmpty(selOpt.FilePath))
+                int comboKey = kvp.Key;
+                ComboBox combo = kvp.Value;
+
+                if (combo.SelectedItem is ReplacementOption selOpt && !string.IsNullOrEmpty(selOpt.FilePath))
                 {
-                    savedSelections[kvp.Key] = selOpt;
+                    string srcFile = combo.Tag?.ToString() ?? string.Empty;
+                    if (_sourceTracks.TryGetValue(comboKey, out var track))
+                    {
+                        string compoundKey = $"{srcFile}_{track.TrackId}";
+                        savedSelections[compoundKey] = selOpt;
+                    }
                 }
             }
 
@@ -261,20 +295,26 @@ public sealed partial class StreamReplaceControl : UserControl
                 TracksEmptyState.Visibility = Visibility.Visible;
                 TracksProgressRing.IsActive = false;
                 TracksProgressRing.Visibility = Visibility.Collapsed;
-                TracksEmptyText.Text = "Добавьте исходный файл на вкладке «Файлы»";
+                if (TracksEmptyIcon != null) TracksEmptyIcon.Visibility = Visibility.Visible;
+                TracksEmptyText.Text = "Перетащите сюда исходные файлы или добавьте их на вкладке «Файлы».";
                 TracksScrollViewer.Visibility = Visibility.Collapsed;
+                TargetDropOverlay?.SetVisible(true);
                 return;
             }
 
-            var activeFile = _files.FirstOrDefault();
-            if (activeFile == null) return;
+            // Если есть добавленные файлы — скрываем фоновую окантовку (появится только при наведении мышью с файлом)
+            TargetDropOverlay?.SetVisible(false);
 
-            if (activeFile.MediaInfo == null)
+            // Проверяем, есть ли файлы с неполной информацией
+            bool isAnyAnalyzing = _files.Any(f => f.MediaInfo == null);
+
+            if (isAnyAnalyzing && _files.All(f => f.MediaInfo == null))
             {
                 TracksEmptyState.Visibility = Visibility.Visible;
                 TracksProgressRing.IsActive = true;
                 TracksProgressRing.Visibility = Visibility.Visible;
-                TracksEmptyText.Text = "Выполняется фоновый анализ структуры исходного файла...";
+                if (TracksEmptyIcon != null) TracksEmptyIcon.Visibility = Visibility.Collapsed;
+                TracksEmptyText.Text = "Выполняется фоновый анализ структуры исходных файлов...";
                 TracksScrollViewer.Visibility = Visibility.Collapsed;
                 return;
             }
@@ -282,79 +322,119 @@ public sealed partial class StreamReplaceControl : UserControl
             TracksEmptyState.Visibility = Visibility.Collapsed;
             TracksScrollViewer.Visibility = Visibility.Visible;
 
-            var structure = activeFile.MediaInfo;
-            _logService.Info($"Построение строк сопоставления для файла '{activeFile.FileName}'", "StreamReplaceControl");
+            int globalComboId = 0;
 
-            // Выводим только видео, аудио и субтитры (без вложений)
-            var tracks = structure.Tracks.Where(t => 
-                t.TrackType.Equals("video", StringComparison.OrdinalIgnoreCase) ||
-                t.TrackType.Equals("audio", StringComparison.OrdinalIgnoreCase) ||
-                t.TrackType.Equals("subtitles", StringComparison.OrdinalIgnoreCase)).ToList();
+            // Две логики отображения: если файл один — выводим компактно; если файлов несколько — оборачиваем каждый файл в отдельный разворачиваемый Expander/Card
+            bool isBatch = _files.Count > 1;
 
-            foreach (var track in tracks)
+            foreach (var fileItem in _files)
             {
-                _sourceTracks[track.TrackId] = track;
+                if (fileItem.MediaInfo == null) continue;
 
-                // Создаем строку-контейнер для дорожки
-                var rowContainer = new StackPanel { Spacing = 4, Margin = new Thickness(0, 0, 0, 8) };
+                var structure = fileItem.MediaInfo;
 
-                // Описание дорожки
-                string typeLabel = track.TypeLabel;
-                string langStr = !string.IsNullOrEmpty(track.Language) && track.Language != "und" ? track.Language.ToUpperInvariant() : "UND";
-                
-                string descText = $"{typeLabel} #{track.TrackId} • {track.Codec.ToUpperInvariant()}";
-                if (track.TrackType.Equals("audio", StringComparison.OrdinalIgnoreCase))
+                // Выводим только видео, аудио и субтитры (без вложений)
+                var tracks = structure.Tracks.Where(t => 
+                    t.TrackType.Equals("video", StringComparison.OrdinalIgnoreCase) ||
+                    t.TrackType.Equals("audio", StringComparison.OrdinalIgnoreCase) ||
+                    t.TrackType.Equals("subtitles", StringComparison.OrdinalIgnoreCase)).ToList();
+
+                if (tracks.Count == 0) continue;
+
+                // Панель для дорожек конкретного файла
+                var tracksContainerPanel = new StackPanel { Spacing = 8, Margin = new Thickness(0, 0, 0, 4) };
+
+                foreach (var track in tracks)
                 {
-                    descText += $" • {langStr} • {track.Channels} ch";
+                    globalComboId++;
+                    int comboKey = globalComboId;
+                    _sourceTracks[comboKey] = track;
+
+                    var rowContainer = new StackPanel { Spacing = 4, Margin = new Thickness(0, 0, 0, 8) };
+
+                    string typeLabel = track.TypeLabel;
+                    string langStr = !string.IsNullOrEmpty(track.Language) && track.Language != "und" ? track.Language.ToUpperInvariant() : "UND";
+                    
+                    string descText = $"{typeLabel} #{track.TrackId} • {track.Codec.ToUpperInvariant()}";
+                    if (track.TrackType.Equals("audio", StringComparison.OrdinalIgnoreCase))
+                    {
+                        descText += $" • {langStr} • {track.Channels} ch";
+                    }
+                    else if (track.TrackType.Equals("subtitles", StringComparison.OrdinalIgnoreCase))
+                    {
+                        descText += $" • {langStr}";
+                    }
+                    else if (track.TrackType.Equals("video", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(track.Resolution))
+                    {
+                        descText += $" • {track.Resolution}";
+                    }
+
+                    if (!string.IsNullOrEmpty(track.Name))
+                    {
+                        descText += $" • \"{track.Name}\"";
+                    }
+
+                    var descLabel = new TextBlock
+                    {
+                        Text = descText,
+                        FontSize = 12,
+                        Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorSecondaryBrush"]
+                    };
+                    rowContainer.Children.Add(descLabel);
+
+                    var combo = new ComboBox
+                    {
+                        HorizontalAlignment = HorizontalAlignment.Stretch,
+                        Height = 32,
+                        Tag = fileItem.FilePath // Сохраняем привязку к исходному файлу
+                    };
+                    rowContainer.Children.Add(combo);
+
+                    _combos[comboKey] = combo;
+                    tracksContainerPanel.Children.Add(rowContainer);
                 }
-                else if (track.TrackType.Equals("subtitles", StringComparison.OrdinalIgnoreCase))
+
+                if (isBatch)
                 {
-                    descText += $" • {langStr}";
+                    // Оборачиваем в карточку Expander для пакетной обработки
+                    var expander = new Expander
+                    {
+                        Header = $"{fileItem.FileName}",
+                        HorizontalAlignment = HorizontalAlignment.Stretch,
+                        HorizontalContentAlignment = HorizontalAlignment.Stretch,
+                        IsExpanded = true,
+                        Margin = new Thickness(0, 0, 0, 8)
+                    };
+                    expander.Content = tracksContainerPanel;
+                    ReplacementsStackPanel.Children.Add(expander);
                 }
-                else if (track.TrackType.Equals("video", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(track.Resolution))
+                else
                 {
-                    descText += $" • {track.Resolution}";
+                    ReplacementsStackPanel.Children.Add(tracksContainerPanel);
                 }
-
-                if (!string.IsNullOrEmpty(track.Name))
-                {
-                    descText += $" • \"{track.Name}\"";
-                }
-
-                var descLabel = new TextBlock
-                {
-                    Text = descText,
-                    FontSize = 12,
-                    Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorSecondaryBrush"]
-                };
-                rowContainer.Children.Add(descLabel);
-
-                // ComboBox выбора замены
-                var combo = new ComboBox
-                {
-                    HorizontalAlignment = HorizontalAlignment.Stretch,
-                    Height = 32
-                };
-                rowContainer.Children.Add(combo);
-
-                _combos[track.TrackId] = combo;
-                ReplacementsStackPanel.Children.Add(rowContainer);
             }
 
             UpdateAllComboBoxOptions();
 
             // Восстанавливаем сохраненный выбор замен
-            foreach (var kvp in savedSelections)
+            foreach (var kvp in _combos)
             {
-                if (_combos.TryGetValue(kvp.Key, out var combo))
+                int comboKey = kvp.Key;
+                ComboBox combo = kvp.Value;
+                string srcFile = combo.Tag?.ToString() ?? string.Empty;
+
+                if (_sourceTracks.TryGetValue(comboKey, out var track))
                 {
-                    var saved = kvp.Value;
-                    var matchOpt = combo.Items.Cast<ReplacementOption>().FirstOrDefault(o =>
-                        o.FilePath.Equals(saved.FilePath, StringComparison.OrdinalIgnoreCase) &&
-                        o.SourceTrackId == saved.SourceTrackId);
-                    if (matchOpt != null)
+                    string compoundKey = $"{srcFile}_{track.TrackId}";
+                    if (savedSelections.TryGetValue(compoundKey, out var saved))
                     {
-                        combo.SelectedItem = matchOpt;
+                        var matchOpt = combo.Items.Cast<ReplacementOption>().FirstOrDefault(o =>
+                            o.FilePath.Equals(saved.FilePath, StringComparison.OrdinalIgnoreCase) &&
+                            o.SourceTrackId == saved.SourceTrackId);
+                        if (matchOpt != null)
+                        {
+                            combo.SelectedItem = matchOpt;
+                        }
                     }
                 }
             }
@@ -516,32 +596,70 @@ public sealed partial class StreamReplaceControl : UserControl
             var files = await picker.PickMultipleFilesAsync();
             if (files != null && files.Count > 0)
             {
-                _logService.Info($"Выбрано внешних файлов-замен: {files.Count}", "StreamReplaceControl");
-                foreach (var file in files)
-                {
-                    // Проверяем на дубликаты
-                    if (_replacementFiles.Any(f => f.FilePath.Equals(file.Path, StringComparison.OrdinalIgnoreCase)))
-                    {
-                        continue;
-                    }
-
-                    var item = new ReplacementFileItem
-                    {
-                        FileName = Path.GetFileName(file.Path),
-                        FilePath = file.Path,
-                        InfoText = "Анализ файла..."
-                    };
-                    _replacementFiles.Add(item);
-
-                    // Фоновый анализ метаданных для контейнеров
-                    StartReplacementFileAnalysis(item);
-                }
+                AddReplacementFiles(files.Select(f => f.Path));
             }
         }
         catch (Exception ex)
         {
             _logService.Exception(ex, "Ошибка при выборе файлов-замен", "StreamReplaceControl");
         }
+    }
+
+    /// <summary>
+    /// Добавляет переданные пути к файлам в список файлов для подмены.
+    /// </summary>
+    private void AddReplacementFiles(IEnumerable<string> filePaths)
+    {
+        int addedCount = 0;
+        foreach (var filePath in filePaths)
+        {
+            if (string.IsNullOrWhiteSpace(filePath)) continue;
+
+            // Проверяем на дубликаты
+            if (_replacementFiles.Any(f => f.FilePath.Equals(filePath, StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+
+            var item = new ReplacementFileItem
+            {
+                FileName = Path.GetFileName(filePath),
+                FilePath = filePath,
+                InfoText = "Анализ файла..."
+            };
+            _replacementFiles.Add(item);
+            addedCount++;
+
+            // Фоновый анализ метаданных для контейнеров
+            StartReplacementFileAnalysis(item);
+        }
+
+        if (addedCount > 0)
+        {
+            _logService.Info($"Добавлено внешних файлов-замен: {addedCount}", "StreamReplaceControl");
+        }
+    }
+
+    private void StartFileAnalysis(FileQueueItem item)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var structure = await _mediaProbeService.ProbeAsync(item.FilePath);
+                if (structure != null)
+                {
+                    _dispatcherQueue.TryEnqueue(() =>
+                    {
+                        item.MediaInfo = structure;
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                _logService.Exception(ex, $"Ошибка при анализе исходного файла '{item.FileName}'", "StreamReplaceControl");
+            }
+        });
     }
 
     private void StartReplacementFileAnalysis(ReplacementFileItem item)
@@ -622,4 +740,180 @@ public sealed partial class StreamReplaceControl : UserControl
     {
         _replacementFiles.Clear();
     }
+
+    #region Drag and Drop Handling
+
+    private void SetDropTargetHighlight(bool isHighlighted)
+    {
+        DropOverlay?.SetHighlighted(isHighlighted);
+
+        if (ReplacementFilesCardBorder != null)
+        {
+            if (Application.Current.Resources.TryGetValue(isHighlighted ? "CardBackgroundFillColorSecondaryBrush" : "CardBackgroundFillColorDefaultBrush", out var bgBrush) && bgBrush is Brush bg)
+            {
+                ReplacementFilesCardBorder.Background = bg;
+            }
+        }
+    }
+
+    private void ReplacementCard_DragOver(object sender, DragEventArgs e)
+    {
+        if (e.DataView.Contains(StandardDataFormats.StorageItems))
+        {
+            e.AcceptedOperation = DataPackageOperation.Copy;
+            e.DragUIOverride.Caption = "Добавить файлы для подмены";
+            e.DragUIOverride.IsCaptionVisible = true;
+            e.DragUIOverride.IsContentVisible = true;
+            e.DragUIOverride.IsGlyphVisible = true;
+            e.Handled = true;
+            
+            SetDropTargetHighlight(true);
+        }
+        else
+        {
+            e.AcceptedOperation = DataPackageOperation.None;
+        }
+    }
+
+    private void ReplacementCard_DragLeave(object sender, DragEventArgs e)
+    {
+        SetDropTargetHighlight(false);
+    }
+
+    private async void ReplacementCard_Drop(object sender, DragEventArgs e)
+    {
+        e.Handled = true;
+        SetDropTargetHighlight(false);
+
+        if (e.DataView.Contains(StandardDataFormats.StorageItems))
+        {
+            var deferral = e.GetDeferral();
+            try
+            {
+                var items = await e.DataView.GetStorageItemsAsync();
+                var paths = new List<string>();
+
+                foreach (var item in items)
+                {
+                    if (item is StorageFile file)
+                    {
+                        paths.Add(file.Path);
+                    }
+                    else if (item is StorageFolder folder)
+                    {
+                        var files = await folder.GetFilesAsync();
+                        paths.AddRange(files.Select(f => f.Path));
+                    }
+                }
+
+                if (paths.Count > 0)
+                {
+                    AddReplacementFiles(paths);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logService.Exception(ex, "Ошибка при обработке перетаскивания файлов для подмены", "StreamReplaceControl");
+            }
+            finally
+            {
+                deferral.Complete();
+            }
+        }
+    }
+    #endregion
+
+    #region Target Card Drag and Drop Handling
+
+    private void SetTargetDropHighlight(bool isHighlighted)
+    {
+        TargetDropOverlay?.SetHighlighted(isHighlighted);
+
+        if (TargetAssignmentsCardBorder != null)
+        {
+            if (Application.Current.Resources.TryGetValue(isHighlighted ? "CardBackgroundFillColorSecondaryBrush" : "CardBackgroundFillColorDefaultBrush", out var bgBrush) && bgBrush is Brush bg)
+            {
+                TargetAssignmentsCardBorder.Background = bg;
+            }
+        }
+    }
+
+    private void TargetCard_DragOver(object sender, DragEventArgs e)
+    {
+        if (e.DataView.Contains(StandardDataFormats.StorageItems))
+        {
+            e.AcceptedOperation = DataPackageOperation.Copy;
+            e.DragUIOverride.Caption = "Добавить исходные файлы в очередь";
+            e.DragUIOverride.IsCaptionVisible = true;
+            e.DragUIOverride.IsContentVisible = true;
+            e.DragUIOverride.IsGlyphVisible = true;
+            e.Handled = true;
+
+            SetTargetDropHighlight(true);
+        }
+        else
+        {
+            e.AcceptedOperation = DataPackageOperation.None;
+        }
+    }
+
+    private void TargetCard_DragLeave(object sender, DragEventArgs e)
+    {
+        SetTargetDropHighlight(false);
+    }
+
+    private async void TargetCard_Drop(object sender, DragEventArgs e)
+    {
+        e.Handled = true;
+        SetTargetDropHighlight(false);
+
+        if (e.DataView.Contains(StandardDataFormats.StorageItems) && _files != null)
+        {
+            var deferral = e.GetDeferral();
+            try
+            {
+                var items = await e.DataView.GetStorageItemsAsync();
+                var paths = new List<string>();
+
+                foreach (var item in items)
+                {
+                    if (item is StorageFile file)
+                    {
+                        paths.Add(file.Path);
+                    }
+                    else if (item is StorageFolder folder)
+                    {
+                        var files = await folder.GetFilesAsync();
+                        paths.AddRange(files.Select(f => f.Path));
+                    }
+                }
+
+                if (paths.Count > 0)
+                {
+                    foreach (var path in paths)
+                    {
+                        if (!_files.Any(f => f.FilePath.Equals(path, StringComparison.OrdinalIgnoreCase)))
+                        {
+                            var item = new FileQueueItem(path);
+                            _files.Add(item);
+                            StartFileAnalysis(item);
+                        }
+                    }
+                    _logService.Info($"Добавлено исходных файлов через Drag & Drop карточки назначений: {paths.Count}", "StreamReplaceControl");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logService.Exception(ex, "Ошибка при обработке перетаскивания исходных файлов", "StreamReplaceControl");
+            }
+            finally
+            {
+                deferral.Complete();
+            }
+        }
+    }
+
+    #endregion
 }
+
+

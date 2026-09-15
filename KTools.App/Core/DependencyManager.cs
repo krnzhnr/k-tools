@@ -8,6 +8,7 @@ using System.Net.Http;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using KTools_App.Encoders;
 using KTools_App.Services.Contracts;
 using SharpCompress.Common;
 using SharpCompress.Compressors.Xz;
@@ -41,6 +42,7 @@ public class DependencyManager : IDependencyManager
     private readonly ILogService _logService;
     private readonly IPathManager _pathManager;
     private readonly ISettingsManager _settingsManager;
+    private readonly IHardwareCapabilityCache _hardwareCache;
 
     private const string DepsReleaseTag = "deps-v1";
     private const string DepsBaseUrl = $"https://github.com/krnzhnr/k-tools/releases/download/{DepsReleaseTag}";
@@ -51,6 +53,8 @@ public class DependencyManager : IDependencyManager
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly HttpClient _httpClient;
     private readonly Dictionary<string, CancellationTokenSource> _activeDownloads = new();
+    private readonly Dictionary<string, int> _downloadProgress = new();
+    private readonly Dictionary<string, string> _downloadSpeed = new();
 
     /// <summary>Событие, возникающее при изменении статуса любой из зависимостей.</summary>
     public event Action<string, DependencyStatus>? StatusChanged;
@@ -71,12 +75,14 @@ public class DependencyManager : IDependencyManager
         ILogService logService,
         IPathManager pathManager,
         IHttpClientFactory httpClientFactory,
-        ISettingsManager settingsManager)
+        ISettingsManager settingsManager,
+        IHardwareCapabilityCache hardwareCache)
     {
         _logService = logService ?? throw new ArgumentNullException(nameof(logService));
         _pathManager = pathManager ?? throw new ArgumentNullException(nameof(pathManager));
         _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
         _settingsManager = settingsManager ?? throw new ArgumentNullException(nameof(settingsManager));
+        _hardwareCache = hardwareCache ?? throw new ArgumentNullException(nameof(hardwareCache));
         // Используем метод интеллектуального поиска директории bin
         _binDir = _pathManager.GetBinDirectory();
         _httpClient = _httpClientFactory.CreateClient("DefaultClient");
@@ -197,6 +203,38 @@ public class DependencyManager : IDependencyManager
             CustomDownloadUrl = "https://nodejs.org/dist/v22.11.0/node-v22.11.0-win-x64.zip",
             StripTopLevelFolder = true
         });
+
+        _registry.Add(new DependencyInfo
+        {
+            Key = "whisper_cpu",
+            DisplayName = "Whisper (CPU)",
+            Description = "Распознавание речи на процессоре (AVX2)",
+            IconName = "audio",
+            Subfolder = "whisper-cpu",
+            SizeMb = 18.0,
+            ArchiveSizeMb = 8.5,
+            ArchiveName = "whisper-bin-x64.zip",
+            VerifyBinary = "whisper-cli.exe",
+            IsRequired = false,
+            CustomDownloadUrl = "https://github.com/ggml-org/whisper.cpp/releases/download/b5130/whisper-bin-x64.zip",
+            StripTopLevelFolder = true
+        });
+
+        _registry.Add(new DependencyInfo
+        {
+            Key = "whisper_cuda",
+            DisplayName = "Whisper (NVIDIA CUDA)",
+            Description = "Распознавание речи на GPU NVIDIA (CUDA)",
+            IconName = "audio",
+            Subfolder = "whisper-cuda",
+            SizeMb = 675.0,
+            ArchiveSizeMb = 675.0,
+            ArchiveName = "whisper-cublas-12.4.0-bin-x64.zip",
+            VerifyBinary = "whisper-cli.exe",
+            IsRequired = false,
+            CustomDownloadUrl = "https://github.com/ggml-org/whisper.cpp/releases/download/b5130/whisper-cublas-12.4.0-bin-x64.zip",
+            StripTopLevelFolder = true
+        });
     }
 
     /// <summary>
@@ -213,6 +251,21 @@ public class DependencyManager : IDependencyManager
         {
             foreach (var dep in _registry)
             {
+                // Не сбрасываем статус, если в данный момент для зависимости выполняется скачивание или распаковка
+                if (_statuses.TryGetValue(dep.Key, out var currentStatus) &&
+                    (currentStatus == DependencyStatus.Downloading || currentStatus == DependencyStatus.Extracting))
+                {
+                    continue;
+                }
+
+                lock (_activeDownloads)
+                {
+                    if (_activeDownloads.ContainsKey(dep.Key))
+                    {
+                        continue;
+                    }
+                }
+
                 bool present = IsBinaryPresent(dep);
                 _statuses[dep.Key] = present ? DependencyStatus.Installed : DependencyStatus.NotInstalled;
             }
@@ -322,18 +375,168 @@ public class DependencyManager : IDependencyManager
         return dep != null && IsBinaryPresent(dep);
     }
 
-    private bool _ytDlpUpdateAvailable;
+    /// <summary>
+    /// Проверяет, выполняются ли в данный момент какие-либо активные операции скачивания или распаковки зависимостей.
+    /// </summary>
+    public bool HasActiveOperations
+    {
+        get
+        {
+            lock (_activeDownloads)
+            {
+                if (_activeDownloads.Count > 0) return true;
+            }
+
+            lock (_statuses)
+            {
+                return _statuses.Values.Any(s => s == DependencyStatus.Downloading || s == DependencyStatus.Extracting);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Получить сохранённый процент скачивания для указанной зависимости (от 0 до 100).
+    /// </summary>
+    public int GetDownloadProgress(string key)
+    {
+        lock (_downloadProgress)
+        {
+            return _downloadProgress.TryGetValue(key, out int prog) ? prog : 0;
+        }
+    }
+
+    /// <summary>
+    /// Получить сохранённую форматированную скорость скачивания для указанной зависимости.
+    /// </summary>
+    public string GetDownloadSpeed(string key)
+    {
+        lock (_downloadSpeed)
+        {
+            return _downloadSpeed.TryGetValue(key, out string? speed) ? (speed ?? string.Empty) : string.Empty;
+        }
+    }
+
+    /// <summary>
+    /// Проверить, находится ли указанная зависимость в процессе активного скачивания.
+    /// </summary>
+    public bool IsDownloading(string key)
+    {
+        lock (_activeDownloads)
+        {
+            return _activeDownloads.ContainsKey(key);
+        }
+    }
+
+    private readonly Dictionary<string, bool> _updatesAvailable = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> _installedVersionsCache = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Проверяет, доступно ли обновление для указанной зависимости.
     /// </summary>
     public bool IsUpdateAvailable(string key)
     {
-        if (key.Equals("yt-dlp", StringComparison.OrdinalIgnoreCase))
+        lock (_updatesAvailable)
         {
-            return _ytDlpUpdateAvailable;
+            return _updatesAvailable.TryGetValue(key, out bool available) && available;
         }
-        return false;
+    }
+
+    /// <summary>
+    /// Устанавливает имитацию доступности обновления для отладки и тестирования UI.
+    /// </summary>
+    public void SetSimulatedUpdateAvailable(string key, bool available)
+    {
+        lock (_updatesAvailable)
+        {
+            _updatesAvailable[key] = available;
+        }
+        StatusChanged?.Invoke(key, GetStatus(key));
+    }
+
+    private readonly Dictionary<string, string> _cachedVersions = new();
+
+    /// <summary>
+    /// Определяет и возвращает строку версии установленной зависимости.
+    /// </summary>
+    public string GetInstalledVersion(string key)
+    {
+        if (!IsInstalled(key)) return string.Empty;
+
+        lock (_cachedVersions)
+        {
+            if (_cachedVersions.TryGetValue(key, out var cached) && !string.IsNullOrEmpty(cached))
+            {
+                return cached;
+            }
+        }
+
+        var dep = _registry.FirstOrDefault(d => d.Key.Equals(key, StringComparison.OrdinalIgnoreCase));
+        if (dep == null) return string.Empty;
+
+        string binaryPath = _pathManager.GetBinaryPath(dep.VerifyBinary);
+        if (!File.Exists(binaryPath)) return string.Empty;
+
+        try
+        {
+            if (key.Equals("yt-dlp", StringComparison.OrdinalIgnoreCase))
+            {
+                string ver = _settingsManager.GetSetting("Updates", "YtDlpInstalledVersion", "Nightly");
+                lock (_cachedVersions) { _cachedVersions[key] = ver; }
+                return ver;
+            }
+
+            if (key.Equals("node", StringComparison.OrdinalIgnoreCase))
+            {
+                var vi = FileVersionInfo.GetVersionInfo(binaryPath);
+                string ver = string.IsNullOrEmpty(vi.FileVersion) ? "v22.11.0" : $"v{vi.FileVersion}";
+                lock (_cachedVersions) { _cachedVersions[key] = ver; }
+                return ver;
+            }
+
+            // Для FFmpeg, MKVToolNix, eac3to вызываем исполняемый файл и извлекаем версию из первой строки вывода
+            // Для eac3to обязательно передаем -log=nul для подавления создания eac3to.log
+            string args = key switch
+            {
+                "ffmpeg" => "-version",
+                "mkvtoolnix" => "-V",
+                "eac3to" => "-log=nul",
+                _ => string.Empty
+            };
+
+            using var process = new Process
+            {
+                StartInfo = new ProcessStartInfo
+                {
+                    FileName = binaryPath,
+                    Arguments = args,
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
+                }
+            };
+
+            process.Start();
+            string line = process.StandardOutput.ReadLine() ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                line = process.StandardError.ReadLine() ?? string.Empty;
+            }
+            process.WaitForExit(1000);
+
+            var match = System.Text.RegularExpressions.Regex.Match(line, @"v?(\d+\.\d+(\.\d+)?)");
+            string result = match.Success ? match.Value : (line.Length > 20 ? line.Substring(0, 20) : line);
+            if (!string.IsNullOrEmpty(result))
+            {
+                lock (_cachedVersions) { _cachedVersions[key] = result; }
+            }
+            return result;
+        }
+        catch (Exception ex)
+        {
+            _logService.Warn($"Не удалось извлечь версию для {key}: {ex.Message}", "DependencyManager");
+            return "Установлено";
+        }
     }
 
     /// <summary>
@@ -369,6 +572,34 @@ public class DependencyManager : IDependencyManager
         }
 
         _logService.Info($"Запущена процедура установки зависимости '{dep.DisplayName}' ({dep.Key})", "DependencyManager");
+
+        // Предварительная проверка доступности бинарных файлов на запись (не заняты ли они другими процессами)
+        string verifyPath = Path.Combine(_binDir, dep.Subfolder, dep.VerifyBinary);
+        if (File.Exists(verifyPath))
+        {
+            try
+            {
+                using (var testStream = new FileStream(verifyPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+                {
+                    // Файл свободно доступен для перезаписи
+                }
+            }
+            catch (IOException ex)
+            {
+                _logService.Warn($"Исполняемый файл '{verifyPath}' заблокирован другим процессом: {ex.Message}", "DependencyManager");
+                InstallFinished?.Invoke(key, false, $"Файл '{dep.VerifyBinary}' заблокирован. Остановите активные задачи кодирования/загрузки в KTools или сторонний процесс, использующий этот файл, и повторите попытку.");
+                lock (_activeDownloads)
+                {
+                    if (_activeDownloads.TryGetValue(key, out var cts))
+                    {
+                        cts.Dispose();
+                        _activeDownloads.Remove(key);
+                    }
+                }
+                return;
+            }
+        }
+
         SetStatus(key, DependencyStatus.Downloading);
         string tempArchivePath = Path.Combine(Path.GetTempPath(), dep.ArchiveName);
 
@@ -378,6 +609,17 @@ public class DependencyManager : IDependencyManager
             string downloadUrl = !string.IsNullOrEmpty(dep.CustomDownloadUrl)
                 ? dep.CustomDownloadUrl
                 : $"{DepsBaseUrl}/{dep.ArchiveName}";
+
+            // Для компонентов Whisper динамически получаем актуальный URL релиза с бинарными сборками, если доступен
+            if (key.StartsWith("whisper_", StringComparison.OrdinalIgnoreCase))
+            {
+                string resolvedUrl = await ResolveWhisperDownloadUrlAsync(key, dep.ArchiveName, downloadUrl);
+                if (!string.IsNullOrEmpty(resolvedUrl))
+                {
+                    downloadUrl = resolvedUrl;
+                }
+            }
+
             _logService.Info($"Начало скачивания архива: {downloadUrl} в {tempArchivePath}", "DependencyManager");
             using (var response = await _httpClient.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead))
             {
@@ -407,6 +649,10 @@ public class DependencyManager : IDependencyManager
                         if (totalBytes.HasValue && totalBytes.Value > 0)
                         {
                             int pct = (int)((totalRead * 100) / totalBytes.Value);
+                            lock (_downloadProgress)
+                            {
+                                _downloadProgress[key] = pct;
+                            }
                             ProgressChanged?.Invoke(key, pct);
                         }
 
@@ -418,6 +664,10 @@ public class DependencyManager : IDependencyManager
                             long bytesDelta = totalRead - lastBytesRead;
                             double speedBytesPerSec = bytesDelta / elapsedSeconds;
                             string formattedSpeed = FormatSpeed(speedBytesPerSec);
+                            lock (_downloadSpeed)
+                            {
+                                _downloadSpeed[key] = formattedSpeed;
+                            }
                             SpeedUpdated?.Invoke(key, formattedSpeed);
 
                             lastBytesRead = totalRead;
@@ -431,10 +681,34 @@ public class DependencyManager : IDependencyManager
 
             string destinationFolder = Path.Combine(_binDir, dep.Subfolder);
 
-            // Гарантируем наличие целевых папок
+            // Гарантируем наличие целевых папок и очистку от старых файлов перед новой распаковкой
             try
             {
-                Directory.CreateDirectory(destinationFolder);
+                if (Directory.Exists(destinationFolder))
+                {
+                    // Если папка уже существовала, очищаем её содержимое перед установкой/обновлением,
+                    // чтобы исключить дублирование и накопление устаревших файлов
+                    try
+                    {
+                        var di = new DirectoryInfo(destinationFolder);
+                        foreach (var file in di.GetFiles())
+                        {
+                            try { file.Delete(); } catch { /* Игнорируем заблокированные файлы */ }
+                        }
+                        foreach (var dir in di.GetDirectories())
+                        {
+                            try { dir.Delete(true); } catch { /* Игнорируем вложенные каталоги с блокировками */ }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logService.Warn($"Предупреждение при предварительной очистке папки '{destinationFolder}': {ex.Message}", "DependencyManager");
+                    }
+                }
+                else
+                {
+                    Directory.CreateDirectory(destinationFolder);
+                }
             }
             catch (UnauthorizedAccessException ex)
             {
@@ -520,6 +794,14 @@ public class DependencyManager : IDependencyManager
                 SetStatus(key, DependencyStatus.Installed);
                 _logService.Info($"Зависимость '{dep.DisplayName}' успешно установлена и верифицирована", "DependencyManager");
                 InstallFinished?.Invoke(key, true, string.Empty);
+
+                // После установки FFmpeg повторно определяем аппаратные возможности (NVENC):
+                // кэш мог быть инициализирован, когда бинарник ещё отсутствовал.
+                if (key.Equals("ffmpeg", StringComparison.OrdinalIgnoreCase))
+                {
+                    _hardwareCache.Invalidate();
+                    await _hardwareCache.InitializeAsync();
+                }
             }
             else
             {
@@ -557,6 +839,16 @@ public class DependencyManager : IDependencyManager
                     cts.Dispose();
                     _activeDownloads.Remove(key);
                 }
+            }
+
+            lock (_downloadProgress)
+            {
+                _downloadProgress.Remove(key);
+            }
+
+            lock (_downloadSpeed)
+            {
+                _downloadSpeed.Remove(key);
             }
         }
     }
@@ -884,6 +1176,78 @@ public class DependencyManager : IDependencyManager
     }
 
     /// <summary>
+    /// Выполняет фоновую проверку обновлений всех зависимостей (yt-dlp, FFmpeg, MKVToolNix, eac3to) раз в сутки.
+    /// </summary>
+    public async Task CheckAllDependencyUpdatesAsync(bool force = false)
+    {
+        try
+        {
+            string lastCheckStr = _settingsManager.GetSetting("Updates", "LastDepsCheckTime", string.Empty);
+            if (!force && DateTime.TryParse(lastCheckStr, out DateTime lastCheckTime))
+            {
+                if (DateTime.UtcNow - lastCheckTime < TimeSpan.FromDays(1))
+                {
+                    _logService.Info("Проверка обновлений всех зависимостей выполнялась менее 24 часов назад. Пропуск.", "DependencyManager");
+                    return;
+                }
+            }
+
+            _logService.Info("Запуск фоновой проверки обновлений всех зависимостей KTools...", "DependencyManager");
+
+            // 1. Проверяем обновления yt-dlp
+            await CheckAndUpdateYtDlpAsync(force: true);
+
+            // 1.1. Проверяем обновления Whisper
+            await CheckAndUpdateWhisperAsync(force: true);
+
+            // 2. Проверяем остальной набор зависимостей из релиза deps-v1 на GitHub
+            using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/repos/krnzhnr/k-tools/releases/tags/deps-v1");
+            request.Headers.UserAgent.Clear();
+            request.Headers.UserAgent.ParseAdd("K-Tools-DependencyManager-WinUI3");
+
+            using var response = await _httpClient.SendAsync(request);
+            if (response.IsSuccessStatusCode)
+            {
+                string json = await response.Content.ReadAsStringAsync();
+                using var doc = JsonDocument.Parse(json);
+                if (doc.RootElement.TryGetProperty("body", out var bodyProp))
+                {
+                    string body = bodyProp.GetString() ?? string.Empty;
+                    var match = System.Text.RegularExpressions.Regex.Match(body, @"```json:versions\s*(\{[\s\S]*?\})\s*```");
+                    if (match.Success)
+                    {
+                        string jsonVersions = match.Groups[1].Value;
+                        using var verDoc = JsonDocument.Parse(jsonVersions);
+                        foreach (var prop in verDoc.RootElement.EnumerateObject())
+                        {
+                            string key = prop.Name;
+                            string remoteVersion = prop.Value.GetString() ?? string.Empty;
+                            if (string.IsNullOrEmpty(remoteVersion)) continue;
+
+                            string localVer = GetInstalledVersion(key);
+                            if (IsInstalled(key) && !string.IsNullOrEmpty(localVer) && !remoteVersion.Equals(localVer, StringComparison.OrdinalIgnoreCase))
+                            {
+                                lock (_updatesAvailable)
+                                {
+                                    _updatesAvailable[key] = true;
+                                }
+                                _logService.Info($"Обнаружена новая версия для зависимости '{key}': remote={remoteVersion}, local={localVer}", "DependencyManager");
+                                StatusChanged?.Invoke(key, GetStatus(key));
+                            }
+                        }
+                    }
+                }
+            }
+
+            _settingsManager.SetSetting("Updates", "LastDepsCheckTime", DateTime.UtcNow.ToString("o"));
+        }
+        catch (Exception ex)
+        {
+            _logService.Error($"Ошибка при фоновой проверке обновлений зависимостей: {ex.Message}", "DependencyManager");
+        }
+    }
+
+    /// <summary>
     /// Выполняет проверку обновлений для утилиты yt-dlp раз в сутки и обновляет её при необходимости.
     /// </summary>
     public async Task CheckAndUpdateYtDlpAsync(bool force = false)
@@ -946,13 +1310,13 @@ public class DependencyManager : IDependencyManager
 
             if (latestTag.Equals(localVersion, StringComparison.OrdinalIgnoreCase))
             {
-                _ytDlpUpdateAvailable = false;
+                lock (_updatesAvailable) { _updatesAvailable["yt-dlp"] = false; }
                 _logService.Info("Установлена актуальная версия yt-dlp. Обновление не требуется.", "DependencyManager");
                 return;
             }
 
             // Если версии не совпадают, фиксируем наличие обновления и запускаем установку/обновление
-            _ytDlpUpdateAvailable = true;
+            lock (_updatesAvailable) { _updatesAvailable["yt-dlp"] = true; }
             _logService.Info($"Обнаружена новая версия yt-dlp: {latestTag}. Запуск автоматического обновления...", "DependencyManager");
             
             // Запускаем асинхронную установку
@@ -961,7 +1325,7 @@ public class DependencyManager : IDependencyManager
             // Если установка завершилась успехом, сохраняем новую версию в настройки
             if (IsInstalled("yt-dlp"))
             {
-                _ytDlpUpdateAvailable = false;
+                lock (_updatesAvailable) { _updatesAvailable["yt-dlp"] = false; }
                 _settingsManager.SetSetting("Updates", "YtDlpInstalledVersion", latestTag);
                 _logService.Info($"yt-dlp успешно обновлен до версии {latestTag}", "DependencyManager");
             }
@@ -970,5 +1334,163 @@ public class DependencyManager : IDependencyManager
         {
             _logService.Error($"Исключение при проверке обновлений yt-dlp: {ex.Message}", "DependencyManager");
         }
+    }
+
+    /// <summary>
+    /// Выполняет фоновую проверку обновлений whisper.cpp и обновляет установленные рантаймы при обнаружении новой версии на GitHub.
+    /// </summary>
+    /// <param name="force">Принудительно запустить проверку без учёта 24-часового интервала.</param>
+    public async Task CheckAndUpdateWhisperAsync(bool force = false)
+    {
+        // Проверяем, установлен ли хотя бы один рантайм Whisper
+        bool anyWhisperInstalled = IsInstalled("whisper_cpu") || IsInstalled("whisper_cuda");
+        if (!anyWhisperInstalled)
+        {
+            _logService.Info("Проверка обновлений Whisper пропущена, так как ни один рантайм не установлен.", "DependencyManager");
+            return;
+        }
+
+        try
+        {
+            string lastCheckStr = _settingsManager.GetSetting("Updates", "LastWhisperCheckTime", string.Empty);
+            if (!force && DateTime.TryParse(lastCheckStr, out DateTime lastCheckTime))
+            {
+                if (DateTime.UtcNow - lastCheckTime < TimeSpan.FromDays(1))
+                {
+                    _logService.Info("Проверка обновлений Whisper выполнялась менее 24 часов назад. Пропуск.", "DependencyManager");
+                    return;
+                }
+            }
+
+            _logService.Info("Запуск проверки обновлений Whisper с GitHub Releases...", "DependencyManager");
+
+            // Ищем последний релиз в ggml-org/whisper.cpp, содержащий бинарные сборки
+            var (latestTag, _) = await FindLatestWhisperReleaseWithAssetsAsync();
+            if (string.IsNullOrEmpty(latestTag))
+            {
+                _logService.Warn("Не удалось определить релиз Whisper с доступными бинарными сборками.", "DependencyManager");
+                return;
+            }
+
+            _settingsManager.SetSetting("Updates", "LastWhisperCheckTime", DateTime.UtcNow.ToString("o"));
+            string localVersion = _settingsManager.GetSetting("Updates", "WhisperInstalledVersion", string.Empty);
+            _logService.Info($"Последняя доступная версия Whisper: {latestTag}. Локальная версия: {localVersion}", "DependencyManager");
+
+            if (latestTag.Equals(localVersion, StringComparison.OrdinalIgnoreCase))
+            {
+                lock (_updatesAvailable)
+                {
+                    _updatesAvailable["whisper_cpu"] = false;
+                    _updatesAvailable["whisper_cuda"] = false;
+                }
+                _logService.Info("Установлена актуальная версия Whisper. Обновление не требуется.", "DependencyManager");
+                return;
+            }
+
+            // Обновляем те рантаймы, которые установлены
+            string[] whisperKeys = new[] { "whisper_cpu", "whisper_cuda" };
+            foreach (var wKey in whisperKeys)
+            {
+                if (IsInstalled(wKey))
+                {
+                    lock (_updatesAvailable) { _updatesAvailable[wKey] = true; }
+                    _logService.Info($"Обнаружена новая версия Whisper ({latestTag}) для {wKey}. Запуск обновления...", "DependencyManager");
+                    await InstallDependencyAsync(wKey);
+                    lock (_updatesAvailable) { _updatesAvailable[wKey] = false; }
+                }
+            }
+
+            _settingsManager.SetSetting("Updates", "WhisperInstalledVersion", latestTag);
+            _logService.Info($"Рантаймы Whisper успешно обновлены до версии {latestTag}", "DependencyManager");
+        }
+        catch (Exception ex)
+        {
+            _logService.Error($"Исключение при проверке обновлений Whisper: {ex.Message}", "DependencyManager");
+        }
+    }
+
+    /// <summary>
+    /// Динамически находит релиз Whisper на GitHub, в котором прикреплены скомпилированные бинарные архивы.
+    /// </summary>
+    private async Task<(string Tag, JsonElement? AssetsArray)> FindLatestWhisperReleaseWithAssetsAsync()
+    {
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/repos/ggml-org/whisper.cpp/releases?per_page=10");
+            request.Headers.UserAgent.Clear();
+            request.Headers.UserAgent.ParseAdd("K-Tools-DependencyManager-WinUI3");
+
+            using var response = await _httpClient.SendAsync(request);
+            if (!response.IsSuccessStatusCode)
+            {
+                _logService.Warn($"Не удалось запросить список релизов Whisper. Код ответа: {response.StatusCode}", "DependencyManager");
+                return (string.Empty, null);
+            }
+
+            string json = await response.Content.ReadAsStringAsync();
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array)
+            {
+                return (string.Empty, null);
+            }
+
+            foreach (var releaseEl in doc.RootElement.EnumerateArray())
+            {
+                if (releaseEl.TryGetProperty("assets", out var assetsProp) &&
+                    assetsProp.ValueKind == JsonValueKind.Array &&
+                    assetsProp.GetArrayLength() > 0)
+                {
+                    string tag = releaseEl.TryGetProperty("tag_name", out var tProp) ? (tProp.GetString() ?? string.Empty) : string.Empty;
+                    if (!string.IsNullOrEmpty(tag))
+                    {
+                        // Клонируем элемент ассетов для безопасного возврата из using-блока JsonDocument
+                        return (tag, assetsProp.Clone());
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logService.Warn($"Ошибка при поиске релизов Whisper с ассетами: {ex.Message}", "DependencyManager");
+        }
+
+        return (string.Empty, null);
+    }
+
+    /// <summary>
+    /// Разрешает прямую ссылку на скачивание архива Whisper из самого свежего подходящего релиза.
+    /// Если запрос завершается ошибкой или ассет не найден, возвращает исходный fallbackUrl.
+    /// </summary>
+    private async Task<string> ResolveWhisperDownloadUrlAsync(string key, string archiveName, string fallbackUrl)
+    {
+        try
+        {
+            var (tag, assets) = await FindLatestWhisperReleaseWithAssetsAsync();
+            if (assets.HasValue && assets.Value.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var asset in assets.Value.EnumerateArray())
+                {
+                    string name = asset.TryGetProperty("name", out var nProp) ? (nProp.GetString() ?? string.Empty) : string.Empty;
+                    if (string.Equals(name, archiveName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (asset.TryGetProperty("browser_download_url", out var urlProp))
+                        {
+                            string resolved = urlProp.GetString() ?? string.Empty;
+                            if (!string.IsNullOrEmpty(resolved))
+                            {
+                                _logService.Info($"Разрешен динамический URL для {key} ({archiveName}): {resolved} (релиз {tag})", "DependencyManager");
+                                return resolved;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logService.Warn($"Не удалось динамически разрешить URL для {key}: {ex.Message}. Используется URL по умолчанию.", "DependencyManager");
+        }
+
+        return fallbackUrl;
     }
 }

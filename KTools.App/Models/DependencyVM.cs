@@ -36,8 +36,22 @@ public partial class DependencyVM : ObservableObject
     [NotifyPropertyChangedFor(nameof(InstallButtonVisibility))]
     [NotifyPropertyChangedFor(nameof(UpdateButtonVisibility))]
     [NotifyPropertyChangedFor(nameof(CancelButtonVisibility))]
-    [NotifyPropertyChangedFor(nameof(DeleteButtonVisibility))]
+    [NotifyPropertyChangedFor(nameof(NormalDeleteButtonVisibility))]
+    [NotifyPropertyChangedFor(nameof(SmallDeleteButtonVisibility))]
+    [NotifyPropertyChangedFor(nameof(SizeText))]
     private DependencyStatus _status;
+
+    partial void OnStatusChanged(DependencyStatus value)
+    {
+        if (value == DependencyStatus.Installed)
+        {
+            LoadVersionAsync();
+        }
+        else if (value == DependencyStatus.NotInstalled)
+        {
+            InstalledVersion = string.Empty;
+        }
+    }
 
     /// <summary>Текущий прогресс скачивания в процентах (0-100).</summary>
     [ObservableProperty]
@@ -58,11 +72,19 @@ public partial class DependencyVM : ObservableObject
     [NotifyPropertyChangedFor(nameof(StatusText))]
     [NotifyPropertyChangedFor(nameof(StatusColor))]
     [NotifyPropertyChangedFor(nameof(UpdateButtonVisibility))]
-    [NotifyPropertyChangedFor(nameof(DeleteButtonVisibility))]
+    [NotifyPropertyChangedFor(nameof(NormalDeleteButtonVisibility))]
+    [NotifyPropertyChangedFor(nameof(SmallDeleteButtonVisibility))]
+    [NotifyPropertyChangedFor(nameof(SizeText))]
     private bool _isUpdateAvailable;
 
-    /// <summary>Форматированный текст размера компонента.</summary>
-    public string SizeText => $"~{Info.SizeMb:F1} МБ (архив ~{Info.ArchiveSizeMb:F1} МБ)";
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(SizeText))]
+    private string _installedVersion = string.Empty;
+
+    /// <summary>Форматированный текст размера компонента и версии.</summary>
+    public string SizeText => Status == DependencyStatus.Installed && !string.IsNullOrEmpty(InstalledVersion)
+        ? $"Версия: {InstalledVersion}"
+        : $"~{Info.SizeMb:F1} МБ (архив ~{Info.ArchiveSizeMb:F1} МБ)";
 
     /// <summary>Локализованный текст статуса зависимости.</summary>
     public string StatusText => Status switch
@@ -123,9 +145,14 @@ public partial class DependencyVM : ObservableObject
         (Status == DependencyStatus.Downloading || Status == DependencyStatus.Extracting) 
         ? Visibility.Visible : Visibility.Collapsed;
 
-    /// <summary>Определяет видимость кнопки удаления.</summary>
-    public Visibility DeleteButtonVisibility => 
+    /// <summary>Определяет видимость стандартной большой кнопки удаления.</summary>
+    public Visibility NormalDeleteButtonVisibility => 
         (Status == DependencyStatus.Installed && !IsUpdateAvailable) 
+        ? Visibility.Visible : Visibility.Collapsed;
+
+    /// <summary>Определяет видимость маленькой квадратной кнопки удаления рядом с Обновить.</summary>
+    public Visibility SmallDeleteButtonVisibility => 
+        (Status == DependencyStatus.Installed && IsUpdateAvailable) 
         ? Visibility.Visible : Visibility.Collapsed;
 
     /// <summary>Команда установки данной зависимости.</summary>
@@ -143,11 +170,20 @@ public partial class DependencyVM : ObservableObject
     /// <summary>Инициализирует новый экземпляр ViewModel для зависимости.</summary>
     public DependencyVM(DependencyInfo info, IDependencyManager dependencyManager)
     {
-        _dispatcherQueue = DispatcherQueue.GetForCurrentThread();
+        try
+        {
+            _dispatcherQueue = DispatcherQueue.GetForCurrentThread();
+        }
+        catch
+        {
+            _dispatcherQueue = null;
+        }
         Info = info;
         _dependencyManager = dependencyManager ?? throw new ArgumentNullException(nameof(dependencyManager));
         _status = _dependencyManager.GetStatus(info.Key);
         _isUpdateAvailable = _dependencyManager.IsUpdateAvailable(info.Key);
+        _progress = _dependencyManager.GetDownloadProgress(info.Key);
+        _speed = _dependencyManager.GetDownloadSpeed(info.Key);
 
         InstallCommand = new AsyncRelayCommand(async () => 
             await _dependencyManager.InstallDependencyAsync(Info.Key));
@@ -160,5 +196,27 @@ public partial class DependencyVM : ObservableObject
 
         RemoveCommand = new RelayCommand(() => 
             _dependencyManager.RemoveDependency(Info.Key));
+
+        LoadVersionAsync();
+    }
+
+    /// <summary>
+    /// Фоновая асинхронная загрузка версии без блокировки UI-потока.
+    /// </summary>
+    public void LoadVersionAsync()
+    {
+        if (Status != DependencyStatus.Installed) return;
+
+        Task.Run(() =>
+        {
+            string ver = _dependencyManager.GetInstalledVersion(Info.Key);
+            if (!string.IsNullOrEmpty(ver) && _dispatcherQueue != null)
+            {
+                _dispatcherQueue.TryEnqueue(() =>
+                {
+                    InstalledVersion = ver;
+                });
+            }
+        });
     }
 }

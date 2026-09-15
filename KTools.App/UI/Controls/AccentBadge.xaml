@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<UserControl
+    x:Class="KTools_App.UI.Controls.AccentBadge"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <Border x:Name="BadgeBorder"
+            Background="{ThemeResource AccentFillColorDefaultBrush}"
+            CornerRadius="10"
+            Padding="8,1,8,2"
+            VerticalAlignment="Center"
+            HorizontalAlignment="Left">
+        <TextBlock x:Name="BadgeTextBlock"
+                   Foreground="{ThemeResource TextOnAccentFillColorPrimaryBrush}"
+                   FontSize="11"
+                   FontWeight="SemiBold"
+                   Margin="0,0,0,0"
+                   VerticalAlignment="Center"
+                   HorizontalAlignment="Center" />
+    </Border>
+</UserControl>

@@ -116,12 +116,25 @@
                                 Visibility="{x:Bind InstallButtonVisibility, Mode=OneWay}"
                                 Command="{x:Bind InstallCommand}" />
 
-                        <!-- Кнопка Обновить (видна при наличии новой версии) -->
-                        <Button Content="Обновить" 
-                                Style="{StaticResource AccentButtonStyle}"
-                                HorizontalAlignment="Stretch"
-                                Visibility="{x:Bind UpdateButtonVisibility, Mode=OneWay}"
-                                Command="{x:Bind UpdateCommand}" />
+                        <!-- Блок Обновить + Маленькая кнопка Удалить справа -->
+                        <Grid Visibility="{x:Bind UpdateButtonVisibility, Mode=OneWay}" ColumnDefinitions="*, Auto">
+                            <Button Grid.Column="0"
+                                    Content="Обновить" 
+                                    Style="{StaticResource AccentButtonStyle}"
+                                    HorizontalAlignment="Stretch"
+                                    Margin="0,0,6,0"
+                                    Command="{x:Bind UpdateCommand}" />
+
+                            <Button Grid.Column="1"
+                                    Width="32"
+                                    Height="32"
+                                    Padding="0"
+                                    ToolTipService.ToolTip="Удалить зависимость"
+                                    AutomationProperties.Name="Удалить зависимость"
+                                    Command="{x:Bind RemoveCommand}">
+                                <FontIcon Glyph="&#xE74D;" FontSize="13" />
+                            </Button>
+                        </Grid>
 
                         <!-- Кнопка Отмена (видна при Downloading/Extracting) -->
                         <Button Content="Отмена" 
@@ -129,10 +142,10 @@
                                 Visibility="{x:Bind CancelButtonVisibility, Mode=OneWay}"
                                 Command="{x:Bind CancelCommand}" />
 
-                        <!-- Кнопка Удалить (видна при Installed) -->
+                        <!-- Обычная большая кнопка Удалить (видна при Installed без обновлений) -->
                         <Button Content="Удалить" 
                                 HorizontalAlignment="Stretch"
-                                Visibility="{x:Bind DeleteButtonVisibility, Mode=OneWay}"
+                                Visibility="{x:Bind NormalDeleteButtonVisibility, Mode=OneWay}"
                                 Command="{x:Bind RemoveCommand}" />
                     </StackPanel>
                     
@@ -155,11 +168,11 @@
                         <TextBlock Text="Установить все отсутствующие" />
                     </StackPanel>
                 </Button>
-                <Button x:Name="RefreshButton" 
+                <Button x:Name="RefreshButton"
                         Command="{x:Bind ViewModel.RefreshAllCommand}">
                     <StackPanel Orientation="Horizontal" Spacing="8">
-                        <SymbolIcon x:Name="RefreshIcon" Symbol="Refresh" />
-                        <TextBlock x:Name="RefreshText" Text="{x:Bind ViewModel.RefreshText, Mode=OneWay}" />
+                        <SymbolIcon Symbol="Refresh" />
+                        <TextBlock Text="Проверить обновления" />
                     </StackPanel>
                 </Button>
                 <Button x:Name="OpenFolderButton" 

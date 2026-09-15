@@ -135,6 +135,11 @@ public interface ISettingsManager
     string GetSafeGroupName(string scriptName);
 
     /// <summary>
+    /// Получить все сохраненные настройки определенной группы.
+    /// </summary>
+    Dictionary<string, object> GetAllSettingsInGroup(string group);
+
+    /// <summary>
     /// Сохранить текущее состояние настроек на диск.
     /// </summary>
     void SaveSettings();

@@ -48,6 +48,7 @@ public sealed class FileQueueItem : INotifyPropertyChanged
     private FileProcessingState _state = FileProcessingState.Pending;
     private bool _isProcessing;
     private MediaStructure? _mediaInfo;
+    private string? _cropBadgeText;
 
     public FileQueueItem(string filePath)
     {
@@ -104,6 +105,29 @@ public sealed class FileQueueItem : INotifyPropertyChanged
     }
 
     /// <summary>
+    /// Текст бейджика автоматического кропа (например, "1920x1080 ➔ 1920x816").
+    /// Устанавливается скриптом кодирования при детекции обрезки черных полос.
+    /// </summary>
+    public string? CropBadgeText
+    {
+        get => _cropBadgeText;
+        set
+        {
+            if (_cropBadgeText != value)
+            {
+                _cropBadgeText = value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(HasCropBadge));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Флаг наличия текста бейджика кропа для управления видимостью в XAML.
+    /// </summary>
+    public bool HasCropBadge => !string.IsNullOrEmpty(CropBadgeText);
+
+    /// <summary>
     /// Текущее состояние обработки файла.
     /// </summary>
     public FileProcessingState State
@@ -121,6 +145,7 @@ public sealed class FileQueueItem : INotifyPropertyChanged
                 OnPropertyChanged(nameof(StatusIcon));
                 OnPropertyChanged(nameof(StatusIconBrush));
                 OnPropertyChanged(nameof(IsDeleteEnabled));
+                OnPropertyChanged(nameof(IsRetryVisible));
             }
         }
     }
@@ -212,6 +237,7 @@ public sealed class FileQueueItem : INotifyPropertyChanged
                 _isProcessing = value;
                 OnPropertyChanged();
                 OnPropertyChanged(nameof(IsDeleteEnabled));
+                OnPropertyChanged(nameof(IsRetryVisible));
             }
         }
     }
@@ -220,6 +246,25 @@ public sealed class FileQueueItem : INotifyPropertyChanged
     /// Указывает, разрешено ли удаление данного файла из очереди.
     /// </summary>
     public bool IsDeleteEnabled => !IsProcessing;
+
+    /// <summary>
+    /// Указывает, доступна ли кнопка повторного запуска (после завершения, отмены или ошибки).
+    /// </summary>
+    public bool IsRetryVisible => !IsProcessing && (
+        State == FileProcessingState.Completed ||
+        State == FileProcessingState.Failed ||
+        State == FileProcessingState.Cancelled ||
+        State == FileProcessingState.Skipped);
+
+    /// <summary>
+    /// Сбрасывает состояние элемента для повторного запуска обработки.
+    /// </summary>
+    public void ResetStateForRetry()
+    {
+        Progress = 0.0;
+        Status = "Ожидание";
+        State = FileProcessingState.Pending;
+    }
 
     /// <summary>
     /// Иконка статуса обработки файла.
@@ -242,6 +287,12 @@ public sealed class FileQueueItem : INotifyPropertyChanged
         }
     }
 
+    private static readonly SolidColorBrush CompletedBrush = new(Microsoft.UI.ColorHelper.FromArgb(255, 34, 180, 115)); // Зеленый
+    private static readonly SolidColorBrush FailedBrush = new(Microsoft.UI.ColorHelper.FromArgb(255, 232, 17, 35));     // Красный
+    private static readonly SolidColorBrush CancelledBrush = new(Microsoft.UI.ColorHelper.FromArgb(255, 128, 128, 128)); // Серый
+    private static readonly SolidColorBrush SecondaryFallbackBrush = new(Microsoft.UI.ColorHelper.FromArgb(255, 150, 150, 150)); // Нейтральный вторичный
+    private static readonly SolidColorBrush TertiaryFallbackBrush = new(Microsoft.UI.ColorHelper.FromArgb(255, 120, 120, 120));
+
     /// <summary>
     /// Цвет иконки статуса.
     /// </summary>
@@ -253,13 +304,25 @@ public sealed class FileQueueItem : INotifyPropertyChanged
             {
                 case FileProcessingState.Completed:
                 case FileProcessingState.Skipped:
-                    return new SolidColorBrush(Windows.UI.Color.FromArgb(255, 34, 180, 115)); // Зеленый
+                    return CompletedBrush;
                 case FileProcessingState.Failed:
-                    return new SolidColorBrush(Windows.UI.Color.FromArgb(255, 232, 17, 35));  // Красный
+                    return FailedBrush;
                 case FileProcessingState.Cancelled:
-                    return (Brush)Application.Current.Resources["TextFillColorTertiaryBrush"];
+                    if (Application.Current != null &&
+                        Application.Current.Resources.TryGetValue("TextFillColorTertiaryBrush", out var tertObj) &&
+                        tertObj is Brush tertBrush)
+                    {
+                        return tertBrush;
+                    }
+                    return CancelledBrush;
                 default:
-                    return (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"];
+                    if (Application.Current != null &&
+                        Application.Current.Resources.TryGetValue("TextFillColorSecondaryBrush", out var secObj) &&
+                        secObj is Brush secBrush)
+                    {
+                        return secBrush;
+                    }
+                    return SecondaryFallbackBrush;
             }
         }
     }
@@ -267,6 +330,42 @@ public sealed class FileQueueItem : INotifyPropertyChanged
     private DownloadFormatItem? _selectedFormat;
     private DownloadSubtitleItem? _selectedSubtitle;
     private string _displayName = string.Empty;
+
+    private Services.Contracts.BitrateAnalysisResult? _bitrateData;
+
+    /// <summary>
+    /// Данные побитового битрейта для открывания GPU-графика Win2D.
+    /// </summary>
+    public Services.Contracts.BitrateAnalysisResult? BitrateData
+    {
+        get => _bitrateData;
+        set
+        {
+            if (_bitrateData != value)
+            {
+                _bitrateData = value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(HasBitrateData));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Флаг наличия результатов анализа битрейта для активизации иконки графика.
+    /// </summary>
+    public bool HasBitrateData => BitrateData != null;
+
+    /// <summary>
+    /// Открыть окно GPU-графика битрейта Win2D для данного файла.
+    /// </summary>
+    public void OpenBitrateGraph()
+    {
+        if (BitrateData != null)
+        {
+            var win = new UI.BitrateViewerWindow(BitrateData);
+            win.Activate();
+        }
+    }
 
     public System.Collections.ObjectModel.ObservableCollection<DownloadFormatItem> AvailableFormats { get; } = new();
     public System.Collections.ObjectModel.ObservableCollection<DownloadSubtitleItem> AvailableSubtitles { get; } = new();
@@ -367,6 +466,8 @@ public sealed class DownloadFormatItem
     public string Id { get; set; } = "";
     public string DisplayName { get; set; } = "";
     public string FormatArg { get; set; } = "";
+    public bool IsAudioOnly { get; set; }
+    public int Height { get; set; }
 
     public override string ToString() => DisplayName;
 }

@@ -23,6 +23,7 @@ public class SettingsViewModelTests
     private Mock<ILogService> _logServiceMock = null!;
     private Mock<IPathManager> _pathManagerMock = null!;
     private Mock<IScriptRegistry> _scriptRegistryMock = null!;
+    private Mock<IDependencyManager> _dependencyManagerMock = null!;
 
     [TestInitialize]
     public void Setup()
@@ -33,6 +34,7 @@ public class SettingsViewModelTests
         _logServiceMock = new Mock<ILogService>();
         _pathManagerMock = new Mock<IPathManager>();
         _scriptRegistryMock = new Mock<IScriptRegistry>();
+        _dependencyManagerMock = new Mock<IDependencyManager>();
 
         // Настройка возвращаемых значений по умолчанию
         _settingsManagerMock.SetupGet(m => m.OverwriteExisting).Returns(false);
@@ -60,7 +62,8 @@ public class SettingsViewModelTests
             _updateServiceMock.Object,
             _logServiceMock.Object,
             _pathManagerMock.Object,
-            _scriptRegistryMock.Object
+            _scriptRegistryMock.Object,
+            _dependencyManagerMock.Object
         );
 
         // Assert
@@ -70,7 +73,7 @@ public class SettingsViewModelTests
         viewModel.MaxParallelTasks.Should().Be(4);
         viewModel.DefaultOutputSubfolder.Should().Be("KTools_Result");
         viewModel.UseAutoSubfolder.Should().BeFalse();
-        viewModel.SelectedThemeIndex.Should().Be(0); // Dark = 0
+        viewModel.SelectedThemeIndex.Should().Be(1); // Dark = 1
         viewModel.SelectedBackdropIndex.Should().Be(0); // Mica = 0
     }
 
@@ -87,7 +90,8 @@ public class SettingsViewModelTests
             _updateServiceMock.Object,
             _logServiceMock.Object,
             _pathManagerMock.Object,
-            _scriptRegistryMock.Object
+            _scriptRegistryMock.Object,
+            _dependencyManagerMock.Object
         );
 
         // Act
@@ -110,11 +114,12 @@ public class SettingsViewModelTests
             _updateServiceMock.Object,
             _logServiceMock.Object,
             _pathManagerMock.Object,
-            _scriptRegistryMock.Object
+            _scriptRegistryMock.Object,
+            _dependencyManagerMock.Object
         );
 
         // Act
-        viewModel.SelectedThemeIndex = 1; // Light
+        viewModel.SelectedThemeIndex = 2; // Light
 
         // Assert
         _settingsManagerMock.VerifySet(m => m.Theme = "Light", Times.Once);

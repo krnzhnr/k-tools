@@ -665,7 +665,7 @@ public sealed partial class SubtitlePreviewViewModel : ThreadSafeViewModel
     private readonly ISettingsManager _settingsManager;
     private readonly ILogService _logService;
     private readonly SubtitleFilterState _filterState;
-    private readonly ObservableCollection<SubtitlePreviewLine> _filteredLines = new();
+    private readonly ObservableRangeCollection<SubtitlePreviewLine> _filteredLines = new();
     private bool _isBulkUpdating;
     private readonly string? _settingsGroupName;
     private readonly List<FilterItemViewModel> _allActors = new();
@@ -675,27 +675,27 @@ public sealed partial class SubtitlePreviewViewModel : ThreadSafeViewModel
     /// <summary>
     /// Полный список строк субтитров.
     /// </summary>
-    public ObservableCollection<SubtitlePreviewLine> SubtitleLines { get; } = new();
+    public ObservableRangeCollection<SubtitlePreviewLine> SubtitleLines { get; } = new();
 
     /// <summary>
     /// Список строк субтитров после фильтрации поисковым запросом.
     /// </summary>
-    public ObservableCollection<SubtitlePreviewLine> FilteredLines => _filteredLines;
+    public ObservableRangeCollection<SubtitlePreviewLine> FilteredLines => _filteredLines;
 
     /// <summary>
     /// Список уникальных актеров.
     /// </summary>
-    public ObservableCollection<FilterItemViewModel> Actors { get; } = new();
+    public ObservableRangeCollection<FilterItemViewModel> Actors { get; } = new();
 
     /// <summary>
     /// Список уникальных стилей.
     /// </summary>
-    public ObservableCollection<FilterItemViewModel> Styles { get; } = new();
+    public ObservableRangeCollection<FilterItemViewModel> Styles { get; } = new();
 
     /// <summary>
     /// Список уникальных эффектов.
     /// </summary>
-    public ObservableCollection<FilterItemViewModel> Effects { get; } = new();
+    public ObservableRangeCollection<FilterItemViewModel> Effects { get; } = new();
 
     /// <summary>
     /// Удалять теги форматирования.
@@ -849,17 +849,22 @@ public sealed partial class SubtitlePreviewViewModel : ThreadSafeViewModel
         SyncCollection(Effects, targetList);
     }
 
-    private void SyncCollection<T>(ObservableCollection<T> collection, IList<T> targetList)
+    private void SyncCollection<T>(ObservableRangeCollection<T> collection, IList<T> targetList)
     {
         if (collection.Count == targetList.Count && collection.SequenceEqual(targetList))
         {
             return;
         }
 
-        collection.Clear();
-        foreach (var item in targetList)
+        collection.ReplaceRange(targetList);
+    }
+
+    private void OnSubtitleLinePropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (_isBulkUpdating) return;
+        if (e.PropertyName == nameof(SubtitlePreviewLine.IsChecked))
         {
-            collection.Add(item);
+            OnPropertyChanged(nameof(SubtitleLines));
         }
     }
 
@@ -914,15 +919,10 @@ public sealed partial class SubtitlePreviewViewModel : ThreadSafeViewModel
         foreach (var line in tempLines)
         {
             line.GlobalIndex = globalIdx++;
-            line.PropertyChanged += (s, e) =>
-            {
-                if (e.PropertyName == nameof(SubtitlePreviewLine.IsChecked))
-                {
-                    OnPropertyChanged(nameof(SubtitleLines));
-                }
-            };
-            SubtitleLines.Add(line);
+            line.PropertyChanged += OnSubtitleLinePropertyChanged;
         }
+
+        SubtitleLines.ReplaceRange(tempLines);
 
         foreach (var actor in uniqueActors.OrderBy(a => a))
         {
@@ -1099,14 +1099,23 @@ public sealed partial class SubtitlePreviewViewModel : ThreadSafeViewModel
     /// </summary>
     public void ApplyFilters()
     {
-        _filterState.StripFormatting = StripFormatting;
-        _filterState.StripCaps = StripCaps;
-
-        foreach (var line in SubtitleLines)
+        _isBulkUpdating = true;
+        try
         {
-            line.UpdateState(true);
+            _filterState.StripFormatting = StripFormatting;
+            _filterState.StripCaps = StripCaps;
+
+            foreach (var line in SubtitleLines)
+            {
+                line.UpdateState(true);
+            }
+        }
+        finally
+        {
+            _isBulkUpdating = false;
         }
 
+        OnPropertyChanged(nameof(SubtitleLines));
         UpdateFilteredLines();
     }
 
@@ -1156,7 +1165,7 @@ public sealed partial class SubtitlePreviewViewModel : ThreadSafeViewModel
     }
 
     /// <summary>
-    /// Пересчитать отфильтрованные строки по строке поиска с сохранением положения скролла (инкрементальное обновление).
+    /// Пересчитать отфильтрованные строки по строке поиска и выбранному файлу с пакетным обновлением списка.
     /// </summary>
     public void UpdateFilteredLines()
     {
@@ -1195,90 +1204,7 @@ public sealed partial class SubtitlePreviewViewModel : ThreadSafeViewModel
             }
         }
 
-        // Быстрая проверка: если количество и порядок совпадают
-        bool matches = _filteredLines.Count == targetList.Count;
-        if (matches)
-        {
-            for (int i = 0; i < targetList.Count; i++)
-            {
-                if (_filteredLines[i] != targetList[i])
-                {
-                    matches = false;
-                    break;
-                }
-            }
-        }
-
-        if (matches)
-        {
-            // Состав не изменился, ничего делать не нужно!
-            return;
-        }
-
-        // Если список полностью пустой в результате
-        if (targetList.Count == 0)
-        {
-            _filteredLines.Clear();
-            return;
-        }
-
-        // Если коллекция была пустой
-        if (_filteredLines.Count == 0)
-        {
-            foreach (var item in targetList)
-            {
-                _filteredLines.Add(item);
-            }
-            return;
-        }
-
-        // Так как взаимный порядок элементов в targetList и _filteredLines всегда одинаков (по индексу строки),
-        // мы можем синхронизировать коллекцию за один проход с помощью указателей.
-        int targetIdx = 0;
-        int filteredIdx = 0;
-
-        while (targetIdx < targetList.Count || filteredIdx < _filteredLines.Count)
-        {
-            if (targetIdx < targetList.Count && filteredIdx < _filteredLines.Count)
-            {
-                var targetItem = targetList[targetIdx];
-                var filteredItem = _filteredLines[filteredIdx];
-
-                if (targetItem == filteredItem)
-                {
-                    // Элементы совпадают, просто идем дальше
-                    targetIdx++;
-                    filteredIdx++;
-                }
-                else
-                {
-                    // Сравниваем их глобальные индексы
-                    if (targetItem.GlobalIndex < filteredItem.GlobalIndex)
-                    {
-                        // Элемент targetItem должен быть вставлен перед filteredItem
-                        _filteredLines.Insert(filteredIdx, targetItem);
-                        targetIdx++;
-                        filteredIdx++;
-                    }
-                    else
-                    {
-                        // Элемент filteredItem отсутствует в новом списке, удаляем его
-                        _filteredLines.RemoveAt(filteredIdx);
-                    }
-                }
-            }
-            else if (targetIdx < targetList.Count)
-            {
-                // В _filteredLines больше нет элементов, добавляем оставшиеся из targetList
-                _filteredLines.Add(targetList[targetIdx]);
-                targetIdx++;
-            }
-            else
-            {
-                // В targetList больше нет элементов, удаляем оставшиеся из _filteredLines
-                _filteredLines.RemoveAt(filteredIdx);
-            }
-        }
+        _filteredLines.ReplaceRange(targetList);
     }
 
     private static bool SafeGetBool(object? obj)
