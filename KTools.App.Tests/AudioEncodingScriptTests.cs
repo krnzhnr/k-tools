@@ -84,16 +84,22 @@ public class AudioEncodingScriptTests
         bitrateField.VisibilityConditions!.Should().Contain(c => c.Key == "target_format" && c.Values.Contains("QAAC"));
         bitrateField.VisibilityConditions!.Should().Contain(c => c.Key == "qaac_mode");
 
-        // Чекбоксы no_delay и limiter также должны зависеть от QAAC
-        var noDelayField = schema.Find(f => f.Key == "qaac_no_delay");
-        noDelayField.Should().NotBeNull();
-        noDelayField!.VisibleIfKey.Should().Be("target_format");
-        noDelayField.VisibleIfValues.Should().Contain("QAAC");
+        // Экспандер дополнительных параметров QAAC (задержка и лимитер)
+        var advancedExpander = schema.Find(f => f.Key == "qaac_advanced_options");
+        advancedExpander.Should().NotBeNull();
+        advancedExpander!.Type.Should().Be(SettingType.Expander);
+        advancedExpander.HasToggleSwitch.Should().BeFalse();
+        advancedExpander.VisibleIfKey.Should().Be("target_format");
+        advancedExpander.VisibleIfValues.Should().Contain("QAAC");
+        advancedExpander.ChildFields.Should().NotBeNull();
 
-        var limiterField = schema.Find(f => f.Key == "qaac_limiter");
+        var noDelayField = advancedExpander.ChildFields.Find(f => f.Key == "qaac_no_delay");
+        noDelayField.Should().NotBeNull();
+        noDelayField!.Type.Should().Be(SettingType.Checkbox);
+
+        var limiterField = advancedExpander.ChildFields.Find(f => f.Key == "qaac_limiter");
         limiterField.Should().NotBeNull();
-        limiterField!.VisibleIfKey.Should().Be("target_format");
-        limiterField.VisibleIfValues.Should().Contain("QAAC");
+        limiterField!.Type.Should().Be(SettingType.Checkbox);
     }
 
     /// <summary>

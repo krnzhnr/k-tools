@@ -242,4 +242,62 @@ Dialogue: 0,0:00:00.50,0:00:03.00,Default,,0,0,0,,Быстрый старт!
             }
         }
     }
+
+    /// <summary>
+    /// Проверяет успешный сдвиг тайминга субтитров при передаче сдвига в формате времени с тремя знаками миллисекунд (Ч:ММ:СС.ммм).
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_MillisecondsTimeFormat_ShiftsTimestamps()
+    {
+        // Arrange
+        string tempSourceFile = Path.Combine(Path.GetTempPath(), $"test_sub_ms_{Guid.NewGuid():N}.srt");
+        string srtContent = 
+@"1
+00:01:20,100 --> 00:01:23,500
+Привет, миллисекунды!
+";
+        File.WriteAllText(tempSourceFile, srtContent, Encoding.UTF8);
+        string tempOutputDir = Path.GetTempPath();
+
+        // 0:00:01.234 = 1234 мс
+        var settings = new Dictionary<string, object>
+        {
+            { "ShiftMs", "0:00:01.234" },
+            { "ShiftDirection", "Вперед" }
+        };
+
+        try
+        {
+            // Act
+            var result = await _script.ExecuteSingleAsync(
+                tempSourceFile,
+                settings,
+                tempOutputDir,
+                (idx, tot, msg, pct, fps, bit) => {},
+                0,
+                1
+            );
+
+            // Assert
+            result.Should().Contain(r => r.StartsWith("✔ Сдвиг выполнен успешно:"));
+            string expectedOutputFile = Path.Combine(tempOutputDir, $"{Path.GetFileNameWithoutExtension(tempSourceFile)}_shifted.srt");
+            File.Exists(expectedOutputFile).Should().BeTrue();
+
+            string outputContent = File.ReadAllText(expectedOutputFile, Encoding.UTF8);
+            // 20.100 + 1.234 = 21.334
+            outputContent.Should().Contain("00:01:21,334 --> 00:01:24,734");
+
+            if (File.Exists(expectedOutputFile))
+            {
+                File.Delete(expectedOutputFile);
+            }
+        }
+        finally
+        {
+            if (File.Exists(tempSourceFile))
+            {
+                File.Delete(tempSourceFile);
+            }
+        }
+    }
 }

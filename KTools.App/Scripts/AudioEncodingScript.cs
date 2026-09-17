@@ -192,24 +192,34 @@ public sealed class AudioEncodingScript : AbstractScript
             }),
 
         new SettingField(
-            "qaac_no_delay",
-            "Компенсировать задержку энкодера (--no-delay)",
-            SettingType.Checkbox,
-            false,
+            "qaac_advanced_options",
+            "Дополнительные параметры",
+            SettingType.Expander,
+            null,
             "Экспорт:Параметры кодирования",
-            comment: "Компенсирует задержку кодировщика путем добавления 960 отсчетов тишины в начало и последующей обрезки 3 кадров AAC. В основном предназначено для решения проблем синхронизации аудио и видео.",
+            comment: "Тонкая настройка задержки и лимитера при кодировании QAAC",
+            headerIconGlyph: "\uE713",
             visibleIfKey: "target_format",
-            visibleIfValues: new List<string> { "QAAC" }),
+            visibleIfValues: new List<string> { "QAAC" },
+            hasToggleSwitch: false,
+            childFields: new List<SettingField>
+            {
+                new SettingField(
+                    "qaac_no_delay",
+                    "Компенсировать задержку энкодера (--no-delay)",
+                    SettingType.Checkbox,
+                    false,
+                    "Экспорт:Параметры кодирования",
+                    comment: "Компенсирует задержку кодировщика путем добавления 960 отсчетов тишины в начало и последующей обрезки 3 кадров AAC. В основном предназначено для решения проблем синхронизации аудио и видео."),
 
-        new SettingField(
-            "qaac_limiter",
-            "Применить смарт-лимитер (--limiter)",
-            SettingType.Checkbox,
-            false,
-            "Экспорт:Параметры кодирования",
-            comment: "Применяет интеллектуальный лимитер, который мягко ограничивает участки, где пиковый уровень превышает (или близок к) 0 dBFS.",
-            visibleIfKey: "target_format",
-            visibleIfValues: new List<string> { "QAAC" }),
+                new SettingField(
+                    "qaac_limiter",
+                    "Применить смарт-лимитер (--limiter)",
+                    SettingType.Checkbox,
+                    false,
+                    "Экспорт:Параметры кодирования",
+                    comment: "Применяет интеллектуальный лимитер, который мягко ограничивает участки, где пиковый уровень превышает (или близок к) 0 dBFS.")
+            }),
 
         new SettingField(
             "bitrate",

@@ -28,14 +28,14 @@
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
                             <TextBox x:Name="TimeBeforeBox" 
-                                     Text="0:00:00.00" 
+                                     Text="0:00:00.000" 
                                      FontFamily="Consolas, Courier New, monospace" 
                                      FontSize="16" 
                                      HorizontalAlignment="Stretch"
                                      HorizontalContentAlignment="Center"
                                      SelectionStart="0"
                                      SelectionLength="0"
-                                     MaxLength="10"
+                                     MaxLength="11"
                                      PreviewKeyDown="TimeBox_PreviewKeyDown"
                                      SelectionChanged="TimeBox_SelectionChanged"
                                      LostFocus="TimeBox_LostFocus"
@@ -64,14 +64,14 @@
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
                             <TextBox x:Name="TimeAfterBox" 
-                                     Text="0:00:00.00" 
+                                     Text="0:00:00.000" 
                                      FontFamily="Consolas, Courier New, monospace" 
                                      FontSize="16" 
                                      HorizontalAlignment="Stretch"
                                      HorizontalContentAlignment="Center"
                                      SelectionStart="0"
                                      SelectionLength="0"
-                                     MaxLength="10"
+                                     MaxLength="11"
                                      PreviewKeyDown="TimeBox_PreviewKeyDown"
                                      SelectionChanged="TimeBox_SelectionChanged"
                                      LostFocus="TimeBox_LostFocus"
@@ -109,15 +109,15 @@
                                    HorizontalAlignment="Center"
                                    Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
                         
-                        <!-- Абсолютный сдвиг (Aegisub Format) -->
+                        <!-- Абсолютный сдвиг (Aegisub / Субтитры Format) -->
                         <StackPanel Spacing="4" HorizontalAlignment="Center">
-                            <TextBlock Text="Сдвиг для Aegisub:" 
+                            <TextBlock Text="Сдвиг для Aegisub / таймингов:" 
                                        FontSize="12" 
                                        HorizontalAlignment="Center"
                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                             <StackPanel Orientation="Horizontal" Spacing="12" HorizontalAlignment="Center">
                                 <TextBlock x:Name="ResultTimeBlock" 
-                                           Text="0:00:00.00" 
+                                           Text="0:00:00.000" 
                                            FontFamily="Consolas, Courier New, monospace" 
                                            FontSize="32" 
                                            FontWeight="Bold" 

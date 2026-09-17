@@ -8,6 +8,12 @@ namespace KTools.App.Tests;
 public class TimingCalculatorTests
 {
     [TestMethod]
+    [DataRow("0:00:00.000", 0L)]
+    [DataRow("0:00:01.000", 1000L)]
+    [DataRow("0:00:00.005", 5L)]
+    [DataRow("0:00:00.050", 50L)]
+    [DataRow("1:23:45.678", 5025678L)]
+    [DataRow("0:02:44.200", 164200L)]
     [DataRow("0:00:00.00", 0L)]
     [DataRow("0:00:01.00", 1000L)]
     [DataRow("0:00:00.05", 50L)]
@@ -20,15 +26,31 @@ public class TimingCalculatorTests
     }
 
     [TestMethod]
-    [DataRow(0L, "0:00:00.00")]
-    [DataRow(1000L, "0:00:01.00")]
-    [DataRow(50L, "0:00:00.05")]
-    [DataRow(5025670L, "1:23:45.67")]
-    [DataRow(164200L, "0:02:44.20")]
-    [DataRow(-164200L, "0:02:44.20")] // Абсолютное значение
+    [DataRow(0L, "0:00:00.000")]
+    [DataRow(1000L, "0:00:01.000")]
+    [DataRow(50L, "0:00:00.050")]
+    [DataRow(5025678L, "1:23:45.678")]
+    [DataRow(164200L, "0:02:44.200")]
+    [DataRow(-164200L, "0:02:44.200")] // Абсолютное значение
     public void FormatMsToAegisub_WithMs_ReturnsExpectedFormat(long ms, string expectedStr)
     {
         string actualStr = TimingCalculatorPage.FormatMsToAegisub(ms);
         Assert.AreEqual(expectedStr, actualStr);
+    }
+
+    [TestMethod]
+    [DataRow("0:01:23.456", "0:01:23.456")]
+    [DataRow("0:01:23,456", "0:01:23.456")]
+    [DataRow("00:01:23.456", "0:01:23.456")]
+    [DataRow("01:23.456", "0:01:23.456")]
+    [DataRow("0:01:23.45", "0:01:23.450")]
+    [DataRow("00:01:23.45", "0:01:23.450")]
+    [DataRow("01:23.45", "0:01:23.450")]
+    [DataRow("0:00:00.000", "0:00:00.000")]
+    [DataRow("invalid", null)]
+    public void NormalizeTimeText_VariousFormats_ReturnsNormalizedOrNull(string input, string? expected)
+    {
+        string? actual = TimingCalculatorPage.NormalizeTimeText(input);
+        Assert.AreEqual(expected, actual);
     }
 }

@@ -488,22 +488,37 @@ public sealed partial class ScriptSettingsControl : UserControl
                     expander.HeaderIcon = new FontIcon { Glyph = field.HeaderIconGlyph };
                 }
 
-                bool isExpanderOn = _settingsManager.GetSetting(
-                    settingsGroup,
-                    field.Key,
-                    field.DefaultValue is bool b && b);
-
-                var toggleSwitch = new ToggleSwitch
-                {
-                    OffContent = "Выкл",
-                    OnContent = "Вкл",
-                    IsOn = isExpanderOn,
-                    VerticalAlignment = VerticalAlignment.Center
-                };
-
-                expander.Content = toggleSwitch;
+                bool hasToggleSwitch = field.HasToggleSwitch;
+                bool isExpanderOn = hasToggleSwitch
+                    ? _settingsManager.GetSetting(settingsGroup, field.Key, field.DefaultValue is bool b && b)
+                    : true;
 
                 var childCards = new List<SettingsCard>();
+
+                if (hasToggleSwitch)
+                {
+                    var toggleSwitch = new ToggleSwitch
+                    {
+                        OffContent = "Выкл",
+                        OnContent = "Вкл",
+                        IsOn = isExpanderOn,
+                        VerticalAlignment = VerticalAlignment.Center
+                    };
+
+                    expander.Content = toggleSwitch;
+
+                    toggleSwitch.Toggled += (s, e) =>
+                    {
+                        bool isOn = toggleSwitch.IsOn;
+                        _settingsManager.SetSetting(settingsGroup, field.Key, isOn);
+                        foreach (var card in childCards)
+                        {
+                            card.IsEnabled = isOn;
+                        }
+                        UpdateVisibility(settingsGroup);
+                        UpdatePreview();
+                    };
+                }
 
                 foreach (var childField in field.ChildFields)
                 {
@@ -523,18 +538,6 @@ public sealed partial class ScriptSettingsControl : UserControl
                     _generatedElements.Add((childField, childCard));
                     groupVisual.Elements.Add(childCard);
                 }
-
-                toggleSwitch.Toggled += (s, e) =>
-                {
-                    bool isOn = toggleSwitch.IsOn;
-                    _settingsManager.SetSetting(settingsGroup, field.Key, isOn);
-                    foreach (var card in childCards)
-                    {
-                        card.IsEnabled = isOn;
-                    }
-                    UpdateVisibility(settingsGroup);
-                    UpdatePreview();
-                };
 
                 cardContentStack.Children.Add(expander);
                 _generatedElements.Add((field, expander));
@@ -2105,6 +2108,17 @@ public sealed partial class ScriptSettingsControl : UserControl
             if (field.Type != SettingType.Subtitle)
             {
                 settings[field.Key] = _settingsManager.GetSetting(settingsGroup, field.Key, field.DefaultValue);
+            }
+
+            if (field.ChildFields != null && field.ChildFields.Count > 0)
+            {
+                foreach (var child in field.ChildFields)
+                {
+                    if (child.Type != SettingType.Subtitle)
+                    {
+                        settings[child.Key] = _settingsManager.GetSetting(settingsGroup, child.Key, child.DefaultValue);
+                    }
+                }
             }
         }
 

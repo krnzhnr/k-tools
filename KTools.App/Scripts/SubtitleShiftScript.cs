@@ -334,7 +334,26 @@ public sealed class SubtitleShiftScript : AbstractScript
             return ms;
         }
 
-        // 2. Проверяем формат Aegisub (Ч:ММ:СС.сс или Ч:ММ:СС,сс)
+        // 2. Проверяем формат с 3 знаками (Ч:ММ:СС.ммм или Ч:ММ:СС,ммм)
+        if (input.Length == 11 && input[1] == ':' && input[4] == ':' && (input[7] == '.' || input[7] == ','))
+        {
+            try
+            {
+                int hours = int.Parse(input.Substring(0, 1));
+                int minutes = int.Parse(input.Substring(2, 2));
+                int seconds = int.Parse(input.Substring(5, 2));
+                int millis = int.Parse(input.Substring(8, 3));
+
+                long totalMs = ((hours * 3600L) + (minutes * 60L) + seconds) * 1000L + millis;
+                return (int)totalMs;
+            }
+            catch (Exception ex)
+            {
+                _logService.Warn($"Не удалось разобрать тайминг с миллисекундами '{input}': {ex.Message}", "SubtitleShiftScript");
+            }
+        }
+
+        // 3. Проверяем формат Aegisub (Ч:ММ:СС.сс или Ч:ММ:СС,сс)
         if (input.Length == 10 && input[1] == ':' && input[4] == ':' && (input[7] == '.' || input[7] == ','))
         {
             try
@@ -353,7 +372,7 @@ public sealed class SubtitleShiftScript : AbstractScript
             }
         }
 
-        // 3. Общий разбор через TimeSpan
+        // 4. Общий разбор через TimeSpan
         string tsInput = input.Replace(',', '.');
         if (TimeSpan.TryParse(tsInput, System.Globalization.CultureInfo.InvariantCulture, out TimeSpan parsedTs))
         {
