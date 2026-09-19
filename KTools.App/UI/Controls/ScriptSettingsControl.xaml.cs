@@ -22,6 +22,7 @@ namespace KTools_App.UI.Controls;
 public sealed partial class ScriptSettingsControl : UserControl
 {
     private readonly List<(SettingField Field, FrameworkElement Element)> _generatedElements = new();
+    private readonly Dictionary<string, string> _childFieldToParentExpanderKey = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, FrameworkElement> _groupContainers = new();
     private AbstractScript? _activeScript;
     private StackPanel? _previewPanel;
@@ -147,6 +148,7 @@ public sealed partial class ScriptSettingsControl : UserControl
 
         SettingsContainer.Children.Clear();
         _generatedElements.Clear();
+        _childFieldToParentExpanderKey.Clear();
         _groups.Clear();
         _groupContainers.Clear();
         SettingsNavigationView.MenuItems.Clear();
@@ -511,12 +513,20 @@ public sealed partial class ScriptSettingsControl : UserControl
                     {
                         bool isOn = toggleSwitch.IsOn;
                         _settingsManager.SetSetting(settingsGroup, field.Key, isOn);
+
+                        // Переключаем активность дочерних карточек напрямую — это единственное,
+                        // что реально нужно при переключении тумблера экспандера.
+                        // UpdateVisibility и UpdatePreview здесь не вызываются намеренно:
+                        // — UpdateVisibility пересоздаёт всю динамическую схему энкодера и рекурсивно
+                        //   обходит визуальное дерево, хотя ни одно поле не зависит от ключа экспандера
+                        //   для VisibleIf / DisableConditions;
+                        // — UpdatePreview обновляет предпросмотр переименования файлов, к которому
+                        //   тумблер экспандера фильтров не имеет отношения.
                         foreach (var card in childCards)
                         {
                             card.IsEnabled = isOn;
+                            card.Opacity = 1.0;
                         }
-                        UpdateVisibility(settingsGroup);
-                        UpdatePreview();
                     };
                 }
 
@@ -535,6 +545,10 @@ public sealed partial class ScriptSettingsControl : UserControl
 
                     expander.Items.Add(childCard);
                     childCards.Add(childCard);
+                    if (hasToggleSwitch)
+                    {
+                        _childFieldToParentExpanderKey[childField.Key] = field.Key;
+                    }
                     _generatedElements.Add((childField, childCard));
                     groupVisual.Elements.Add(childCard);
                 }
@@ -1024,9 +1038,19 @@ public sealed partial class ScriptSettingsControl : UserControl
             item.Element.Visibility = isVisible ? Visibility.Visible : Visibility.Collapsed;
         }
 
-        // 1.5. Обработка отключения (DisableConditions)
+        // 1.5. Обработка отключения (DisableConditions) и вложенности в экспандер
         foreach (var item in _generatedElements)
         {
+            bool isParentExpanderOn = true;
+            if (_childFieldToParentExpanderKey.TryGetValue(item.Field.Key, out string? parentExpanderKey))
+            {
+                object? parentDefVal = _generatedElements.FirstOrDefault(x => x.Field.Key == parentExpanderKey).Field?.DefaultValue;
+                isParentExpanderOn = _settingsManager.GetSetting(
+                    settingsGroup,
+                    parentExpanderKey,
+                    parentDefVal is bool pb && pb);
+            }
+
             if (item.Field.DisableConditions != null && item.Field.DisableConditions.Count > 0)
             {
                 bool isDisabled = false;
@@ -1059,35 +1083,44 @@ public sealed partial class ScriptSettingsControl : UserControl
                         break;
                     }
                 }
+
+                bool effectiveEnabled = !isDisabled && isParentExpanderOn;
                 if (item.Element is Control ctrl)
                 {
-                    ctrl.IsEnabled = !isDisabled;
+                    ctrl.IsEnabled = effectiveEnabled;
+                    // Для нативных Control (включая SettingsCard) WinUI 3 сам управляет визуальным
+                    // состоянием Disabled. Сбрасываем Opacity в 1.0, чтобы исключить наложение двойной прозрачности.
+                    ctrl.Opacity = 1.0;
                 }
                 else if (item.Element is Grid grid)
                 {
                     foreach (var child in grid.Children.OfType<Control>())
                     {
-                        child.IsEnabled = !isDisabled;
+                        child.IsEnabled = effectiveEnabled;
+                        child.Opacity = 1.0;
                     }
+                    grid.Opacity = effectiveEnabled ? 1.0 : 0.5;
                 }
-                item.Element.IsHitTestVisible = !isDisabled;
-                item.Element.Opacity = isDisabled ? 0.5 : 1.0;
+                item.Element.IsHitTestVisible = effectiveEnabled;
             }
             else
             {
+                bool effectiveEnabled = isParentExpanderOn;
                 if (item.Element is Control ctrl)
                 {
-                    ctrl.IsEnabled = true;
+                    ctrl.IsEnabled = effectiveEnabled;
+                    ctrl.Opacity = 1.0;
                 }
                 else if (item.Element is Grid grid)
                 {
                     foreach (var child in grid.Children.OfType<Control>())
                     {
-                        child.IsEnabled = true;
+                        child.IsEnabled = effectiveEnabled;
+                        child.Opacity = 1.0;
                     }
+                    grid.Opacity = effectiveEnabled ? 1.0 : 0.5;
                 }
-                item.Element.IsHitTestVisible = true;
-                item.Element.Opacity = 1.0;
+                item.Element.IsHitTestVisible = effectiveEnabled;
             }
         }
 
