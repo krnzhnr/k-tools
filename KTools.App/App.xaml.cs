@@ -216,6 +216,7 @@ public partial class App : Application
 
         // 1. Регистрация служб ядра через чистый DI
         services.AddSingleton<ILogService, LogService>();
+        services.AddSingleton<ISystemInfoService, SystemInfoService>();
         services.AddSingleton<IPathManager, PathManager>();
         services.AddSingleton<ISettingsManager, SettingsManager>();
         services.AddSingleton<IDependencyManager, DependencyManager>();
@@ -310,6 +311,16 @@ public partial class App : Application
             _logService?.Info(
                 $"=== Запуск приложения K-Tools C# Edition (Права администратора: {(isAdmin ? "Да" : "Нет")}) ===",
                 "App");
+
+            // Логирование основных аппаратных и системных характеристик
+            try
+            {
+                Services.GetRequiredService<ISystemInfoService>().LogSystemCharacteristics();
+            }
+            catch (Exception ex)
+            {
+                _logService?.Exception(ex, "Не удалось вывести характеристики системы при запуске", "App");
+            }
 
             string settingsDir = Services.GetRequiredService<IPathManager>().GetSettingsDirectory();
             _logService?.Info(

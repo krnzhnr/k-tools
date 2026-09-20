@@ -251,9 +251,9 @@ public sealed class SpeechRecognitionScript : AbstractScript
                 "whisper_flash_attn",
                 "Flash Attention (для GPU)",
                 SettingType.Checkbox,
-                true,
+                false,
                 "Движок:Аппаратное ускорение",
-                "Оптимизация внимания: существенно экономит видеопамять VRAM и ускоряет работу."));
+                "Оптимизация внимания: экономит VRAM и ускоряет инференс. Рекомендуется для видеокарт NVIDIA поколения Ampere и новее (RTX 30xx, 40xx). Для более старых карт (Turing/RTX 20xx) рекомендуется выключить при сбоях."));
 
             // --- 4. Вкладка: Модели (Управление и загрузка) ---
             foreach (var m in models)
@@ -418,7 +418,7 @@ public sealed class SpeechRecognitionScript : AbstractScript
             double noSpeechThold = Convert.ToDouble(GetSettingValue(settings, "whisper_no_speech_thold", 0.65f), System.Globalization.CultureInfo.InvariantCulture);
             bool suppressNst = GetSettingValue(settings, "whisper_suppress_nst", true);
             int threads = GetSettingValue(settings, "whisper_threads", Math.Min(Environment.ProcessorCount, 8));
-            bool flashAttn = GetSettingValue(settings, "whisper_flash_attn", true);
+            bool flashAttn = GetSettingValue(settings, "whisper_flash_attn", false);
 
             var transcribeOptions = new WhisperTranscribeOptions
             {

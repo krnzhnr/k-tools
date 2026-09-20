@@ -112,6 +112,10 @@ public class WhisperIntegrationTests
         schema.Should().Contain(f => f.Key == "whisper_backend");
         schema.Should().Contain(f => f.Key == "max_segment_length");
 
+        var flashAttnField = schema.FirstOrDefault(f => f.Key == "whisper_flash_attn");
+        flashAttnField.Should().NotBeNull();
+        flashAttnField!.DefaultValue.Should().Be(false);
+
         script.Name.Should().Be(AppConstants.ScriptMetadata.SpeechRecognitionName);
         script.Category.Should().Be(AppConstants.ScriptCategory.Subtitles);
         script.IconName.Should().Be(AppConstants.ScriptIcons.SpeechRecognition);
