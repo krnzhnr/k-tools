@@ -202,7 +202,7 @@ public static class AppConstants
 
         // --- Контейнерные скрипты ---
         public const string MuxerName = "Сборка MKV";
-        public const string MuxerDesc = "Сборка контейнера MKV из отдельных потоков видео, аудио и субтитров с сопоставлением по имени";
+        public const string MuxerDesc = "Сборка контейнера MKV из видео с несколькими внешними аудио и субтитрами, сопоставление по имени файла";
 
         public const string StreamMgrName = "Управление потоками";
         public const string StreamMgrDesc = "Удаление или сохранение выбранных дорожек (видео, аудио, субтитры) в MKV и MP4 файлах.";

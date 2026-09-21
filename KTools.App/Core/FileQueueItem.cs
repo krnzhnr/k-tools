@@ -442,6 +442,71 @@ public sealed class FileQueueItem : INotifyPropertyChanged
         }
     }
 
+    private string? _muxPinnedStem;
+
+    /// <summary>
+    /// Ручная привязка сопутствующего файла к видео с заданным базовым именем.
+    /// Устанавливается дроп-зоной группы в таблице сборки MKV и имеет приоритет
+    /// над автоматическим сопоставлением по имени файла. Null — автосопоставление.
+    /// </summary>
+    public string? MuxPinnedStem
+    {
+        get => _muxPinnedStem;
+        set
+        {
+            if (!string.Equals(_muxPinnedStem, value, StringComparison.OrdinalIgnoreCase))
+            {
+                _muxPinnedStem = value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(IsPinned));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Признак ручной привязки файла к группе (для отображения кнопки открепления).
+    /// </summary>
+    public bool IsPinned => !string.IsNullOrEmpty(_muxPinnedStem);
+
+    private MuxSubsRole? _muxRoleOverride;
+
+    /// <summary>
+    /// Ручной выбор роли субтитров (Полные/Надписи/Другие), задаваемый селектором в таблице сборки.
+    /// Имеет приоритет над автоопределением по суффиксу имени. Null — автоопределение.
+    /// Для аудио игнорируется.
+    /// </summary>
+    public MuxSubsRole? MuxRoleOverride
+    {
+        get => _muxRoleOverride;
+        set
+        {
+            if (_muxRoleOverride != value)
+            {
+                _muxRoleOverride = value;
+                OnPropertyChanged();
+            }
+        }
+    }
+
+    private bool _muxAudioMain;
+
+    /// <summary>
+    /// Признак основной аудиодорожки (зона "RU Аудио (Осн.)"): русский язык,
+    /// флаги default/forced. Если явно не задана ни одна, основной считается первая по имени.
+    /// </summary>
+    public bool MuxAudioMain
+    {
+        get => _muxAudioMain;
+        set
+        {
+            if (_muxAudioMain != value)
+            {
+                _muxAudioMain = value;
+                OnPropertyChanged();
+            }
+        }
+    }
+
     public event PropertyChangedEventHandler? PropertyChanged;
 
     private void OnPropertyChanged([CallerMemberName] string? prop = null)
