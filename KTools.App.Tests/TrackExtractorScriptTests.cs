@@ -187,4 +187,150 @@ public class TrackExtractorScriptTests
         AppConstants.ResolveRawExtension("unknown_custom_codec", "audio").Should().Be(".mka");
         AppConstants.ResolveRawExtension("unknown_custom_codec", "subtitles").Should().Be(".mks");
     }
+
+    /// <summary>
+    /// Проверяет, что при выполнении извлечения дорожек с включенным LocalRenameOverride
+    /// выходные файлы и аргументы FFmpeg получают корректно переименованные имена файлов.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_WithLocalRename_ShouldApplyRenameToExtractedTracks()
+    {
+        string inputPath = @"C:\Test\Yomi no Tsugai - 10 TG.mp4";
+        string outputDir = @"C:\Test\Output";
+
+        var structure = new MediaStructure
+        {
+            Duration = 100.0
+        };
+        structure.Tracks.Add(new MediaTrack
+        {
+            TrackId = 1,
+            TrackType = "audio",
+            Codec = "aac",
+            Language = "rus",
+            Name = "Stereo"
+        });
+
+        _mediaProbeServiceMock
+            .Setup(m => m.ProbeAsync(inputPath))
+            .ReturnsAsync(structure);
+
+        List<string>? capturedExtraArgs = null;
+        _ffmpegRunnerMock
+            .Setup(r => r.RunAsync(
+                inputPath,
+                null,
+                It.IsAny<List<string>>(),
+                null,
+                It.IsAny<bool>(),
+                It.IsAny<double>(),
+                It.IsAny<Action<ProgressInfo>>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<string, string?, List<string>?, List<string>?, bool, double, Action<ProgressInfo>?, CancellationToken>(
+                (inP, outP, args, inArgs, ow, dur, prog, ct) =>
+                {
+                    if (args != null)
+                    {
+                        capturedExtraArgs = new List<string>(args);
+                    }
+                })
+            .ReturnsAsync(true);
+
+        var settings = new Dictionary<string, object>
+        {
+            { "selected_tracks_per_file", new Dictionary<string, List<int>> { { inputPath, new List<int> { 1 } } } },
+            { "name_format", "{original}" },
+            { "LocalRenameOverride", true },
+            { "LocalRenameSearch", @" - (\d+) TG" },
+            { "LocalRenameReplace", @" - [$1]" },
+            { "LocalRenameUseRegex", true },
+            { "LocalRenameCaseSensitive", false }
+        };
+
+        var results = await _script.ExecuteSingleAsync(
+            inputPath,
+            settings,
+            outputDir,
+            (cur, total, msg, pct, fps, br) => { },
+            1,
+            1);
+
+        results.Should().Contain(r => r.Contains("✅ Извлечена дорожка 1: Yomi no Tsugai - [10].aac"));
+        capturedExtraArgs.Should().NotBeNull();
+        string expectedPathArg = $"\"{Path.Combine(outputDir, "Yomi no Tsugai - [10].aac")}\"";
+        capturedExtraArgs.Should().Contain(expectedPathArg);
+    }
+
+    /// <summary>
+    /// Проверяет, что при глобальных настройках переименования дорожки извлекаются с корректно обновленным именем.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_WithGlobalRename_ShouldApplyRenameToExtractedTracks()
+    {
+        string inputPath = @"C:\Test\Anime_Episode_01.mkv";
+        string outputDir = @"C:\Test\Output";
+
+        var structure = new MediaStructure
+        {
+            Duration = 50.0
+        };
+        structure.Tracks.Add(new MediaTrack
+        {
+            TrackId = 0,
+            TrackType = "subtitles",
+            Codec = "SubRip/SRT",
+            Language = "rus"
+        });
+
+        _mediaProbeServiceMock
+            .Setup(m => m.ProbeAsync(inputPath))
+            .ReturnsAsync(structure);
+
+        _settingsManagerMock.Setup(s => s.RenameEnableRegex).Returns(true);
+        _settingsManagerMock.Setup(s => s.RenameRegexSearch).Returns(@"_Episode_(\d+)");
+        _settingsManagerMock.Setup(s => s.RenameRegexReplace).Returns(@"_E$1");
+        _settingsManagerMock.Setup(s => s.RenameUseRegex).Returns(true);
+        _settingsManagerMock.Setup(s => s.RenameCaseSensitive).Returns(false);
+
+        List<string>? capturedExtraArgs = null;
+        _ffmpegRunnerMock
+            .Setup(r => r.RunAsync(
+                inputPath,
+                null,
+                It.IsAny<List<string>>(),
+                null,
+                It.IsAny<bool>(),
+                It.IsAny<double>(),
+                It.IsAny<Action<ProgressInfo>>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<string, string?, List<string>?, List<string>?, bool, double, Action<ProgressInfo>?, CancellationToken>(
+                (inP, outP, args, inArgs, ow, dur, prog, ct) =>
+                {
+                    if (args != null)
+                    {
+                        capturedExtraArgs = new List<string>(args);
+                    }
+                })
+            .ReturnsAsync(true);
+
+        var settings = new Dictionary<string, object>
+        {
+            { "selected_tracks_per_file", new Dictionary<string, List<int>> { { inputPath, new List<int> { 0 } } } },
+            { "name_format", "{original}" },
+            { "LocalRenameOverride", false }
+        };
+
+        var results = await _script.ExecuteSingleAsync(
+            inputPath,
+            settings,
+            outputDir,
+            (cur, total, msg, pct, fps, br) => { },
+            1,
+            1);
+
+        results.Should().Contain(r => r.Contains("✅ Извлечена дорожка 0: Anime_E01.srt"));
+        capturedExtraArgs.Should().NotBeNull();
+        string expectedPathArg = $"\"{Path.Combine(outputDir, "Anime_E01.srt")}\"";
+        capturedExtraArgs.Should().Contain(expectedPathArg);
+    }
 }

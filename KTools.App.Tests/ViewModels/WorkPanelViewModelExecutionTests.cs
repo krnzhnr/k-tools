@@ -652,6 +652,70 @@ public class WorkPanelViewModelExecutionTests : IsolatedMessengerTestBase
     }
 
     /// <summary>
+    /// Проверяет, что при успешном выполнении всей очереди задач без ошибок
+    /// панель журнала выполнения остается закрытой (IsLogExpanded == false).
+    /// </summary>
+    [TestMethod]
+    public async Task StartExecutionAsync_SuccessfulExecution_LogExpanderRemainsClosed()
+    {
+        // Arrange
+        var script = CreateScript((file, settings) =>
+            Task.FromResult(new List<string> { $"✅ Готово: {file}" }));
+        var vm = CreateViewModel();
+        vm.Initialize(script, CreateFiles("C:\\media\\file1.mkv", "C:\\media\\file2.mp4"));
+        vm.IsLogExpanded = false;
+
+        // Act
+        await vm.StartExecutionCommand.ExecuteAsync(null);
+
+        // Assert
+        vm.IsLogExpanded.Should().BeFalse("при успешном выполнении очереди лог не должен раскрываться автоматически");
+        script.SavedStatusText.Should().Be("Обработка завершена");
+    }
+
+    /// <summary>
+    /// Проверяет, что при возникновении ошибки выполнения файла в результатах (префикс "❌")
+    /// панель журнала выполнения автоматически открывается (IsLogExpanded == true).
+    /// </summary>
+    [TestMethod]
+    public async Task StartExecutionAsync_WithError_LogExpanderOpens()
+    {
+        // Arrange
+        var script = CreateScript((file, settings) =>
+            Task.FromResult(new List<string> { "❌ Ошибка обработки файла" }));
+        var vm = CreateViewModel();
+        vm.Initialize(script, CreateFiles("C:\\media\\file_with_error.mkv"));
+        vm.IsLogExpanded = false;
+
+        // Act
+        await vm.StartExecutionCommand.ExecuteAsync(null);
+
+        // Assert
+        vm.IsLogExpanded.Should().BeTrue("при ошибке в результатах выполнения лог должен автоматически раскрыться");
+    }
+
+    /// <summary>
+    /// Проверяет, что при возникновении необработанного исключения в обработчике задачи
+    /// панель журнала выполнения также автоматически открывается (IsLogExpanded == true).
+    /// </summary>
+    [TestMethod]
+    public async Task StartExecutionAsync_HandlerThrows_LogExpanderOpens()
+    {
+        // Arrange
+        var script = CreateScript((file, settings) =>
+            throw new InvalidOperationException("Фатальная ошибка кодирования"));
+        var vm = CreateViewModel();
+        vm.Initialize(script, CreateFiles("C:\\media\\fatal.mkv"));
+        vm.IsLogExpanded = false;
+
+        // Act
+        await vm.StartExecutionCommand.ExecuteAsync(null);
+
+        // Assert
+        vm.IsLogExpanded.Should().BeTrue("при исключении в процессе обработки файла лог должен автоматически раскрыться");
+    }
+
+    /// <summary>
     /// Вспомогательный метод ожидания условия с поллингом (без Thread.Sleep).
     /// </summary>
     private static async Task WaitUntilAsync(Func<bool> condition, TimeSpan timeout)

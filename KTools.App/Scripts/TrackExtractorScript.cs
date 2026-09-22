@@ -200,6 +200,10 @@ public sealed class TrackExtractorScript : AbstractScript
                 }
 
                 string outFilename = FormatFilename(Path.GetFileNameWithoutExtension(filePath), track, ext, nameFormat, nameSuffix);
+                string trackStem = Path.GetFileNameWithoutExtension(outFilename);
+                string trackExt = Path.GetExtension(outFilename);
+                string renamedStem = ApplyPowerRename(trackStem, fileIndex, settings);
+                outFilename = $"{renamedStem}{trackExt}";
                 string outPath = Path.Combine(baseDir, outFilename);
 
                 if (File.Exists(outPath) && !overwrite)

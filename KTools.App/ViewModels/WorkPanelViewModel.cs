@@ -37,6 +37,7 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
     private readonly Dictionary<int, string> _activeBitrates = new();
     private Dictionary<string, List<int>> _selectedTracks = new();
     private Dictionary<string, List<int>> _selectedAttachments = new();
+    private bool _hasQueueErrors;
 
     /// <summary>
     /// Активный исполняемый скрипт обработки медиаданных.
@@ -344,6 +345,8 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
         _finishedIndices.Clear();
         _activeFps.Clear();
         _activeBitrates.Clear();
+        _hasQueueErrors = false;
+        IsLogExpanded = false;
 
         for (int i = 0; i < filesList.Count; i++)
         {
@@ -503,6 +506,7 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
                                              r.Contains("ОШИБКА", StringComparison.OrdinalIgnoreCase));
             if (hasError)
             {
+                _hasQueueErrors = true;
                 UpdateFileStatus(fileItem.FilePath, "Ошибка", 0.0, FileProcessingState.Failed);
             }
             else
@@ -512,6 +516,7 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
         }
         catch (Exception ex)
         {
+            _hasQueueErrors = true;
             _logService.Exception(
                 ex, 
                 $"Ошибка выполнения скрипта на файле " +
@@ -532,16 +537,27 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
     {
         if (ActiveScript == null) return;
 
-        // Обновляем состояние обработки элементов списка в UI-потоке,
-        // чтобы избежать исключения перекрестного доступа к потокам (thread access violation)
-        App.CurrentMainWindow?.DispatcherQueue?.TryEnqueue(() =>
+        // Обновляем состояние обработки элементов списка и видимость журнала логов.
+        // Журнал автоматически раскрывается только при возникновении ошибок в очереди.
+        if (App.CurrentMainWindow?.DispatcherQueue != null)
+        {
+            App.CurrentMainWindow.DispatcherQueue.TryEnqueue(() =>
+            {
+                foreach (var item in Files)
+                {
+                    item.IsProcessing = false;
+                }
+                IsLogExpanded = _hasQueueErrors;
+            });
+        }
+        else
         {
             foreach (var item in Files)
             {
                 item.IsProcessing = false;
             }
-            IsLogExpanded = true;
-        });
+            IsLogExpanded = _hasQueueErrors;
+        }
 
         if (ActiveScript.IsCancelled)
         {

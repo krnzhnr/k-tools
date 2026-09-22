@@ -224,6 +224,8 @@ public sealed class MkvAssemblyScript(
             _logService.Info($"Найден сопутствующий файл субтитров в очереди ({MuxTrackTyper.GetRoleLabel(role)}): '{Path.GetFileName(subsPath)}'", "MkvAssemblyScript");
         }
 
+        _logService.Info($"Режим сборки: cleanTracks={cleanTracks} (False — встроенные дорожки сохраняются), внешних аудио: {audioPaths.Count}, субтитров: {subsPaths.Count}", "MkvAssemblyScript");
+
         // 4. Формирование путей назначения
         string containerChoice = GetSettingValue(settings, "output_container", "MKV");
         bool isMp4 = containerChoice.Equals("MP4", StringComparison.OrdinalIgnoreCase);
@@ -440,7 +442,7 @@ public sealed class MkvAssemblyScript(
         }
 
         // Настройка внешних источников субтитров (если найдены).
-        // Порядок: полные, прочие, надписи. Флаги default/forced получают надписи
+        // Порядок: надписи, полные, прочие. Флаги default/forced получают надписи
         // (первые из них), остальные дорожки добавляются без флагов.
         // Надписи получают отдельный заголовок из настроек.
         bool signsDefaultAssigned = false;
