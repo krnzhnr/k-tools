@@ -460,7 +460,24 @@ public class DependencyManager : IDependencyManager
     /// </summary>
     public string GetInstalledVersion(string key)
     {
-        if (!IsInstalled(key)) return string.Empty;
+        return GetInstalledVersionAsync(key).GetAwaiter().GetResult();
+    }
+
+    /// <summary>
+    /// Синхронная обёртка удаления файлов зависимости.
+    /// </summary>
+    public bool RemoveDependency(string key)
+    {
+        return RemoveDependencyAsync(key).GetAwaiter().GetResult();
+    }
+
+    /// <summary>
+    /// Определяет и возвращает строку версии установленной зависимости.
+    /// </summary>
+    public async Task<string> GetInstalledVersionAsync(string key)
+    {
+        bool isQaac = key.Equals("qaac", StringComparison.OrdinalIgnoreCase);
+        if (!isQaac && !IsInstalled(key)) return string.Empty;
 
         lock (_cachedVersions)
         {
@@ -471,10 +488,10 @@ public class DependencyManager : IDependencyManager
         }
 
         var dep = _registry.FirstOrDefault(d => d.Key.Equals(key, StringComparison.OrdinalIgnoreCase));
-        if (dep == null) return string.Empty;
+        if (dep == null && !isQaac) return string.Empty;
 
-        string binaryPath = _pathManager.GetBinaryPath(dep.VerifyBinary);
-        if (!File.Exists(binaryPath)) return string.Empty;
+        string binaryPath = dep != null ? _pathManager.GetBinaryPath(dep.VerifyBinary) : string.Empty;
+        if (!isQaac && !File.Exists(binaryPath)) return string.Empty;
 
         try
         {
@@ -493,6 +510,23 @@ public class DependencyManager : IDependencyManager
                 return ver;
             }
 
+            // Для qaac вызываем qaac64.exe --check
+            if (key.Equals("qaac", StringComparison.OrdinalIgnoreCase))
+            {
+                string qaacPath = _pathManager.GetBinaryPath("qaac64.exe");
+                if (!File.Exists(qaacPath)) return string.Empty;
+
+                string qLine = await ReadFirstOutputLineAsync(qaacPath, "--check");
+
+                var qMatch = System.Text.RegularExpressions.Regex.Match(qLine, @"qaac\s+(\d+\.\d+(\.\d+)?)");
+                string qResult = qMatch.Success ? qMatch.Groups[1].Value : (qLine.Length > 20 ? qLine.Substring(0, 20) : qLine);
+                if (!string.IsNullOrEmpty(qResult))
+                {
+                    lock (_cachedVersions) { _cachedVersions[key] = qResult; }
+                }
+                return qResult;
+            }
+
             // Для FFmpeg, MKVToolNix, eac3to вызываем исполняемый файл и извлекаем версию из первой строки вывода
             // Для eac3to обязательно передаем -log=nul для подавления создания eac3to.log
             string args = key switch
@@ -503,29 +537,11 @@ public class DependencyManager : IDependencyManager
                 _ => string.Empty
             };
 
-            using var process = new Process
-            {
-                StartInfo = new ProcessStartInfo
-                {
-                    FileName = binaryPath,
-                    Arguments = args,
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    CreateNoWindow = true
-                }
-            };
+            string line = await ReadFirstOutputLineAsync(binaryPath, args);
 
-            process.Start();
-            string line = process.StandardOutput.ReadLine() ?? string.Empty;
-            if (string.IsNullOrWhiteSpace(line))
-            {
-                line = process.StandardError.ReadLine() ?? string.Empty;
-            }
-            process.WaitForExit(1000);
-
-            var match = System.Text.RegularExpressions.Regex.Match(line, @"v?(\d+\.\d+(\.\d+)?)");
-            string result = match.Success ? match.Value : (line.Length > 20 ? line.Substring(0, 20) : line);
+            var match = System.Text.RegularExpressions.Regex.Match(line, @"v?(\d+(\.\d+)+)");
+            string result = match.Success ? match.Groups[1].Value : (line.Length > 20 ? line.Substring(0, 20) : line);
+            result = result.TrimStart('v', 'V').Trim();
             if (!string.IsNullOrEmpty(result))
             {
                 lock (_cachedVersions) { _cachedVersions[key] = result; }
@@ -537,6 +553,85 @@ public class DependencyManager : IDependencyManager
             _logService.Warn($"Не удалось извлечь версию для {key}: {ex.Message}", "DependencyManager");
             return "Установлено";
         }
+    }
+
+    /// <summary>
+    /// Запускает процесс, параллельно читает stdout и stderr и возвращает первую строку вывода
+    /// (stdout либо stderr, если stdout пуст). При зависании процесс снимается по таймауту.
+    /// </summary>
+    private static async Task<string> ReadFirstOutputLineAsync(string fileName, string arguments)
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        using var process = new Process
+        {
+            StartInfo = new ProcessStartInfo
+            {
+                FileName = fileName,
+                Arguments = arguments,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            }
+        };
+        process.Start();
+
+        var stdoutTask = process.StandardOutput.ReadToEndAsync();
+        var stderrTask = process.StandardError.ReadToEndAsync();
+
+        try
+        {
+            await process.WaitForExitAsync(cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+
+        if (!process.HasExited)
+        {
+            try { process.Kill(true); }
+            catch { /* Игнорируем ошибки Kill */ }
+        }
+
+        // Чтение потоков также ограничиваем по времени: после Kill процесс-потомок
+        // может удерживать дескриптор, и ожидание ReadToEndAsync длилось бы вечно.
+        string stdout = await ReadToEndWithTimeoutAsync(stdoutTask);
+        string stderr = await ReadToEndWithTimeoutAsync(stderrTask);
+
+        string line = stdout.Length > 0 ? stdout.Split('\n')[0].TrimEnd('\r') : string.Empty;
+        if (string.IsNullOrWhiteSpace(line) && stderr.Length > 0)
+        {
+            line = stderr.Split('\n')[0].TrimEnd('\r');
+        }
+        return line;
+    }
+
+    /// <summary>
+    /// Ожидает завершения асинхронного чтения потока с жестким таймаутом,
+    /// не блокируя вызывающий поток.
+    /// </summary>
+    private static async Task<string> ReadToEndWithTimeoutAsync(Task<string> readTask)
+    {
+        if (readTask.IsCompleted)
+        {
+            try { return await readTask; }
+            catch { return string.Empty; }
+        }
+
+        try
+        {
+            Task completed = await Task.WhenAny(readTask, Task.Delay(TimeSpan.FromSeconds(2)));
+            if (completed == readTask)
+            {
+                return await readTask;
+            }
+        }
+        catch
+        {
+            // Игнорируем: возвращаем пустой вывод
+        }
+
+        return string.Empty;
     }
 
     /// <summary>
@@ -791,6 +886,18 @@ public class DependencyManager : IDependencyManager
             RefreshAllStatuses();
             if (IsInstalled(key))
             {
+                lock (_cachedVersions)
+                {
+                    _cachedVersions.Remove(key);
+                    if (key.Equals("ffmpeg", StringComparison.OrdinalIgnoreCase))
+                    {
+                        _cachedVersions.Remove("qaac");
+                    }
+                }
+                lock (_updatesAvailable)
+                {
+                    _updatesAvailable[key] = false;
+                }
                 SetStatus(key, DependencyStatus.Installed);
                 _logService.Info($"Зависимость '{dep.DisplayName}' успешно установлена и верифицирована", "DependencyManager");
                 InstallFinished?.Invoke(key, true, string.Empty);
@@ -941,7 +1048,7 @@ public class DependencyManager : IDependencyManager
     /// <summary>
     /// Физически удаляет папку зависимости с диска и сбрасывает статус.
     /// </summary>
-    public bool RemoveDependency(string key)
+    public async Task<bool> RemoveDependencyAsync(string key)
     {
         var dep = _registry.FirstOrDefault(d => d.Key.Equals(key, StringComparison.OrdinalIgnoreCase));
         if (dep == null)
@@ -975,7 +1082,7 @@ public class DependencyManager : IDependencyManager
                         using var process = Process.Start(startInfo);
                         if (process != null)
                         {
-                            process.WaitForExit();
+                            await process.WaitForExitAsync();
                             _logService.Info("Деинсталлятор eac3to Decoder Pack успешно завершил работу", "DependencyManager");
                             uninstalledViaSetup = true;
                         }
@@ -1065,7 +1172,7 @@ public class DependencyManager : IDependencyManager
                     using var process = Process.Start(startInfo);
                     if (process != null)
                     {
-                        process.WaitForExit();
+                        await process.WaitForExitAsync();
                         _logService.Info("Резервное удаление декодеров eac3to завершено успешно", "DependencyManager");
                     }
                     else
@@ -1088,6 +1195,19 @@ public class DependencyManager : IDependencyManager
         }
 
         string folderPath = Path.Combine(_binDir, dep.Subfolder);
+        lock (_cachedVersions)
+        {
+            _cachedVersions.Remove(key);
+            if (key.Equals("ffmpeg", StringComparison.OrdinalIgnoreCase))
+            {
+                _cachedVersions.Remove("qaac");
+            }
+        }
+        lock (_updatesAvailable)
+        {
+            _updatesAvailable[key] = false;
+        }
+
         if (!Directory.Exists(folderPath))
         {
             _logService.Warn($"Папка зависимости '{dep.DisplayName}' не обнаружена на диске. Сброс статуса в NotInstalled", "DependencyManager");
@@ -1218,22 +1338,99 @@ public class DependencyManager : IDependencyManager
                     {
                         string jsonVersions = match.Groups[1].Value;
                         using var verDoc = JsonDocument.Parse(jsonVersions);
+                        var remoteVersions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                         foreach (var prop in verDoc.RootElement.EnumerateObject())
                         {
                             string key = prop.Name;
-                            string remoteVersion = prop.Value.GetString() ?? string.Empty;
-                            if (string.IsNullOrEmpty(remoteVersion)) continue;
+                            string remoteVersion = string.Empty;
 
-                            string localVer = GetInstalledVersion(key);
-                            if (IsInstalled(key) && !string.IsNullOrEmpty(localVer) && !remoteVersion.Equals(localVer, StringComparison.OrdinalIgnoreCase))
+                            if (prop.Value.ValueKind == JsonValueKind.String)
                             {
-                                lock (_updatesAvailable)
-                                {
-                                    _updatesAvailable[key] = true;
-                                }
-                                _logService.Info($"Обнаружена новая версия для зависимости '{key}': remote={remoteVersion}, local={localVer}", "DependencyManager");
-                                StatusChanged?.Invoke(key, GetStatus(key));
+                                remoteVersion = prop.Value.GetString() ?? string.Empty;
                             }
+                            else if (prop.Value.ValueKind == JsonValueKind.Array)
+                            {
+                                foreach (var item in prop.Value.EnumerateArray())
+                                {
+                                    if (item.ValueKind == JsonValueKind.String)
+                                    {
+                                        remoteVersion = item.GetString() ?? string.Empty;
+                                        break;
+                                    }
+                                }
+                            }
+
+                            if (!string.IsNullOrEmpty(remoteVersion))
+                            {
+                                remoteVersions[key] = remoteVersion;
+                            }
+                        }
+
+                        // Проверяем FFmpeg (+ QAAC): обновление доступно, если отличается версия FFmpeg или версия QAAC
+                        if (IsInstalled("ffmpeg"))
+                        {
+                            bool ffmpegUpdate = false;
+                            string localFfmpegVer = (await GetInstalledVersionAsync("ffmpeg")).TrimStart('v', 'V').Trim();
+                            if (remoteVersions.TryGetValue("ffmpeg", out var remoteFfmpeg) &&
+                                !string.IsNullOrEmpty(localFfmpegVer))
+                            {
+                                string cleanRemoteFfmpeg = remoteFfmpeg.TrimStart('v', 'V').Trim();
+                                if (!cleanRemoteFfmpeg.Equals(localFfmpegVer, StringComparison.OrdinalIgnoreCase))
+                                {
+                                    ffmpegUpdate = true;
+                                    _logService.Info($"Обнаружена новая версия FFmpeg: remote={remoteFfmpeg}, local={localFfmpegVer}", "DependencyManager");
+                                }
+                            }
+
+                            string localQaacVer = (await GetInstalledVersionAsync("qaac")).TrimStart('v', 'V').Trim();
+                            if (remoteVersions.TryGetValue("qaac", out var remoteQaac) &&
+                                !string.IsNullOrEmpty(localQaacVer))
+                            {
+                                string cleanRemoteQaac = remoteQaac.TrimStart('v', 'V').Trim();
+                                if (!cleanRemoteQaac.Equals(localQaacVer, StringComparison.OrdinalIgnoreCase))
+                                {
+                                    ffmpegUpdate = true;
+                                    _logService.Info($"Обнаружена новая версия QAAC: remote={remoteQaac}, local={localQaacVer}", "DependencyManager");
+                                }
+                            }
+
+                            lock (_updatesAvailable)
+                            {
+                                _updatesAvailable["ffmpeg"] = ffmpegUpdate;
+                            }
+                            StatusChanged?.Invoke("ffmpeg", GetStatus("ffmpeg"));
+                        }
+
+                        // Проверяем остальные зависимости из манифеста
+                        foreach (var kvp in remoteVersions)
+                        {
+                            string depKey = kvp.Key;
+                            if (depKey.Equals("ffmpeg", StringComparison.OrdinalIgnoreCase) ||
+                                depKey.Equals("qaac", StringComparison.OrdinalIgnoreCase))
+                            {
+                                continue;
+                            }
+
+                            if (!IsInstalled(depKey))
+                            {
+                                continue;
+                            }
+
+                            string localVer = (await GetInstalledVersionAsync(depKey)).TrimStart('v', 'V').Trim();
+                            string remoteVer = kvp.Value.TrimStart('v', 'V').Trim();
+                            bool hasUpdate = !string.IsNullOrEmpty(localVer) &&
+                                !remoteVer.Equals(localVer, StringComparison.OrdinalIgnoreCase);
+
+                            lock (_updatesAvailable)
+                            {
+                                _updatesAvailable[depKey] = hasUpdate;
+                            }
+
+                            if (hasUpdate)
+                            {
+                                _logService.Info($"Обнаружена новая версия для '{depKey}': remote={kvp.Value}, local={localVer}", "DependencyManager");
+                            }
+                            StatusChanged?.Invoke(depKey, GetStatus(depKey));
                         }
                     }
                 }

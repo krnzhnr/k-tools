@@ -1,5 +1,6 @@
 // -*- coding: utf-8 -*-
 using System;
+using System.Collections.Generic;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Navigation;
 using Microsoft.Extensions.DependencyInjection;
@@ -20,6 +21,10 @@ public sealed partial class LogPage : Page
     /// </summary>
     public LogViewModel ViewModel { get; }
 
+    private readonly List<KTools_App.Models.LogItem> _pendingLogs = new();
+    private readonly object _pendingLock = new();
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _logBatchTimer;
+
     /// <summary>
     /// Инициализирует новый экземпляр LogPage, разрешая зависимости через DI.
     /// </summary>
@@ -27,6 +32,10 @@ public sealed partial class LogPage : Page
     {
         ViewModel = App.Services.GetRequiredService<LogViewModel>();
         InitializeComponent();
+
+        // Страница кэшируется навигационным фреймом: список логов (до 2000 строк)
+        // не пересоздается при каждом возвращении на вкладку.
+        NavigationCacheMode = NavigationCacheMode.Required;
     }
 
     /// <summary>
@@ -60,6 +69,22 @@ public sealed partial class LogPage : Page
 
         LogService.LogReceived -= OnLogReceived;
         App.Services.GetRequiredService<ILogService>().DebugLog("Пользователь покинул вкладку мониторинга логов", "LogPage");
+
+        // Накопленные записи не сбрасываем в список при уходе со страницы:
+        // при следующем открытии вкладки OnNavigatedTo заново загружает журнал
+        // из файла (ViewModel.LoadLogs), поэтому синхронное обновление ListView
+        // на 2000 элементов в момент навигации только задерживало переход.
+        if (_logBatchTimer is { IsRunning: true })
+        {
+            _logBatchTimer.Stop();
+        }
+
+        // Буфер очищаем: его содержимое уже будет прочитано из файла при следующем входе,
+        // иначе после загрузки истории записи продублировались бы в списке.
+        lock (_pendingLock)
+        {
+            _pendingLogs.Clear();
+        }
     }
 
     /// <summary>
@@ -67,11 +92,55 @@ public sealed partial class LogPage : Page
     /// </summary>
     private void OnLogReceived(object? sender, LogReceivedEventArgs e)
     {
-        DispatcherQueue.TryEnqueue(() =>
+        lock (_pendingLock)
         {
-            ViewModel.AddLog(e.FormattedMessage, e.Level);
-            ScrollToEnd();
+            _pendingLogs.Add(new KTools_App.Models.LogItem { Message = e.FormattedMessage, Level = e.Level });
+        }
+
+        bool isEnqueued = DispatcherQueue.TryEnqueue(() =>
+        {
+            if (_logBatchTimer == null)
+            {
+                _logBatchTimer = DispatcherQueue.CreateTimer();
+                _logBatchTimer.Interval = TimeSpan.FromMilliseconds(200);
+                _logBatchTimer.Tick += (s, args) => FlushPendingLogs();
+            }
+
+            if (!_logBatchTimer.IsRunning)
+            {
+                _logBatchTimer.Start();
+            }
         });
+
+        if (!isEnqueued)
+        {
+            DispatcherQueue.TryEnqueue(() => FlushPendingLogs());
+        }
+    }
+
+    /// <summary>
+    /// Добавляет накопленные логи в ViewModel одной пачкой и прокручивает список к последнему элементу.
+    /// </summary>
+    private void FlushPendingLogs()
+    {
+        if (_logBatchTimer is { IsRunning: true })
+        {
+            _logBatchTimer.Stop();
+        }
+
+        List<KTools_App.Models.LogItem> batch;
+        lock (_pendingLock)
+        {
+            if (_pendingLogs.Count == 0)
+            {
+                return;
+            }
+            batch = new List<KTools_App.Models.LogItem>(_pendingLogs);
+            _pendingLogs.Clear();
+        }
+
+        ViewModel.AddLogs(batch);
+        ScrollToEnd();
     }
 
     /// <summary>

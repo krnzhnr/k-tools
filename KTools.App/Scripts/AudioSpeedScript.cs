@@ -283,7 +283,7 @@ public sealed class AudioSpeedScript : AbstractScript
 
             if (IsCancelled || !decodeSuccess || !File.Exists(tempInputWavPath))
             {
-                CleanupFailedOutputFile(tempInputWavPath);
+                await CleanupFailedOutputFileAsync(tempInputWavPath);
                 if (IsCancelled)
                 {
                     results.Add($"⚠ Отменено: {outputName}");
@@ -358,15 +358,15 @@ public sealed class AudioSpeedScript : AbstractScript
         {
             if (!string.IsNullOrEmpty(tempInputWavPath))
             {
-                CleanupFailedOutputFile(tempInputWavPath);
+                await CleanupFailedOutputFileAsync(tempInputWavPath);
                 _logService.DebugLog($"Временный входной WAV-файл '{tempInputWavPath}' успешно удален.", "AudioSpeedScript");
             }
         }
 
         if (IsCancelled)
         {
-            CleanupFailedOutputFile(tempOutputFilePath);
-            CleanupFailedOutputFile(outputFilePath);
+            await CleanupFailedOutputFileAsync(tempOutputFilePath);
+            await CleanupFailedOutputFileAsync(outputFilePath);
             results.Add($"⚠ Отменено: {outputName}");
             _logService.Info(
                 $"Обработка файла '{originalName}' отменена пользователем.",
@@ -400,7 +400,7 @@ public sealed class AudioSpeedScript : AbstractScript
 
                 if (deleteOriginal)
                 {
-                    DeleteSource(filePath, results);
+                    await DeleteSourceAsync(filePath, results);
                 }
             }
             catch (Exception ex)
@@ -408,15 +408,15 @@ public sealed class AudioSpeedScript : AbstractScript
                 string moveErr = $"❌ Ошибка при сохранении итогового файла: {ex.Message}";
                 results.Add(moveErr);
                 _logService.Exception(ex, $"Не удалось переместить временный файл '{tempOutputFilePath}' в '{outputFilePath}'", "AudioSpeedScript");
-                CleanupFailedOutputFile(tempOutputFilePath);
-                CleanupFailedOutputFile(outputFilePath);
+                await CleanupFailedOutputFileAsync(tempOutputFilePath);
+                await CleanupFailedOutputFileAsync(outputFilePath);
             }
         }
         else
         {
             // Очищаем временный файл и выходной файл, если они остались пустыми или поврежденными
-            CleanupFailedOutputFile(tempOutputFilePath);
-            CleanupFailedOutputFile(outputFilePath);
+            await CleanupFailedOutputFileAsync(tempOutputFilePath);
+            await CleanupFailedOutputFileAsync(outputFilePath);
 
             string errorMsg = $"❌ Ошибка обработки для " +
                               $"{Path.GetFileName(filePath)}";

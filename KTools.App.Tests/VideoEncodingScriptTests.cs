@@ -337,13 +337,16 @@ public class VideoEncodingScriptTests
 
         _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile)).ReturnsAsync(structure);
 
-        // Настраиваем извлечение шрифтов
-        _ffmpegRunnerMock.Setup(r => r.ExtractAttachmentAsync(tempSourceFile, It.IsAny<int>(), It.IsAny<string>()))
+        // Настраиваем извлечение шрифтов: пакетный запуск ничего не извлекает (fallback по одному файлу)
+        _ffmpegRunnerMock.Setup(r => r.ExtractAttachmentsBatchAsync(tempSourceFile, It.IsAny<List<(int StreamIndex, string OutputPath)>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<string>());
+
+        _ffmpegRunnerMock.Setup(r => r.ExtractAttachmentAsync(tempSourceFile, It.IsAny<int>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
 
         // Настраиваем извлечение субтитров (записываем фиктивный файл)
-        _ffmpegRunnerMock.Setup(r => r.ExtractSubtitleAsync(tempSourceFile, It.IsAny<int>(), It.IsAny<string>(), true))
-            .Callback<string, int, string, bool>((inP, idx, outP, rel) => File.WriteAllText(outP, "[Events]\nDialogue: ..."))
+        _ffmpegRunnerMock.Setup(r => r.ExtractSubtitleAsync(tempSourceFile, It.IsAny<int>(), It.IsAny<string>(), true, It.IsAny<CancellationToken>()))
+            .Callback<string, int, string, bool, CancellationToken>((inP, idx, outP, rel, ct) => File.WriteAllText(outP, "[Events]\nDialogue: ..."))
             .ReturnsAsync(true);
 
         List<string>? capturedExtraArgs = null;
@@ -369,8 +372,8 @@ public class VideoEncodingScriptTests
             await _script.ExecuteSingleAsync(tempSourceFile, settings, tempOutputDir, (idx, total, status, pct, fps, bit) => { }, 0, 1);
 
             // Assert
-            _ffmpegRunnerMock.Verify(r => r.ExtractAttachmentAsync(tempSourceFile, It.IsAny<int>(), It.IsAny<string>()), Times.Once);
-            _ffmpegRunnerMock.Verify(r => r.ExtractSubtitleAsync(tempSourceFile, It.IsAny<int>(), It.IsAny<string>(), true), Times.Once);
+            _ffmpegRunnerMock.Verify(r => r.ExtractAttachmentAsync(tempSourceFile, It.IsAny<int>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
+            _ffmpegRunnerMock.Verify(r => r.ExtractSubtitleAsync(tempSourceFile, It.IsAny<int>(), It.IsAny<string>(), true, It.IsAny<CancellationToken>()), Times.Once);
 
             capturedExtraArgs.Should().NotBeNull();
             capturedExtraArgs.Should().Contain("-vf");

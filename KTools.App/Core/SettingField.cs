@@ -34,12 +34,13 @@ public class SettingField
         double? minimum = null,
         double? maximum = null,
         List<SettingField>? childFields = null,
-        string? headerIconGlyph = null)
+        string? headerIconGlyph = null,
+        bool hasToggleSwitch = true)
     {
         Key = key ?? throw new ArgumentNullException(nameof(key));
         Label = label ?? throw new ArgumentNullException(nameof(label));
         Type = type;
-        DefaultValue = defaultValue ?? (type == SettingType.Expander ? false : string.Empty);
+        DefaultValue = defaultValue ?? (type == SettingType.Expander ? (hasToggleSwitch ? false : string.Empty) : string.Empty);
         Group = group ?? "Общие";
         Comment = comment ?? string.Empty;
         Options = options ?? new List<string>();
@@ -56,7 +57,13 @@ public class SettingField
         Maximum = maximum;
         ChildFields = childFields ?? new List<SettingField>();
         HeaderIconGlyph = headerIconGlyph;
+        HasToggleSwitch = hasToggleSwitch;
     }
+
+    /// <summary>
+    /// Указывает, отображается ли переключатель (ToggleSwitch) в заголовке раскрывающегося блока (Expander).
+    /// </summary>
+    public bool HasToggleSwitch { get; }
 
     /// <summary>
     /// Вложенные дочерние параметры для блоков типа SettingType.Expander.

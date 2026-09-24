@@ -20,9 +20,11 @@ public sealed partial class TimingCalculatorPage : Page
     private readonly ILogService _logService;
     private bool _isUpdatingText = false;
 
-    // Маска: 0:00:00.00
+    // Маска: 0:00:00.000
     // Индексы разделителей: 1 (':'), 4 (':'), 7 ('.')
     private static readonly int[] SeparatorIndices = { 1, 4, 7 };
+    private const string DefaultTime = "0:00:00.000";
+    private const int MaskLength = 11;
 
     public TimingCalculatorPage()
     {
@@ -134,57 +136,88 @@ public sealed partial class TimingCalculatorPage : Page
         }
     }
 
-    private static string? NormalizeTimeText(string input)
+    public static string? NormalizeTimeText(string input)
     {
-        if (string.IsNullOrEmpty(input)) return null;
+        if (string.IsNullOrWhiteSpace(input)) return null;
 
-        // Aegisub формат: Ч:ММ:СС.сс (длина 10, двоеточия на 1 и 4, точка на 7)
-        if (input.Length == 10 && input[1] == ':' && input[4] == ':' && input[7] == '.')
+        string text = input.Trim().Replace(',', '.');
+
+        // 1. Формат с 3 знаками миллисекунд после точки:
+        // Ч:ММ:СС.ммм (длина 11, двоеточия на 1 и 4, точка на 7)
+        if (text.Length == 11 && text[1] == ':' && text[4] == ':' && text[7] == '.')
         {
-            bool allDigits = true;
-            for (int i = 0; i < input.Length; i++)
+            if (IsDigitsOnlyExcluding(text, 1, 4, 7))
             {
-                if (i != 1 && i != 4 && i != 7 && !char.IsDigit(input[i]))
-                {
-                    allDigits = false;
-                    break;
-                }
+                return text;
             }
-            if (allDigits) return input;
         }
 
-        // Поддержка формата ЧЧ:ММ:СС.сс (длина 11, двоеточия на 2 и 5, точка на 8)
-        if (input.Length == 11 && input[2] == ':' && input[5] == ':' && input[8] == '.')
+        // ЧЧ:ММ:СС.ммм (длина 12, двоеточия на 2 и 5, точка на 8) -> отрезаем ведущую цифру часа
+        if (text.Length == 12 && text[2] == ':' && text[5] == ':' && text[8] == '.')
         {
-            string sliced = input.Substring(1);
+            string sliced = text.Substring(1);
             return NormalizeTimeText(sliced);
         }
 
-        // Поддержка формата ММ:СС.сс (длина 8, двоеточие на 2, точка на 5)
-        if (input.Length == 8 && input[2] == ':' && input[5] == '.')
+        // ММ:СС.ммм (длина 9, двоеточие на 2, точка на 5) -> добавляем "0:" в начало
+        if (text.Length == 9 && text[2] == ':' && text[5] == '.')
         {
-            string extended = "0:" + input;
+            string extended = "0:" + text;
+            return NormalizeTimeText(extended);
+        }
+
+        // 2. Формат с 2 знаками (Aegisub / сотые секунды):
+        // Ч:ММ:СС.сс (длина 10, двоеточия на 1 и 4, точка на 7) -> добавляем '0' на конце для 3 знаков
+        if (text.Length == 10 && text[1] == ':' && text[4] == ':' && text[7] == '.')
+        {
+            if (IsDigitsOnlyExcluding(text, 1, 4, 7))
+            {
+                return text + "0";
+            }
+        }
+
+        // ЧЧ:ММ:СС.сс (длина 11, двоеточия на 2 и 5, точка на 8) -> отрезаем ведущую цифру часа
+        if (text.Length == 11 && text[2] == ':' && text[5] == ':' && text[8] == '.')
+        {
+            string sliced = text.Substring(1);
+            return NormalizeTimeText(sliced);
+        }
+
+        // ММ:СС.сс (длина 8, двоеточие на 2, точка на 5) -> добавляем "0:"
+        if (text.Length == 8 && text[2] == ':' && text[5] == '.')
+        {
+            string extended = "0:" + text;
             return NormalizeTimeText(extended);
         }
 
         return null;
     }
 
+    private static bool IsDigitsOnlyExcluding(string text, params int[] excludedIndices)
+    {
+        for (int i = 0; i < text.Length; i++)
+        {
+            if (excludedIndices.Contains(i)) continue;
+            if (!char.IsDigit(text[i])) return false;
+        }
+        return true;
+    }
+
     /// <summary>
-    /// Сброс полей в исходное состояние 0:00:00.00.
+    /// Сброс полей в исходное состояние 0:00:00.000.
     /// </summary>
     private void ResetButton_Click(object sender, RoutedEventArgs e)
     {
         _logService.Info("Сброс полей калькулятора сдвига", "TimingCalculatorPage");
-        TimeBeforeBox.Text = "0:00:00.00";
-        TimeAfterBox.Text = "0:00:00.00";
+        TimeBeforeBox.Text = DefaultTime;
+        TimeAfterBox.Text = DefaultTime;
         TimeBeforeBox.Focus(FocusState.Programmatic);
         TimeBeforeBox.SelectionStart = 0;
         UpdateCalculation();
     }
 
     /// <summary>
-    /// Копирует тайминг в формате Aegisub в буфер обмена.
+    /// Копирует тайминг в формате субтитров в буфер обмена.
     /// </summary>
     private void CopyResult_Click(object sender, RoutedEventArgs e)
     {
@@ -238,15 +271,15 @@ public sealed partial class TimingCalculatorPage : Page
     }
 
     /// <summary>
-    /// Восстановление маски при потере фокуса или пустом поле.
+    /// Восстановление маски при потере фокуса или некорректном значении поля.
     /// </summary>
     private void TimeBox_LostFocus(object sender, RoutedEventArgs e)
     {
         if (sender is TextBox textBox)
         {
-            if (string.IsNullOrEmpty(textBox.Text) || textBox.Text.Length != 10)
+            if (string.IsNullOrEmpty(textBox.Text) || textBox.Text.Length != MaskLength)
             {
-                textBox.Text = "0:00:00.00";
+                textBox.Text = DefaultTime;
             }
             UpdateCalculation();
         }
@@ -279,10 +312,10 @@ public sealed partial class TimingCalculatorPage : Page
         string currentText = textBox.Text;
 
         // Гарантируем корректность маски перед обработкой
-        if (currentText.Length != 10)
+        if (currentText.Length != MaskLength)
         {
-            textBox.Text = "0:00:00.00";
-            currentText = "0:00:00.00";
+            textBox.Text = DefaultTime;
+            currentText = DefaultTime;
             caretIndex = 0;
         }
 
@@ -295,7 +328,7 @@ public sealed partial class TimingCalculatorPage : Page
             e.Handled = true;
 
             // Если курсор вышел за пределы строки
-            if (caretIndex >= 10) return;
+            if (caretIndex >= MaskLength) return;
 
             // Если курсор наткнулся на разделитель (':', '.') - пропускаем его
             if (SeparatorIndices.Contains(caretIndex))
@@ -303,7 +336,7 @@ public sealed partial class TimingCalculatorPage : Page
                 caretIndex++;
             }
 
-            if (caretIndex < 10)
+            if (caretIndex < MaskLength)
             {
                 char digitChar = GetDigitChar(e.Key);
                 
@@ -321,7 +354,7 @@ public sealed partial class TimingCalculatorPage : Page
                 {
                     nextCaret++; // Перешагиваем разделитель
                 }
-                textBox.SelectionStart = Math.Min(nextCaret, 10);
+                textBox.SelectionStart = Math.Min(nextCaret, MaskLength);
             }
 
             UpdateCalculation();
@@ -360,7 +393,7 @@ public sealed partial class TimingCalculatorPage : Page
         if (e.Key == Windows.System.VirtualKey.Delete)
         {
             e.Handled = true;
-            if (caretIndex < 10)
+            if (caretIndex < MaskLength)
             {
                 int targetIndex = caretIndex;
                 if (SeparatorIndices.Contains(targetIndex))
@@ -368,7 +401,7 @@ public sealed partial class TimingCalculatorPage : Page
                     targetIndex++; // Смещаемся на цифру справа
                 }
 
-                if (targetIndex < 10)
+                if (targetIndex < MaskLength)
                 {
                     char[] chars = currentText.ToCharArray();
                     chars[targetIndex] = '0';
@@ -404,13 +437,13 @@ public sealed partial class TimingCalculatorPage : Page
         {
             e.Handled = true;
             int nextCaret = textBox.SelectionStart + 1;
-            if (nextCaret <= 10)
+            if (nextCaret <= MaskLength)
             {
                 if (SeparatorIndices.Contains(nextCaret))
                 {
                     nextCaret++; // Перешагиваем разделитель вправо
                 }
-                textBox.SelectionStart = Math.Min(nextCaret, 10);
+                textBox.SelectionStart = Math.Min(nextCaret, MaskLength);
             }
             return;
         }
@@ -444,21 +477,47 @@ public sealed partial class TimingCalculatorPage : Page
     }
 
     /// <summary>
-    /// Парсит строку времени формата Ч:ММ:СС.сс в общее количество миллисекунд.
+    /// Парсит строку времени формата Ч:ММ:СС.ммм (11 символов) или Ч:ММ:СС.сс (10 символов) в миллисекунды.
     /// </summary>
     public static long ParseTimeToMs(string timeStr)
     {
-        if (string.IsNullOrEmpty(timeStr) || timeStr.Length != 10) return 0;
+        if (string.IsNullOrWhiteSpace(timeStr)) return 0;
+
+        string clean = timeStr.Trim().Replace(',', '.');
 
         try
         {
-            int hours = int.Parse(timeStr.Substring(0, 1));
-            int minutes = int.Parse(timeStr.Substring(2, 2));
-            int seconds = int.Parse(timeStr.Substring(5, 2));
-            int hundredths = int.Parse(timeStr.Substring(8, 2));
+            // Формат 11 символов: Ч:ММ:СС.ммм
+            if (clean.Length == 11 && clean[1] == ':' && clean[4] == ':' && clean[7] == '.')
+            {
+                int hours = int.Parse(clean.Substring(0, 1));
+                int minutes = int.Parse(clean.Substring(2, 2));
+                int seconds = int.Parse(clean.Substring(5, 2));
+                int milliseconds = int.Parse(clean.Substring(8, 3));
 
-            long totalMs = ((hours * 3600L) + (minutes * 60L) + seconds) * 1000L + (hundredths * 10L);
-            return totalMs;
+                long totalMs = ((hours * 3600L) + (minutes * 60L) + seconds) * 1000L + milliseconds;
+                return totalMs;
+            }
+
+            // Формат 10 символов (Aegisub): Ч:ММ:СС.сс
+            if (clean.Length == 10 && clean[1] == ':' && clean[4] == ':' && clean[7] == '.')
+            {
+                int hours = int.Parse(clean.Substring(0, 1));
+                int minutes = int.Parse(clean.Substring(2, 2));
+                int seconds = int.Parse(clean.Substring(5, 2));
+                int hundredths = int.Parse(clean.Substring(8, 2));
+
+                long totalMs = ((hours * 3600L) + (minutes * 60L) + seconds) * 1000L + (hundredths * 10L);
+                return totalMs;
+            }
+
+            // Общий разбор через TimeSpan
+            if (TimeSpan.TryParse(clean, System.Globalization.CultureInfo.InvariantCulture, out TimeSpan parsedTs))
+            {
+                return (long)parsedTs.TotalMilliseconds;
+            }
+
+            return 0;
         }
         catch
         {
@@ -467,7 +526,7 @@ public sealed partial class TimingCalculatorPage : Page
     }
 
     /// <summary>
-    /// Форматирует общее число миллисекунд в абсолютный формат времени Aegisub (Ч:ММ:СС.сс).
+    /// Форматирует общее число миллисекунд в абсолютный формат времени Ч:ММ:СС.ммм с 3 знаками миллисекунд.
     /// </summary>
     public static string FormatMsToAegisub(long totalMs)
     {
@@ -475,9 +534,9 @@ public sealed partial class TimingCalculatorPage : Page
         long hours = absMs / 3600000L;
         long minutes = (absMs % 3600000L) / 60000L;
         long seconds = (absMs % 60000L) / 1000L;
-        long hundredths = (absMs % 1000L) / 10L;
+        long millis = absMs % 1000L;
 
-        return $"{hours}:{minutes:D2}:{seconds:D2}.{hundredths:D2}";
+        return $"{hours}:{minutes:D2}:{seconds:D2}.{millis:D3}";
     }
 
     /// <summary>
@@ -487,15 +546,15 @@ public sealed partial class TimingCalculatorPage : Page
     {
         if (_isUpdatingText) return;
 
-        string beforeText = TimeBeforeBox?.Text ?? "0:00:00.00";
-        string afterText = TimeAfterBox?.Text ?? "0:00:00.00";
+        string beforeText = TimeBeforeBox?.Text ?? DefaultTime;
+        string afterText = TimeAfterBox?.Text ?? DefaultTime;
 
         long beforeMs = ParseTimeToMs(beforeText);
         long afterMs = ParseTimeToMs(afterText);
 
         long diffMs = afterMs - beforeMs;
 
-        // Вывод абсолютного значения сдвига в формате Aegisub
+        // Вывод абсолютного значения сдвига с 3 знаками миллисекунд
         if (ResultTimeBlock != null)
         {
             ResultTimeBlock.Text = FormatMsToAegisub(diffMs);

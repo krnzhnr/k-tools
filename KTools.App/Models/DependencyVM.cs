@@ -43,6 +43,7 @@ public partial class DependencyVM : ObservableObject
 
     partial void OnStatusChanged(DependencyStatus value)
     {
+        IsUpdateAvailable = _dependencyManager.IsUpdateAvailable(Info.Key);
         if (value == DependencyStatus.Installed)
         {
             LoadVersionAsync();
@@ -194,8 +195,8 @@ public partial class DependencyVM : ObservableObject
         CancelCommand = new RelayCommand(() => 
             _dependencyManager.CancelInstallation(Info.Key));
 
-        RemoveCommand = new RelayCommand(() => 
-            _dependencyManager.RemoveDependency(Info.Key));
+        RemoveCommand = new AsyncRelayCommand(async () =>
+            await _dependencyManager.RemoveDependencyAsync(Info.Key));
 
         LoadVersionAsync();
     }
@@ -207,15 +208,22 @@ public partial class DependencyVM : ObservableObject
     {
         if (Status != DependencyStatus.Installed) return;
 
-        Task.Run(() =>
+        _ = Task.Run(async () =>
         {
-            string ver = _dependencyManager.GetInstalledVersion(Info.Key);
-            if (!string.IsNullOrEmpty(ver) && _dispatcherQueue != null)
+            string ver = await _dependencyManager.GetInstalledVersionAsync(Info.Key);
+            if (!string.IsNullOrEmpty(ver))
             {
-                _dispatcherQueue.TryEnqueue(() =>
+                if (_dispatcherQueue != null)
+                {
+                    _dispatcherQueue.TryEnqueue(() =>
+                    {
+                        InstalledVersion = ver;
+                    });
+                }
+                else
                 {
                     InstalledVersion = ver;
-                });
+                }
             }
         });
     }

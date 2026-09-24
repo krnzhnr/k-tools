@@ -32,11 +32,15 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
     private ObservableCollection<FileQueueItem> _files = new();
     private DateTime _startTime;
     private readonly Dictionary<int, double> _filesProgress = new();
+    private double _progressSumTotal;
+    private int _finishedCountIndex;
+    private readonly Dictionary<int, (int Tick, double Percent, string Msg, double Fps, string Bitrate)> _lastProgressEmit = new();
     private readonly HashSet<int> _finishedIndices = new();
     private readonly Dictionary<int, double> _activeFps = new();
     private readonly Dictionary<int, string> _activeBitrates = new();
     private Dictionary<string, List<int>> _selectedTracks = new();
     private Dictionary<string, List<int>> _selectedAttachments = new();
+    private bool _hasQueueErrors;
 
     /// <summary>
     /// Активный исполняемый скрипт обработки медиаданных.
@@ -341,9 +345,14 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
 
         _startTime = DateTime.Now;
         _filesProgress.Clear();
+        _progressSumTotal = 0.0;
+        _finishedCountIndex = 0;
+        _lastProgressEmit.Clear();
         _finishedIndices.Clear();
         _activeFps.Clear();
         _activeBitrates.Clear();
+        _hasQueueErrors = false;
+        IsLogExpanded = false;
 
         for (int i = 0; i < filesList.Count; i++)
         {
@@ -455,7 +464,7 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
     {
         if (ActiveScript == null) return;
 
-        UpdateFileStatus(fileItem.FilePath, "Обработка...", 0.0, FileProcessingState.Processing);
+        UpdateFileStatus(fileItem, "Обработка...", 0.0, FileProcessingState.Processing);
         UpdateProgressState(
             index, 
             total, 
@@ -467,19 +476,34 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
             ScriptProgressCallback progressCallback = 
                 (currIdx, totCount, msg, percent, fps, bitrate) =>
                 {
+                    double percentValue = percent ?? 0.0;
+
+                    // Троттлинг: поток stdout может выдавать десятки обновлений в секунду.
+                    // Пропускаем промежуточные обновления, кроме финального значения.
+                    if (percentValue < 100.0 && !ShouldEmitProgress(index, percentValue, msg, fps, bitrate))
+                    {
+                        return;
+                    }
+
+                    // Один RaiseStateChanged на цикл обработки прогресса
+                    // вместо двух (UpdateFileStatus + UpdateProgressState).
                     UpdateFileStatus(
-                        fileItem.FilePath, 
+                        fileItem, 
                         msg, 
-                        percent ?? 0.0,
-                        FileProcessingState.Processing);
+                        percentValue,
+                        FileProcessingState.Processing,
+                        syncScriptState: false);
                         
                     UpdateProgressState(
                         index, 
                         total, 
                         $"Файл {index + 1} из {total} ({percent:F0}%)", 
-                        percent ?? 0.0,
+                        percentValue,
                         fps,
-                        bitrate);
+                        bitrate,
+                        syncScriptState: false);
+
+                    ActiveScript.RaiseStateChanged();
                 };
 
             var results = await ActiveScript.ExecuteSingleAsync(
@@ -494,7 +518,7 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
 
             if (ActiveScript.IsCancelled)
             {
-                UpdateFileStatus(fileItem.FilePath, "Отменено", 0.0, FileProcessingState.Cancelled);
+                UpdateFileStatus(fileItem, "Отменено", 0.0, FileProcessingState.Cancelled);
                 return;
             }
 
@@ -503,22 +527,24 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
                                              r.Contains("ОШИБКА", StringComparison.OrdinalIgnoreCase));
             if (hasError)
             {
-                UpdateFileStatus(fileItem.FilePath, "Ошибка", 0.0, FileProcessingState.Failed);
+                _hasQueueErrors = true;
+                UpdateFileStatus(fileItem, "Ошибка", 0.0, FileProcessingState.Failed);
             }
             else
             {
-                UpdateFileStatus(fileItem.FilePath, "Завершено", 100.0, FileProcessingState.Completed);
+                UpdateFileStatus(fileItem, "Завершено", 100.0, FileProcessingState.Completed);
             }
         }
         catch (Exception ex)
         {
+            _hasQueueErrors = true;
             _logService.Exception(
                 ex, 
                 $"Ошибка выполнения скрипта на файле " +
                 $"'{fileItem.FileName}': {ex.Message}", 
                 "WorkPanelViewModel");
                 
-            UpdateFileStatus(fileItem.FilePath, "Ошибка", 0.0, FileProcessingState.Failed);
+            UpdateFileStatus(fileItem, "Ошибка", 0.0, FileProcessingState.Failed);
             AppendLogs(new List<string> { 
                 $"❌ Критическая ошибка: {ex.Message}" 
             });
@@ -532,28 +558,39 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
     {
         if (ActiveScript == null) return;
 
-        // Обновляем состояние обработки элементов списка в UI-потоке,
-        // чтобы избежать исключения перекрестного доступа к потокам (thread access violation)
-        App.CurrentMainWindow?.DispatcherQueue?.TryEnqueue(() =>
+        // Обновляем состояние обработки элементов списка и видимость журнала логов.
+        // Журнал автоматически раскрывается только при возникновении ошибок в очереди.
+        if (App.CurrentMainWindow?.DispatcherQueue != null)
+        {
+            App.CurrentMainWindow.DispatcherQueue.TryEnqueue(() =>
+            {
+                foreach (var item in Files)
+                {
+                    item.IsProcessing = false;
+                }
+                IsLogExpanded = _hasQueueErrors;
+            });
+        }
+        else
         {
             foreach (var item in Files)
             {
                 item.IsProcessing = false;
             }
-            IsLogExpanded = true;
-        });
+            IsLogExpanded = _hasQueueErrors;
+        }
 
         if (ActiveScript.IsCancelled)
         {
-            ActiveScript.SavedLogText += 
-                "⚠ Обработка прервана пользователем.\r\n";
+            ActiveScript.AppendToLog(
+                "⚠ Обработка прервана пользователем.\r\n");
             ActiveScript.SavedStatusText = "Обработка отменена";
             ActiveScript.SavedGlobalProgress = 0;
         }
         else
         {
-            ActiveScript.SavedLogText += 
-                "🎉 Все файлы успешно обработаны.\r\n";
+            ActiveScript.AppendToLog(
+                "🎉 Все файлы успешно обработаны.\r\n");
             ActiveScript.SavedStatusText = "Обработка завершена";
             ActiveScript.SavedGlobalProgress = 100;
         }
@@ -568,42 +605,79 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
         {
             if (ActiveScript == null) return;
 
+            string savedLogText = ActiveScript.SavedLogText;
+            if (!string.Equals(LogText, savedLogText, StringComparison.Ordinal))
+            {
+                // Обновляем только реально изменившийся текст журнала,
+                // чтобы не переустанавливать весь TextBox на каждом событии.
+                LogText = savedLogText;
+            }
             StatusText = ActiveScript.SavedStatusText;
             GlobalProgressValue = ActiveScript.SavedGlobalProgress;
-            LogText = ActiveScript.SavedLogText;
             IsProcessing = ActiveScript.IsProcessing;
             IsStartButtonEnabled = !IsProcessing && CheckDependencies();
         });
     }
 
+    /// <summary>
+    /// Определяет, нужно ли отправлять промежуточное обновление прогресса в UI.
+    /// Ограничивает частоту обновлений (~6 Гц), сохраняя первое и изменившие смысл обновления.
+    /// Метрики (FPS, битрейт) тоже участвуют в решении, иначе их обновления терялись бы.
+    /// </summary>
+    private bool ShouldEmitProgress(
+        int fileIndex,
+        double percent,
+        string msg,
+        double? fps = null,
+        string? bitrate = null)
+    {
+        lock (_progressLock)
+        {
+            int now = Environment.TickCount;
+            bool isFirst = !_lastProgressEmit.TryGetValue(fileIndex, out var last);
+            bool changed = isFirst || 
+                Math.Abs(percent - last.Percent) > 0.0001 || 
+                !string.Equals(last.Msg, msg ?? "", StringComparison.Ordinal) ||
+                (fps.HasValue && Math.Abs(fps.Value - last.Fps) > 0.0001) ||
+                !string.Equals(last.Bitrate ?? "", bitrate ?? "", StringComparison.Ordinal);
+            bool elapsed = isFirst || (uint)(now - last.Tick) > 150;
+            bool heartbeat = isFirst || (uint)(now - last.Tick) > 1000;
+
+            if ((changed && (isFirst || elapsed)) || heartbeat)
+            {
+                _lastProgressEmit[fileIndex] = (now, percent, msg ?? "", fps ?? 0.0, bitrate ?? "");
+                return true;
+            }
+
+            return false;
+        }
+    }
+
     private void UpdateFileStatus(
-        string filePath, 
+        FileQueueItem fileItem, 
         string status, 
         double progress,
-        FileProcessingState? state = null)
+        FileProcessingState? state = null,
+        bool syncScriptState = true)
     {
         App.CurrentMainWindow?.DispatcherQueue?.TryEnqueue(() =>
         {
-            var fileItem = Files.FirstOrDefault(f => 
-                f.FilePath.Equals(
-                    filePath, 
-                    StringComparison.OrdinalIgnoreCase));
-            if (fileItem != null)
+            fileItem.Status = status;
+            fileItem.Progress = progress;
+            if (state.HasValue)
             {
-                fileItem.Status = status;
-                fileItem.Progress = progress;
-                if (state.HasValue)
-                {
-                    fileItem.State = state.Value;
-                }
-                else
-                {
-                    fileItem.State = InferStateFromStatus(status);
-                }
+                fileItem.State = state.Value;
+            }
+            else
+            {
+                fileItem.State = InferStateFromStatus(status);
             }
         });
 
-        ActiveScript?.RaiseStateChanged();
+        if (syncScriptState)
+        {
+            ActiveScript?.RaiseStateChanged();
+        }
     }
 
     private FileProcessingState InferStateFromStatus(string status)
@@ -626,7 +700,8 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
         string status, 
         double filePercent,
         double? fps = null,
-        string? bitrate = null)
+        string? bitrate = null,
+        bool syncScriptState = true)
     {
         if (ActiveScript == null) return;
 
@@ -635,15 +710,21 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
         string etaStr = "-";
         double? displayFps = null;
         string? displayBitrate = null;
+        string metricsText;
 
         lock (_progressLock)
         {
-            // 1. Обновляем индивидуальный прогресс файла в словаре
+            // 1. Обновляем индивидуальный прогресс файла в словаре (инкрементально)
+            double oldPercent = _filesProgress.TryGetValue(fileIndex, out var oldVal) ? oldVal : 0.0;
             _filesProgress[fileIndex] = filePercent;
+            _progressSumTotal += filePercent - oldPercent;
 
             if (filePercent >= 100.0)
             {
-                _finishedIndices.Add(fileIndex);
+                if (_finishedIndices.Add(fileIndex))
+                {
+                    _finishedCountIndex++;
+                }
                 _activeFps.Remove(fileIndex);
                 _activeBitrates.Remove(fileIndex);
             }
@@ -660,12 +741,7 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
             }
 
             // 2. Рассчитываем общий процент очереди (0-100%)
-            double totalProgressSum = 0.0;
-            foreach (var val in _filesProgress.Values)
-            {
-                totalProgressSum += val;
-            }
-            overallPercent = (totalProgressSum / (totalCount * 100.0)) * 100.0;
+            overallPercent = (_progressSumTotal / (totalCount * 100.0)) * 100.0;
             overallPercent = Math.Min(Math.Max(overallPercent, 0.0), 100.0);
 
             // 3. Рассчитываем общее оставшееся время (ETA) для очереди
@@ -692,7 +768,7 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
                 }
             }
 
-            finishedCount = _finishedIndices.Count;
+            finishedCount = _finishedCountIndex;
 
             // Находим первый активный файл для отображения его метрик
             int? targetIndex = null;
@@ -712,32 +788,35 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
                 if (_activeFps.TryGetValue(targetIndex.Value, out double f)) displayFps = f;
                 if (_activeBitrates.TryGetValue(targetIndex.Value, out string? b)) displayBitrate = b;
             }
+
+            metricsText = "";
+            if (displayFps.HasValue)
+            {
+                metricsText += $" | {displayFps.Value:F0} FPS";
+            }
+            if (!string.IsNullOrEmpty(displayBitrate))
+            {
+                metricsText += $" | {displayBitrate}";
+            }
+
+            // Публикуем состояние под тем же lock: при параллельной обработке
+            // более старый поток иначе мог бы записать данные после более новых.
+            ActiveScript.SavedStatusText =
+                $"Выполнение: готово {finishedCount} из {totalCount} ({overallPercent:F1}%){metricsText} | Осталось: {etaStr}";
+            ActiveScript.SavedGlobalProgress = overallPercent;
         }
 
-        string metrics = "";
-        if (displayFps.HasValue)
+        if (syncScriptState)
         {
-            metrics += $" | {displayFps.Value:F0} FPS";
+            ActiveScript.RaiseStateChanged();
         }
-        if (!string.IsNullOrEmpty(displayBitrate))
-        {
-            metrics += $" | {displayBitrate}";
-        }
-
-        // 4. Формируем чистый общий текст статуса без мерцания индивидуальных данных
-        string displayStatusText = $"Выполнение: готово {finishedCount} из {totalCount} ({overallPercent:F1}%){metrics} | Осталось: {etaStr}";
-
-        ActiveScript.SavedStatusText = displayStatusText;
-        ActiveScript.SavedGlobalProgress = overallPercent;
-
-        ActiveScript.RaiseStateChanged();
     }
 
     private void AppendLog(string message)
     {
         if (ActiveScript == null) return;
 
-        ActiveScript.SavedLogText += message;
+        ActiveScript.AppendToLog(message);
         ActiveScript.RaiseStateChanged();
     }
 
@@ -745,12 +824,7 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
     {
         if (ActiveScript == null) return;
 
-        var sb = new StringBuilder(ActiveScript.SavedLogText);
-        foreach (var line in lines)
-        {
-            sb.AppendLine(line);
-        }
-        ActiveScript.SavedLogText = sb.ToString();
+        ActiveScript.AppendLinesToLog(lines);
         ActiveScript.RaiseStateChanged();
     }
 

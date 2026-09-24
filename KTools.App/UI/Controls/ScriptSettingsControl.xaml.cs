@@ -22,6 +22,7 @@ namespace KTools_App.UI.Controls;
 public sealed partial class ScriptSettingsControl : UserControl
 {
     private readonly List<(SettingField Field, FrameworkElement Element)> _generatedElements = new();
+    private readonly Dictionary<string, string> _childFieldToParentExpanderKey = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, FrameworkElement> _groupContainers = new();
     private AbstractScript? _activeScript;
     private StackPanel? _previewPanel;
@@ -43,6 +44,8 @@ public sealed partial class ScriptSettingsControl : UserControl
     private bool _isInternalNumberBoxUpdate;
     private static readonly Dictionary<string, string> _lastActiveTabs = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, (Button ActionBtn, ProgressRing Ring, TextBlock PText, Button CancelBtn)> _whisperActionControls = new(StringComparer.OrdinalIgnoreCase);
+    private AbstractScript? _pendingBuildScript;
+    private AbstractScript? _builtScript;
 
     public ScriptSettingsControl()
     {
@@ -78,9 +81,43 @@ public sealed partial class ScriptSettingsControl : UserControl
                 _whisperModelManager.DownloadProgressChanged -= OnWhisperDownloadProgressChanged;
                 _whisperModelManager.DownloadCompleted -= OnWhisperDownloadCompleted;
             }
-
-            _whisperActionControls.Clear();
         };
+
+        // Страница может кэшироваться навигационным фреймом, поэтому после выгрузки
+        // подписки восстанавливаются, а визуальное состояние кнопок синхронизируется заново.
+        this.Loaded += (s, e) => RestoreSubscriptions();
+    }
+
+    /// <summary>
+    /// Восстанавливает подписки после выгрузки страницы и актуализирует состояние
+    /// элементов управления моделями Whisper (загрузка могла завершиться, пока вкладка была скрыта).
+    /// </summary>
+    private void RestoreSubscriptions()
+    {
+        if (_activeScript != null)
+        {
+            _activeScript.FilesQueue.CollectionChanged -= OnFilesQueueCollectionChanged;
+            _activeScript.FilesQueue.CollectionChanged += OnFilesQueueCollectionChanged;
+        }
+
+        if (_whisperModelManager != null)
+        {
+            _whisperModelManager.DownloadProgressChanged -= OnWhisperDownloadProgressChanged;
+            _whisperModelManager.DownloadProgressChanged += OnWhisperDownloadProgressChanged;
+            _whisperModelManager.DownloadCompleted -= OnWhisperDownloadCompleted;
+            _whisperModelManager.DownloadCompleted += OnWhisperDownloadCompleted;
+
+            foreach (var (modelKey, ctrl) in _whisperActionControls)
+            {
+                ctrl.ActionBtn.IsEnabled = true;
+                ctrl.Ring.Visibility = Visibility.Collapsed;
+                ctrl.Ring.IsActive = false;
+                ctrl.PText.Visibility = Visibility.Collapsed;
+                ctrl.PText.Text = string.Empty;
+                ctrl.CancelBtn.Visibility = Visibility.Collapsed;
+                UpdateWhisperButtonVisuals(ctrl.ActionBtn, _whisperModelManager.IsModelDownloaded(modelKey));
+            }
+        }
     }
 
     private void OnWhisperDownloadProgressChanged(string modelKey, int percent)
@@ -136,6 +173,50 @@ public sealed partial class ScriptSettingsControl : UserControl
     /// </summary>
     public void GenerateSettingsUI(AbstractScript script)
     {
+        _pendingBuildScript = null;
+        PrepareSettingsState(script);
+        BuildSettingsUi(script);
+    }
+
+    /// <summary>
+    /// Подготавливает состояние настроек скрипта без построения визуального дерева.
+    /// Тяжелое построение карточек откладывается до первого открытия вкладки «Настройки»
+    /// (метод <see cref="GenerateSettingsUIIfPending"/>), что убирает задержку при
+    /// переходе на скрипт. Значения настроек при этом полностью готовы к чтению
+    /// через ReadCurrentSettings, как и раньше.
+    /// </summary>
+    public void EnsureSettingsUI(AbstractScript script)
+    {
+        if (ReferenceEquals(_activeScript, script) && ReferenceEquals(_builtScript, script))
+        {
+            return;
+        }
+
+        PrepareSettingsState(script);
+        _pendingBuildScript = script;
+    }
+
+    /// <summary>
+    /// Строит отложенное визуальное дерево настроек, если скрипт сменился.
+    /// </summary>
+    public void GenerateSettingsUIIfPending()
+    {
+        if (_pendingBuildScript == null)
+        {
+            return;
+        }
+
+        AbstractScript script = _pendingBuildScript;
+        _pendingBuildScript = null;
+        BuildSettingsUi(script);
+    }
+
+    /// <summary>
+    /// Переключает подписку на очередь файлов и модель представления настроек на новый скрипт,
+    /// применяя побочные настройки (пресеты lossless). Не строит визуальное дерево.
+    /// </summary>
+    private void PrepareSettingsState(AbstractScript script)
+    {
         if (_activeScript != null)
         {
             _activeScript.FilesQueue.CollectionChanged -= OnFilesQueueCollectionChanged;
@@ -145,8 +226,22 @@ public sealed partial class ScriptSettingsControl : UserControl
         _activeScript.FilesQueue.CollectionChanged += OnFilesQueueCollectionChanged;
         _isPreviewExpanded = false;
 
+        string settingsGroup = _settingsManager.GetSafeGroupName(script.Name);
+        if (_settingsManager.GetSetting(settingsGroup, "lossless", false))
+        {
+            ApplyFastestPresetOnLossless(settingsGroup);
+        }
+    }
+
+    /// <summary>
+    /// Строит визуальное дерево параметров скрипта (карточки, группы, вкладки).
+    /// </summary>
+    private void BuildSettingsUi(AbstractScript script)
+    {
+        _whisperActionControls.Clear();
         SettingsContainer.Children.Clear();
         _generatedElements.Clear();
+        _childFieldToParentExpanderKey.Clear();
         _groups.Clear();
         _groupContainers.Clear();
         SettingsNavigationView.MenuItems.Clear();
@@ -166,6 +261,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                 HorizontalAlignment = HorizontalAlignment.Center
             };
             SettingsContainer.Children.Add(noSettingsText);
+            _builtScript = script;
             return;
         }
 
@@ -282,6 +378,8 @@ public sealed partial class ScriptSettingsControl : UserControl
         {
             ApplyFastestPresetOnLossless(settingsGroup);
         }
+
+        _builtScript = script;
     }
 
     /// <summary>
@@ -488,22 +586,45 @@ public sealed partial class ScriptSettingsControl : UserControl
                     expander.HeaderIcon = new FontIcon { Glyph = field.HeaderIconGlyph };
                 }
 
-                bool isExpanderOn = _settingsManager.GetSetting(
-                    settingsGroup,
-                    field.Key,
-                    field.DefaultValue is bool b && b);
-
-                var toggleSwitch = new ToggleSwitch
-                {
-                    OffContent = "Выкл",
-                    OnContent = "Вкл",
-                    IsOn = isExpanderOn,
-                    VerticalAlignment = VerticalAlignment.Center
-                };
-
-                expander.Content = toggleSwitch;
+                bool hasToggleSwitch = field.HasToggleSwitch;
+                bool isExpanderOn = hasToggleSwitch
+                    ? _settingsManager.GetSetting(settingsGroup, field.Key, field.DefaultValue is bool b && b)
+                    : true;
 
                 var childCards = new List<SettingsCard>();
+
+                if (hasToggleSwitch)
+                {
+                    var toggleSwitch = new ToggleSwitch
+                    {
+                        OffContent = "Выкл",
+                        OnContent = "Вкл",
+                        IsOn = isExpanderOn,
+                        VerticalAlignment = VerticalAlignment.Center
+                    };
+
+                    expander.Content = toggleSwitch;
+
+                    toggleSwitch.Toggled += (s, e) =>
+                    {
+                        bool isOn = toggleSwitch.IsOn;
+                        _settingsManager.SetSetting(settingsGroup, field.Key, isOn);
+
+                        // Переключаем активность дочерних карточек напрямую — это единственное,
+                        // что реально нужно при переключении тумблера экспандера.
+                        // UpdateVisibility и UpdatePreview здесь не вызываются намеренно:
+                        // — UpdateVisibility пересоздаёт всю динамическую схему энкодера и рекурсивно
+                        //   обходит визуальное дерево, хотя ни одно поле не зависит от ключа экспандера
+                        //   для VisibleIf / DisableConditions;
+                        // — UpdatePreview обновляет предпросмотр переименования файлов, к которому
+                        //   тумблер экспандера фильтров не имеет отношения.
+                        foreach (var card in childCards)
+                        {
+                            card.IsEnabled = isOn;
+                            card.Opacity = 1.0;
+                        }
+                    };
+                }
 
                 foreach (var childField in field.ChildFields)
                 {
@@ -520,21 +641,13 @@ public sealed partial class ScriptSettingsControl : UserControl
 
                     expander.Items.Add(childCard);
                     childCards.Add(childCard);
+                    if (hasToggleSwitch)
+                    {
+                        _childFieldToParentExpanderKey[childField.Key] = field.Key;
+                    }
                     _generatedElements.Add((childField, childCard));
                     groupVisual.Elements.Add(childCard);
                 }
-
-                toggleSwitch.Toggled += (s, e) =>
-                {
-                    bool isOn = toggleSwitch.IsOn;
-                    _settingsManager.SetSetting(settingsGroup, field.Key, isOn);
-                    foreach (var card in childCards)
-                    {
-                        card.IsEnabled = isOn;
-                    }
-                    UpdateVisibility(settingsGroup);
-                    UpdatePreview();
-                };
 
                 cardContentStack.Children.Add(expander);
                 _generatedElements.Add((field, expander));
@@ -1021,9 +1134,19 @@ public sealed partial class ScriptSettingsControl : UserControl
             item.Element.Visibility = isVisible ? Visibility.Visible : Visibility.Collapsed;
         }
 
-        // 1.5. Обработка отключения (DisableConditions)
+        // 1.5. Обработка отключения (DisableConditions) и вложенности в экспандер
         foreach (var item in _generatedElements)
         {
+            bool isParentExpanderOn = true;
+            if (_childFieldToParentExpanderKey.TryGetValue(item.Field.Key, out string? parentExpanderKey))
+            {
+                object? parentDefVal = _generatedElements.FirstOrDefault(x => x.Field.Key == parentExpanderKey).Field?.DefaultValue;
+                isParentExpanderOn = _settingsManager.GetSetting(
+                    settingsGroup,
+                    parentExpanderKey,
+                    parentDefVal is bool pb && pb);
+            }
+
             if (item.Field.DisableConditions != null && item.Field.DisableConditions.Count > 0)
             {
                 bool isDisabled = false;
@@ -1056,35 +1179,44 @@ public sealed partial class ScriptSettingsControl : UserControl
                         break;
                     }
                 }
+
+                bool effectiveEnabled = !isDisabled && isParentExpanderOn;
                 if (item.Element is Control ctrl)
                 {
-                    ctrl.IsEnabled = !isDisabled;
+                    ctrl.IsEnabled = effectiveEnabled;
+                    // Для нативных Control (включая SettingsCard) WinUI 3 сам управляет визуальным
+                    // состоянием Disabled. Сбрасываем Opacity в 1.0, чтобы исключить наложение двойной прозрачности.
+                    ctrl.Opacity = 1.0;
                 }
                 else if (item.Element is Grid grid)
                 {
                     foreach (var child in grid.Children.OfType<Control>())
                     {
-                        child.IsEnabled = !isDisabled;
+                        child.IsEnabled = effectiveEnabled;
+                        child.Opacity = 1.0;
                     }
+                    grid.Opacity = effectiveEnabled ? 1.0 : 0.5;
                 }
-                item.Element.IsHitTestVisible = !isDisabled;
-                item.Element.Opacity = isDisabled ? 0.5 : 1.0;
+                item.Element.IsHitTestVisible = effectiveEnabled;
             }
             else
             {
+                bool effectiveEnabled = isParentExpanderOn;
                 if (item.Element is Control ctrl)
                 {
-                    ctrl.IsEnabled = true;
+                    ctrl.IsEnabled = effectiveEnabled;
+                    ctrl.Opacity = 1.0;
                 }
                 else if (item.Element is Grid grid)
                 {
                     foreach (var child in grid.Children.OfType<Control>())
                     {
-                        child.IsEnabled = true;
+                        child.IsEnabled = effectiveEnabled;
+                        child.Opacity = 1.0;
                     }
+                    grid.Opacity = effectiveEnabled ? 1.0 : 0.5;
                 }
-                item.Element.IsHitTestVisible = true;
-                item.Element.Opacity = 1.0;
+                item.Element.IsHitTestVisible = effectiveEnabled;
             }
         }
 
@@ -2105,6 +2237,17 @@ public sealed partial class ScriptSettingsControl : UserControl
             if (field.Type != SettingType.Subtitle)
             {
                 settings[field.Key] = _settingsManager.GetSetting(settingsGroup, field.Key, field.DefaultValue);
+            }
+
+            if (field.ChildFields != null && field.ChildFields.Count > 0)
+            {
+                foreach (var child in field.ChildFields)
+                {
+                    if (child.Type != SettingType.Subtitle)
+                    {
+                        settings[child.Key] = _settingsManager.GetSetting(settingsGroup, child.Key, child.DefaultValue);
+                    }
+                }
             }
         }
 

@@ -460,6 +460,12 @@ public partial class MainViewModel : ThreadSafeViewModel
     private void AddFilesToScript(AbstractScript script, List<string> files)
     {
         var mediaProbeService = _mediaProbeService;
+        var existingPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var queued in script.FilesQueue)
+        {
+            existingPaths.Add(queued.FilePath);
+        }
+
         foreach (var file in files)
         {
             // Проверяем поддерживается ли расширение файла выбранным скриптом
@@ -473,7 +479,7 @@ public partial class MainViewModel : ThreadSafeViewModel
                 }
             }
 
-            if (script.FilesQueue.Any(f => f.FilePath.Equals(file, StringComparison.OrdinalIgnoreCase)))
+            if (!existingPaths.Add(file))
             {
                 continue; // Исключаем дубликаты
             }

@@ -1,5 +1,6 @@
 // -*- coding: utf-8 -*-
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
@@ -36,6 +37,11 @@ public partial class DependencySetupViewModel : ThreadSafeViewModel
     /// </summary>
     [ObservableProperty]
     public partial ObservableCollection<DependencyVM> OptionalDependencies { get; set; } = new();
+
+    /// <summary>
+    /// Словарь для быстрого поиска ViewModel зависимости по её ключу.
+    /// </summary>
+    private readonly Dictionary<string, DependencyVM> _dependencyLookup = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Указывает, доступна ли кнопка пакетной установки всех компонентов.
@@ -95,11 +101,13 @@ public partial class DependencySetupViewModel : ThreadSafeViewModel
     {
         RequiredDependencies.Clear();
         OptionalDependencies.Clear();
+        _dependencyLookup.Clear();
 
         var registry = _dependencyManager.GetRegistry();
         foreach (var dep in registry)
         {
             var vm = new DependencyVM(dep, _dependencyManager);
+            _dependencyLookup[dep.Key] = vm;
             if (dep.IsRequired)
             {
                 RequiredDependencies.Add(vm);
@@ -127,8 +135,8 @@ public partial class DependencySetupViewModel : ThreadSafeViewModel
 
     private DependencyVM? FindViewModel(string key)
     {
-        return RequiredDependencies.Concat(OptionalDependencies)
-            .FirstOrDefault(d => d.Info.Key.Equals(key, StringComparison.OrdinalIgnoreCase));
+        _dependencyLookup.TryGetValue(key, out var vm);
+        return vm;
     }
 
     private void OnStatusChanged(string key, DependencyStatus status)
@@ -164,9 +172,15 @@ public partial class DependencySetupViewModel : ThreadSafeViewModel
         var vm = FindViewModel(key);
         if (vm != null)
         {
+            vm.IsUpdateAvailable = _dependencyManager.IsUpdateAvailable(key);
             if (!success)
             {
                 vm.ErrorMessage = errorMsg;
+            }
+            else
+            {
+                vm.ErrorMessage = string.Empty;
+                vm.LoadVersionAsync();
             }
             UpdateUIStates();
         }
@@ -198,11 +212,11 @@ public partial class DependencySetupViewModel : ThreadSafeViewModel
     /// Удаляет установленную зависимость с физического накопителя.
     /// </summary>
     [RelayCommand]
-    private void RemoveDependency(DependencyVM? vm)
+    private async Task RemoveDependencyAsync(DependencyVM? vm)
     {
         if (vm == null) return;
         _logService.Warn($"Пользователь инициировал удаление зависимости: {vm.Info.Key}", "DependencySetupViewModel");
-        _dependencyManager.RemoveDependency(vm.Info.Key);
+        await _dependencyManager.RemoveDependencyAsync(vm.Info.Key);
     }
 
     /// <summary>

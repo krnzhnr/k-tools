@@ -2,7 +2,6 @@
 using System;
 using System.IO;
 using System.Diagnostics;
-using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Windows.ApplicationModel.DataTransfer;
@@ -26,7 +25,7 @@ public partial class LogViewModel : ThreadSafeViewModel
     /// <summary>
     /// Предоставляет коллекцию записей логов для привязки к элементу управления ListView.
     /// </summary>
-    public ObservableCollection<LogItem> Logs { get; } = new();
+    public ObservableRangeCollection<LogItem> Logs { get; } = new();
 
     /// <summary>
     /// Инициализирует новый экземпляр LogViewModel с внедрением зависимостей.
@@ -65,16 +64,19 @@ public partial class LogViewModel : ThreadSafeViewModel
             }
 
             string[] lines = allLogs.Split(new[] { Environment.NewLine, "\n" }, StringSplitOptions.RemoveEmptyEntries);
-            
+
             // Загружаем последние 1000 строк для предотвращения перегрузки графического интерфейса
             int startIdx = Math.Max(0, lines.Length - 1000);
 
+            var items = new List<LogItem>(lines.Length - startIdx);
             for (int i = startIdx; i < lines.Length; i++)
             {
                 string line = lines[i];
                 LogLevel level = ParseLevelFromLogLine(line);
-                Logs.Add(new LogItem { Message = line, Level = level });
+                items.Add(new LogItem { Message = line, Level = level });
             }
+
+            Logs.AddRange(items);
             
             _logService.DebugLog($"Успешно загружено {Logs.Count} записей истории в графическую панель", "LogViewModel");
         }
@@ -103,6 +105,29 @@ public partial class LogViewModel : ThreadSafeViewModel
         {
             // Используем системную отладку для предотвращения бесконечной рекурсии в логгере
             Debug.WriteLine($"[Error] Ошибка при динамическом добавлении лога в коллекцию ViewModel: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Добавляет пачку сообщений лога одной операцией и удаляет старые элементы, если превышен лимит в 2000 строк.
+    /// </summary>
+    public void AddLogs(System.Collections.Generic.IEnumerable<LogItem> items)
+    {
+        try
+        {
+            Logs.AddRange(items);
+
+            // Усечение переполнения одной операцией (без сдвига элементов по одному)
+            if (Logs.Count > 2000)
+            {
+                int overflow = Logs.Count - 2000;
+                Logs.RemoveRangeFront(overflow);
+            }
+        }
+        catch (Exception ex)
+        {
+            // Используем системную отладку для предотвращения бесконечной рекурсии в логгере
+            Debug.WriteLine($"[Error] Ошибка при пакетном добавлении логов в коллекцию ViewModel: {ex.Message}");
         }
     }
 

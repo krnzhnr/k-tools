@@ -66,4 +66,9 @@ public interface ILogService
     /// Полностью очистить содержимое текущего файла логов.
     /// </summary>
     void ClearCurrentLog();
+
+    /// <summary>
+    /// Принудительно сбросить буфер журнала на диск (вызывается перед завершением приложения).
+    /// </summary>
+    void Flush();
 }

@@ -212,16 +212,16 @@ public sealed class MetadataCleanupScript : AbstractScript
 
                 if (overwriteSource && string.IsNullOrEmpty(outputPath))
                 {
-                    ReplaceSourceWithResult(filePath, finalOutputFile, results);
+                    await ReplaceSourceWithResultAsync(filePath, finalOutputFile, results);
                 }
                 else if (deleteSource)
                 {
-                    DeleteSource(filePath, results);
+                    await DeleteSourceAsync(filePath, results);
                 }
             }
             else
             {
-                CleanupFailedOutputFile(finalOutputFile);
+                await CleanupFailedOutputFileAsync(finalOutputFile);
                 string failMsg = $"❌ ОШИБКА очистки метаданных: {Path.GetFileName(filePath)}";
                 _logService.Error(failMsg, "MetadataCleanupScript");
                 results.Add(failMsg);
@@ -229,7 +229,7 @@ public sealed class MetadataCleanupScript : AbstractScript
         }
         catch (Exception ex)
         {
-            CleanupFailedOutputFile(finalOutputFile);
+            await CleanupFailedOutputFileAsync(finalOutputFile);
             string errorMsg = $"❌ Ошибка выполнения скрипта для {Path.GetFileName(filePath)}: {ex.Message}";
             results.Add(errorMsg);
             _logService.Exception(ex, $"Ошибка при очистке метаданных для '{originalName}': {ex.Message}", "MetadataCleanupScript");

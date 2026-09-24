@@ -227,12 +227,12 @@ public sealed class ContainerConversionScript : AbstractScript
 
             if (deleteOriginal)
             {
-                DeleteSource(filePath, results);
+                await DeleteSourceAsync(filePath, results);
             }
         }
         else
         {
-            CleanupFailedOutputFile(outputFilePath);
+            await CleanupFailedOutputFileAsync(outputFilePath);
             if (IsCancelled)
             {
                 progressCallback(fileIndex, totalCount, "Отменено пользователем", 0.0);

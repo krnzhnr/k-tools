@@ -123,6 +123,7 @@ public sealed partial class TrackSelectionControl : UserControl
     private bool _isUpdatingSelection;
     private bool _hasShownScrollTip;
     private bool _isUnloaded;
+    private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _rebuildTreeTimer;
 
     public TrackSelectionControl()
     {
@@ -132,6 +133,11 @@ public sealed partial class TrackSelectionControl : UserControl
         InitializeComponent();
         Loaded += TrackSelectionControl_Loaded;
         Unloaded += TrackSelectionControl_Unloaded;
+
+        _rebuildTreeTimer = _dispatcherQueue.CreateTimer();
+        _rebuildTreeTimer.Interval = TimeSpan.FromMilliseconds(100);
+        _rebuildTreeTimer.IsRepeating = false;
+        _rebuildTreeTimer.Tick += (s, e) => RebuildTreeCore();
     }
 
     /// <summary>
@@ -342,6 +348,15 @@ public sealed partial class TrackSelectionControl : UserControl
     /// Гарантирует сохранение пользовательского выбора при асинхронных обновлениях.
     /// </summary>
     private void RebuildTree()
+    {
+        _rebuildTreeTimer.Stop();
+        _rebuildTreeTimer.Start();
+    }
+
+    /// <summary>
+    /// Отложенная перестройка дерева (не более одного запланированного прохода на интервал).
+    /// </summary>
+    private void RebuildTreeCore()
     {
         _dispatcherQueue.TryEnqueue(() =>
         {
@@ -1530,6 +1545,10 @@ public sealed partial class TrackSelectionControl : UserControl
             "Выгрузка виджета выбора дорожек: " +
             "освобождение зарегистрированных подписок",
             "TrackSelectionControl");
+
+        // Отложенное перестроение не должно срабатывать на отсоединенном элементе:
+        // актуальное состояние будет построено заново при следующей загрузке.
+        _rebuildTreeTimer.Stop();
 
         if (_files != null)
         {

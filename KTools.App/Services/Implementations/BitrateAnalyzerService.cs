@@ -55,6 +55,10 @@ public sealed class BitrateAnalyzerService : AbstractProcessRunner, IBitrateAnal
         var videoTrack = videoTracks.FirstOrDefault();
         var audioTrack = audioTracks.FirstOrDefault();
 
+        // Селекторы подбираются от самого точного (индекс нужного потока) к самому общему.
+        // Перебор выполняется только при нулевом результате предыдущего варианта, поэтому
+        // в типичном случае файл читается один раз. Важно: 'v'/'a' выбирают ВСЕ потоки типа,
+        // поэтому используются только как последний резервный вариант.
         var selectorsToTry = new List<string>();
         string codecName = "Unknown";
         double fps = 25.0;
@@ -66,7 +70,6 @@ public sealed class BitrateAnalyzerService : AbstractProcessRunner, IBitrateAnal
             selectorsToTry.Add($"v:{relVideoIdx}");
             selectorsToTry.Add("v:0");
             selectorsToTry.Add("v");
-            selectorsToTry.Add("0");
             codecName = !string.IsNullOrEmpty(videoTrack.Codec) ? videoTrack.Codec : "Video";
         }
         else if (audioTrack != null)
@@ -75,7 +78,6 @@ public sealed class BitrateAnalyzerService : AbstractProcessRunner, IBitrateAnal
             selectorsToTry.Add($"a:{relAudioIdx}");
             selectorsToTry.Add("a:0");
             selectorsToTry.Add("a");
-            selectorsToTry.Add("0");
             codecName = !string.IsNullOrEmpty(audioTrack.Codec) ? audioTrack.Codec : "Audio";
         }
         else

@@ -30,6 +30,43 @@ public sealed class LogService : ILogService
     private readonly object _lock = new();
     private string _currentLogFile = string.Empty;
     private string _customLogDir = string.Empty;
+    private StreamWriter? _writer;
+    private int _lastFlushTick = Environment.TickCount;
+    private int _lastWriteTick = Environment.TickCount - IdleCloseMilliseconds;
+
+    private const int FlushIntervalMilliseconds = 1000;
+    private const int IdleCloseMilliseconds = 200;
+
+    private static readonly UTF8Encoding Utf8WithBom = new(true);
+
+    private void CloseWriterNoLock()
+    {
+        _writer?.Dispose();
+        _writer = null;
+        _lastFlushTick = Environment.TickCount;
+    }
+
+    private void EnsureWriterNoLock()
+    {
+        if (_writer == null)
+        {
+            var stream = new FileStream(_currentLogFile, FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
+            _writer = new StreamWriter(stream, Utf8WithBom)
+            {
+                AutoFlush = false
+            };
+        }
+    }
+
+    private void FlushIfDueNoLock(int nowTick)
+    {
+        if (_writer == null) return;
+        if (nowTick - _lastFlushTick >= FlushIntervalMilliseconds)
+        {
+            _writer.Flush();
+            _lastFlushTick = nowTick;
+        }
+    }
 
     public LogService()
     {
@@ -108,6 +145,8 @@ public sealed class LogService : ILogService
 
                 // Уникальный файл лога для каждого запуска на основе даты и времени
                 string timestampStr = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+                _writer?.Flush();
+                CloseWriterNoLock();
                 _currentLogFile = Path.Combine(logDir, $"ktools_{timestampStr}.log");
 
                 // Ротация логов: удаляем файлы старше 10 дней (как в оригинале)
@@ -186,7 +225,26 @@ public sealed class LogService : ILogService
                     }
                 }
 
-                File.AppendAllText(_currentLogFile, formatted + Environment.NewLine, Encoding.UTF8);
+                try
+                {
+                    int nowTick = Environment.TickCount;
+                    EnsureWriterNoLock();
+                    _writer!.WriteLine(formatted);
+                    FlushIfDueNoLock(nowTick);
+
+                    // Активная пачка записей: ручка держится открытой; одиночный вызов — сброс и закрытие
+                    if (nowTick - _lastWriteTick >= IdleCloseMilliseconds)
+                    {
+                        _writer.Flush();
+                        CloseWriterNoLock();
+                    }
+                    _lastWriteTick = nowTick;
+                }
+                catch (UnauthorizedAccessException ex)
+                {
+                    Debug.WriteLine($"[Error] Нет доступа для записи лога на диск: {ex.Message}");
+                    CloseWriterNoLock();
+                }
             }
             catch (UnauthorizedAccessException ex)
             {
@@ -225,6 +283,26 @@ public sealed class LogService : ILogService
     }
 
     /// <summary>
+    /// Принудительно сбрасывает буфер журнала на диск.
+    /// Вызывается перед завершением приложения, чтобы последние записи не потерялись.
+    /// </summary>
+    public void Flush()
+    {
+        lock (_lock)
+        {
+            try
+            {
+                _writer?.Flush();
+                _lastFlushTick = Environment.TickCount;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[Error] Не удалось сбросить буфер лога на диск: {ex.Message}");
+            }
+        }
+    }
+
+    /// <summary>
     /// Прочитать весь текст из текущего посуточного лог-файла.
     /// </summary>
     /// <returns>Строка с текстом лога или пустая строка.</returns>
@@ -234,9 +312,12 @@ public sealed class LogService : ILogService
         {
             try
             {
+                _writer?.Flush();
                 if (File.Exists(_currentLogFile))
                 {
-                    return File.ReadAllText(_currentLogFile, Encoding.UTF8);
+                    using var stream = new FileStream(_currentLogFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                    using var reader = new StreamReader(stream, Encoding.UTF8);
+                    return reader.ReadToEnd();
                 }
             }
             catch (Exception ex)
@@ -256,9 +337,14 @@ public sealed class LogService : ILogService
         {
             try
             {
+                _writer?.Flush();
                 if (File.Exists(_currentLogFile))
                 {
-                    File.WriteAllText(_currentLogFile, string.Empty, Encoding.UTF8);
+                    CloseWriterNoLock();
+                    using (var stream = new FileStream(_currentLogFile, FileMode.Truncate, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete))
+                    {
+                        stream.SetLength(0);
+                    }
                 }
             }
             catch (UnauthorizedAccessException ex)

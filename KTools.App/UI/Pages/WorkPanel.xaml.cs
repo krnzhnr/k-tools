@@ -8,6 +8,7 @@ using System.ComponentModel;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Animation;
 using Microsoft.UI.Xaml.Hosting;
 using Microsoft.UI.Xaml.Navigation;
 using Microsoft.Extensions.DependencyInjection;
@@ -31,6 +32,7 @@ public sealed partial class WorkPanel : Page
     private ILogService _logService => App.Services.GetRequiredService<ILogService>();
 
     private AbstractScript? _script;
+    private bool _isScriptInitialized;
 
     // Контейнеры контента для горизонтального NavigationView
     private Grid _filesContainer = null!;
@@ -49,6 +51,16 @@ public sealed partial class WorkPanel : Page
     private ScriptSettingsControl ScriptSettings = null!;
     private bool _isLandscape;
 
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _logSyncTimer;
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _rightPanelWidthTimer;
+    private ScrollViewer? _logScrollViewer;
+    private bool _isApplyingLayout;
+    private Storyboard? _scriptSwitchStoryboard;
+    private DoubleAnimation? _scriptSwitchFade;
+    private DoubleAnimation? _scriptSwitchSlide;
+    private double _pendingRightPanelWidth;
+    private bool _rightPanelWidthDirty;
+
     /// <summary>
     /// Предоставляет доступ к модели представления рабочей панели.
     /// </summary>
@@ -63,6 +75,11 @@ public sealed partial class WorkPanel : Page
         ViewModel.PropertyChanged += OnViewModelPropertyChanged;
         InitializeTabs();
         InitializeComponent();
+
+        // Страница кэшируется навигационным фреймом: тяжелое дерево элементов
+        // (список файлов, дерево дорожек, настройки) создается один раз,
+        // а переходы между скриптами больше не пересоздают его заново.
+        NavigationCacheMode = NavigationCacheMode.Required;
 
         SizeChanged += WorkPanel_SizeChanged;
         Unloaded += WorkPanel_Unloaded;
@@ -248,6 +265,83 @@ public sealed partial class WorkPanel : Page
     }
 
     /// <summary>
+    /// Проигрывает короткий переход (затухание и небольшой сдвиг) рабочей области
+    /// при переключении между скриптами. Анимация выполняется композитором,
+    /// не блокирует поток интерфейса и не влияет на состояние элементов.
+    /// </summary>
+    private void PlayScriptSwitchTransition()
+    {
+        if (contentFrame == null)
+        {
+            return;
+        }
+
+        if (_scriptSwitchStoryboard == null)
+        {
+            var transform = new TranslateTransform();
+            contentFrame.RenderTransform = transform;
+
+            _scriptSwitchFade = new DoubleAnimation
+            {
+                From = 0.0,
+                To = 1.0,
+                Duration = new Duration(TimeSpan.FromMilliseconds(180))
+            };
+            Storyboard.SetTarget(_scriptSwitchFade, contentFrame);
+            Storyboard.SetTargetProperty(_scriptSwitchFade, "Opacity");
+
+            _scriptSwitchSlide = new DoubleAnimation
+            {
+                From = 14.0,
+                To = 0.0,
+                Duration = new Duration(TimeSpan.FromMilliseconds(180))
+            };
+            Storyboard.SetTarget(_scriptSwitchSlide, contentFrame);
+            Storyboard.SetTargetProperty(
+                _scriptSwitchSlide,
+                "(UIElement.RenderTransform).(TranslateTransform.Y)");
+
+            _scriptSwitchStoryboard = new Storyboard();
+            _scriptSwitchStoryboard.Children.Add(_scriptSwitchFade);
+            _scriptSwitchStoryboard.Children.Add(_scriptSwitchSlide);
+            _scriptSwitchStoryboard.Completed += (s, args) => ResetScriptSwitchVisualState();
+        }
+
+        try
+        {
+            _scriptSwitchStoryboard.Stop();
+            _scriptSwitchStoryboard.Begin();
+        }
+        catch (Exception ex)
+        {
+            // Переход purely косметический: при любой ошибке показываем содержимое без анимации.
+            _logService.Warn(
+                $"Не удалось проиграть анимацию переключения скрипта: {ex.Message}",
+                "WorkPanel");
+            ResetScriptSwitchVisualState();
+        }
+    }
+
+    /// <summary>
+    /// Гарантирует финальное состояние рабочей области после анимации перехода
+    /// (не остается частично прозрачной панель при быстрых переключениях).
+    /// </summary>
+    private void ResetScriptSwitchVisualState()
+    {
+        if (contentFrame == null)
+        {
+            return;
+        }
+
+        contentFrame.Opacity = 1.0;
+
+        if (contentFrame.RenderTransform is TranslateTransform translate)
+        {
+            translate.Y = 0.0;
+        }
+    }
+
+    /// <summary>
     /// Метод жизненного цикла страницы, вызываемый при навигации на нее.
     /// </summary>
     protected override void OnNavigatedTo(NavigationEventArgs e)
@@ -256,12 +350,30 @@ public sealed partial class WorkPanel : Page
 
         if (e.Parameter is AbstractScript script)
         {
+            if (_isScriptInitialized && ReferenceEquals(_script, script))
+            {
+                // Повторный вход на тот же скрипт: дерево элементов уже построено,
+                // достаточно переподписать ViewModel и синхронизировать видимое состояние.
+                ViewModel.Initialize(_script!, FileList.Files);
+                nvSample.SelectedItem = SamplePage1Item;
+
+                _isLandscape = IsLandscapeOrientation(ActualWidth, ActualHeight);
+                ApplyLayoutOrientation();
+
+                UpdateActionButtonState(ViewModel.IsProcessing);
+                FileList.IsProcessing = ViewModel.IsProcessing;
+                ScriptSettings.SetProcessingMode(ViewModel.IsProcessing);
+                return;
+            }
+
             _script = script;
-            
-            // Связываем скрипт со списком файлов и генерируем его параметры настроек
+            _isScriptInitialized = true;
+
+            // Связываем скрипт со списком файлов и готовим его параметры настроек
+            // (визуальное дерево настроек строится лениво при открытии вкладки)
             FileList.ActiveScript = _script;
             FileList.SetFiles(_script.FilesQueue);
-            ScriptSettings.GenerateSettingsUI(_script);
+            ScriptSettings.EnsureSettingsUI(_script);
 
             // Если скрипт — Пересадка аудио, подменяем стандартный файл-лист на карточный DubSwap контрол
             if (_script is AudioTransplantScript)
@@ -410,8 +522,13 @@ public sealed partial class WorkPanel : Page
             _isLandscape = IsLandscapeOrientation(ActualWidth, ActualHeight);
             ApplyLayoutOrientation();
 
+            // Плавное появление содержимого при смене скрипта: страница кэшируется
+            // фреймом, поэтому переход на уровне Frame не срабатывает.
+            PlayScriptSwitchTransition();
+
             // Инициализируем состояние кнопки запуска/отмены в соответствии с текущим состоянием обработки
             UpdateActionButtonState(ViewModel.IsProcessing);
+            ScriptSettings.SetProcessingMode(ViewModel.IsProcessing);
 
             // Инициализируем режим блокировки списка файлов
             FileList.IsProcessing = ViewModel.IsProcessing;
@@ -427,10 +544,16 @@ public sealed partial class WorkPanel : Page
     {
         if (e.PropertyName == nameof(WorkPanelViewModel.LogText))
         {
-            LogTextBox.Text = ViewModel.LogText;
-            LogTextBox.SelectionStart = LogTextBox.Text.Length;
-            LogTextBox.SelectionLength = 0;
-            ScrollLogToBottom();
+            if (_logSyncTimer == null)
+            {
+                _logSyncTimer = DispatcherQueue.CreateTimer();
+                _logSyncTimer.Interval = TimeSpan.FromMilliseconds(200);
+                _logSyncTimer.IsRepeating = false;
+                _logSyncTimer.Tick += (s, ev) => ApplyLogText();
+            }
+
+            _logSyncTimer.Stop();
+            _logSyncTimer.Start();
         }
         else if (e.PropertyName == nameof(WorkPanelViewModel.IsLogExpanded))
         {
@@ -498,6 +621,7 @@ public sealed partial class WorkPanel : Page
             }
             else if (tag == "settings")
             {
+                ScriptSettings.GenerateSettingsUIIfPending();
                 contentFrame.Content = _settingsControl;
             }
         }
@@ -730,7 +854,12 @@ public sealed partial class WorkPanel : Page
     protected override void OnNavigatedFrom(NavigationEventArgs e)
     {
         base.OnNavigatedFrom(e);
-        
+
+        // Страница остается в кэше фрейма, поэтому принудительно перезаписывать
+        // текст журнала и прокручивать его здесь не нужно: актуальный текст уже
+        // отображен, а ViewModel переподпишется и обновит его при следующем входе.
+        FlushPendingRightPanelWidth();
+
         ViewModel.SaveState();
     }
 
@@ -742,6 +871,26 @@ public sealed partial class WorkPanel : Page
         SizeChanged -= WorkPanel_SizeChanged;
         Loaded -= WorkPanel_Loaded;
         ViewModel.PropertyChanged -= OnViewModelPropertyChanged;
+
+        // Журнал не сбрасываем при выгрузке: страница остается в кэше фрейма,
+        // а актуальный текст подтянется при следующем входе через RestoreState.
+        FlushPendingRightPanelWidth();
+    }
+
+    private void ApplyLogText()
+    {
+        string text = ViewModel.LogText ?? string.Empty;
+
+        // Не трогаем TextBox, если текст не изменился: присваивание того же значения
+        // вызывает полную переверстку блока текста и заметно тормозит навигацию.
+        if (!string.Equals(LogTextBox.Text, text, StringComparison.Ordinal))
+        {
+            LogTextBox.Text = text;
+            LogTextBox.SelectionStart = LogTextBox.Text.Length;
+            LogTextBox.SelectionLength = 0;
+        }
+
+        ScrollLogToBottom();
     }
 
     /// <summary>
@@ -750,6 +899,29 @@ public sealed partial class WorkPanel : Page
     /// </summary>
     private void WorkPanel_Loaded(object sender, RoutedEventArgs e)
     {
+        // Страница кэшируется фреймом и может многократно выгружаться/загружаться,
+        // поэтому подписки восстанавливаем идемпотентно (без дублей).
+        ViewModel.PropertyChanged -= OnViewModelPropertyChanged;
+        ViewModel.PropertyChanged += OnViewModelPropertyChanged;
+        SizeChanged -= WorkPanel_SizeChanged;
+        SizeChanged += WorkPanel_SizeChanged;
+        Unloaded -= WorkPanel_Unloaded;
+        Unloaded += WorkPanel_Unloaded;
+
+        // OnNavigatedTo выполняется до Loaded, когда изменения ViewModel еще не
+        // доходили до UI: синхронизируем состояние, обновленное между уходом и возвратом.
+        if (_script != null)
+        {
+            ApplyLogText();
+            LogExpander.IsExpanded = ViewModel.IsLogExpanded;
+            UpdateActionButtonState(ViewModel.IsProcessing);
+            FileList.IsProcessing = ViewModel.IsProcessing;
+            ScriptSettings.SetProcessingMode(ViewModel.IsProcessing);
+        }
+
+        // Переход мог прерваться выгрузкой страницы: рабочая область должна быть полностью видима.
+        ResetScriptSwitchVisualState();
+
         InitializeOutputOverlayVisual();
     }
 
@@ -866,7 +1038,20 @@ public sealed partial class WorkPanel : Page
     {
         if (_script == null) return;
 
-        var schemaList = _script.GetFullSettingsSchema();
+        _isApplyingLayout = true;
+        try
+        {
+            ApplyLayoutOrientationCore();
+        }
+        finally
+        {
+            _isApplyingLayout = false;
+        }
+    }
+
+    private void ApplyLayoutOrientationCore()
+    {
+        var schemaList = _script!.GetFullSettingsSchema();
         bool hasSettings = schemaList != null && schemaList.Count > 0;
 
         if (_isLandscape && hasSettings)
@@ -891,7 +1076,10 @@ public sealed partial class WorkPanel : Page
                 contentFrame.Content = null;
                 nvSample.SelectedItem = SamplePage1Item;
             }
-            
+
+            // В альбомной ориентации панель настроек показывается справа без вкладки,
+            // поэтому строим отложенное дерево параметров здесь.
+            ScriptSettings.GenerateSettingsUIIfPending();
             rightSettingsFrame.Content = _settingsControl;
 
             // 4. Показываем разделитель GridSplitter и правую панель
@@ -957,11 +1145,55 @@ public sealed partial class WorkPanel : Page
     {
         if (_script == null) return;
 
+        // Ширина, которую мы сами задали при программной раскладке, не является
+        // пользовательской настройкой: сохранение таких значений вызывало лишние
+        // записи в файл настроек при каждом переходе между скриптами.
+        if (_isApplyingLayout) return;
+
         // Сохраняем ширину только в альбомном режиме, когда правая панель действительно отображается
         if (_isLandscape && RightAreaGrid.Visibility == Visibility.Visible && e.NewSize.Width > 0)
         {
-            _settingsManager.SetSetting("Window", "RightPanelWidth", e.NewSize.Width);
-            _settingsManager.SaveSettings();
+            _pendingRightPanelWidth = e.NewSize.Width;
+            _rightPanelWidthDirty = true;
+
+            if (_rightPanelWidthTimer == null)
+            {
+                _rightPanelWidthTimer = DispatcherQueue.CreateTimer();
+                _rightPanelWidthTimer.Interval = TimeSpan.FromMilliseconds(300);
+                _rightPanelWidthTimer.IsRepeating = false;
+                _rightPanelWidthTimer.Tick += (s, ev) => ApplyRightPanelWidth();
+            }
+
+            _rightPanelWidthTimer.Stop();
+            _rightPanelWidthTimer.Start();
+        }
+    }
+
+    private void ApplyRightPanelWidth()
+    {
+        _rightPanelWidthTimer?.Stop();
+        if (!_rightPanelWidthDirty) return;
+
+        _rightPanelWidthDirty = false;
+        _settingsManager.SetSetting("Window", "RightPanelWidth", _pendingRightPanelWidth);
+        _settingsManager.SaveSettings();
+    }
+
+    private void FlushPendingRightPanelWidth()
+    {
+        if (_rightPanelWidthTimer == null)
+        {
+            if (_rightPanelWidthDirty) ApplyRightPanelWidth();
+            return;
+        }
+
+        if (_rightPanelWidthDirty)
+        {
+            ApplyRightPanelWidth();
+        }
+        else
+        {
+            _rightPanelWidthTimer.Stop();
         }
     }
 
@@ -971,7 +1203,11 @@ public sealed partial class WorkPanel : Page
     private void ScrollLogToBottom()
     {
         if (LogTextBox == null) return;
-        var scrollViewer = FindVisualChild<ScrollViewer>(LogTextBox);
+        if (_logScrollViewer == null)
+        {
+            _logScrollViewer = FindVisualChild<ScrollViewer>(LogTextBox);
+        }
+        var scrollViewer = _logScrollViewer;
         if (scrollViewer != null)
         {
             scrollViewer.ChangeView(null, scrollViewer.ScrollableHeight, null);

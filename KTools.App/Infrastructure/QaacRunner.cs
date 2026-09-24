@@ -24,6 +24,9 @@ public sealed class QaacRunner
     private readonly ILogService _logService;
     private readonly IPathManager _pathManager;
 
+    private static readonly object TempEnvLock = new();
+    private static string? _cachedTempDir;
+
     /// <summary>
     /// Инициализирует новый экземпляр QaacRunner с внедрением зависимостей.
     /// </summary>
@@ -77,59 +80,79 @@ public sealed class QaacRunner
             $"Начало кодирования QAAC (Режим: {mode}, Значение: {qualityOrBitrate}, no-delay: {noDelay}, limiter: {limiter}) для файла: '{Path.GetFileName(inputPath)}'", 
             "QaacRunner");
 
-        // 1. Создаем изолированную временную папку для обхода ограничений AppContainer (WinUI 3 MSIX)
-        string tempDir = Path.Combine(Path.GetTempPath(), "KTools_Qaac_" + Guid.NewGuid().ToString("N"));
-        string tempQaacPath = Path.Combine(tempDir, "qaac64.exe");
+        // 1. Создаем изолированную временную папку для обхода ограничений AppContainer (WinUI 3 MSIX).
+        // Окружение кэшируется между запусками: файлы копируются только при первом вызове или при их отсутствии.
+        string tempDir;
+        string tempQaacPath;
 
-        try
+        lock (TempEnvLock)
         {
-            Directory.CreateDirectory(tempDir);
-            
-            // Копируем исполняемый файл во временную директорию
-            File.Copy(qaacPath, tempQaacPath, true);
-
-            // Копируем все DLL библиотеки Apple из подпапки QTfiles64 / QTFiles64
-            string baseDir = Path.GetDirectoryName(qaacPath) ?? AppContext.BaseDirectory;
-            string[] sourceSubfolders = { "QTfiles64", "QTFiles64", "QTFiles", "QTfiles" };
-            string? sourceDir = null;
-
-            foreach (var subfolder in sourceSubfolders)
+            try
             {
-                string path = Path.Combine(baseDir, subfolder);
-                if (Directory.Exists(path) && File.Exists(Path.Combine(path, "CoreAudioToolbox.dll")))
+                if (string.IsNullOrEmpty(_cachedTempDir))
                 {
-                    sourceDir = path;
-                    break;
+                    _cachedTempDir = Path.Combine(Path.GetTempPath(), "KTools_Qaac_" + Guid.NewGuid().ToString("N"));
+                    Directory.CreateDirectory(_cachedTempDir);
                 }
-            }
 
-            if (sourceDir != null)
-            {
-                var dllFiles = Directory.GetFiles(sourceDir, "*.dll");
-                foreach (var dllFile in dllFiles)
+                tempDir = _cachedTempDir;
+
+                // Копируем исполняемый файл во временную директорию
+                if (!File.Exists(Path.Combine(tempDir, "qaac64.exe")))
                 {
-                    File.Copy(dllFile, Path.Combine(tempDir, Path.GetFileName(dllFile)), true);
+                    File.Copy(qaacPath, Path.Combine(tempDir, "qaac64.exe"), true);
                 }
+
+                // Копируем все DLL библиотеки Apple из подпапки QTfiles64 / QTFiles64
+                string baseDir = Path.GetDirectoryName(qaacPath) ?? AppContext.BaseDirectory;
+                string[] sourceSubfolders = { "QTfiles64", "QTFiles64", "QTFiles", "QTfiles" };
+                string? sourceDir = null;
+
+                foreach (var subfolder in sourceSubfolders)
+                {
+                    string path = Path.Combine(baseDir, subfolder);
+                    if (Directory.Exists(path) && File.Exists(Path.Combine(path, "CoreAudioToolbox.dll")))
+                    {
+                        sourceDir = path;
+                        break;
+                    }
+                }
+
+                if (sourceDir != null)
+                {
+                    var dllFiles = Directory.GetFiles(sourceDir, "*.dll");
+                    foreach (var dllFile in dllFiles)
+                    {
+                        string dllDestPath = Path.Combine(tempDir, Path.GetFileName(dllFile));
+                        if (!File.Exists(dllDestPath))
+                        {
+                            File.Copy(dllFile, dllDestPath, true);
+                        }
+                    }
+                }
+                else
+                {
+                    _logService.Warn(
+                        "Не найдена папка QTfiles64 с библиотеками Apple Application Support. Возможен сбой запуска.",
+                        "QaacRunner");
+                }
+
                 _logService.DebugLog(
-                    $"Изолированное окружение QAAC подготовлено во временной папке: '{tempDir}'", 
+                    $"Изолированное окружение QAAC подготовлено во временной папке: '{tempDir}'",
                     "QaacRunner");
+
+                tempQaacPath = Path.Combine(tempDir, "qaac64.exe");
             }
-            else
+            catch (Exception ex)
             {
-                _logService.Warn(
-                    "Не найдена папка QTfiles64 с библиотеками Apple Application Support. Возможен сбой запуска.", 
+                _logService.Exception(
+                    ex,
+                    $"Не удалось создать изолированное временное окружение для QAAC: {ex.Message}",
                     "QaacRunner");
+                // Фоллбэк: пробуем запуск из оригинальной папки
+                tempQaacPath = qaacPath;
+                tempDir = Path.GetDirectoryName(qaacPath) ?? AppContext.BaseDirectory;
             }
-        }
-        catch (Exception ex)
-        {
-            _logService.Exception(
-                ex, 
-                $"Не удалось создать изолированное временное окружение для QAAC: {ex.Message}", 
-                "QaacRunner");
-            // Фоллбэк: пробуем запуск из оригинальной папки
-            tempQaacPath = qaacPath;
-            tempDir = Path.GetDirectoryName(qaacPath) ?? AppContext.BaseDirectory;
         }
 
         // 2. Формируем аргументы для FFmpeg (декодирование в WAV и вывод в stdout)
@@ -503,9 +526,31 @@ public sealed class QaacRunner
 
     /// <summary>
     /// Безопасно удаляет временное изолированное окружение QAAC.
+    /// Кэшированное окружение не удаляется, так как переиспользуется между запусками.
     /// </summary>
     private void CleanupTempDir(string tempDir)
     {
+        if (string.Equals(tempDir, _cachedTempDir, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        // Удаляем только созданные нами временные папки внутри системного Temp.
+        // При отказе создания окружения tempDir может указывать на установленную
+        // папку QAAC — её удаление снесло бы qaac64.exe и библиотеки Apple.
+        string tempRoot = Path.GetTempPath();
+        string normalizedRoot = tempRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        string normalizedDir = tempDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+        if (!normalizedDir.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase) ||
+            !Path.GetFileName(normalizedDir).StartsWith("KTools_Qaac_", StringComparison.OrdinalIgnoreCase))
+        {
+            _logService.DebugLog(
+                $"Пропущено удаление папки '{tempDir}': это не созданное приложением временное окружение",
+                "QaacRunner");
+            return;
+        }
+
         try
         {
             if (Directory.Exists(tempDir))

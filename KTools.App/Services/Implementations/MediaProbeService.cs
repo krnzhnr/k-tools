@@ -1,5 +1,6 @@
 // -*- coding: utf-8 -*-
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -26,6 +27,12 @@ public sealed class MediaProbeService : IMediaProbeService
     private readonly object _semaphoreLock = new();
     private System.Threading.SemaphoreSlim? _probeSemaphore;
     private int _currentMaxParallel = -1;
+    private readonly ConcurrentDictionary<string, (DateTime LastWriteUtc, long Length, MediaStructure Structure)> _probeCache = new();
+
+    /// <summary>
+    /// Ограничение числа одновременных анализов файлов (следует настройке параллельной обработки).
+    /// </summary>
+    private const int MaxProbeCacheEntries = 512;
 
     /// <summary>
     /// Инициализирует новый экземпляр класса MediaProbeService с внедрением зависимостей.
@@ -42,6 +49,10 @@ public sealed class MediaProbeService : IMediaProbeService
         _settingsManager = settingsManager;
     }
 
+    /// <summary>
+    /// Возвращает ограничитель параллелизма, соответствующий текущим настройкам.
+    /// Старый экземпляр намеренно не освобождается: на нём могут ожидать запущенные проверки.
+    /// </summary>
     private System.Threading.SemaphoreSlim GetProbeSemaphore()
     {
         int targetParallel = 1;
@@ -54,10 +65,10 @@ public sealed class MediaProbeService : IMediaProbeService
         {
             if (_probeSemaphore == null || _currentMaxParallel != targetParallel)
             {
-                var newSemaphore = new System.Threading.SemaphoreSlim(targetParallel, targetParallel);
-                System.Threading.Interlocked.Exchange(ref _probeSemaphore, newSemaphore);
+                _probeSemaphore = new System.Threading.SemaphoreSlim(targetParallel, targetParallel);
                 _currentMaxParallel = targetParallel;
             }
+
             return _probeSemaphore;
         }
     }
@@ -69,6 +80,71 @@ public sealed class MediaProbeService : IMediaProbeService
     /// <param name="filePath">Абсолютный путь к файлу.</param>
     /// <returns>Объект MediaStructure с дорожками и вложениями, или null при сбоях.</returns>
     public async Task<MediaStructure?> ProbeAsync(string filePath)
+    {
+        if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
+        {
+            _logService.Error($"Файл не существует или путь пуст: '{filePath}'", "MediaProbeService");
+            return null;
+        }
+
+        string cacheKey = Path.GetFullPath(filePath);
+        try
+        {
+            var lastWriteUtc = File.GetLastWriteTimeUtc(cacheKey);
+            long length = new FileInfo(cacheKey).Length;
+
+            if (_probeCache.TryGetValue(cacheKey, out var cachedEntry) &&
+                cachedEntry.LastWriteUtc == lastWriteUtc &&
+                cachedEntry.Length == length)
+            {
+                return cachedEntry.Structure;
+            }
+
+            // Если файл исчез, освобождаем кэш, чтобы структуры удаленных файлов не накапливались.
+            if (!File.Exists(cacheKey))
+            {
+                _probeCache.TryRemove(cacheKey, out _);
+                return null;
+            }
+
+            var fresh = await ProbeInternalAsync(cacheKey);
+
+            // Кэшируем только если файл не изменился во время анализа,
+            // иначе результат соответствовал бы устаревшей версии файла.
+            if (fresh != null)
+            {
+                var postWriteUtc = File.GetLastWriteTimeUtc(cacheKey);
+                long postLength = new FileInfo(cacheKey).Length;
+                if (postWriteUtc == lastWriteUtc && postLength == length)
+                {
+                    if (_probeCache.Count >= MaxProbeCacheEntries)
+                    {
+                        foreach (var key in _probeCache.Keys.Take(MaxProbeCacheEntries / 2))
+                        {
+                            _probeCache.TryRemove(key, out _);
+                        }
+                    }
+
+                    _probeCache[cacheKey] = (lastWriteUtc, length, fresh);
+                }
+            }
+
+            return fresh;
+        }
+        catch (System.IO.IOException ex)
+        {
+            _logService.Error($"Ошибка доступа к файлу '{filePath}': {ex.Message}", "MediaProbeService");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Асинхронно анализирует медиафайл и возвращает его полную структуру.
+    /// Автоматически выбирает оптимальную стратегию в зависимости от контейнера.
+    /// </summary>
+    /// <param name="filePath">Абсолютный путь к файлу.</param>
+    /// <returns>Объект MediaStructure с дорожками и вложениями, или null при сбоях.</returns>
+    private async Task<MediaStructure?> ProbeInternalAsync(string filePath)
     {
         if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
         {

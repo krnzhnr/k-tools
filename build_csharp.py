@@ -210,7 +210,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 
 [Tasks]
 Name: "desktopicon"; Description: "{{cm:CreateDesktopIcon}}"; \\
-GroupDescription: "{{cm:AdditionalIcons}}"; Flags: unchecked
+GroupDescription: "{{cm:AdditionalIcons}}"; Flags: unchecked checkedonce
 
 [Files]
 ; Основная папка публикации .NET self-contained
@@ -223,7 +223,7 @@ Name: "{{group}}\\KTools"; \\
 Filename: "{{app}}\\KTools.App.exe"
 Name: "{{autodesktop}}\\KTools"; \\
 Filename: "{{app}}\\KTools.App.exe"; \\
-Tasks: desktopicon
+Tasks: desktopicon; Check: ShouldCreateDesktopIcon
 
 [Run]
 Filename: "{{app}}\\KTools.App.exe"; \\
@@ -268,6 +268,49 @@ begin
   if not RegQueryStringValue(HKLM, sUnInstPath, 'UninstallString', sUnInstallString) then
     RegQueryStringValue(HKCU, sUnInstPath, 'UninstallString', sUnInstallString);
   Result := sUnInstallString;
+end;
+
+function IsAppInstalled: Boolean;
+begin
+  Result := (GetUninstallString('krnzhnr.ktools') <> '') or (GetInstallDir('krnzhnr.ktools') <> '');
+end;
+
+function DesktopIconExists: Boolean;
+begin
+  Result := FileExists(ExpandConstant('{{autodesktop}}\\KTools.lnk')) or
+            FileExists(ExpandConstant('{{userdesktop}}\\KTools.lnk')) or
+            FileExists(ExpandConstant('{{commondesktop}}\\KTools.lnk'));
+end;
+
+function ShouldCreateDesktopIcon: Boolean;
+begin
+  // Если установка выполняется в тихом режиме (автоматическое обновление из программы):
+  if IsSilentUpdate and not DesktopIconExists then
+  begin
+    // В тихом режиме ярлык ни при каких обстоятельствах не создается, если он уже отсутствует на рабочем столе
+    Result := False;
+    Exit;
+  end;
+
+  Result := True;
+end;
+
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  if CurPageID = wpSelectTasks then
+  begin
+    // При интерактивном обновлении поверх уже установленной версии:
+    // Автоматически синхронизируем выбор задачи desktopicon с реальным наличием ярлыка.
+    // Если ярлык на рабочем столе отсутствует (пользователь его удалил), снимаем отметку,
+    // чтобы ярлык не пересоздавался повторно при обычном нажатии "Далее".
+    if IsAppInstalled then
+    begin
+      if DesktopIconExists then
+        WizardSelectTasks('desktopicon')
+      else
+        WizardSelectTasks('!desktopicon');
+    end;
+  end;
 end;
 
 procedure RemoveOldVersion(const AppIdStr: String);

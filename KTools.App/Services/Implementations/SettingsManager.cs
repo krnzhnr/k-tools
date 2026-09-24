@@ -5,6 +5,7 @@ using System.IO;
 using System.Reflection;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Threading;
 using KTools_App.Services.Contracts;
 
 namespace KTools_App.Core;
@@ -18,9 +19,19 @@ public sealed class SettingsManager : ISettingsManager
 {
     private readonly ILogService _logService;
     private readonly IPathManager _pathManager;
-    private readonly object _lock = new();
+    private readonly ReaderWriterLockSlim _lock = new();
+    private readonly object _saveTimerLock = new();
     private readonly string _settingsFilePath;
     private Dictionary<string, Dictionary<string, object>> _cache;
+    private System.Threading.Timer? _saveTimer;
+
+    private static readonly JsonSerializerOptions SaveOptions = new()
+    {
+        WriteIndented = true,
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+    };
+
+    private const int SaveDebounceMilliseconds = 300;
 
     /// <summary>
     /// Инициализирует новый экземпляр класса SettingsManager с внедрением зависимостей.
@@ -253,29 +264,33 @@ public sealed class SettingsManager : ISettingsManager
     /// </summary>
     public void LoadSettings()
     {
-        lock (_lock)
+        _lock.EnterWriteLock();
+        try
         {
-            try
+            if (File.Exists(_settingsFilePath))
             {
-                if (File.Exists(_settingsFilePath))
-                {
-                    string json = File.ReadAllText(_settingsFilePath);
-                    var data = JsonSerializer.Deserialize<
-                        Dictionary<string, Dictionary<string, object>>
-                    >(json);
+                string json = File.ReadAllText(_settingsFilePath);
+                var data = JsonSerializer.Deserialize<
+                    Dictionary<string, Dictionary<string, object>>
+                >(json);
 
-                    if (data != null)
-                    {
-                        _cache = data;
-                        return;
-                    }
+                if (data != null)
+                {
+                    _cache = data;
+                    return;
                 }
             }
-            catch (Exception)
-            {
-                // Резервный пустой кэш при ошибках десериализации
-            }
+
             _cache = new Dictionary<string, Dictionary<string, object>>();
+        }
+        catch (Exception)
+        {
+            // Резервный пустой кэш при ошибках десериализации
+            _cache = new Dictionary<string, Dictionary<string, object>>();
+        }
+        finally
+        {
+            _lock.ExitWriteLock();
         }
     }
 
@@ -284,39 +299,84 @@ public sealed class SettingsManager : ISettingsManager
     /// </summary>
     public void SaveSettings()
     {
-        lock (_lock)
+        CancelPendingSave();
+
+        _lock.EnterWriteLock();
+        try
         {
-            try
-            {
-                var options = new JsonSerializerOptions
-                {
-                    WriteIndented = true,
-                    Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
-                };
-                string json = JsonSerializer.Serialize(_cache, options);
-
-                string? dir = Path.GetDirectoryName(_settingsFilePath);
-                if (dir != null && !Directory.Exists(dir))
-                {
-                    Directory.CreateDirectory(dir);
-                }
-
-                File.WriteAllText(_settingsFilePath, json);
-                _logService.DebugLog("Конфигурация успешно сохранена на диск", "SettingsManager");
-            }
-            catch (Exception ex)
-            {
-                _logService.Error($"Ошибка сохранения конфигурации на диск: {ex.Message}", "SettingsManager");
-            }
+            WriteSettingsFileNoLock();
+        }
+        finally
+        {
+            _lock.ExitWriteLock();
         }
     }
+
+    private void WriteSettingsFileNoLock()
+    {
+        try
+        {
+            string json = JsonSerializer.Serialize(_cache, SaveOptions);
+
+            string? dir = Path.GetDirectoryName(_settingsFilePath);
+            if (dir != null && !Directory.Exists(dir))
+            {
+                Directory.CreateDirectory(dir);
+            }
+
+            File.WriteAllText(_settingsFilePath, json);
+            _logService.DebugLog("Конфигурация успешно сохранена на диск", "SettingsManager");
+        }
+        catch (Exception ex)
+        {
+            _logService.Error($"Ошибка сохранения конфигурации на диск: {ex.Message}", "SettingsManager");
+        }
+    }
+
+    private void CancelPendingSave()
+    {
+        lock (_saveTimerLock)
+        {
+            _saveTimer?.Dispose();
+            _saveTimer = null;
+        }
+    }
+
+    private void SaveSettingsNow()
+    {
+        CancelPendingSave();
+
+        _lock.EnterWriteLock();
+        try
+        {
+            WriteSettingsFileNoLock();
+            _lastDiskSaveTick = Environment.TickCount;
+        }
+        finally
+        {
+            _lock.ExitWriteLock();
+        }
+    }
+
+    private void ScheduleDeferredSave()
+    {
+        lock (_saveTimerLock)
+        {
+            _saveTimer?.Dispose();
+            _saveTimer = new System.Threading.Timer(static s => ((SettingsManager)s!).SaveSettingsNow(), this, SaveDebounceMilliseconds, Timeout.Infinite);
+        }
+    }
+
+    private int _lastDiskSaveTick = Environment.TickCount - SaveDebounceMilliseconds;
+
 
     /// <summary>
     /// Получить значение настройки.
     /// </summary>
     public T GetSetting<T>(string group, string key, T defaultValue)
     {
-        lock (_lock)
+        _lock.EnterReadLock();
+        try
         {
             if (_cache.TryGetValue(group, out var groupDict))
             {
@@ -380,6 +440,10 @@ public sealed class SettingsManager : ISettingsManager
             }
             return defaultValue;
         }
+        finally
+        {
+            _lock.ExitReadLock();
+        }
     }
 
     /// <summary>
@@ -387,7 +451,10 @@ public sealed class SettingsManager : ISettingsManager
     /// </summary>
     public void SetSetting<T>(string group, string key, T value)
     {
-        lock (_lock)
+        bool changed = false;
+
+        _lock.EnterWriteLock();
+        try
         {
             if (!_cache.TryGetValue(group, out var groupDict))
             {
@@ -397,7 +464,7 @@ public sealed class SettingsManager : ISettingsManager
 
             if (groupDict.TryGetValue(key, out var existingValue))
             {
-                if (Equals(existingValue, value) || 
+                if (Equals(existingValue, value) ||
                     (existingValue != null && value != null && string.Equals(existingValue.ToString(), value.ToString(), StringComparison.Ordinal)))
                 {
                     return;
@@ -414,7 +481,26 @@ public sealed class SettingsManager : ISettingsManager
             }
 
             _logService.Info($"Изменён параметр [{group}/{key}] -> '{value}'", "SettingsManager");
-            SaveSettings();
+            changed = true;
+        }
+        finally
+        {
+            _lock.ExitWriteLock();
+        }
+
+        if (changed)
+        {
+            int nowTick = Environment.TickCount;
+            if (nowTick - _lastDiskSaveTick >= SaveDebounceMilliseconds)
+            {
+                CancelPendingSave();
+                SaveSettingsNow();
+                _lastDiskSaveTick = Environment.TickCount;
+            }
+            else
+            {
+                ScheduleDeferredSave();
+            }
         }
     }
 
@@ -423,7 +509,8 @@ public sealed class SettingsManager : ISettingsManager
     /// </summary>
     public Dictionary<string, object> GetAllSettingsInGroup(string group)
     {
-        lock (_lock)
+        _lock.EnterReadLock();
+        try
         {
             var result = new Dictionary<string, object>();
             if (_cache.TryGetValue(group, out var groupDict))
@@ -435,6 +522,10 @@ public sealed class SettingsManager : ISettingsManager
             }
             return result;
         }
+        finally
+        {
+            _lock.ExitReadLock();
+        }
     }
 
     /// <summary>
@@ -442,7 +533,8 @@ public sealed class SettingsManager : ISettingsManager
     /// </summary>
     public void InitializeDefaults(List<AbstractScript> scripts)
     {
-        lock (_lock)
+        _lock.EnterWriteLock();
+        try
         {
             bool modified = false;
 
@@ -614,8 +706,14 @@ public sealed class SettingsManager : ISettingsManager
             if (modified)
             {
                 _logService.Warn("Выполнена инициализация настроек по умолчанию", "SettingsManager");
-                SaveSettings();
+                CancelPendingSave();
+                WriteSettingsFileNoLock();
+                _lastDiskSaveTick = Environment.TickCount;
             }
+        }
+        finally
+        {
+            _lock.ExitWriteLock();
         }
     }
 

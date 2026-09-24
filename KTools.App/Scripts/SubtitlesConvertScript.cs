@@ -203,20 +203,21 @@ public sealed class SubtitlesConvertScript : AbstractScript
             bool fastSuccess = await _ffmpegRunner.RunAsync(
                 inputPath: filePath,
                 outputPath: outputFilePath,
-                overwrite: overwrite);
+                overwrite: overwrite,
+                cancellationToken: CancellationToken);
 
             if (fastSuccess)
             {
                 progressCallback(fileIndex, totalCount, "Завершено!", 100.0);
                 results.Add($"✅ УСПЕХ: {outputFileName}");
-                if (deleteOriginal)
+                if (deleteOriginal && !IsCancelled)
                 {
-                    DeleteSource(filePath, results);
+                    await DeleteSourceAsync(filePath, results);
                 }
             }
             else
             {
-                CleanupFailedOutputFile(outputFilePath);
+                await CleanupFailedOutputFileAsync(outputFilePath);
                 progressCallback(fileIndex, totalCount, "Ошибка!", 0.0);
                 results.Add($"❌ Ошибка FFmpeg: {outputFileName}");
             }
@@ -445,7 +446,8 @@ public sealed class SubtitlesConvertScript : AbstractScript
             bool success = await _ffmpegRunner.RunAsync(
                 inputPath: tempAssPath,
                 outputPath: outputFilePath,
-                overwrite: overwrite);
+                overwrite: overwrite,
+                cancellationToken: CancellationToken);
 
             if (success)
             {
@@ -459,19 +461,19 @@ public sealed class SubtitlesConvertScript : AbstractScript
                 
                 if (deleteOriginal)
                 {
-                    DeleteSource(filePath, results);
+                    await DeleteSourceAsync(filePath, results);
                 }
             }
             else
             {
-                CleanupFailedOutputFile(outputFilePath);
+                await CleanupFailedOutputFileAsync(outputFilePath);
                 progressCallback(fileIndex, totalCount, "Ошибка FFmpeg!", 0.0);
                 results.Add($"❌ Ошибка FFmpeg: {outputFileName}");
             }
         }
         catch (Exception ex)
         {
-            CleanupFailedOutputFile(outputFilePath);
+            await CleanupFailedOutputFileAsync(outputFilePath);
             _logService.Exception(
                 ex,
                 $"Критическая ошибка обработки субтитров для '{originalName}': " +

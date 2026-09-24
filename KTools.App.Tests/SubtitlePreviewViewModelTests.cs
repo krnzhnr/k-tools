@@ -181,21 +181,38 @@ public class SubtitlePreviewViewModelTests
             // Initially all 3 files (5 lines) are in FilteredLines
             viewModel.FilteredLines.Should().HaveCount(5);
 
-            // Select File 2
-            viewModel.SelectedFilePath = file2;
+            // Проверка генерации FileCards
+            viewModel.FileCards.Should().HaveCount(3);
+            viewModel.TotalLinesCount.Should().Be(5);
+            viewModel.TotalActiveLinesCount.Should().Be(5);
+            viewModel.TotalDeletedLinesCount.Should().Be(0);
+            viewModel.IsDetailedViewActive.Should().BeFalse();
+
+            // Проверка навигации к файлу 2 через OpenFileDetail
+            viewModel.OpenFileDetail(file2);
+            viewModel.IsDetailedViewActive.Should().BeTrue();
+            viewModel.SelectedFilePath.Should().Be(file2);
             viewModel.FilteredLines.Should().HaveCount(2);
             viewModel.FilteredLines.All(l => l.FilePath == file2).Should().BeTrue();
             viewModel.FilteredLines[0].IsFirstLineInFile.Should().BeTrue();
             viewModel.FilteredLines[1].IsFirstLineInFile.Should().BeFalse();
 
+            // Проверка возврата к хабу файлов
+            viewModel.BackToFilesHub();
+            viewModel.IsDetailedViewActive.Should().BeFalse();
+
             // Select File 3
-            viewModel.SelectedFilePath = file3;
+            viewModel.OpenFileDetail(file3);
+            viewModel.IsDetailedViewActive.Should().BeTrue();
+            viewModel.SelectedFilePath.Should().Be(file3);
             viewModel.FilteredLines.Should().HaveCount(1);
             viewModel.FilteredLines[0].FilePath.Should().Be(file3);
             viewModel.FilteredLines[0].IsFirstLineInFile.Should().BeTrue();
 
             // Switch back to "All files"
-            viewModel.SelectedFilePath = null;
+            viewModel.OpenFileDetail(null);
+            viewModel.IsDetailedViewActive.Should().BeTrue();
+            viewModel.SelectedFilePath.Should().BeNull();
             viewModel.FilteredLines.Should().HaveCount(5);
             viewModel.FilteredLines.Select(l => l.FileName).Distinct().Should().HaveCount(3);
         }

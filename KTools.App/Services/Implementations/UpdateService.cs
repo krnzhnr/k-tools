@@ -59,6 +59,14 @@ public sealed class UpdateService : IUpdateService
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly HttpClient _httpClient;
     private const string GitHubApiUrl = "https://api.github.com/repos/krnzhnr/k-tools/releases";
+
+    /// <summary>
+    /// Аргументы командной строки, используемые при запуске процесса фоновой установки обновления.
+    /// Ключи /SILENT и /SUPPRESSMSGBOXES обеспечивают автоматическую установку без лишних диалоговых окон.
+    /// Флаг /MERGETASKS="!desktopicon" исключает выполнение задачи создания ярлыка на рабочем столе,
+    /// предотвращая повторное появление удаленного пользователем ярлыка.
+    /// </summary>
+    public const string SilentUpdateInstallerArguments = "/SILENT /SUPPRESSMSGBOXES /MERGETASKS=\"!desktopicon\"";
     private readonly ILogService _logService;
     private readonly ISettingsManager _settingsManager;
 
@@ -260,6 +268,8 @@ public sealed class UpdateService : IUpdateService
                     var buffer = new byte[8192];
                     long totalReadBytes = 0;
                     int readBytes;
+                    int lastProgressTick = Environment.TickCount - 100;
+                    double lastProgress = -1.0;
 
                     while ((readBytes = await contentStream.ReadAsync(buffer, 0, buffer.Length, cancellationToken)) > 0)
                     {
@@ -269,7 +279,15 @@ public sealed class UpdateService : IUpdateService
                         if (totalBytes.HasValue)
                         {
                             double progress = (double)totalReadBytes / totalBytes.Value * 100.0;
-                            progressCallback(progress);
+                            if (progress >= 100.0 || Environment.TickCount - lastProgressTick >= 100)
+                            {
+                                lastProgressTick = Environment.TickCount;
+                                if (progress != lastProgress)
+                                {
+                                    lastProgress = progress;
+                                    progressCallback(progress);
+                                }
+                            }
                         }
                     }
                 }
@@ -277,11 +295,11 @@ public sealed class UpdateService : IUpdateService
 
             _logService.Info($"Файл обновления успешно скачан: {tempFilePath}. Запуск процесса бесшумного обновления...", "UpdateService");
 
-            // Запускаем инсталлятор во внешнем процессе с ключами /SILENT /SUPPRESSMSGBOXES
+            // Запускаем инсталлятор во внешнем процессе с ключами /SILENT /SUPPRESSMSGBOXES и исключением пересоздания ярлыка рабочего стола
             var processStartInfo = new System.Diagnostics.ProcessStartInfo
             {
                 FileName = tempFilePath,
-                Arguments = "/SILENT /SUPPRESSMSGBOXES",
+                Arguments = SilentUpdateInstallerArguments,
                 UseShellExecute = true // Обязательный параметр в .NET 10 для запуска exe файлов напрямую
             };
 

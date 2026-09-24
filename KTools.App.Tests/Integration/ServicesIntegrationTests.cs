@@ -1,4 +1,4 @@
-﻿// -*- coding: utf-8 -*-
+// -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -521,66 +521,35 @@ public class ServicesIntegrationTests
     {
         // Arrange
         using var scope = new TempDirectoryScope();
-        var pathManager = new PathManager(MockBuilders.CreateLogServiceMock().Object);
-        string mkvDir = Path.Combine(AppContext.BaseDirectory, "bin", "mkvtoolnix");
+        var pathManager = new PathManager(MockBuilders.CreateLogServiceMock().Object, scope.RootPath);
+        string mkvDir = Path.Combine(scope.RootPath, "bin", "mkvtoolnix");
         string mkvExe = Path.Combine(mkvDir, "mkvmerge.exe");
-        bool dirCreated = Directory.Exists(mkvDir);
-        bool exeCreated = File.Exists(mkvExe);
         Directory.CreateDirectory(mkvDir);
         File.WriteAllText(mkvExe, "stub");
 
-        try
-        {
-            // Act
-            string path = pathManager.GetBinaryPath("mkvmerge");
+        // Act
+        string path = pathManager.GetBinaryPath("mkvmerge");
 
-            // Assert — маппинг подпапок: mkvmerge лежит в bin/mkvtoolnix/
-            path.Should().Be(mkvExe);
-        }
-        finally
-        {
-            if (!exeCreated)
-            {
-                File.Delete(mkvExe);
-            }
-            if (!dirCreated)
-            {
-                Directory.Delete(mkvDir);
-            }
-        }
+        // Assert — маппинг подпапок: mkvmerge лежит в bin/mkvtoolnix/
+        path.Should().Be(mkvExe);
     }
 
     [TestMethod]
     public void PathManager_GetBinaryPath_FindsFileInBinRoot()
     {
         // Arrange
-        var pathManager = new PathManager(MockBuilders.CreateLogServiceMock().Object);
-        string binDir = Path.Combine(AppContext.BaseDirectory, "bin");
-        bool dirCreated = Directory.Exists(binDir);
+        using var scope = new TempDirectoryScope();
+        var pathManager = new PathManager(MockBuilders.CreateLogServiceMock().Object, scope.RootPath);
+        string binDir = Path.Combine(scope.RootPath, "bin");
         Directory.CreateDirectory(binDir);
         string eacPath = Path.Combine(binDir, "eac3to.exe");
-        bool fileCreated = File.Exists(eacPath);
         File.WriteAllText(eacPath, "stub");
 
-        try
-        {
-            // Act
-            string path = pathManager.GetBinaryPath("eac3to");
+        // Act
+        string path = pathManager.GetBinaryPath("eac3to");
 
-            // Assert
-            path.Should().Be(eacPath);
-        }
-        finally
-        {
-            if (!fileCreated)
-            {
-                File.Delete(eacPath);
-            }
-            if (!dirCreated)
-            {
-                Directory.Delete(binDir);
-            }
-        }
+        // Assert
+        path.Should().Be(eacPath);
     }
 
     [TestMethod]

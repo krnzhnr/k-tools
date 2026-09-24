@@ -351,11 +351,14 @@ public sealed partial class MainWindow : Window
                     // Гарантированно убиваем все активные дочерние процессы (ffmpeg, yt-dlp и др.)
                     ActiveProcessTracker.KillAll();
                     _logService.Info("Все дочерние процессы были успешно остановлены при закрытии.", "MainWindow");
+                    _logService.Info(
+                        "Запрос на выход из приложения успешно отправлен через Application.Current.Exit().",
+                        "MainWindow");
+
+                    // Сбрасываем буфер журнала на диск перед завершением процесса
+                    _logService.Flush();
 
                     Application.Current.Exit();
-                    _logService.Info(
-                        "Запрос на выход из приложения успешно отправлен через Application.Current.Exit().", 
-                        "MainWindow");
                 }
                 catch (Exception ex)
                 {
@@ -363,6 +366,7 @@ public sealed partial class MainWindow : Window
                         ex, 
                         "Возникло исключение при попытке принудительного завершения работы приложения.", 
                         "MainWindow");
+                    _logService.Flush();
                 }
             };
         }

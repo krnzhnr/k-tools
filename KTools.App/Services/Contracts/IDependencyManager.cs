@@ -74,10 +74,20 @@ public interface IDependencyManager
     /// <summary>
     /// Удалить файлы зависимости с диска и сбросить её статус.
     /// </summary>
+    Task<bool> RemoveDependencyAsync(string key);
+
+    /// <summary>
+    /// Синхронная обёртка удаления файлов зависимости.
+    /// </summary>
     bool RemoveDependency(string key);
 
     /// <summary>
     /// Получить определенную версию установленной зависимости (например "7.1.0" или "v93.0").
+    /// </summary>
+    Task<string> GetInstalledVersionAsync(string key);
+
+    /// <summary>
+    /// Синхронная обёртка получения версии установленной зависимости.
     /// </summary>
     string GetInstalledVersion(string key);
 

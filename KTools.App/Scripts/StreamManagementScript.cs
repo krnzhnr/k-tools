@@ -352,16 +352,16 @@ public sealed class StreamManagementScript : AbstractScript
 
                 if (overwriteSource && string.IsNullOrEmpty(outputPath))
                 {
-                    ReplaceSourceWithResult(filePath, finalOutputFile, results);
+                    await ReplaceSourceWithResultAsync(filePath, finalOutputFile, results);
                 }
                 else if (deleteSource)
                 {
-                    DeleteSource(filePath, results);
+                    await DeleteSourceAsync(filePath, results);
                 }
             }
             else
             {
-                CleanupFailedOutputFile(finalOutputFile);
+                await CleanupFailedOutputFileAsync(finalOutputFile);
                 string failMsg = $"❌ ОШИБКА обработки файла: {Path.GetFileName(filePath)}";
                 _logService.Error(failMsg, "StreamManagementScript");
                 results.Add(failMsg);
@@ -369,7 +369,7 @@ public sealed class StreamManagementScript : AbstractScript
         }
         catch (Exception ex)
         {
-            CleanupFailedOutputFile(finalOutputFile);
+            await CleanupFailedOutputFileAsync(finalOutputFile);
             string errorMsg = $"❌ Ошибка выполнения скрипта для {Path.GetFileName(filePath)}: {ex.Message}";
             results.Add(errorMsg);
             _logService.Exception(ex, $"Ошибка при выполнении фильтрации потоков для '{stem}': {ex.Message}", "StreamManagementScript");

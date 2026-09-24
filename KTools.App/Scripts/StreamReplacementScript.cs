@@ -285,16 +285,16 @@ public sealed class StreamReplacementScript : AbstractScript
 
                 if (overwriteSource)
                 {
-                    ReplaceSourceWithResult(filePath, finalOutputFile, results);
+                    await ReplaceSourceWithResultAsync(filePath, finalOutputFile, results);
                 }
                 else if (deleteSource)
                 {
-                    DeleteSource(filePath, results);
+                    await DeleteSourceAsync(filePath, results);
                 }
             }
             else
             {
-                CleanupFailedOutputFile(finalOutputFile);
+                await CleanupFailedOutputFileAsync(finalOutputFile);
                 string failMsg = $"❌ ОШИБКА сборки файла: {Path.GetFileName(filePath)}";
                 _logService.Error(failMsg, "StreamReplacementScript");
                 results.Add(failMsg);
@@ -302,7 +302,7 @@ public sealed class StreamReplacementScript : AbstractScript
         }
         catch (Exception ex)
         {
-            CleanupFailedOutputFile(finalOutputFile);
+            await CleanupFailedOutputFileAsync(finalOutputFile);
             string errorMsg = $"❌ Ошибка выполнения скрипта для {Path.GetFileName(filePath)}: {ex.Message}";
             results.Add(errorMsg);
             _logService.Exception(ex, $"Ошибка при выполнении подмены дорожек для '{stem}': {ex.Message}", "StreamReplacementScript");

@@ -272,11 +272,8 @@ public sealed class MediaDownloaderScript : AbstractScript
                         // Вывод в лог в реальном времени
                         lock (results)
                         {
-                            SavedLogText += line + "\r\n";
-                            if (SavedLogText.Length > 50000)
-                            {
-                                SavedLogText = SavedLogText.Substring(SavedLogText.Length - 40000);
-                            }
+                            AppendToLog(line + "\r\n");
+                            TrimSavedLogToTail(50000, 40000);
                         }
 
                         int now = Environment.TickCount;
@@ -312,11 +309,8 @@ public sealed class MediaDownloaderScript : AbstractScript
                         // Вывод в лог в реальном времени
                         lock (results)
                         {
-                            SavedLogText += $"[stderr] {line}\r\n";
-                            if (SavedLogText.Length > 50000)
-                            {
-                                SavedLogText = SavedLogText.Substring(SavedLogText.Length - 40000);
-                            }
+                            AppendToLog($"[stderr] {line}\r\n");
+                            TrimSavedLogToTail(50000, 40000);
                         }
 
                         int now = Environment.TickCount;

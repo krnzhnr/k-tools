@@ -201,7 +201,7 @@ public sealed class AudioShiftScript : AbstractScript
 
             if (IsCancelled || !eac3Success || !File.Exists(outputFilePath))
             {
-                CleanupFailedOutputFile(outputFilePath);
+                await CleanupFailedOutputFileAsync(outputFilePath);
                 if (IsCancelled)
                 {
                     results.Add($"⚠ Отменено: {outputName}");
@@ -302,7 +302,7 @@ public sealed class AudioShiftScript : AbstractScript
 
         if (IsCancelled || !success || !File.Exists(outputFilePath))
         {
-            CleanupFailedOutputFile(outputFilePath);
+            await CleanupFailedOutputFileAsync(outputFilePath);
             if (IsCancelled)
             {
                 results.Add($"⚠ Отменено: {outputName}");

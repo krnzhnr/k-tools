@@ -24,6 +24,8 @@ public sealed partial class MainPage : Page
     private readonly ILogService _logService;
     private string? _pendingScriptTag;
     private bool _isSyncingNavigation;
+    private string? _expectedSelectionTag;
+    private string? _workPanelTargetTag;
 
     /// <summary>
     /// Предоставляет доступ к модели представления главной страницы.
@@ -216,9 +218,30 @@ public sealed partial class MainPage : Page
         if (args.SelectedItemContainer is NavigationViewItem selectedItem)
         {
             string? tag = selectedItem.Tag?.ToString();
-            if (tag != null && ViewModel.NavigateCommand.CanExecute(tag))
+
+            // NavigationView может доставить событие выделения уже после снятия флага
+            // синхронизации. Если это наше собственное программное выделение, навигацию
+            // повторять нельзя: иначе возникает цикл переходов между WorkPanel и меню.
+            if (tag != null && string.Equals(tag, _expectedSelectionTag, StringComparison.Ordinal))
             {
-                ViewModel.NavigateCommand.Execute(tag);
+                _expectedSelectionTag = null;
+                return;
+            }
+
+            _expectedSelectionTag = null;
+
+            if (tag != null)
+            {
+                // Запоминаем целевой скрипт: событие Navigated приходит раньше,
+                // чем страница применяет новый скрипт, и читать состояние страницы там рано.
+                _workPanelTargetTag = tag.StartsWith("script:", StringComparison.Ordinal)
+                    ? tag
+                    : null;
+
+                if (ViewModel.NavigateCommand.CanExecute(tag))
+                {
+                    ViewModel.NavigateCommand.Execute(tag);
+                }
             }
         }
     }
@@ -235,6 +258,8 @@ public sealed partial class MainPage : Page
             $"[MainPage] Получено событие навигации на страницу: '{pageTypeName}'",
             "MainPage");
 
+        bool isWorkPanel = pageTypeName == nameof(WorkPanel);
+
         string? targetTag = pageTypeName switch
         {
             nameof(HomePage) => "home",
@@ -242,19 +267,35 @@ public sealed partial class MainPage : Page
             nameof(SettingsPage) => "settings",
             nameof(LogPage) => "logs",
             nameof(DependencySetupPage) => "dependencies",
-            nameof(WorkPanel) => GetActiveScriptTag(),
+            // Для рабочей панели используем целевой тег выбранного пункта меню:
+            // состояние страницы в момент события еще не применено.
+            nameof(WorkPanel) => _workPanelTargetTag ?? GetActiveScriptTag(),
             _ => null
         };
+
+        if (!isWorkPanel)
+        {
+            _workPanelTargetTag = null;
+        }
 
         _logService.Info(
             $"[MainPage] Вычисленный тег навигации для '{pageTypeName}': '{targetTag ?? "null"}'",
             "MainPage");
 
-        if (targetTag != null)
+        // Если целевой тег известен (переход из меню), синхронизируем выделение сразу.
+        // При переходе с домашней страницы выделение выставит событие активного
+        // скрипта уже с применённым состоянием страницы.
+        if (targetTag == null)
+        {
+            return;
+        }
+
+        if (!isWorkPanel || _workPanelTargetTag != null)
         {
             SyncNavigationSelection(targetTag);
-            UpdateHeader(targetTag);
         }
+
+        UpdateHeader(targetTag);
     }
 
     /// <summary>
@@ -408,6 +449,7 @@ public sealed partial class MainPage : Page
             if (targetTag == "settings")
             {
                 NavView.SelectedItem = NavView.SettingsItem;
+                _expectedSelectionTag = null;
             }
             else
             {
@@ -425,6 +467,9 @@ public sealed partial class MainPage : Page
                         parentItem.IsExpanded = true;
                     }
 
+                    // Помечаем тег, чтобы событие выделения, пришедшее уже после
+                    // снятия флага синхронизации, не запускало повторную навигацию.
+                    _expectedSelectionTag = targetTag;
                     NavView.SelectedItem = item;
                 }
             }

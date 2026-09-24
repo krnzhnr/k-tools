@@ -92,6 +92,7 @@ public sealed partial class StreamReplaceControl : UserControl
     private ObservableCollection<FileQueueItem>? _files;
     private readonly ObservableCollection<ReplacementFileItem> _replacementFiles = new();
     private AbstractScript? _activeScript;
+    private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _rebuildUITimer;
 
     // Хранение: track_id оригинального файла -> ComboBox в UI
     private readonly Dictionary<int, ComboBox> _combos = new();
@@ -119,6 +120,22 @@ public sealed partial class StreamReplaceControl : UserControl
         ReplacementFilesListView.ItemsSource = _replacementFiles;
         _replacementFiles.CollectionChanged += OnReplacementFilesChanged;
         Loaded += StreamReplaceControl_Loaded;
+
+        _rebuildUITimer = _dispatcherQueue.CreateTimer();
+        _rebuildUITimer.Interval = TimeSpan.FromMilliseconds(100);
+        _rebuildUITimer.IsRepeating = false;
+        _rebuildUITimer.Tick += (s, e) => RebuildUI();
+
+        Unloaded += (s, e) =>
+        {
+            // Пока контрол отсоединен от дерева, отложенная перестройка не нужна:
+            // подписки и интерфейс восстанавливаются в обработчике Loaded.
+            _rebuildUITimer.Stop();
+            if (_files != null)
+            {
+                _files.CollectionChanged -= OnFilesCollectionChanged;
+            }
+        };
     }
 
     private void StreamReplaceControl_Loaded(object sender, RoutedEventArgs e)
@@ -229,7 +246,8 @@ public sealed partial class StreamReplaceControl : UserControl
         _dispatcherQueue.TryEnqueue(() =>
         {
             SubscribeToItems();
-            RebuildUI();
+            _rebuildUITimer.Stop();
+            _rebuildUITimer.Start();
         });
     }
 
@@ -240,7 +258,8 @@ public sealed partial class StreamReplaceControl : UserControl
             _dispatcherQueue.TryEnqueue(() =>
             {
                 _logService.Info("Завершен фоновый анализ исходного файла, перестраиваем интерфейс", "StreamReplaceControl");
-                RebuildUI();
+                _rebuildUITimer.Stop();
+                _rebuildUITimer.Start();
             });
         }
     }

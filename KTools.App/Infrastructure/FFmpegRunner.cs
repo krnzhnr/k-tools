@@ -260,19 +260,28 @@ public sealed class FFmpegRunner : AbstractProcessRunner, IFFmpegRunner
     /// <summary>
     /// Извлечь выбранную дорожку субтитров и перекодировать в формат ASS.
     /// </summary>
-    public async Task<bool> ExtractSubtitleAsync(string inputFile, int streamIndex, string outputPath, bool relative = false)
+    public async Task<bool> ExtractSubtitleAsync(
+        string inputFile,
+        int streamIndex,
+        string outputPath,
+        bool relative = false,
+        CancellationToken cancellationToken = default)
     {
         string mapVal = relative ? $"0:s:{streamIndex}" : $"0:{streamIndex}";
         string arguments = $"-y -hide_banner -loglevel error -i \"{inputFile}\" -map {mapVal} -c:s ass \"{outputPath}\"";
 
-        var result = await RunProcessAsync("ffmpeg", arguments, null, null, CancellationToken.None);
+        var result = await RunProcessAsync("ffmpeg", arguments, null, null, cancellationToken);
         return result.IsSuccess && File.Exists(outputPath) && new FileInfo(outputPath).Length > 0;
     }
 
     /// <summary>
     /// Извлечь встроенное вложение (например, файл шрифта) из видеофайла.
     /// </summary>
-    public async Task<bool> ExtractAttachmentAsync(string inputFile, int streamIndex, string outputPath)
+    public async Task<bool> ExtractAttachmentAsync(
+        string inputFile,
+        int streamIndex,
+        string outputPath,
+        CancellationToken cancellationToken = default)
     {
         // Папка вывода должна существовать
         string? dir = Path.GetDirectoryName(outputPath);
@@ -281,10 +290,89 @@ public sealed class FFmpegRunner : AbstractProcessRunner, IFFmpegRunner
             Directory.CreateDirectory(dir);
         }
 
-        string arguments = $"-y -hide_banner -loglevel error -dump_attachment:{streamIndex} \"{outputPath}\" -i \"{inputFile}\"";
-        
-        var result = await RunProcessAsync("ffmpeg", arguments, null, null, CancellationToken.None);
+        string arguments = $"-y -hide_banner -loglevel error -dump_attachment:{streamIndex} \"{outputPath}\" -i \"{inputFile}\" -f null -";
+
+        var result = await RunProcessAsync("ffmpeg", arguments, null, null, cancellationToken);
         return result.IsSuccess && File.Exists(outputPath) && new FileInfo(outputPath).Length > 0;
+    }
+
+    /// <summary>
+    /// Извлечь несколько вложений одним запуском FFmpeg (все флаги -dump_attachment передаются за раз).
+    /// Возвращает список путей вложений, которые удалось извлечь.
+    /// При сбое пакетного запуска возвращенный список может быть неполным —
+    /// вызывающий код может дозапросить недостающие вложения через ExtractAttachmentAsync.
+    /// </summary>
+    public async Task<List<string>> ExtractAttachmentsBatchAsync(
+        string inputFile,
+        List<(int StreamIndex, string OutputPath)> attachments,
+        CancellationToken cancellationToken = default)
+    {
+        var extracted = new List<string>();
+        if (attachments.Count == 0)
+        {
+            return extracted;
+        }
+
+        foreach (var attachment in attachments)
+        {
+            string? dir = Path.GetDirectoryName(attachment.OutputPath);
+            if (dir != null && !Directory.Exists(dir))
+            {
+                Directory.CreateDirectory(dir);
+            }
+        }
+
+        var argsList = BuildAttachmentDumpArguments(inputFile, attachments);
+
+        var result = await RunProcessAsync("ffmpeg", string.Join(" ", argsList), null, null, cancellationToken);
+
+        if (!result.IsSuccess)
+        {
+            return extracted;
+        }
+
+        foreach (var attachment in attachments)
+        {
+            if (File.Exists(attachment.OutputPath) && new FileInfo(attachment.OutputPath).Length > 0)
+            {
+                extracted.Add(attachment.OutputPath);
+            }
+        }
+
+        return extracted;
+    }
+
+    /// <summary>
+    /// Формирует аргументы командной строки для извлечения вложений одним запуском FFmpeg.
+    /// Обязательный пустой вывод "-f null -" без указания выходного файла приводит к коду
+    /// возврата 1 ("At least one output file must be specified"), хотя извлечение уже выполнено.
+    /// </summary>
+    internal static List<string> BuildAttachmentDumpArguments(
+        string inputFile,
+        List<(int StreamIndex, string OutputPath)> attachments)
+    {
+        var argsList = new List<string>
+        {
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error"
+        };
+
+        foreach (var attachment in attachments)
+        {
+            argsList.Add($"-dump_attachment:{attachment.StreamIndex}");
+            argsList.Add($"\"{attachment.OutputPath}\"");
+        }
+
+        argsList.Add("-i");
+        argsList.Add($"\"{inputFile}\"");
+
+        argsList.Add("-f");
+        argsList.Add("null");
+        argsList.Add("-");
+
+        return argsList;
     }
 
     /// <summary>

@@ -12,14 +12,28 @@ public sealed class PathManager : IPathManager
 {
     private readonly string _baseDir;
     private readonly ILogService _logService;
+    private string? _binDirectory;
+    private readonly object _binDirectoryLock = new();
+    private readonly Dictionary<string, string> _binaryPathCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> _shortPathCache = new(StringComparer.Ordinal);
 
     /// <summary>
     /// Инициализирует новый экземпляр класса <see cref="PathManager"/> с внедрением зависимостей.
     /// </summary>
     public PathManager(ILogService logService)
+        : this(logService, AppContext.BaseDirectory)
+    {
+    }
+
+    /// <summary>
+    /// Инициализирует новый экземпляр класса <see cref="PathManager"/> с указанием базовой директории.
+    /// </summary>
+    /// <param name="logService">Служба ведения системных журналов.</param>
+    /// <param name="baseDir">Базовая директория приложения (при null или пустоте используется AppContext.BaseDirectory).</param>
+    public PathManager(ILogService logService, string? baseDir)
     {
         _logService = logService ?? throw new ArgumentNullException(nameof(logService));
-        _baseDir = AppContext.BaseDirectory;
+        _baseDir = string.IsNullOrWhiteSpace(baseDir) ? AppContext.BaseDirectory : baseDir;
     }
 
     /// <summary>
@@ -47,34 +61,49 @@ public sealed class PathManager : IPathManager
     /// <returns>Абсолютный путь к локальной папке bin утилит.</returns>
     public string GetBinDirectory()
     {
-        // Проверка: если приложение запущено из защищенной системной папки MSIX
-        bool isMsix = _baseDir.Contains("WindowsApps", StringComparison.OrdinalIgnoreCase);
-
-        if (isMsix)
+        string? cached = _binDirectory;
+        if (cached != null)
         {
-            string appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-            return Path.Combine(appData, "KTools", "bin");
+            return cached;
         }
 
-        // Проверяем доступность папки приложения на запись (Program Files vs LocalAppData / Portable)
-        string testFile = Path.Combine(_baseDir, ".write_test_bin");
-        try
+        lock (_binDirectoryLock)
         {
-            File.WriteAllText(testFile, "test");
-            File.Delete(testFile);
-            return Path.Combine(_baseDir, "bin");
-        }
-        catch (Exception)
-        {
-            // При отсутствии прав записи в папку установки (Program Files) используем LOCALAPPDATA
-            string appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-            string fallbackPath = Path.Combine(appData, "KTools", "bin");
-
-            if (!Directory.Exists(fallbackPath))
+            if (_binDirectory != null)
             {
-                Directory.CreateDirectory(fallbackPath);
+                return _binDirectory;
             }
-            return fallbackPath;
+
+            // Проверка: если приложение запущено из защищенной системной папки MSIX
+            bool isMsix = _baseDir.Contains("WindowsApps", StringComparison.OrdinalIgnoreCase);
+
+            if (isMsix)
+            {
+                string appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+                return _binDirectory = Path.Combine(appData, "KTools", "bin");
+            }
+
+            // Проверяем доступность папки приложения на запись (Program Files vs LocalAppData / Portable)
+            // Имя проверочного файла уникально, чтобы параллельные вызовы не мешали друг другу.
+            string testFile = Path.Combine(_baseDir, $".write_test_bin_{Guid.NewGuid():N}");
+            try
+            {
+                File.WriteAllText(testFile, "test");
+                File.Delete(testFile);
+                return _binDirectory = Path.Combine(_baseDir, "bin");
+            }
+            catch (Exception)
+            {
+                // При отсутствии прав записи в папку установки (Program Files) используем LOCALAPPDATA
+                string appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+                string fallbackPath = Path.Combine(appData, "KTools", "bin");
+
+                if (!Directory.Exists(fallbackPath))
+                {
+                    Directory.CreateDirectory(fallbackPath);
+                }
+                return _binDirectory = fallbackPath;
+            }
         }
     }
 
@@ -136,6 +165,21 @@ public sealed class PathManager : IPathManager
             binaryName += ".exe";
         }
 
+        lock (_binaryPathCache)
+        {
+            if (_binaryPathCache.TryGetValue(binaryName, out string? cached))
+            {
+                // Кэш актуален, только если файл на месте: после удаления или
+                // переустановки зависимости путь нужно искать заново.
+                if (File.Exists(cached))
+                {
+                    return cached;
+                }
+
+                _binaryPathCache.Remove(binaryName);
+            }
+        }
+
         // Замена имени в соответствии с соглашением именования K-Tools
         string targetName = binaryName.ToLowerInvariant() switch
         {
@@ -161,6 +205,10 @@ public sealed class PathManager : IPathManager
             string pathInBin = Path.Combine(dir, targetName);
             if (File.Exists(pathInBin))
             {
+                lock (_binaryPathCache)
+                {
+                    _binaryPathCache[binaryName] = pathInBin;
+                }
                 return pathInBin;
             }
 
@@ -168,6 +216,10 @@ public sealed class PathManager : IPathManager
             string pathInSubfolder = Path.Combine(dir, subfolder, targetName);
             if (File.Exists(pathInSubfolder))
             {
+                lock (_binaryPathCache)
+                {
+                    _binaryPathCache[binaryName] = pathInSubfolder;
+                }
                 return pathInSubfolder;
             }
         }
@@ -195,6 +247,26 @@ public sealed class PathManager : IPathManager
             return path;
         }
 
+        lock (_shortPathCache)
+        {
+            if (_shortPathCache.TryGetValue(path, out string? cached))
+            {
+                return cached;
+            }
+        }
+
+        string result = ComputeShortPath(path);
+
+        lock (_shortPathCache)
+        {
+            _shortPathCache[path] = result;
+        }
+
+        return result;
+    }
+
+    private string ComputeShortPath(string path)
+    {
         try
         {
             var sb = new System.Text.StringBuilder(1024);

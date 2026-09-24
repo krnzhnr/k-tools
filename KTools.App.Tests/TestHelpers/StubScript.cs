@@ -24,6 +24,16 @@ public sealed class StubScript : AbstractScript
     }
 
     /// <summary>
+    /// Необязательный обработчик прогресса: вызывается перед основным обработчиком
+    /// и позволяет тестам эмитировать поток обновлений прогресса (проверки троттлинга).
+    /// </summary>
+    public Action<ScriptProgressCallback, int, int>? ProgressHandler
+    {
+        get;
+        set;
+    }
+
+    /// <summary>
     /// Имя скрипта по умолчанию для StubScript.
     /// </summary>
     public const string DefaultName = "Тестовый скрипт";
@@ -90,6 +100,8 @@ public sealed class StubScript : AbstractScript
         int fileIndex,
         int totalCount)
     {
+        ProgressHandler?.Invoke(progressCallback, fileIndex, totalCount);
+
         var handler = ExecuteHandler ?? DefaultExecuteHandler;
         return handler(filePath, settings);
     }

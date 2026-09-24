@@ -49,12 +49,8 @@ public sealed partial class SubtitlePreviewPage : Page
         // Слушаем изменения коллекции строк для обновления статистики
         ViewModel.PropertyChanged += OnViewModelPropertyChanged;
 
-        // Заполняем боковое меню списком уникальных файлов
-        var uniquePaths = ViewModel.SubtitleLines
-            .Select(l => l.FilePath)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-        PopulateFilesMenu(uniquePaths);
+        // По умолчанию выбираем раздел «Предпросмотр» в боковом меню
+        MainNavigation.SelectedItem = PreviewNavigationItem;
 
         UpdateStatsText();
     }
@@ -63,61 +59,11 @@ public sealed partial class SubtitlePreviewPage : Page
     {
         _cachedPatterns = null;
         if (e.PropertyName == nameof(SubtitlePreviewViewModel.SearchText) ||
-            e.PropertyName == nameof(SubtitlePreviewViewModel.SubtitleLines))
+            e.PropertyName == nameof(SubtitlePreviewViewModel.SubtitleLines) ||
+            e.PropertyName == nameof(SubtitlePreviewViewModel.SelectedFilePath))
         {
             UpdateStatsText();
         }
-    }
-
-    /// <summary>
-    /// Динамически заполняет подменю файлов в разделе «Предпросмотр» боковой панели с поддержкой переноса длинных имен.
-    /// </summary>
-    private void PopulateFilesMenu(System.Collections.Generic.IEnumerable<string> filePaths)
-    {
-        PreviewRootItem.MenuItems.Clear();
-
-        // Добавляем пункт «Все файлы»
-        var allFilesItem = new NavigationViewItem
-        {
-            Content = "Все файлы",
-            Icon = new SymbolIcon(Symbol.Copy),
-            Tag = "preview_all"
-        };
-        PreviewRootItem.MenuItems.Add(allFilesItem);
-
-        // Добавляем каждый файл отдельно
-        foreach (var path in filePaths)
-        {
-            var fileName = System.IO.Path.GetFileName(path);
-
-            // Используем TextBlock для переноса длинных имен файлов
-            var textBlock = new TextBlock
-            {
-                Text = fileName,
-                TextWrapping = TextWrapping.Wrap,
-                MaxLines = 3,
-                Margin = new Thickness(0, 4, 0, 4),
-                VerticalAlignment = VerticalAlignment.Center
-            };
-
-            var item = new NavigationViewItem
-            {
-                Content = textBlock,
-                Icon = new SymbolIcon(Symbol.Page2),
-                Tag = $"file:{path}"
-            };
-
-            // Добавляем подсказку с полным именем файла при наведении
-            ToolTipService.SetToolTip(item, fileName);
-
-            PreviewRootItem.MenuItems.Add(item);
-        }
-
-        // Раскрываем корневой элемент предпросмотра
-        PreviewRootItem.IsExpanded = true;
-
-        // Программный выбор первого элемента («Все файлы»)
-        MainNavigation.SelectedItem = allFilesItem;
     }
 
     /// <summary>
@@ -131,7 +77,7 @@ public sealed partial class SubtitlePreviewPage : Page
         {
             string tag = item.Tag?.ToString() ?? string.Empty;
 
-            if (tag == "preview_all" || tag.StartsWith("file:"))
+            if (tag == "preview")
             {
                 PreviewGrid.Visibility = Visibility.Visible;
                 ActorsGrid.Visibility = Visibility.Collapsed;
@@ -139,7 +85,6 @@ public sealed partial class SubtitlePreviewPage : Page
                 EffectsGrid.Visibility = Visibility.Collapsed;
                 PatternsGrid.Visibility = Visibility.Collapsed;
 
-                ViewModel.SelectedFilePath = tag == "preview_all" ? null : tag.Substring("file:".Length);
                 UpdateStatsText();
             }
             else
@@ -149,9 +94,39 @@ public sealed partial class SubtitlePreviewPage : Page
                 StylesGrid.Visibility = tag == "styles" ? Visibility.Visible : Visibility.Collapsed;
                 EffectsGrid.Visibility = tag == "effects" ? Visibility.Visible : Visibility.Collapsed;
                 PatternsGrid.Visibility = tag == "patterns" ? Visibility.Visible : Visibility.Collapsed;
-
             }
         }
+    }
+
+    /// <summary>
+    /// Обработчик клика по карточке «Все файлы» для перехода к общему списку строк.
+    /// </summary>
+    private void AllFilesCard_Click(object sender, RoutedEventArgs e)
+    {
+        DetailTitleTextBlock.Text = "Все файлы (весь сезон)";
+        ViewModel.OpenFileDetail(null);
+        UpdateStatsText();
+    }
+
+    /// <summary>
+    /// Обработчик клика по карточке конкретного файла субтитров.
+    /// </summary>
+    private void FileCard_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement element && element.DataContext is SubtitleFileCardItem fileCard)
+        {
+            DetailTitleTextBlock.Text = fileCard.FileName;
+            ViewModel.OpenFileDetail(fileCard.FilePath);
+            UpdateStatsText();
+        }
+    }
+
+    /// <summary>
+    /// Обработчик кнопки возврата к списку карточек файлов.
+    /// </summary>
+    private void BackToFilesButton_Click(object sender, RoutedEventArgs e)
+    {
+        ViewModel.BackToFilesHub();
     }
 
     /// <summary>

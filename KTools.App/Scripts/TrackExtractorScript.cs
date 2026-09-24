@@ -200,6 +200,10 @@ public sealed class TrackExtractorScript : AbstractScript
                 }
 
                 string outFilename = FormatFilename(Path.GetFileNameWithoutExtension(filePath), track, ext, nameFormat, nameSuffix);
+                string trackStem = Path.GetFileNameWithoutExtension(outFilename);
+                string trackExt = Path.GetExtension(outFilename);
+                string renamedStem = ApplyPowerRename(trackStem, fileIndex, settings);
+                outFilename = $"{renamedStem}{trackExt}";
                 string outPath = Path.Combine(baseDir, outFilename);
 
                 if (File.Exists(outPath) && !overwrite)
@@ -357,7 +361,7 @@ public sealed class TrackExtractorScript : AbstractScript
                     $"файл: {font.FileName})", 
                     "TrackExtractorScript");
                 
-                bool fSuccess = await _ffmpegRunner.ExtractAttachmentAsync(filePath, ffmpegAttachmentIndex, outFontPath);
+                bool fSuccess = await _ffmpegRunner.ExtractAttachmentAsync(filePath, ffmpegAttachmentIndex, outFontPath, CancellationToken);
                 
                 if (fSuccess)
                 {

@@ -122,67 +122,88 @@ public sealed class AudioTransplantScript : AbstractScript
         double actualOffsetMs = userShiftMs - AacPrimingDelayMs;
         _logService.Info($"Пользовательский сдвиг: {userShiftMs} мс. Математическая компенсация AAC (-21.33 мс). Фактический сдвиг: {actualOffsetMs:F2} мс.", "AudioTransplantScript");
 
-        // 3. Извлечение и прямоточный физический сдвиг аудиопотока через eac3to
-        string sourceExt = Path.GetExtension(sourceFilePath).TrimStart('.');
-        if (string.IsNullOrEmpty(sourceExt)) sourceExt = "ac3";
+        // 3. Предварительное прямоточное извлечение сырого аудиопотока через FFmpeg
+        // eac3to не поддерживает контейнеры MP4/M4A и требует сырой элементарный поток (AAC/AC3/DTS и т.д.)
+        string rawExt = "ac3";
+        try
+        {
+            var sourceStructure = await _mediaProbeService.ProbeAsync(sourceFilePath);
+            var audioTracks = sourceStructure?.GetAudioTracks();
+            if (audioTracks != null && sourceTrackIndex < audioTracks.Count)
+            {
+                string codec = audioTracks[sourceTrackIndex].Codec.ToLowerInvariant();
+                rawExt = codec switch
+                {
+                    "aac" => "aac",
+                    "ac3" => "ac3",
+                    "eac3" => "eac3",
+                    "dts" => "dts",
+                    "dtshd" => "dts",
+                    "truehd" => "thd",
+                    "flac" => "flac",
+                    "mp3" => "mp3",
+                    "opus" => "opus",
+                    _ => Path.GetExtension(sourceFilePath).TrimStart('.').ToLowerInvariant()
+                };
+            }
+            else
+            {
+                string ext = Path.GetExtension(sourceFilePath).TrimStart('.').ToLowerInvariant();
+                rawExt = ext == "m4a" ? "aac" : (string.IsNullOrEmpty(ext) ? "ac3" : ext);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logService.Warn($"Не удалось заранее прозондировать аудиопоток источника: {ex.Message}. Используется определение по расширению.", "AudioTransplantScript");
+            string ext = Path.GetExtension(sourceFilePath).TrimStart('.').ToLowerInvariant();
+            rawExt = ext == "m4a" ? "aac" : (string.IsNullOrEmpty(ext) ? "ac3" : ext);
+        }
 
-        string tempShiftedPath = Path.Combine(Path.GetTempPath(), $"transplant_{Guid.NewGuid():N}.{sourceExt}");
+        string tempRawAudioPath = Path.Combine(Path.GetTempPath(), $"transplant_raw_{Guid.NewGuid():N}.{rawExt}");
+        string tempShiftedPath = Path.Combine(Path.GetTempPath(), $"transplant_{Guid.NewGuid():N}.{rawExt}");
 
         try
         {
-            progressCallback(fileIndex, totalCount, "Извлечение и прямоточный сдвиг аудио (eac3to Bitstream)...", 30.0);
+            progressCallback(fileIndex, totalCount, "Извлечение сырого аудиопотока (FFmpeg stream copy)...", 25.0);
+            _logService.Info($"Прямоточное извлечение сырого аудиопотока дорожки a:{sourceTrackIndex} в '{rawExt}'...", "AudioTransplantScript");
+
+            var ffmpegDemuxArgs = new List<string>
+            {
+                "-map", $"0:a:{sourceTrackIndex}",
+                "-c:a", "copy"
+            };
+
+            bool demuxSuccess = await _ffmpegRunner.RunAsync(
+                inputPath: sourceFilePath,
+                outputPath: tempRawAudioPath,
+                extraArgs: ffmpegDemuxArgs,
+                overwrite: true,
+                cancellationToken: CancellationToken);
+
+            if (!demuxSuccess || !File.Exists(tempRawAudioPath))
+            {
+                throw new InvalidOperationException($"Не удалось прямоточно извлечь сырой аудиопоток дорожки {sourceTrackIndex} через FFmpeg.");
+            }
+
+            progressCallback(fileIndex, totalCount, "Прямоточный физический сдвиг аудио (eac3to Bitstream)...", 45.0);
 
             int roundedOffsetMs = (int)Math.Round(actualOffsetMs);
             string shiftArg = roundedOffsetMs >= 0 ? $"+{roundedOffsetMs}ms" : $"{roundedOffsetMs}ms";
 
-            // eac3to дорожка 1-indexed (если исходный файл моно-дорожка, иначе добавляем 1 к 0-indexed индексу)
-            int eac3TrackNum = sourceTrackIndex + 1;
+            _logService.Info($"Запуск физического сдвига аудиопотока в eac3to: {shiftArg} (файл: '{Path.GetFileName(tempRawAudioPath)}')", "AudioTransplantScript");
+
+            // Передаем в eac3to извлеченный элементарный поток
             var eac3toArgs = new List<string>
             {
-                $"\"{sourceFilePath}\"",
-                $"{eac3TrackNum}:\"{tempShiftedPath}\"",
+                $"\"{tempRawAudioPath}\"",
+                $"\"{tempShiftedPath}\"",
                 shiftArg,
                 "-silence",
                 "-progressnumbers",
                 "-log=nul"
             };
 
-            bool eac3Success = await _eac3toRunner.RunAsync(eac3toArgs);
-
-            // Резервный вариант, если eac3to не смог распарсить контейнер: используем FFmpeg для извлечения сырого потока с прямоточным копированием
-            if (!eac3Success || !File.Exists(tempShiftedPath))
-            {
-                _logService.Warn("Прямой сдвиг трека через eac3to не завершился успешно. Запуск резервной обработки через FFmpeg...", "AudioTransplantScript");
-
-                string tempRawPath = Path.Combine(Path.GetTempPath(), $"transplant_raw_{Guid.NewGuid():N}.{sourceExt}");
-                var ffmpegDemuxArgs = new List<string>
-                {
-                    "-map", $"0:a:{sourceTrackIndex}",
-                    "-c:a", "copy"
-                };
-
-                bool ffmpegDemuxSuccess = await _ffmpegRunner.RunAsync(
-                    inputPath: sourceFilePath,
-                    outputPath: tempRawPath,
-                    extraArgs: ffmpegDemuxArgs,
-                    overwrite: true);
-
-                if (ffmpegDemuxSuccess && File.Exists(tempRawPath))
-                {
-                    var fallbackEacArgs = new List<string>
-                    {
-                        $"\"{tempRawPath}\"",
-                        $"\"{tempShiftedPath}\"",
-                        shiftArg,
-                        "-silence",
-                        "-progressnumbers",
-                        "-log=nul"
-                    };
-
-                    eac3Success = await _eac3toRunner.RunAsync(fallbackEacArgs);
-                    if (File.Exists(tempRawPath)) File.Delete(tempRawPath);
-                }
-            }
+            bool eac3Success = await _eac3toRunner.RunAsync(eac3toArgs, cancellationToken: CancellationToken);
 
             if (!eac3Success || !File.Exists(tempShiftedPath))
             {
@@ -248,7 +269,10 @@ public sealed class AudioTransplantScript : AbstractScript
 
             mkvInputs.Add(new MkvInputSource(filePath, destExtraArgs));
 
-            bool mkvSuccess = await _mkvmergeRunner.RunAsync(finalOutputPath, mkvInputs);
+            bool mkvSuccess = await _mkvmergeRunner.RunAsync(
+                finalOutputPath,
+                mkvInputs,
+                cancellationToken: CancellationToken);
 
             if (mkvSuccess && File.Exists(finalOutputPath))
             {
@@ -270,7 +294,16 @@ public sealed class AudioTransplantScript : AbstractScript
         }
         finally
         {
-            // Очистка временного прямоточного аудиофайла
+            // Очистка временных промежуточных и сдвинутых аудиофайлов
+            if (File.Exists(tempRawAudioPath))
+            {
+                try
+                {
+                    File.Delete(tempRawAudioPath);
+                }
+                catch { }
+            }
+
             if (File.Exists(tempShiftedPath))
             {
                 try

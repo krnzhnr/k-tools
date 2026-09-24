@@ -267,7 +267,7 @@ public class DependencySetupViewModelTests
         vm.RemoveDependencyCommand.Execute(null);
 
         // Assert
-        _dependencyManagerMock.Verify(d => d.RemoveDependency(It.IsAny<string>()), Times.Never);
+        _dependencyManagerMock.Verify(d => d.RemoveDependencyAsync(It.IsAny<string>()), Times.Never);
         _logServiceMock.Verify(l => l.Warn(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
     }
 
@@ -399,11 +399,11 @@ public class DependencySetupViewModelTests
         // Act
         await vm.InstallDependencyCommand.ExecuteAsync(dep);
         vm.CancelInstallationCommand.Execute(dep);
-        vm.RemoveDependencyCommand.Execute(dep);
+        await vm.RemoveDependencyCommand.ExecuteAsync(dep);
 
         // Assert
         _dependencyManagerMock.Verify(d => d.InstallDependencyAsync("ffmpeg"), Times.Once);
         _dependencyManagerMock.Verify(d => d.CancelInstallation("ffmpeg"), Times.Once);
-        _dependencyManagerMock.Verify(d => d.RemoveDependency("ffmpeg"), Times.Once);
+        _dependencyManagerMock.Verify(d => d.RemoveDependencyAsync("ffmpeg"), Times.Once);
     }
 }

@@ -112,6 +112,26 @@ public sealed class AssParser : IAssParser
 
     private const string DialoguePrefix = "Dialogue:";
 
+    private readonly record struct DialogueFieldIndices(
+        int NumFields,
+        int Start,
+        int End,
+        int Style,
+        int Name,
+        int Actor,
+        int Effect,
+        int Text);
+
+    private static readonly DialogueFieldIndices FallbackFieldIndices = new(
+        NumFields: 10,
+        Start: 1,
+        End: 2,
+        Style: 3,
+        Name: 4,
+        Actor: -1,
+        Effect: -1,
+        Text: 9);
+
     public AssParser() { }
 
 
@@ -137,8 +157,8 @@ public sealed class AssParser : IAssParser
         var data = new AssData();
         bool inEvents = false;
         bool metFirstDialogue = false;
-        var formatFields = new List<string>();
         var headerBuilder = new System.Text.StringBuilder();
+        var fieldIndices = FallbackFieldIndices;
 
         string content = ReadFileWithFallbackEncoding(filePath);
 
@@ -151,7 +171,7 @@ public sealed class AssParser : IAssParser
             if (stripped.StartsWith(DialoguePrefix, StringComparison.OrdinalIgnoreCase))
             {
                 metFirstDialogue = true;
-                var dialogue = ParseDialogueLine(stripped, formatFields);
+                var dialogue = ParseDialogueLine(stripped, fieldIndices);
                 if (dialogue != null)
                 {
                     data.Dialogues.Add(dialogue);
@@ -190,9 +210,31 @@ public sealed class AssParser : IAssParser
                 if (stripped.StartsWith("Format:", StringComparison.OrdinalIgnoreCase))
                 {
                     string[] rawFields = stripped.Substring("Format:".Length).Split(',');
-                    formatFields = rawFields
+                    var normalizedFields = rawFields
                         .Select(f => f.Trim().ToLowerInvariant())
                         .ToList();
+
+                    int normalizedFieldsIndex(string name)
+                    {
+                        for (int i = 0; i < normalizedFields.Count; i++)
+                        {
+                            if (normalizedFields[i] == name)
+                            {
+                                return i;
+                            }
+                        }
+                        return -1;
+                    }
+
+                    fieldIndices = new DialogueFieldIndices(
+                        NumFields: normalizedFields.Count,
+                        Start: normalizedFieldsIndex("start"),
+                        End: normalizedFieldsIndex("end"),
+                        Style: normalizedFieldsIndex("style"),
+                        Name: normalizedFieldsIndex("name"),
+                        Actor: normalizedFieldsIndex("actor"),
+                        Effect: normalizedFieldsIndex("effect"),
+                        Text: normalizedFieldsIndex("text"));
                     continue;
                 }
             }
@@ -210,8 +252,8 @@ public sealed class AssParser : IAssParser
         var data = new AssData();
         string content = ReadFileWithFallbackEncoding(filePath);
 
-        // Разделяем на блоки по пустым строкам
-        string[] blocks = Regex.Split(content.Trim(), @"\r?\n\s*\r?\n");
+        // Разделяем на блоки по пустым строкам (Trim в блоках отсекает ведущие/хвостовые пропуски)
+        string[] blocks = Regex.Split(content, @"\r?\n\s*\r?\n");
         foreach (string block in blocks)
         {
             string[] lines = block.Trim().Split(
@@ -274,42 +316,28 @@ public sealed class AssParser : IAssParser
 
     private AssDialogue? ParseDialogueLine(
         string line,
-        List<string> formatFields)
+        DialogueFieldIndices fieldIndices)
     {
         string afterPrefix = line.Substring(DialoguePrefix.Length).Trim();
-        int numFields = formatFields.Count > 0 ? formatFields.Count : 10;
 
-        string[] parts = afterPrefix.Split(',', numFields);
+        string[] parts = afterPrefix.Split(',', fieldIndices.NumFields);
 
-        if (parts.Length < numFields)
+        if (parts.Length < fieldIndices.NumFields)
         {
             return null;
         }
 
-        var fieldMap = new Dictionary<string, string>();
-        if (formatFields.Count > 0)
-        {
-            for (int i = 0; i < formatFields.Count; i++)
-            {
-                fieldMap[formatFields[i]] = parts[i].Trim();
-            }
-        }
-        else
-        {
-            fieldMap["start"] = parts[1].Trim();
-            fieldMap["end"] = parts[2].Trim();
-            fieldMap["style"] = parts[3].Trim();
-            fieldMap["name"] = parts[4].Trim();
-            fieldMap["text"] = parts[9].Trim();
-        }
+        string GetField(int index, string fallback) => index >= 0 ? parts[index].Trim() : fallback;
 
         return new AssDialogue(
-            start: fieldMap.GetValueOrDefault("start", "0:00:00.00"),
-            end: fieldMap.GetValueOrDefault("end", "0:00:00.00"),
-            style: fieldMap.GetValueOrDefault("style", "Default"),
-            actor: fieldMap.GetValueOrDefault("name", fieldMap.GetValueOrDefault("actor", "")),
-            effect: fieldMap.GetValueOrDefault("effect", ""),
-            text: fieldMap.GetValueOrDefault("text", "")
+            start: GetField(fieldIndices.Start, "0:00:00.00"),
+            end: GetField(fieldIndices.End, "0:00:00.00"),
+            style: GetField(fieldIndices.Style, "Default"),
+            actor: fieldIndices.Name >= 0
+                ? parts[fieldIndices.Name].Trim()
+                : GetField(fieldIndices.Actor, ""),
+            effect: GetField(fieldIndices.Effect, ""),
+            text: GetField(fieldIndices.Text, "")
         );
     }
 
@@ -512,14 +540,31 @@ public sealed class AssParser : IAssParser
         var utf8Strict = new UTF8Encoding(
             encoderShouldEmitUTF8Identifier: false,
             throwOnInvalidBytes: true);
+        byte[] bytes = File.ReadAllBytes(filePath);
+
+        // File.ReadAllText раньше снимал BOM автоматически, а GetString оставляет
+        // символ U+FEFF в начале текста, что попадало в заголовок и разбор событий.
+        int offset = HasUtfBom(bytes) ? 3 : 0;
+
         try
         {
-            return File.ReadAllText(filePath, utf8Strict);
+            return utf8Strict.GetString(bytes, offset, bytes.Length - offset);
         }
         catch
         {
             var cp1251 = Encoding.GetEncoding("windows-1251");
-            return File.ReadAllText(filePath, cp1251);
+            return cp1251.GetString(bytes, offset, bytes.Length - offset);
         }
+    }
+
+    /// <summary>
+    /// Определяет наличие UTF-8 BOM в начале файла.
+    /// </summary>
+    private static bool HasUtfBom(byte[] bytes)
+    {
+        return bytes.Length >= 3 &&
+               bytes[0] == 0xEF &&
+               bytes[1] == 0xBB &&
+               bytes[2] == 0xBF;
     }
 }

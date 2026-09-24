@@ -230,7 +230,18 @@
                         </InfoBar.Content>
                     </InfoBar>
 
-                    <Frame x:Name="ContentFrame" Grid.Row="1" Margin="0" />
+                    <!--
+                        В WinUI 3 Frame не имеет перехода по умолчанию, поэтому анимация
+                        навигации задается явно: плавное появление содержимого при переходах
+                        между главной страницей, логами, настройками и рабочей панелью.
+                    -->
+                    <Frame x:Name="ContentFrame" Grid.Row="1" Margin="0">
+                        <Frame.ContentTransitions>
+                            <TransitionCollection>
+                                <NavigationThemeTransition />
+                            </TransitionCollection>
+                        </Frame.ContentTransitions>
+                    </Frame>
                 </Grid>
             </Grid>
         </NavigationView>

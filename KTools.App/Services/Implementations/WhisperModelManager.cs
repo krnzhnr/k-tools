@@ -297,6 +297,8 @@ public sealed class WhisperModelManager : IWhisperModelManager
 
             DateTime lastSpeedUpdate = DateTime.UtcNow;
             long lastBytesRead = 0;
+            int lastProgressTick = Environment.TickCount - 200;
+            int lastReportedPercent = -1;
 
             await using (var contentStream = await response.Content.ReadAsStreamAsync(linkedCts.Token))
             await using (var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, 65536, true))
@@ -310,16 +312,26 @@ public sealed class WhisperModelManager : IWhisperModelManager
                     if (totalBytes.HasValue && totalBytes.Value > 0)
                     {
                         int percent = (int)((double)totalRead / totalBytes.Value * 100);
-                        lock (_downloadsLock)
+
+                        if (lastReportedPercent != percent)
                         {
-                            if (_activeDownloads.ContainsKey(modelKey))
+                            int nowTick = Environment.TickCount;
+                            if (nowTick - lastProgressTick >= 200)
                             {
-                                _activeDownloads[modelKey] = (linkedCts, percent);
+                                lastReportedPercent = percent;
+                                lastProgressTick = nowTick;
+                                lock (_downloadsLock)
+                                {
+                                    if (_activeDownloads.ContainsKey(modelKey))
+                                    {
+                                        _activeDownloads[modelKey] = (linkedCts, percent);
+                                    }
+                                }
+
+                                progress?.Report(percent);
+                                DownloadProgressChanged?.Invoke(modelKey, percent);
                             }
                         }
-
-                        progress?.Report(percent);
-                        DownloadProgressChanged?.Invoke(modelKey, percent);
                     }
 
                     DateTime now = DateTime.UtcNow;

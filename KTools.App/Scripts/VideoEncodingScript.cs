@@ -414,16 +414,26 @@ public sealed class VideoEncodingScript : AbstractScript
                 string inputExt = Path.GetExtension(filePath).ToLowerInvariant();
                 bool isMkv = inputExt.Equals(".mkv", StringComparison.OrdinalIgnoreCase) || inputExt.Equals(".mka", StringComparison.OrdinalIgnoreCase);
 
+                var fontRequests = new List<(int StreamIndex, string OutputPath)>();
                 foreach (var font in fontAttachments)
                 {
-                    if (IsCancelled) break;
-
                     int ffmpegAttachmentIndex = isMkv
                         ? structure.Tracks.Count + structure.Attachments.IndexOf(font)
                         : font.AttachmentId;
 
-                    string outFontPath = Path.Combine(tempFontsDir, font.FileName);
-                    bool fSuccess = await _ffmpegRunner.ExtractAttachmentAsync(filePath, ffmpegAttachmentIndex, outFontPath);
+                    fontRequests.Add((ffmpegAttachmentIndex, Path.Combine(tempFontsDir, font.FileName)));
+                }
+
+                var extractedSet = new HashSet<string>(
+                    await _ffmpegRunner.ExtractAttachmentsBatchAsync(filePath, fontRequests, CancellationToken),
+                    StringComparer.OrdinalIgnoreCase);
+
+                foreach (var (ffmpegAttachmentIndex, outFontPath) in fontRequests)
+                {
+                    if (IsCancelled) break;
+
+                    bool fSuccess = extractedSet.Contains(outFontPath)
+                        || await _ffmpegRunner.ExtractAttachmentAsync(filePath, ffmpegAttachmentIndex, outFontPath, CancellationToken);
                     if (fSuccess)
                     {
                         fontCount++;
@@ -474,7 +484,7 @@ public sealed class VideoEncodingScript : AbstractScript
                     tempSubFile = Path.Combine(tempDir, $"subs_{DateTime.Now.Ticks}.ass");
 
                     _logService.Info($"Извлечение субтитров #{targetSubTrack.TrackId} (относительный индекс {relSubIdx}) во временный файл", "VideoEncodingScript");
-                    bool extSubSuccess = await _ffmpegRunner.ExtractSubtitleAsync(filePath, relSubIdx, tempSubFile, relative: true);
+                    bool extSubSuccess = await _ffmpegRunner.ExtractSubtitleAsync(filePath, relSubIdx, tempSubFile, relative: true, cancellationToken: CancellationToken);
 
                     if (extSubSuccess && File.Exists(tempSubFile))
                     {
@@ -878,7 +888,7 @@ public sealed class VideoEncodingScript : AbstractScript
             // 9. Обработка результатов
             if (IsCancelled)
             {
-                CleanupFailedOutputFile(finalOutputFile);
+                await CleanupFailedOutputFileAsync(finalOutputFile);
                 string cancelMsg = $"⚠ Обработка отменена пользователем: {Path.GetFileName(finalOutputFile)}";
                 _logService.Info(cancelMsg, "VideoEncodingScript");
                 results.Add(cancelMsg);
@@ -895,12 +905,12 @@ public sealed class VideoEncodingScript : AbstractScript
                 bool overwriteSource = GetSettingValue(settings, "overwrite_source", false);
                 if (overwriteSource && string.IsNullOrEmpty(outputPath))
                 {
-                    ReplaceSourceWithResult(filePath, finalOutputFile, results);
+                    await ReplaceSourceWithResultAsync(filePath, finalOutputFile, results);
                 }
             }
             else
             {
-                CleanupFailedOutputFile(finalOutputFile);
+                await CleanupFailedOutputFileAsync(finalOutputFile);
                 string failMsg = $"❌ ОШИБКА кодирования файла: {Path.GetFileName(filePath)}";
                 _logService.Error(failMsg, "VideoEncodingScript");
                 results.Add(failMsg);
@@ -910,7 +920,7 @@ public sealed class VideoEncodingScript : AbstractScript
         {
             if (!string.IsNullOrEmpty(_finalOutputFileForCleanup))
             {
-                CleanupFailedOutputFile(_finalOutputFileForCleanup);
+                await CleanupFailedOutputFileAsync(_finalOutputFileForCleanup);
             }
             string runErr = $"❌ Критическая ошибка при кодировании видео для '{Path.GetFileName(filePath)}': {ex.Message}";
             _logService.Exception(ex, $"Исключение в процессе кодирования '{filePath}': {ex.Message}", "VideoEncodingScript");

@@ -42,12 +42,18 @@ public interface IFFmpegRunner
     /// <summary>
     /// Извлечь выбранную дорожку субтитров и перекодировать её в формат ASS.
     /// </summary>
-    Task<bool> ExtractSubtitleAsync(string inputFile, int streamIndex, string outputPath, bool relative = false);
+    Task<bool> ExtractSubtitleAsync(string inputFile, int streamIndex, string outputPath, bool relative = false, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Извлечь встроенное вложение (файл шрифта) из медиафайла.
     /// </summary>
-    Task<bool> ExtractAttachmentAsync(string inputFile, int streamIndex, string outputPath);
+    Task<bool> ExtractAttachmentAsync(string inputFile, int streamIndex, string outputPath, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Извлечь несколько вложений одним запуском FFmpeg (все флаги -dump_attachment за раз).
+    /// Возвращает список путей успешно извлеченных вложений.
+    /// </summary>
+    Task<List<string>> ExtractAttachmentsBatchAsync(string inputFile, List<(int StreamIndex, string OutputPath)> attachments, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Проверить поддержку кодирования с аппаратным ускорением NVIDIA NVENC.

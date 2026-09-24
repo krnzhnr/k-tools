@@ -74,10 +74,17 @@ public sealed class MkvAssemblyScript(
             options: ["MKV", "MP4"]
         ),
         new SettingField(
-            "subs_title",
-            "Заголовок субтитров",
+            "subs_full_title",
+            "Заголовок полных субтитров",
             SettingType.Text,
-            "[Надписи]",
+            "Субтитры",
+            "Субтитры"
+        ),
+        new SettingField(
+            "subs_signs_title",
+            "Заголовок надписей",
+            SettingType.Text,
+            "Надписи",
             "Субтитры"
         ),
         new SettingField(
@@ -144,13 +151,24 @@ public sealed class MkvAssemblyScript(
         _logService.Info($"Начало сборки MKV-контейнера для видеофайла '{Path.GetFileName(filePath)}'", "MkvAssemblyScript");
 
         // 2. Извлекаем пользовательские настройки
-        string subsTitle = GetSettingValue(settings, "subs_title", "[Надписи]");
+        string subsFullTitle = GetSettingValue(settings, "subs_full_title", "Субтитры");
+        string subsSignsTitle = GetSettingValue(settings, "subs_signs_title", "Надписи");
+        // Разовая миграция со старых дефолтов ("Полные" / "[Надписи]"): если пользователь
+        // значение не менял, подменяем новым и сохраняем, иначе старые дефолты из файла
+        // настроек перекрывали бы новые.
+        subsFullTitle = MigrateSubsTitle("subs_full_title", subsFullTitle, "Полные", "Субтитры");
+        subsSignsTitle = MigrateSubsTitle("subs_signs_title", subsSignsTitle, "[Надписи]", "Надписи");
         bool cleanTracks = GetSettingValue(settings, "clean_tracks", true);
         bool positionBeforeBuiltin = GetSettingValue(settings, "position_before_builtin", false);
 
-        // 3. Поиск сопутствующих аудио- и субтитровых файлов строго в очереди файлов пользователя (FilesQueue) по совпадению stem
-        string? audioPath = null;
-        string? subsPath = null;
+        // 3. Поиск сопутствующих аудио- и субтитровых файлов строго в очереди файлов пользователя (FilesQueue).
+        // Имя файла — главный источник правды: точное совпадение либо префикс через разделитель
+        // (например, "video.dub.mka", "video.en.srt", "video.signs.ass"). К одному видео привязывается N дорожек.
+        // Ручная привязка через дроп-зону (MuxPinnedStem) имеет приоритет над автосопоставлением.
+        // Роль субтитров (полные/надписи/прочие) определяется суффиксом через MuxTrackTyper.
+        // Основная аудиодорожка — явно помеченная (зона "RU Аудио (Осн.)") или первая по имени.
+        List<(string Path, bool ExplicitMain)> audioCandidates = [];
+        List<(string Path, MuxSubsRole Role)> subsTracks = [];
 
         foreach (var queueItem in FilesQueue)
         {
@@ -162,20 +180,51 @@ public sealed class MkvAssemblyScript(
             string qExt = Path.GetExtension(queueItem.FilePath).ToLowerInvariant();
             string qStem = Path.GetFileNameWithoutExtension(queueItem.FilePath);
 
-            if (qStem.Equals(stem, System.StringComparison.OrdinalIgnoreCase))
+            if (!MuxGroupMatcher.BelongsToVideo(stem, qStem, queueItem.MuxPinnedStem))
             {
-                if (audioPath == null && (AppConstants.AudioContainers.Contains(qExt) || AppConstants.AudioStreams.Contains(qExt)))
+                continue;
+            }
+
+            if (AppConstants.AudioContainers.Contains(qExt) || AppConstants.AudioStreams.Contains(qExt))
+            {
+                if (!audioCandidates.Any(c => string.Equals(c.Path, queueItem.FilePath, StringComparison.OrdinalIgnoreCase)))
                 {
-                    audioPath = queueItem.FilePath;
-                    _logService.Info($"Найден сопутствующий аудиофайл в очереди: '{Path.GetFileName(queueItem.FilePath)}'", "MkvAssemblyScript");
+                    audioCandidates.Add((queueItem.FilePath, queueItem.MuxAudioMain));
                 }
-                else if (subsPath == null && AppConstants.SubtitleExtensions.Contains(qExt))
+            }
+            else if (AppConstants.SubtitleExtensions.Contains(qExt))
+            {
+                if (!subsTracks.Any(t => string.Equals(t.Path, queueItem.FilePath, StringComparison.OrdinalIgnoreCase)))
                 {
-                    subsPath = queueItem.FilePath;
-                    _logService.Info($"Найден сопутствующий файл субтитров в очереди: '{Path.GetFileName(queueItem.FilePath)}'", "MkvAssemblyScript");
+                    subsTracks.Add((queueItem.FilePath, MuxTrackTyper.ResolveSubsRole(stem, qStem, queueItem.MuxRoleOverride)));
                 }
             }
         }
+
+        // Основная дорожка идёт первой; остальные сортируются по имени.
+        audioCandidates.Sort((left, right) =>
+        {
+            int mainCmp = (left.ExplicitMain ? 0 : 1).CompareTo(right.ExplicitMain ? 0 : 1);
+            return mainCmp != 0 ? mainCmp : StringComparer.OrdinalIgnoreCase.Compare(left.Path, right.Path);
+        });
+        List<string> audioPaths = [.. audioCandidates.Select(c => c.Path)];
+        subsTracks.Sort((left, right) =>
+        {
+            int roleCmp = MuxTrackTyper.GetRoleOrder(left.Role).CompareTo(MuxTrackTyper.GetRoleOrder(right.Role));
+            return roleCmp != 0 ? roleCmp : StringComparer.OrdinalIgnoreCase.Compare(left.Path, right.Path);
+        });
+        List<string> subsPaths = [.. subsTracks.Select(t => t.Path)];
+
+        foreach (string found in audioPaths)
+        {
+            _logService.Info($"Найден сопутствующий аудиофайл в очереди: '{Path.GetFileName(found)}'", "MkvAssemblyScript");
+        }
+        foreach (var (subsPath, role) in subsTracks)
+        {
+            _logService.Info($"Найден сопутствующий файл субтитров в очереди ({MuxTrackTyper.GetRoleLabel(role)}): '{Path.GetFileName(subsPath)}'", "MkvAssemblyScript");
+        }
+
+        _logService.Info($"Режим сборки: cleanTracks={cleanTracks} (False — встроенные дорожки сохраняются), внешних аудио: {audioPaths.Count}, субтитров: {subsPaths.Count}", "MkvAssemblyScript");
 
         // 4. Формирование путей назначения
         string containerChoice = GetSettingValue(settings, "output_container", "MKV");
@@ -200,69 +249,66 @@ public sealed class MkvAssemblyScript(
             return results;
         }
 
-        // 5a. Обработка сборки контейнера MP4
+        // 5a. Обработка сборки контейнера MP4 (несколько внешних дорожек)
         if (isMp4)
         {
-            if (audioPath != null)
+            List<string> mp4AudioPaths = [];
+            foreach (string candidate in audioPaths)
             {
-                string aExt = Path.GetExtension(audioPath).ToLowerInvariant();
+                string aExt = Path.GetExtension(candidate).ToLowerInvariant();
                 if (aExt == ".flac" || aExt == ".thd" || aExt == ".truehd" || aExt == ".dts" || aExt == ".dtshd")
                 {
-                    string warnAudio = $"⚠ [Сборка MP4] Внешний аудиофайл '{Path.GetFileName(audioPath)}' имеет формат {aExt.TrimStart('.').ToUpperInvariant()}, который не поддерживается контейнером MP4, и будет пропущен.";
+                    string warnAudio = $"⚠ [Сборка MP4] Внешний аудиофайл '{Path.GetFileName(candidate)}' имеет формат {aExt.TrimStart('.').ToUpperInvariant()}, который не поддерживается контейнером MP4, и будет пропущен.";
                     _logService.Info(warnAudio, "MkvAssemblyScript");
                     results.Add(warnAudio);
-                    audioPath = null;
+                    continue;
                 }
+                mp4AudioPaths.Add(candidate);
             }
 
-            if (subsPath != null)
+            List<string> mp4SubsPaths = [];
+            foreach (string candidate in subsPaths)
             {
-                string sExt = Path.GetExtension(subsPath).ToLowerInvariant();
+                string sExt = Path.GetExtension(candidate).ToLowerInvariant();
                 if (sExt == ".ass" || sExt == ".ssa")
                 {
-                    string warnSub = $"⚠ [Сборка MP4] Субтитры формата ASS/SSA ({Path.GetFileName(subsPath)}) не поддерживаются контейнером MP4 и будут пропущены.";
+                    string warnSub = $"⚠ [Сборка MP4] Субтитры формата ASS/SSA ({Path.GetFileName(candidate)}) не поддерживаются контейнером MP4 и будут пропущены.";
                     _logService.Info(warnSub, "MkvAssemblyScript");
                     results.Add(warnSub);
-                    subsPath = null;
+                    continue;
                 }
+                mp4SubsPaths.Add(candidate);
             }
 
             progressCallback(fileIndex, totalCount, $"Сборка MP4: {stem}...", 0.0);
 
-            using var ctsMp4 = new CancellationTokenSource();
-            var cancelTaskMp4 = Task.Run(async () =>
-            {
-                while (!IsCancelled && !ctsMp4.IsCancellationRequested)
-                {
-                    await Task.Delay(100);
-                }
-                if (IsCancelled)
-                {
-                    ctsMp4.Cancel();
-                }
-            });
+            using var ctsMp4 = CancellationTokenSource.CreateLinkedTokenSource(CancellationToken);
 
             bool mp4Success = false;
             try
             {
-                List<string> extraArgsMp4 = ["-c", "copy", "-movflags", "+faststart"];
-
-                if (audioPath != null)
+                // Внешние входы перечисляются после входа 0 (видео) в порядке: аудио, затем субтитры.
+                List<string> mp4InputArgs = [];
+                foreach (string externalAudio in mp4AudioPaths)
                 {
-                    extraArgsMp4.InsertRange(0, ["-i", $"\"{audioPath}\""]);
+                    mp4InputArgs.AddRange(["-i", $"\"{externalAudio}\""]);
                 }
-                if (subsPath != null)
+                foreach (string externalSubs in mp4SubsPaths)
                 {
-                    extraArgsMp4.InsertRange(audioPath != null ? 2 : 0, ["-i", $"\"{subsPath}\""]);
+                    mp4InputArgs.AddRange(["-i", $"\"{externalSubs}\""]);
                 }
 
+                List<string> extraArgsMp4 = [.. mp4InputArgs, "-c", "copy", "-movflags", "+faststart"];
                 extraArgsMp4.Add("-map");
                 extraArgsMp4.Add("0:v");
 
-                if (audioPath != null)
+                if (mp4AudioPaths.Count > 0)
                 {
-                    extraArgsMp4.Add("-map");
-                    extraArgsMp4.Add("1:a");
+                    for (int i = 0; i < mp4AudioPaths.Count; i++)
+                    {
+                        extraArgsMp4.Add("-map");
+                        extraArgsMp4.Add($"{1 + i}:a");
+                    }
                 }
                 else if (!cleanTracks)
                 {
@@ -270,11 +316,14 @@ public sealed class MkvAssemblyScript(
                     extraArgsMp4.Add("0:a?");
                 }
 
-                if (subsPath != null)
+                if (mp4SubsPaths.Count > 0)
                 {
-                    int subsInputIdx = audioPath != null ? 2 : 1;
-                    extraArgsMp4.Add("-map");
-                    extraArgsMp4.Add($"{subsInputIdx}:s");
+                    int subsInputIdx = 1 + mp4AudioPaths.Count;
+                    for (int i = 0; i < mp4SubsPaths.Count; i++)
+                    {
+                        extraArgsMp4.Add("-map");
+                        extraArgsMp4.Add($"{subsInputIdx + i}:s");
+                    }
                     extraArgsMp4.Add("-c:s");
                     extraArgsMp4.Add("mov_text");
                 }
@@ -301,11 +350,6 @@ public sealed class MkvAssemblyScript(
                 _logService.Exception(ex, runErr, "MkvAssemblyScript");
                 results.Add(runErr);
             }
-            finally
-            {
-                ctsMp4.Cancel();
-                await cancelTaskMp4;
-            }
 
             if (IsCancelled)
             {
@@ -325,7 +369,7 @@ public sealed class MkvAssemblyScript(
             }
             else
             {
-                CleanupFailedOutputFile(finalOutputFile);
+                await CleanupFailedOutputFileAsync(finalOutputFile);
                 string failMsg = $"❌ Ошибка сборки MP4-файла: {Path.GetFileName(finalOutputFile)}";
                 _logService.Error(failMsg, "MkvAssemblyScript");
                 results.Add(failMsg);
@@ -341,11 +385,11 @@ public sealed class MkvAssemblyScript(
         List<string> videoArgs = [];
         if (cleanTracks)
         {
-            if (audioPath != null)
+            if (audioPaths.Count > 0)
             {
                 videoArgs.Add("--no-audio");
             }
-            if (subsPath != null)
+            if (subsPaths.Count > 0)
             {
                 videoArgs.Add("--no-subtitles");
             }
@@ -354,34 +398,63 @@ public sealed class MkvAssemblyScript(
         }
         mkvInputs.Add(new MkvInputSource(filePath, videoArgs));
 
-        // Настройка внешнего аудио-источника (если найден)
-        if (audioPath != null)
+        // Настройка внешних аудио-источников (если найдены).
+        // Первая дорожка — основная (зона "RU Аудио (Осн.)" или первая по имени):
+        // флаги default/forced. Язык всех внешних дорожек — русский.
+        // Дополнительные различаются заголовком: сначала заголовок из метаданных
+        // файла (MediaInfo Title), при его отсутствии — из различающейся части имени файла.
+        for (int i = 0; i < audioPaths.Count; i++)
         {
-            mkvInputs.Add(new MkvInputSource(audioPath,
-            [
+            bool isMain = i == 0;
+            string audioStem = Path.GetFileNameWithoutExtension(audioPaths[i]);
+            string embeddedTitle = await GetEmbeddedAudioTitleAsync(audioPaths[i]);
+            string audioTitle = !string.IsNullOrWhiteSpace(embeddedTitle)
+                ? embeddedTitle
+                : MuxTrackTyper.InferTrackTitle(stem, audioStem);
+            var audioArgs = new List<string>
+            {
                 "--audio-tracks", "0",
                 "--language", "0:rus",
-                "--default-track", "0:yes",
-                "--forced-display-flag", "0:yes"
-            ]));
+                "--default-track", isMain ? "0:yes" : "0:no",
+                "--forced-display-flag", isMain ? "0:yes" : "0:no"
+            };
+            if (!string.IsNullOrWhiteSpace(audioTitle))
+            {
+                audioArgs.AddRange(["--track-name", $"\"0:{audioTitle}\""]);
+            }
+            mkvInputs.Add(new MkvInputSource(audioPaths[i], audioArgs));
         }
 
-        // Настройка внешнего источника субтитров (если найден)
-        if (subsPath != null)
+        // Настройка внешних источников субтитров (если найдены).
+        // Порядок: надписи, полные, прочие. Флаги default/forced получают надписи
+        // (первые из них), остальные дорожки добавляются без флагов.
+        // Надписи получают отдельный заголовок из настроек.
+        bool signsDefaultAssigned = false;
+        for (int i = 0; i < subsTracks.Count; i++)
         {
-            mkvInputs.Add(new MkvInputSource(subsPath,
-            [
+            bool isSignsDefault = subsTracks[i].Role == MuxSubsRole.Signs && !signsDefaultAssigned;
+            if (subsTracks[i].Role == MuxSubsRole.Signs)
+            {
+                signsDefaultAssigned = true;
+            }
+            string trackTitle = subsTracks[i].Role == MuxSubsRole.Signs ? subsSignsTitle : subsFullTitle;
+            var subsArgs = new List<string>
+            {
                 "--subtitle-tracks", "0",
                 "--language", "0:rus",
-                "--track-name", $"\"0:{subsTitle}\"",
-                "--default-track", "0:yes",
-                "--forced-display-flag", "0:yes"
-            ]));
+                "--default-track", isSignsDefault ? "0:yes" : "0:no",
+                "--forced-display-flag", isSignsDefault ? "0:yes" : "0:no"
+            };
+            if (!string.IsNullOrWhiteSpace(trackTitle))
+            {
+                subsArgs.AddRange(["--track-name", $"\"0:{trackTitle}\""]);
+            }
+            mkvInputs.Add(new MkvInputSource(subsTracks[i].Path, subsArgs));
         }
 
         // Вызов кастомного порядка дорожек, если требуется
         List<string>? extraArgs = null;
-        if (!cleanTracks && (audioPath != null || subsPath != null))
+        if (!cleanTracks && (audioPaths.Count > 0 || subsPaths.Count > 0))
         {
             try
             {
@@ -400,12 +473,12 @@ public sealed class MkvAssemblyScript(
                     // Если новые дорожки позиционируются ПЕРЕД встроенными
                     if (positionBeforeBuiltin)
                     {
-                        if (audioPath != null)
+                        for (int audioIdx = 0; audioIdx < audioPaths.Count; audioIdx++)
                         {
                             orderParts.Add($"{nextInputIdx}:0");
                             nextInputIdx++;
                         }
-                        if (subsPath != null)
+                        for (int subsIdx = 0; subsIdx < subsPaths.Count; subsIdx++)
                         {
                             orderParts.Add($"{nextInputIdx}:0");
                             nextInputIdx++;
@@ -425,12 +498,12 @@ public sealed class MkvAssemblyScript(
                     // Если новые дорожки позиционируются ПОСЛЕ встроенных (по умолчанию)
                     if (!positionBeforeBuiltin)
                     {
-                        if (audioPath != null)
+                        for (int audioIdx = 0; audioIdx < audioPaths.Count; audioIdx++)
                         {
                             orderParts.Add($"{nextInputIdx}:0");
                             nextInputIdx++;
                         }
-                        if (subsPath != null)
+                        for (int subsIdx = 0; subsIdx < subsPaths.Count; subsIdx++)
                         {
                             orderParts.Add($"{nextInputIdx}:0");
                             nextInputIdx++;
@@ -454,18 +527,7 @@ public sealed class MkvAssemblyScript(
         // 7. Запуск процесса сборки через MkvmergeRunner с мониторингом отмены
         progressCallback(fileIndex, totalCount, $"Сборка MKV: {stem}...", 0.0);
 
-        using var cts = new CancellationTokenSource();
-        var cancelMonitorTask = Task.Run(async () =>
-        {
-            while (!IsCancelled && !cts.IsCancellationRequested)
-            {
-                await Task.Delay(100);
-            }
-            if (IsCancelled)
-            {
-                cts.Cancel();
-            }
-        });
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(CancellationToken);
 
         bool success = false;
         try
@@ -487,11 +549,6 @@ public sealed class MkvAssemblyScript(
             string runErr = $"❌ Критическая ошибка при сборке MKV для '{stem}': {ex.Message}";
             _logService.Exception(ex, runErr, "MkvAssemblyScript");
             results.Add(runErr);
-        }
-        finally
-        {
-            cts.Cancel();
-            await cancelMonitorTask;
         }
 
         // 8. Обработка завершения и отмены операции
@@ -515,7 +572,7 @@ public sealed class MkvAssemblyScript(
             }
             else
             {
-                CleanupFailedOutputFile(finalOutputFile);
+                await CleanupFailedOutputFileAsync(finalOutputFile);
                 string failMsg = $"❌ Ошибка сборки MKV-файла: {Path.GetFileName(finalOutputFile)}";
                 _logService.Error(failMsg, "MkvAssemblyScript");
                 results.Add(failMsg);
@@ -523,13 +580,59 @@ public sealed class MkvAssemblyScript(
         }
         catch (System.Exception ex)
         {
-            CleanupFailedOutputFile(finalOutputFile);
+            await CleanupFailedOutputFileAsync(finalOutputFile);
             string errorMsg = $"❌ Ошибка выполнения скрипта для {Path.GetFileName(filePath)}: {ex.Message}";
             results.Add(errorMsg);
             _logService.Exception(ex, $"Ошибка при выполнении сборки MKV для '{stem}': {ex.Message}", "MkvAssemblyScript");
         }
 
         return results;
+    }
+
+    /// <summary>
+    /// Разово мигрирует заголовок субтитров со старого значения по умолчанию на новое,
+    /// если пользователь его не менял. Возвращает действующее значение.
+    /// </summary>
+    private string MigrateSubsTitle(string key, string current, string oldDefault, string newDefault)
+    {
+        if (!current.Equals(oldDefault, StringComparison.Ordinal))
+        {
+            return current;
+        }
+
+        try
+        {
+            string groupName = _settingsManager.GetSafeGroupName(Name);
+            _settingsManager.SetSetting(groupName, key, newDefault);
+        }
+        catch (System.Exception ex)
+        {
+            _logService.Exception(ex, $"Не удалось мигрировать настройку '{key}', использовано значение по умолчанию", "MkvAssemblyScript");
+        }
+
+        return newDefault;
+    }
+
+    /// <summary>
+    /// Извлекает заголовок первой аудиодорожки из метаданных файла (поле Title/Name).
+    /// При отсутствии метаданных или ошибке пробы возвращает пустую строку —
+    /// вызывающий код использует заголовок из имени файла.
+    /// Кавычки вычищаются, так как заголовок подставляется в кавычках в аргументы mkvmerge.
+    /// </summary>
+    private async Task<string> GetEmbeddedAudioTitleAsync(string audioPath)
+    {
+        try
+        {
+            var structure = await _mediaProbeService.ProbeAsync(audioPath);
+            var track = structure?.Tracks.FirstOrDefault(t => t.TrackType.Equals("audio", System.StringComparison.OrdinalIgnoreCase));
+            string title = track?.Name?.Trim() ?? string.Empty;
+            return title.Replace("\"", "'", StringComparison.Ordinal);
+        }
+        catch (System.Exception ex)
+        {
+            _logService.Exception(ex, $"Не удалось прочитать заголовок дорожки из '{Path.GetFileName(audioPath)}', будет использован заголовок из имени файла", "MkvAssemblyScript");
+            return string.Empty;
+        }
     }
 
     public override string GetOutputExtension(string inputPath)

@@ -223,7 +223,7 @@ public sealed class AudioChannelsScript : AbstractScript
 
             if (IsCancelled || !decodeSuccess || !File.Exists(tempInputWavPath))
             {
-                CleanupFailedOutputFile(tempInputWavPath);
+                await CleanupFailedOutputFileAsync(tempInputWavPath);
                 CleanupAllOutputs(basePath);
                 if (IsCancelled)
                 {
@@ -290,7 +290,7 @@ public sealed class AudioChannelsScript : AbstractScript
         {
             if (!string.IsNullOrEmpty(tempInputWavPath))
             {
-                CleanupFailedOutputFile(tempInputWavPath);
+                await CleanupFailedOutputFileAsync(tempInputWavPath);
                 _logService.DebugLog($"Временный входной WAV-файл '{tempInputWavPath}' успешно удален.", "AudioChannelsScript");
             }
         }
@@ -444,7 +444,7 @@ public sealed class AudioChannelsScript : AbstractScript
 
                 if (deleteOriginal)
                 {
-                    DeleteSource(filePath, results);
+                    await DeleteSourceAsync(filePath, results);
                 }
             }
             else

@@ -157,6 +157,7 @@ public sealed class AudioWaveformService : IAudioWaveformService
     {
         const int sampleRate = 44100;
         const int wavHeaderSize = 44;
+        const int bytesPerSample = 2;
 
         using var fileStream = new FileStream(wavPath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 65536, useAsync: false);
         if (fileStream.Length <= wavHeaderSize)
@@ -175,7 +176,7 @@ public sealed class AudioWaveformService : IAudioWaveformService
 
         fileStream.Seek(wavHeaderSize, SeekOrigin.Begin);
         long pcmBytesLength = fileStream.Length - wavHeaderSize;
-        long totalSamples = pcmBytesLength / 2; // 16-бит mono
+        long totalSamples = pcmBytesLength / bytesPerSample; // 16-бит mono
 
         double duration = (double)totalSamples / sampleRate;
 
@@ -185,8 +186,9 @@ public sealed class AudioWaveformService : IAudioWaveformService
 
         var peaks1000Hz = new WaveformPeak[count1000Hz];
 
-        byte[] rawBuffer = new byte[samplesPerPeak1000Hz * 2];
-        short[] sampleBuffer = new short[samplesPerPeak1000Hz];
+        // Буфер ~2 МБ, сбалансированный до целого числа пиков, чтобы пики не разрывались между чтениями
+        int chunkSamples = (int)(2 * 1024L * 1024L / bytesPerSample / samplesPerPeak1000Hz) * samplesPerPeak1000Hz;
+        byte[] rawBuffer = new byte[chunkSamples * bytesPerSample];
 
         long currentSampleIndex = 0;
         int peakIndex = 0;
@@ -195,68 +197,76 @@ public sealed class AudioWaveformService : IAudioWaveformService
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            int bytesToRead = (int)Math.Min(rawBuffer.Length, (totalSamples - currentSampleIndex) * 2);
-            int bytesRead = fileStream.Read(rawBuffer, 0, bytesToRead);
-            if (bytesRead <= 0) break;
-
-            int samplesRead = bytesRead / 2;
-
-            MemoryMarshal.Cast<byte, short>(rawBuffer.AsSpan(0, bytesRead)).CopyTo(sampleBuffer);
-
-            short min = short.MaxValue;
-            short max = short.MinValue;
-
-            int i = 0;
-            if (Vector.IsHardwareAccelerated && samplesRead >= Vector<short>.Count)
+            int bytesRead = 0;
+            while (bytesRead < rawBuffer.Length)
             {
-                var minVec = new Vector<short>(short.MaxValue);
-                var maxVec = new Vector<short>(short.MinValue);
+                int read = fileStream.Read(rawBuffer, bytesRead, rawBuffer.Length - bytesRead);
+                if (read <= 0) break;
+                bytesRead += read;
+            }
+            if (bytesRead == 0) break;
 
-                int vectorSize = Vector<short>.Count;
-                int limit = samplesRead - vectorSize;
+            int samplesRead = bytesRead / bytesPerSample;
+            var peeks = MemoryMarshal.Cast<byte, short>(rawBuffer.AsSpan(0, samplesRead * bytesPerSample));
 
-                for (; i <= limit; i += vectorSize)
+            for (int p = 0; p < samplesRead; p += samplesPerPeak1000Hz)
+            {
+                int segCount = Math.Min(samplesPerPeak1000Hz, samplesRead - p);
+                var seg = peeks.Slice(p, segCount);
+
+                short min = short.MaxValue;
+                short max = short.MinValue;
+
+                int i = 0;
+                if (Vector.IsHardwareAccelerated && segCount >= Vector<short>.Count)
                 {
-                    var vec = new Vector<short>(sampleBuffer, i);
-                    minVec = Vector.Min(minVec, vec);
-                    maxVec = Vector.Max(maxVec, vec);
+                    var minVec = new Vector<short>(short.MaxValue);
+                    var maxVec = new Vector<short>(short.MinValue);
+
+                    int vectorSize = Vector<short>.Count;
+                    int limit = segCount - vectorSize;
+
+                    for (; i <= limit; i += vectorSize)
+                    {
+                        var vec = new Vector<short>(seg.Slice(i, vectorSize));
+                        minVec = Vector.Min(minVec, vec);
+                        maxVec = Vector.Max(maxVec, vec);
+                    }
+
+                    for (int v = 0; v < vectorSize; v++)
+                    {
+                        if (minVec[v] < min) min = minVec[v];
+                        if (maxVec[v] > max) max = maxVec[v];
+                    }
                 }
 
-                for (int v = 0; v < vectorSize; v++)
+                for (; i < segCount; i++)
                 {
-                    if (minVec[v] < min) min = minVec[v];
-                    if (maxVec[v] > max) max = maxVec[v];
+                    short val = seg[i];
+                    if (val < min) min = val;
+                    if (val > max) max = val;
+                }
+
+                if (min > max)
+                {
+                    min = 0;
+                    max = 0;
+                }
+
+                float minNorm = min / 32768.0f;
+                float maxNorm = max / 32768.0f;
+
+                if (peakIndex < count1000Hz)
+                {
+                    peaks1000Hz[peakIndex++] = new WaveformPeak(minNorm, maxNorm);
                 }
             }
 
-            for (; i < samplesRead; i++)
-            {
-                short val = sampleBuffer[i];
-                if (val < min) min = val;
-                if (val > max) max = val;
-            }
+            int samplesConsumed = Math.Min(samplesRead, (int)(totalSamples - currentSampleIndex));
+            currentSampleIndex += samplesConsumed;
 
-            if (min > max)
-            {
-                min = 0;
-                max = 0;
-            }
-
-            float minNorm = min / 32768.0f;
-            float maxNorm = max / 32768.0f;
-
-            if (peakIndex < count1000Hz)
-            {
-                peaks1000Hz[peakIndex++] = new WaveformPeak(minNorm, maxNorm);
-            }
-
-            currentSampleIndex += samplesRead;
-
-            if (peakIndex % 2000 == 0)
-            {
-                double progressPct = 40.0 + (50.0 * currentSampleIndex / totalSamples);
-                progressCallback?.Invoke(progressPct, "Расчет миллисекундных пиков (1000 Гц)...");
-            }
+            double progressPct = 40.0 + (50.0 * currentSampleIndex / totalSamples);
+            progressCallback?.Invoke(progressPct, "Расчет миллисекундных пиков (1000 Гц)...");
         }
 
         // Пирамида понижения разрешения для масштабов (200Гц, 50Гц, 10Гц, 1Гц)

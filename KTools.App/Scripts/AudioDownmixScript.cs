@@ -414,18 +414,18 @@ public sealed class AudioDownmixScript : AbstractScript
 
                 if (deleteOriginal)
                 {
-                    DeleteSource(filePath, results);
+                    await DeleteSourceAsync(filePath, results);
                 }
             }
             else
             {
-                CleanupFailedOutputFile(outputFilePath);
+                await CleanupFailedOutputFileAsync(outputFilePath);
                 results.Add($"❌ Ошибка обработки для {Path.GetFileName(filePath)}");
             }
         }
         catch (Exception ex)
         {
-            CleanupFailedOutputFile(outputFilePath);
+            await CleanupFailedOutputFileAsync(outputFilePath);
             string errorMsg = $"❌ Ошибка выполнения скрипта для {Path.GetFileName(filePath)}: {ex.Message}";
             results.Add(errorMsg);
             _logService.Exception(ex, $"Ошибка при выполнении даунмикса для '{originalName}': {ex.Message}", "AudioDownmixScript");

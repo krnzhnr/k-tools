@@ -7,6 +7,7 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:viewmodels="using:KTools_App.ViewModels"
     xmlns:converters="using:KTools_App.Converters"
+    xmlns:community="using:CommunityToolkit.WinUI.Controls"
     mc:Ignorable="d">
 
     <Page.Resources>
@@ -47,56 +48,135 @@
                 <NavigationViewItem Icon="OutlineStar" Content="Эффекты" Tag="effects" />
                 <NavigationViewItem Icon="Filter" Content="Очистка текста" Tag="patterns" />
                 <NavigationViewItemSeparator />
-                <NavigationViewItem Icon="Document" Content="Предпросмотр" Tag="preview_all" x:Name="PreviewRootItem">
-                    <NavigationViewItem.MenuItems>
-                        <!-- Сюда динамически добавляются файлы в Code-Behind -->
-                    </NavigationViewItem.MenuItems>
-                </NavigationViewItem>
+                <NavigationViewItem Icon="Document" Content="Предпросмотр" Tag="preview" x:Name="PreviewNavigationItem" />
             </NavigationView.MenuItems>
 
             <!-- ОБЛАСТЬ КОНТЕНТА -->
             <Grid Padding="24,24,24,24">
                 
                 <!-- 1. ЭКРАН ПРЕДПРОСМОТРА -->
-                <Grid x:Name="PreviewGrid" Visibility="Visible" RowSpacing="16">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" /> <!-- Шапка: Заголовок, поиск, глобальные опции -->
-                        <RowDefinition Height="Auto" /> <!-- Заголовки колонок таблицы -->
-                        <RowDefinition Height="*" />    <!-- Таблица строк субтитров -->
-                    </Grid.RowDefinitions>
+                <!-- 1. ЭКРАН ПРЕДПРОСМОТРА С ИЕРАРХИЧЕСКОЙ НАВИГАЦИЕЙ -->
+                <Grid x:Name="PreviewGrid" Visibility="Visible">
+                    <!-- 1.1. ОБЗОРНЫЙ ЭКРАН: СПИСОК КАРТОЧЕК ФАЙЛОВ СУБТИТРОВ -->
+                    <Grid x:Name="FilesHubGrid" 
+                          Visibility="{x:Bind ViewModel.IsDetailedViewActive, Mode=OneWay, Converter={StaticResource InverseBoolToVisibilityConverter}}" 
+                          RowSpacing="16">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
 
-                    <Grid Grid.Row="0">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        
-                        <StackPanel Grid.Column="0" VerticalAlignment="Center" Spacing="4">
-                            <TextBlock Text="Результаты предпросмотра" Style="{ThemeResource SubtitleTextBlockStyle}" />
-                            <TextBlock x:Name="StatsTextBlock" 
-                                       Text="Загрузка данных..." 
+                        <!-- Заголовок раздела выбора файлов -->
+                        <StackPanel Grid.Row="0" Spacing="4">
+                            <TextBlock Text="Выбор файла для предпросмотра" Style="{ThemeResource SubtitleTextBlockStyle}" />
+                            <TextBlock Text="Выберите конкретный файл для детальной проверки реплик или откройте все файлы сразу." 
                                        FontSize="12" 
                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                            
-                            <!-- Глобальные опции очистки под статистикой -->
-                            <StackPanel Orientation="Horizontal" Spacing="16" Margin="0,4,0,0">
-                                <CheckBox Content="Удалять теги форматирования" 
-                                          IsChecked="{x:Bind ViewModel.StripFormatting, Mode=TwoWay}"
-                                          FontSize="12" />
-                                <CheckBox Content="Удалять текст в верхнем регистре (КАПС)" 
-                                          IsChecked="{x:Bind ViewModel.StripCaps, Mode=TwoWay}"
-                                          FontSize="12" />
-                            </StackPanel>
                         </StackPanel>
-                        
-                        <AutoSuggestBox Grid.Column="1" 
-                                        x:Name="SearchBox"
-                                        QueryIcon="Find" 
-                                        PlaceholderText="Поиск по тексту реплик..."
-                                        Text="{x:Bind ViewModel.SearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                        Width="300"
-                                        VerticalAlignment="Center" />
+
+                        <!-- Список карточек файлов с прокруткой -->
+                        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                            <StackPanel Spacing="8" Padding="0,0,16,16">
+                                <!-- Карточка: Все файлы сразу -->
+                                <community:SettingsCard
+                                    Header="Все файлы"
+                                    Description="{x:Bind ViewModel.AllFilesDescriptionText, Mode=OneWay}"
+                                    IsClickEnabled="True"
+                                    Click="AllFilesCard_Click">
+                                    <community:SettingsCard.HeaderIcon>
+                                        <FontIcon Glyph="&#xE8F1;" />
+                                    </community:SettingsCard.HeaderIcon>
+                                    <TextBlock Text="{x:Bind ViewModel.TotalLinesCount, Mode=OneWay}" 
+                                               Style="{ThemeResource CaptionTextBlockStyle}"
+                                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                </community:SettingsCard>
+
+                                <!-- Разделитель между карточкой «Все файлы» и конкретными файлами -->
+                                <Border BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}" 
+                                        BorderThickness="0,0,0,1" 
+                                        Margin="0,4,0,4" />
+
+                                <!-- Карточки конкретных файлов -->
+                                <ItemsControl ItemsSource="{x:Bind ViewModel.FileCards, Mode=OneWay}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="viewmodels:SubtitleFileCardItem">
+                                            <community:SettingsCard
+                                                Header="{x:Bind FileName}"
+                                                Description="{x:Bind DescriptionText, Mode=OneWay}"
+                                                IsClickEnabled="True"
+                                                Click="FileCard_Click"
+                                                Margin="0,0,0,8">
+                                                <community:SettingsCard.HeaderIcon>
+                                                    <FontIcon Glyph="&#xE8A5;" />
+                                                </community:SettingsCard.HeaderIcon>
+                                                <TextBlock Text="{x:Bind StatusBadgeText, Mode=OneWay}" 
+                                                           Style="{ThemeResource CaptionTextBlockStyle}"
+                                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                            </community:SettingsCard>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </ScrollViewer>
                     </Grid>
+
+                    <!-- 1.2. ДЕТАЛЬНЫЙ ЭКРАН: СПИСОК СТРОК ВЫБРАННОГО ФАЙЛА / ВСЕХ ФАЙЛОВ -->
+                    <Grid x:Name="LinesDetailGrid" 
+                          Visibility="{x:Bind ViewModel.IsDetailedViewActive, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" 
+                          RowSpacing="16">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" /> <!-- Шапка: Назад, Заголовок, поиск, глобальные опции -->
+                            <RowDefinition Height="Auto" /> <!-- Заголовки колонок таблицы -->
+                            <RowDefinition Height="*" />    <!-- Таблица строк субтитров -->
+                        </Grid.RowDefinitions>
+
+                        <Grid Grid.Row="0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            
+                            <StackPanel Grid.Column="0" VerticalAlignment="Center" Spacing="6">
+                                <!-- Кнопка возврата к хабу файлов -->
+                                <Button Click="BackToFilesButton_Click"
+                                        Style="{ThemeResource SubtleButtonStyle}"
+                                        Padding="8,4,12,4">
+                                    <Button.KeyboardAccelerators>
+                                        <KeyboardAccelerator Key="Back" />
+                                    </Button.KeyboardAccelerators>
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <FontIcon Glyph="&#xE72B;" FontSize="12" />
+                                        <TextBlock Text="Назад к списку файлов" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </Button>
+
+                                <StackPanel Spacing="4">
+                                    <TextBlock x:Name="DetailTitleTextBlock" Text="Результаты предпросмотра" Style="{ThemeResource SubtitleTextBlockStyle}" />
+                                    <TextBlock x:Name="StatsTextBlock" 
+                                               Text="Загрузка данных..." 
+                                               FontSize="12" 
+                                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                </StackPanel>
+                                
+                                <!-- Глобальные опции очистки под статистикой -->
+                                <StackPanel Orientation="Horizontal" Spacing="16" Margin="0,4,0,0">
+                                    <CheckBox Content="Удалять теги форматирования" 
+                                              IsChecked="{x:Bind ViewModel.StripFormatting, Mode=TwoWay}"
+                                              FontSize="12" />
+                                    <CheckBox Content="Удалять текст в верхнем регистре (КАПС)" 
+                                              IsChecked="{x:Bind ViewModel.StripCaps, Mode=TwoWay}"
+                                              FontSize="12" />
+                                </StackPanel>
+                            </StackPanel>
+                            
+                            <AutoSuggestBox Grid.Column="1" 
+                                            x:Name="SearchBox"
+                                            QueryIcon="Find" 
+                                            PlaceholderText="Поиск по тексту реплик..."
+                                            Text="{x:Bind ViewModel.SearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                            Width="300"
+                                            VerticalAlignment="Center" />
+                        </Grid>
 
                     <!-- Шапка таблицы предпросмотра -->
                     <Border Grid.Row="1" 
@@ -248,6 +328,7 @@
                             </DataTemplate>
                         </ListView.ItemTemplate>
                     </ListView>
+                    </Grid>
                 </Grid>
 
                 <!-- 2. ЭКРАН ФИЛЬТРА АКТЁРОВ -->
