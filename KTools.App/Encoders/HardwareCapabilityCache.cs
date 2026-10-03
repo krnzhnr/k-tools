@@ -1,6 +1,9 @@
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
 using System;
 using System.Threading.Tasks;
+
+using KTools_App.Core;
+using KTools_App.Diagnostics;
 using KTools_App.Services.Contracts;
 
 namespace KTools_App.Encoders;
@@ -12,6 +15,8 @@ namespace KTools_App.Encoders;
 /// </summary>
 public class HardwareCapabilityCache : IHardwareCapabilityCache
 {
+    private const string SourceName = nameof(HardwareCapabilityCache);
+
     private readonly IFFmpegRunner _ffmpegRunner;
     private readonly ILogService _logService;
     private readonly SemaphoreSlim _initLock = new(1, 1);
@@ -38,25 +43,56 @@ public class HardwareCapabilityCache : IHardwareCapabilityCache
 
             try
             {
-                _logService.Info("Инициализация кэша аппаратных возможностей...", "HardwareCapabilityCache");
+                _logService.Write(
+                    "encoder.capabilities.init_started",
+                    LogLevel.Debug,
+                    LogStatus.Running,
+                    "Начинается опрос аппаратных возможностей кодирования",
+                    source: SourceName);
                 IsNvencSupported = await _ffmpegRunner.CheckNvencSupportAsync();
-                _logService.Info($"Поддержка NVENC: {IsNvencSupported}", "HardwareCapabilityCache");
+                _logService.Write(
+                    "encoder.capabilities.detected",
+                    LogLevel.Info,
+                    LogStatus.Succeeded,
+                    $"Аппаратные возможности кодирования определены: NVENC {(IsNvencSupported ? "доступен" : "недоступен")}",
+                    source: SourceName,
+                    properties: LogProps
+                        .Create("Verified", IsNvencSupported)
+                        .With("Tool", "ffmpeg")
+                        .With("Codec", "h264_nvenc"));
 
                 if (IsNvencSupported)
                 {
                     IsNvencTemporalAqSupported = await CheckNvencTemporalAqAsync();
-                    _logService.Info($"Поддержка NVENC Temporal AQ: {IsNvencTemporalAqSupported}", "HardwareCapabilityCache");
+                    _logService.Write(
+                        "encoder.capabilities.temporal_aq_detected",
+                        LogLevel.Debug,
+                        LogStatus.Succeeded,
+                        $"NVENC Temporal AQ {(IsNvencTemporalAqSupported ? "доступен" : "недоступен")}",
+                        source: SourceName,
+                        properties: LogProps
+                            .Create("Verified", IsNvencTemporalAqSupported)
+                            .With("Codec", "h264_nvenc"));
                 }
                 else
                 {
                     IsNvencTemporalAqSupported = false;
                 }
-                
+
                 _isInitialized = true;
             }
             catch (Exception ex)
             {
-                _logService.Error($"Ошибка при инициализации кэша аппаратных возможностей: {ex.Message}", "HardwareCapabilityCache");
+                _logService.Write(
+                    "encoder.capabilities.init_failed",
+                    LogLevel.Warning,
+                    LogStatus.Failed,
+                    "Аппаратные возможности кодирования не определены, аппаратное ускорение будет недоступно",
+                    ex,
+                    SourceName,
+                    properties: LogProps
+                        .Create("ErrorCode", "ENCODER_CAPABILITIES_INIT_FAILED")
+                        .With("Tool", "ffmpeg"));
                 IsNvencSupported = false;
                 IsNvencTemporalAqSupported = false;
             }

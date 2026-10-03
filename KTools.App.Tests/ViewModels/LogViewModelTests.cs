@@ -5,6 +5,7 @@ using System.Linq;
 using FluentAssertions;
 using Moq;
 using KTools_App.Core;
+using KTools_App.Diagnostics;
 using KTools_App.Models;
 using KTools_App.Services.Contracts;
 using KTools_App.Tests.TestHelpers;
@@ -49,11 +50,36 @@ public class LogViewModelTests
     }
 
     /// <summary>
-    /// Настраивает текст, возвращаемый ReadCurrentLog.
+    /// Настраивает структурированные события, возвращаемые ReadRecentEvents,
+    /// с ограничением окна так же, как это делает реальный сервис журналирования.
     /// </summary>
-    private void SetupLogText(string text)
+    private void SetupEvents(IReadOnlyList<LogEvent> events)
     {
-        _logServiceMock.Setup(l => l.ReadCurrentLog()).Returns(text);
+        _logServiceMock
+            .Setup(l => l.ReadRecentEvents(It.IsAny<int>()))
+            .Returns<int>(limit => events.Skip(Math.Max(0, events.Count - limit)).Take(limit).ToArray());
+    }
+
+    /// <summary>
+    /// Создаёт типизированное событие журнала для проверок загрузки истории.
+    /// </summary>
+    private static LogEvent CreateEvent(
+        string eventId,
+        LogLevel level,
+        string message,
+        long sequence = 0,
+        LogStatus status = LogStatus.None)
+    {
+        return new LogEvent
+        {
+            EventId = eventId,
+            Level = level,
+            Status = status,
+            Source = "TestSource",
+            Message = message,
+            Sequence = sequence,
+            TimestampUtc = new DateTimeOffset(2024, 1, 1, 10, 0, 0, TimeSpan.Zero)
+        };
     }
 
     /// <summary>
@@ -74,92 +100,106 @@ public class LogViewModelTests
     }
 
     /// <summary>
-    /// Проверяет, что GetCurrentLogText делегирует чтение сервису логирования.
-    /// </summary>
-    [TestMethod]
-    public void GetCurrentLogText_DelegatesToLogService()
-    {
-        // Arrange
-        SetupLogText("текст лога");
-        var vm = CreateViewModel();
-
-        // Act
-        string result = vm.GetCurrentLogText();
-
-        // Assert
-        result.Should().Be("текст лога");
-        _logServiceMock.Verify(l => l.ReadCurrentLog(), Times.Once);
-    }
-
-    /// <summary>
-    /// Проверяет загрузку логов с корректным парсингом уровней из строк.
+    /// Проверяет загрузку истории с корректным переносом типизированных уровней
+    /// и статусов из структурированных событий в элементы панели.
     /// </summary>
     [TestMethod]
     public void LoadLogs_LogWithMixedLevels_ParsesLevelsCorrectly()
     {
         // Arrange
-        SetupLogText(string.Join(Environment.NewLine, new[]
+        SetupEvents(new[]
         {
-            "2024-01-01 10:00:00 | DEBUG   | Отладка",
-            "2024-01-01 10:00:01 | INFO    | Информация",
-            "2024-01-01 10:00:02 | WARNING | Предупреждение",
-            "2024-01-01 10:00:03 | ERROR   | Ошибка",
-            "2024-01-01 10:00:04 | FATAL   | Фатальная",
-            "2024-01-01 10:00:05 | Строка без маркера уровня",
-        }));
+            CreateEvent("test.debug", LogLevel.Debug, "Отладка", 1),
+            CreateEvent("test.info", LogLevel.Info, "Информация", 2),
+            CreateEvent("test.warning", LogLevel.Warning, "Предупреждение", 3, LogStatus.Failed),
+            CreateEvent("test.error", LogLevel.Error, "Ошибка", 4, LogStatus.Failed),
+            CreateEvent("test.fatal", LogLevel.Fatal, "Фатальная", 5, LogStatus.Failed),
+            CreateEvent("test.none", LogLevel.Info, "Событие без уровня ошибки", 6, LogStatus.Succeeded)
+        });
         var vm = CreateViewModel();
 
         // Act
-        vm.LoadLogs();
+        IReadOnlyList<LogEvent> loaded = vm.LoadLogs();
 
         // Assert
+        loaded.Should().HaveCount(6);
         vm.Logs.Should().HaveCount(6);
         vm.Logs[0].Level.Should().Be(LogLevel.Debug);
         vm.Logs[1].Level.Should().Be(LogLevel.Info);
         vm.Logs[2].Level.Should().Be(LogLevel.Warning);
         vm.Logs[3].Level.Should().Be(LogLevel.Error);
         vm.Logs[4].Level.Should().Be(LogLevel.Fatal);
-        vm.Logs[5].Level.Should().Be(LogLevel.Info, "строка без маркера трактуется как Info");
+        vm.Logs[5].Level.Should().Be(LogLevel.Info);
+        vm.Logs.Select(l => l.EventId).Should().Equal(
+            "test.debug", "test.info", "test.warning", "test.error", "test.fatal", "test.none");
+        vm.Logs.Select(l => l.Status).Should().Equal(
+            LogStatus.None, LogStatus.None, LogStatus.Failed, LogStatus.Failed, LogStatus.Failed, LogStatus.Succeeded);
+        vm.Logs.Should().OnlyContain(l => l.HasStructuredEvent,
+            "уровень берётся из типизированного события, а не из разбора текста");
+        vm.Logs.Select(l => l.Sequence).Should().Equal(1, 2, 3, 4, 5, 6);
     }
 
     /// <summary>
-    /// Проверяет, что пустой лог не добавляет записей и пишет DebugLog.
+    /// Проверяет, что пустая история не добавляет записей
+    /// и фиксирует структурированное событие log.history.loaded с нулевым счётчиком.
     /// </summary>
     [TestMethod]
     public void LoadLogs_EmptyLog_LeavesCollectionEmptyAndLogsDebug()
     {
         // Arrange
-        SetupLogText(string.Empty);
+        SetupEvents(Array.Empty<LogEvent>());
         var vm = CreateViewModel();
 
         // Act
-        vm.LoadLogs();
+        IReadOnlyList<LogEvent> loaded = vm.LoadLogs();
 
         // Assert
+        loaded.Should().BeEmpty();
         vm.Logs.Should().BeEmpty();
         _logServiceMock.Verify(
-            l => l.DebugLog(It.Is<string>(s => s.Contains("пуст или не инициализирован")), It.IsAny<string>()),
-            Times.Once);
+            l => l.ReadRecentEvents(LogViewModel.RecentEventsLimit),
+            Times.Once,
+            "история запрашивается ограниченным окном событий");
+        _logServiceMock.Verify(
+            l => l.Write(
+                "log.history.loaded",
+                LogLevel.Debug,
+                LogStatus.Succeeded,
+                It.IsAny<string>(),
+                It.IsAny<Exception>(),
+                "LogViewModel",
+                It.IsAny<LogContext?>(),
+                It.Is<IReadOnlyDictionary<string, object?>>(p => Equals(p["Count"], 0))),
+            Times.Once,
+            "пустая история фиксируется структурированным событием с нулевым счётчиком");
     }
 
     /// <summary>
-    /// Проверяет, что загружаются только последние 1000 строк.
+    /// Проверяет, что загружается только ограниченное окно последних событий.
     /// </summary>
     [TestMethod]
     public void LoadLogs_MoreThanThousandLines_LoadsOnlyLastThousand()
     {
         // Arrange
-        var lines = Enumerable.Range(1, 1500).Select(i => $"Строка лога номер {i}").ToList();
-        SetupLogText(string.Join(Environment.NewLine, lines));
+        var events = Enumerable.Range(1, 1500)
+            .Select(i => CreateEvent("test.bulk", LogLevel.Info, $"Строка лога номер {i}", i))
+            .ToArray();
+        SetupEvents(events);
         var vm = CreateViewModel();
 
         // Act
         vm.LoadLogs();
 
         // Assert
-        vm.Logs.Should().HaveCount(1000, "лимит загрузки — последние 1000 строк");
-        vm.Logs[0].Message.Should().Be("Строка лога номер 501", "первой должна быть строка 501");
-        vm.Logs[999].Message.Should().Be("Строка лога номер 1500");
+        _logServiceMock.Verify(
+            l => l.ReadRecentEvents(LogViewModel.RecentEventsLimit),
+            Times.Once,
+            "модель представления обязана запрашивать ровно 1000 последних событий");
+        vm.Logs.Should().HaveCount(1000, "в панель попадает только ограниченное окно событий");
+        vm.Logs[0].Message.Should().Contain("Строка лога номер 501", "первым должно быть событие 501");
+        vm.Logs[999].Message.Should().Contain("Строка лога номер 1500");
+        vm.Logs[0].Sequence.Should().Be(501);
+        vm.Logs[999].Sequence.Should().Be(1500);
     }
 
     /// <summary>
@@ -169,9 +209,9 @@ public class LogViewModelTests
     public void LoadLogs_PreExistingItems_ClearsCollectionBeforeLoading()
     {
         // Arrange
-        SetupLogText("новая строка");
+        SetupEvents(new[] { CreateEvent("test.new", LogLevel.Info, "новая строка", 1) });
         var vm = CreateViewModel();
-        vm.AddLog("старая запись", LogLevel.Info);
+        vm.AddLogs(new[] { new LogItem { Message = "старая запись", Level = LogLevel.Info } });
         vm.Logs.Should().HaveCount(1);
 
         // Act
@@ -179,40 +219,54 @@ public class LogViewModelTests
 
         // Assert
         vm.Logs.Should().HaveCount(1);
-        vm.Logs[0].Message.Should().Be("новая строка");
+        vm.Logs[0].Message.Should().Contain("новая строка");
+        vm.Logs[0].EventId.Should().Be("test.new");
     }
 
     /// <summary>
-    /// Проверяет, что LoadLogs при исключении сервиса не падает и пишет Exception-лог.
+    /// Проверяет, что LoadLogs при исключении сервиса не падает, возвращает пустой
+    /// список и фиксирует структурированное событие log.history.load_failed с кодом ошибки.
     /// </summary>
     [TestMethod]
     public void LoadLogs_LogServiceThrows_HandlesExceptionAndLogsIt()
     {
         // Arrange
-        _logServiceMock.Setup(l => l.ReadCurrentLog()).Throws(new IOException("диск недоступен"));
+        var failure = new IOException("диск недоступен");
+        _logServiceMock.Setup(l => l.ReadRecentEvents(It.IsAny<int>())).Throws(failure);
         var vm = CreateViewModel();
 
         // Act
-        Action act = () => vm.LoadLogs();
+        IReadOnlyList<LogEvent>? loaded = null;
+        Action act = () => loaded = vm.LoadLogs();
 
         // Assert
         act.Should().NotThrow("исключения загрузки должны перехватываться");
+        loaded.Should().BeEmpty("при ошибке загрузки панель получает пустую историю");
         _logServiceMock.Verify(
-            l => l.Exception(It.IsAny<Exception>(), It.Is<string>(s => s.Contains("Критическая ошибка")), It.IsAny<string>()),
-            Times.Once);
+            l => l.Write(
+                "log.history.load_failed",
+                LogLevel.Error,
+                LogStatus.Failed,
+                It.Is<string>(m => !m.Contains("Exception", StringComparison.Ordinal)),
+                It.Is<IOException>(ex => ReferenceEquals(ex, failure)),
+                "LogViewModel",
+                It.IsAny<LogContext?>(),
+                It.Is<IReadOnlyDictionary<string, object?>>(p => Equals(p["ErrorCode"], "LOG_HISTORY_LOAD_FAILED"))),
+            Times.Once,
+            "ошибка загрузки фиксируется структурированным событием с кодом и исключением в отдельном параметре");
     }
 
     /// <summary>
-    /// Проверяет добавление новой записи лога в коллекцию.
+    /// Проверяет добавление пакета записей в коллекцию панели журнала.
     /// </summary>
     [TestMethod]
-    public void AddLog_NewMessage_AppendsToCollection()
+    public void AddLogs_NewItems_AppendsToCollection()
     {
         // Arrange
         var vm = CreateViewModel();
 
         // Act
-        vm.AddLog("Новое сообщение", LogLevel.Warning);
+        vm.AddLogs(new[] { new LogItem { Message = "Новое сообщение", Level = LogLevel.Warning } });
 
         // Assert
         vm.Logs.Should().HaveCount(1);
@@ -224,17 +278,16 @@ public class LogViewModelTests
     /// Проверяет усечение коллекции при превышении лимита 2000 записей.
     /// </summary>
     [TestMethod]
-    public void AddLog_ExceedsTwoThousandRecords_TrimsOldestEntries()
+    public void AddLogs_ExceedsTwoThousandRecords_TrimsOldestEntries()
     {
         // Arrange
-        SetupLogText(string.Empty);
+        SetupEvents(Array.Empty<LogEvent>());
         var vm = CreateViewModel();
 
         // Act — добавляем 2005 записей
-        for (int i = 0; i < 2005; i++)
-        {
-            vm.AddLog($"Запись {i}", LogLevel.Info);
-        }
+        vm.AddLogs(Enumerable.Range(0, 2005)
+            .Select(index => new LogItem { Message = $"Запись {index}", Level = LogLevel.Info })
+            .ToArray());
 
         // Assert
         vm.Logs.Should().HaveCount(2000, "лимит коллекции — 2000 записей");
@@ -243,15 +296,19 @@ public class LogViewModelTests
     }
 
     /// <summary>
-    /// Проверяет, что ClearLogsCommand очищает коллекцию и пишет Info-лог.
+    /// Проверяет, что ClearLogsCommand очищает коллекцию и фиксирует
+    /// структурированное событие log.history.window_cleared.
     /// </summary>
     [TestMethod]
     public void ClearLogsCommand_WithItems_ClearsCollectionAndLogsInfo()
     {
         // Arrange
         var vm = CreateViewModel();
-        vm.AddLog("Запись 1", LogLevel.Info);
-        vm.AddLog("Запись 2", LogLevel.Error);
+        vm.AddLogs(new[]
+        {
+            new LogItem { Message = "Запись 1", Level = LogLevel.Info },
+            new LogItem { Message = "Запись 2", Level = LogLevel.Error }
+        });
 
         // Act
         vm.ClearLogsCommand.Execute(null);
@@ -259,7 +316,15 @@ public class LogViewModelTests
         // Assert
         vm.Logs.Should().BeEmpty();
         _logServiceMock.Verify(
-            l => l.Info(It.Is<string>(s => s.Contains("успешно очищено")), It.IsAny<string>()),
+            l => l.Write(
+                "log.history.window_cleared",
+                LogLevel.Info,
+                LogStatus.Changed,
+                It.IsAny<string>(),
+                It.IsAny<Exception>(),
+                "LogViewModel",
+                It.IsAny<LogContext?>(),
+                It.IsAny<IReadOnlyDictionary<string, object?>>()),
             Times.Once);
     }
 
@@ -281,13 +346,17 @@ public class LogViewModelTests
     }
 
     /// <summary>
-    /// Проверяет, что LoadLogs отправляет Debug-сообщение об успешной загрузке.
+    /// Проверяет, что LoadLogs фиксирует структурированное событие
+    /// log.history.loaded с числом загруженных событий.
     /// </summary>
     [TestMethod]
     public void LoadLogs_SuccessfulLoad_LogsDebugMessageWithCount()
     {
         // Arrange
-        SetupLogText("одна строка");
+        SetupEvents(new[]
+        {
+            CreateEvent("test.first", LogLevel.Info, "одна строка", 1)
+        });
         var vm = CreateViewModel();
 
         // Act
@@ -295,29 +364,42 @@ public class LogViewModelTests
 
         // Assert
         _logServiceMock.Verify(
-            l => l.DebugLog(It.Is<string>(s => s.Contains("1") && s.Contains("записей")), It.IsAny<string>()),
+            l => l.Write(
+                "log.history.loaded",
+                LogLevel.Debug,
+                LogStatus.Succeeded,
+                It.IsAny<string>(),
+                It.IsAny<Exception>(),
+                "LogViewModel",
+                It.IsAny<LogContext?>(),
+                It.Is<IReadOnlyDictionary<string, object?>>(p => Equals(p["Count"], 1))),
             Times.Once);
     }
 
     /// <summary>
-    /// Проверяет, что парсинг уровней распознаёт marker-формат с корректными пробелами.
+    /// Проверяет, что уровень элемента панели берётся из типизированного события
+    /// без разбора текстовых маркеров уровня.
     /// </summary>
     [TestMethod]
     public void LoadLogs_LevelMarkers_RequireExactPadding()
     {
-        // Arrange — "| INFO    |" с четырьмя пробелами; вариант "| INFO |" не распознаётся
-        SetupLogText(string.Join(Environment.NewLine, new[]
+        // Arrange — типизированное событие переносит уровень без разбора паддинга текста
+        SetupEvents(new[]
         {
-            "| INFO    | корректный маркер",
-            "| INFO | неверный паддинг",
-        }));
+            CreateEvent("test.info", LogLevel.Info, "| INFO    | корректный маркер", 1, LogStatus.Succeeded),
+            CreateEvent("test.info.padding", LogLevel.Info, "| INFO | неверный паддинг", 2, LogStatus.Succeeded)
+        });
         var vm = CreateViewModel();
 
         // Act
         vm.LoadLogs();
 
         // Assert
+        vm.Logs.Should().HaveCount(2);
         vm.Logs[0].Level.Should().Be(LogLevel.Info);
-        vm.Logs[1].Level.Should().Be(LogLevel.Info, "неверный паддинг всё равно fallback на Info");
+        vm.Logs[1].Level.Should().Be(LogLevel.Info);
+        vm.Logs.Select(l => l.Level).Should().AllBeEquivalentTo(LogLevel.Info,
+            "уровень определяется типизированным событием, а не пробелами в тексте маркера");
+        vm.Logs.Should().OnlyContain(l => l.HasStructuredEvent);
     }
 }

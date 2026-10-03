@@ -8,10 +8,13 @@ using System.Threading.Tasks;
 using FluentAssertions;
 using Moq;
 using KTools_App.Core;
+using KTools_App.Diagnostics;
+using KTools_App.Models;
 using KTools_App.Services.Contracts;
 using KTools_App.Tests.TestHelpers;
 using KTools_App.ViewModels;
 using CommunityToolkit.Mvvm.Messaging;
+using ExecutionContext = KTools_App.Models.ExecutionContext;
 
 namespace KTools_App.Tests.ViewModels;
 
@@ -71,14 +74,15 @@ public class WorkPanelViewModelExecutionTests : IsolatedMessengerTestBase
     /// <summary>
     /// Создаёт скрипт с успешным обработчиком по умолчанию.
     /// </summary>
-    private StubScript CreateScript(Func<string, Dictionary<string, object>, Task<List<string>>>? handler = null)
+    private StubScript CreateScript(
+        Func<string, Dictionary<string, object>, ExecutionContext, Task<ExecutionResult>>? handler = null)
     {
         var script = new StubScript(
             _logMock.Object,
             _settingsMock.Object,
             MockBuilders.CreatePathManagerMock().Object);
-        script.ExecuteHandler = handler ?? ((file, settings) =>
-            Task.FromResult(new List<string> { $"✅ Готово: {file}" }));
+        script.ExecuteHandler = handler ?? ((file, settings, context) =>
+            Task.FromResult(ExecutionResult.Succeeded(context, $"Готово: {file}")));
         return script;
     }
 
@@ -96,7 +100,9 @@ public class WorkPanelViewModelExecutionTests : IsolatedMessengerTestBase
     }
 
     /// <summary>
-    /// Проверяет, что запуск с пустой очередью логирует ошибку и не запускает обработку.
+    /// Проверяет, что запуск с пустой очередью возвращает типизированный результат очереди
+    /// с кодом "queue-empty", пишет структурированное событие exec.queue.empty
+    /// и не запускает обработку.
     /// </summary>
     [TestMethod]
     public async Task StartExecutionAsync_EmptyQueue_LogsErrorAndDoesNotExecute()
@@ -110,29 +116,47 @@ public class WorkPanelViewModelExecutionTests : IsolatedMessengerTestBase
         await vm.StartExecutionCommand.ExecuteAsync(null);
 
         // Assert
-        script.SavedLogText.Should().Contain("нет файлов для обработки",
+        script.SavedLogText.Should().Contain("Очередь не содержит файлов для обработки",
             "должно быть записано сообщение об ошибке в лог");
-        script.SavedLogText.Should().Contain("❌");
         script.IsProcessing.Should().BeFalse("обработка не должна запускаться");
-        script.SavedStatusText.Should().Be("Ожидание запуска...", "статус не должен меняться");
+
+        vm.LastQueueResult.Should().NotBeNull("пустая очередь обязана вернуть типизированный результат");
+        vm.LastQueueResult!.Status.Should().Be(ExecutionStatus.Failed);
+        vm.LastQueueResult.ErrorCode.Should().Be("queue-empty");
+        vm.LastQueueResult.CleanupState.Should().Be(CleanupState.Completed);
+        vm.TypedItemResults.Should().BeEmpty("ни один элемент очереди не обрабатывается");
+        vm.SucceededCount.Should().Be(0);
+        vm.FailedCount.Should().Be(0);
+        script.SavedStatusText.Should().Be("Очередь пуста");
+        script.SavedGlobalProgress.Should().Be(0);
+
+        _logMock.Verify(
+            l => l.Write(It.Is<LogEvent>(e =>
+                e.EventId == "exec.queue.empty"
+                && e.Level == LogLevel.Error
+                && e.Status == LogStatus.Failed
+                && e.ErrorCode == "queue-empty"
+                && e.OperationId == vm.CurrentOperationId)),
+            Times.Once,
+            "пустая очередь обязана фиксироваться структурированным событием с OperationId");
     }
 
     /// <summary>
-    /// Проверяет успешное выполнение двух файлов: финальные Saved-состояния
-    /// (статус "Обработка завершена", прогресс 100, логи результатов).
+    /// Проверяет успешное выполнение двух файлов: финальные Saved-состояния,
+    /// типизированные статусы элементов и агрегированный результат очереди.
     /// </summary>
     [TestMethod]
     public async Task StartExecutionAsync_TwoFiles_SuccessfulExecution()
     {
         // Arrange
         var executedFiles = new List<string>();
-        var script = CreateScript((file, settings) =>
+        var script = CreateScript((file, settings, context) =>
         {
             lock (executedFiles)
             {
                 executedFiles.Add(file);
             }
-            return Task.FromResult(new List<string> { $"✅ Готово: {file}" });
+            return Task.FromResult(ExecutionResult.Succeeded(context, $"Готово: {file}"));
         });
         var vm = CreateViewModel();
         var files = CreateFiles("C:\\media\\one.mkv", "C:\\media\\two.mp4");
@@ -145,47 +169,111 @@ public class WorkPanelViewModelExecutionTests : IsolatedMessengerTestBase
         executedFiles.Should().HaveCount(2, "оба файла должны быть обработаны");
         executedFiles[0].Should().Be("C:\\media\\one.mkv", "последовательный режим обрабатывает файлы по порядку");
         executedFiles[1].Should().Be("C:\\media\\two.mp4");
-        script.SavedStatusText.Should().Be("Обработка завершена");
+        script.SavedStatusText.Should().Be("Все файлы успешно обработаны");
         script.SavedGlobalProgress.Should().Be(100);
         script.IsProcessing.Should().BeFalse();
         script.SavedLogText.Should().Contain("🚀 Запуск скрипта");
-        script.SavedLogText.Should().Contain("✅ Готово: C:\\media\\one.mkv");
-        script.SavedLogText.Should().Contain("✅ Готово: C:\\media\\two.mp4");
-        script.SavedLogText.Should().Contain("🎉 Все файлы успешно обработаны");
+        script.SavedLogText.Should().Contain("Готово: C:\\media\\one.mkv");
+        script.SavedLogText.Should().Contain("Готово: C:\\media\\two.mp4");
+        script.SavedLogText.Should().Contain("Все файлы успешно обработаны");
+
+        vm.SucceededCount.Should().Be(2, "оба элемента очереди должны иметь типизированный статус Succeeded");
+        vm.FailedCount.Should().Be(0);
+        vm.CancelledCount.Should().Be(0);
+        vm.SkippedCount.Should().Be(0);
+        vm.TypedItemResults.Should().HaveCount(2);
+        vm.TypedItemResults.Should().OnlyContain(r => r.Status == ExecutionStatus.Succeeded);
+        vm.TypedItemResults.Should().OnlyContain(r => r.IsSuccess);
+        vm.TypedItemResults.Should().OnlyContain(r => r.Context.OperationId == vm.CurrentOperationId,
+            "все элементы очереди принадлежат одной операции");
+        vm.TypedItemResults.Select(r => r.Context.ItemIndex).Should().Equal(0, 1);
+        vm.TypedItemResults.Should().OnlyContain(r => r.DurationMs > 0,
+            "WorkPanel обязан измерять длительность выполнения элемента");
+
+        _logMock.Verify(
+            l => l.Write(It.Is<LogEvent>(e => e.EventId == "exec.item.succeeded")),
+            Times.Exactly(2),
+            "каждый успешный элемент очереди фиксируется ровно одним терминальным событием");
+        _logMock.Verify(
+            l => l.Write(It.Is<LogEvent>(e =>
+                e.EventId == "exec.item.succeeded" && e.Properties.ContainsKey("ErrorCode"))),
+            Times.Never,
+            "успешный элемент очереди не должен сообщать код ошибки в структурированной телеметрии");
+
+        vm.LastQueueResult.Should().NotBeNull();
+        vm.LastQueueResult!.Status.Should().Be(ExecutionStatus.Succeeded);
+        vm.LastQueueResult.ErrorCode.Should().BeNull(
+            "при Succeeded ErrorCode обязан быть пустым, иначе поиск отказов по errorCode != null даёт ложное срабатывание");
+        vm.LastQueueResult.DurationMs.Should().BeGreaterThan(0);
+        script.SavedLogText.Should().NotContain(vm.CurrentOperationId!,
+            "машинный OperationId не должен попадать в пользовательский журнал");
     }
 
     /// <summary>
-    /// Проверяет, что результат с "❌" помечает выполнение как ошибочное:
-    /// сообщение об ошибке в логе, финальный статус — ошибка прервана не была.
+    /// Проверяет, что типизированный результат Failed помечает элемент как ошибочный:
+    /// статус Failed с кодом ошибки, событие exec.item.failed уровня Error,
+    /// агрегат очереди Failed.
     /// </summary>
     [TestMethod]
     public async Task StartExecutionAsync_HandlerReturnsError_LoggedAsError()
     {
         // Arrange
-        var script = CreateScript((file, settings) =>
-            Task.FromResult(new List<string> { "❌ Ошибка декодирования" }));
+        var script = CreateScript((file, settings, context) =>
+            Task.FromResult(ExecutionResult.Failed(
+                context,
+                "Ошибка декодирования",
+                errorCode: "decode-failed",
+                outputFile: "C:\\media\\bad.mkv",
+                outputExists: false,
+                cleanupState: CleanupState.Completed)));
         var vm = CreateViewModel();
         vm.Initialize(script, CreateFiles("C:\\media\\bad.mkv"));
 
         // Act
         await vm.StartExecutionCommand.ExecuteAsync(null);
 
-        // Assert — ошибка попадает в лог, но выполнение продолжается до финализации
-        script.SavedLogText.Should().Contain("❌ Ошибка декодирования");
+        // Assert
+        script.SavedLogText.Should().Contain("Ошибка декодирования");
         script.IsProcessing.Should().BeFalse("после ошибки выполнение завершается");
         script.SavedGlobalProgress.Should().Be(100, "глобальный прогресс достигает 100 после обработки всех файлов");
+        script.SavedStatusText.Should().Be("Обработка завершилась ошибкой");
+
+        vm.FailedCount.Should().Be(1);
+        vm.SucceededCount.Should().Be(0);
+        ExecutionResult result = vm.TypedItemResults.Should().ContainSingle().Subject;
+        result.Status.Should().Be(ExecutionStatus.Failed);
+        result.ErrorCode.Should().Be("decode-failed");
+        result.OutputExists.Should().BeFalse();
+        result.CleanupState.Should().Be(CleanupState.Completed);
+
+        vm.LastQueueResult.Should().NotBeNull();
+        vm.LastQueueResult!.Status.Should().Be(ExecutionStatus.Failed);
+        vm.LastQueueResult.ErrorCode.Should().Be("queue-partial");
+
+        _logMock.Verify(
+            l => l.Write(It.Is<LogEvent>(e =>
+                e.EventId == "exec.item.failed"
+                && e.Level == LogLevel.Error
+                && e.ErrorCode == "decode-failed"
+                && Equals(e.Properties["OutputExists"], false)
+                && Equals(e.Properties["CleanupState"], "Completed"))),
+            Times.Once,
+            "ошибочный элемент очереди фиксируется структурированным событием с типизированной телеметрией");
     }
 
     /// <summary>
-    /// Проверяет, что исключение в handler перехватывается: файл помечается ошибкой,
-    /// логируется через ILogService.Exception и критическое сообщение пишется в лог.
+    /// Проверяет, что исключение в handler перехватывается: элемент получает типизированный
+    /// статус Failed с кодом "execution-exception" и ExceptionInfo, исключение уходит
+    /// в структурированное событие exec.item.exception с контекстом операции, а типизированное
+    /// терминальное событие exec.item.failed остаётся единственным для элемента.
     /// </summary>
     [TestMethod]
     public async Task StartExecutionAsync_HandlerThrows_ExceptionLoggedAndExecutionFinalized()
     {
         // Arrange
-        var script = CreateScript((file, settings) =>
-            throw new InvalidOperationException("Аварийное завершение процесса"));
+        var failure = new InvalidOperationException("Аварийное завершение процесса");
+        var script = CreateScript((file, settings, context) =>
+            throw failure);
         var vm = CreateViewModel();
         vm.Initialize(script, CreateFiles("C:\\media\\crash.mkv"));
 
@@ -194,30 +282,53 @@ public class WorkPanelViewModelExecutionTests : IsolatedMessengerTestBase
 
         // Assert
         _logMock.Verify(
-            l => l.Exception(
-                It.Is<InvalidOperationException>(ex => ex.Message.Contains("Аварийное завершение")),
+            l => l.Write(
+                "exec.item.exception",
+                LogLevel.Error,
+                It.IsAny<LogStatus>(),
                 It.IsAny<string>(),
-                "WorkPanelViewModel"),
+                It.Is<InvalidOperationException>(ex => ReferenceEquals(ex, failure)),
+                "WorkPanelViewModel",
+                It.Is<LogContext?>(c => c != null && c.ResolveOperationId() != null && c.ResolveItemId() != null),
+                It.IsAny<IReadOnlyDictionary<string, object?>>()),
             Times.Once,
-            "исключение handler должно логироваться через ILogService.Exception");
-        script.SavedLogText.Should().Contain("❌ Критическая ошибка: Аварийное завершение процесса");
+            "исключение handler должно фиксироваться структурированным событием с контекстом, а не текстом");
+        _logMock.Verify(
+            l => l.Write(It.Is<LogEvent>(e =>
+                e.EventId == "exec.item.failed"
+                && e.ErrorCode == "execution-exception"
+                && e.Exception != null)),
+            Times.Once,
+            "типизированное терминальное событие элемента содержит реальный результат и исключение");
+        script.SavedLogText.Should().Contain("Критическая ошибка выполнения.");
+        script.SavedLogText.Should().NotContain("Аварийное завершение процесса",
+            "текст исключения не должен попадать в пользовательский журнал — он доступен в ExceptionInfo");
         script.IsProcessing.Should().BeFalse("после исключения выполнение финализируется");
-        script.SavedStatusText.Should().Be("Обработка завершена");
+        script.SavedStatusText.Should().Be("Обработка завершилась ошибкой");
+
+        vm.FailedCount.Should().Be(1);
+        ExecutionResult result = vm.TypedItemResults.Should().ContainSingle().Subject;
+        result.Status.Should().Be(ExecutionStatus.Failed);
+        result.ErrorCode.Should().Be("execution-exception");
+        result.Exception.Should().BeSameAs(failure);
+        result.ExceptionInfo.Should().NotBeNull();
+        result.CleanupState.Should().Be(CleanupState.Unknown);
+        vm.LastQueueResult!.Status.Should().Be(ExecutionStatus.Failed);
     }
 
     /// <summary>
-    /// Проверяет отмену выполнения: CancelExecutionCommand во время обработки
-    /// приводит к статусу "Обработка отменена" и обнулению прогресса.
+    /// Проверяет отмену выполнения: успешный результат handler нормализуется в типизированный
+    /// статус Cancelled с кодом "cancelled", агрегат очереди — Cancelled.
     /// </summary>
     [TestMethod]
     public async Task StartExecutionAsync_CancelDuringExecution_StatusBecomesCancelled()
     {
         // Arrange
         var release = new TaskCompletionSource();
-        var script = CreateScript(async (file, settings) =>
+        var script = CreateScript(async (file, settings, context) =>
         {
             await release.Task; // держим обработку, пока тест не отменит
-            return new List<string> { $"✅ Готово: {file}" };
+            return ExecutionResult.Succeeded(context, $"Готово: {file}");
         });
         var vm = CreateViewModel();
         vm.Initialize(script, CreateFiles("C:\\media\\slow.mkv"));
@@ -235,11 +346,32 @@ public class WorkPanelViewModelExecutionTests : IsolatedMessengerTestBase
         await executionTask;
 
         // Assert
-        script.SavedStatusText.Should().Be("Обработка отменена");
-        script.SavedGlobalProgress.Should().Be(0, "при отмене прогресс сбрасывается в 0");
-        script.SavedLogText.Should().Contain("⚠ Обработка прервана пользователем");
+        script.SavedStatusText.Should().Be("Обработка отменена: 1 из 1");
+        script.SavedGlobalProgress.Should().Be(100, "отменённый элемент получает терминальный результат, поэтому очередь терминальна");
         script.IsCancelled.Should().BeTrue("скрипт должен находиться в отменённом состоянии");
         script.IsProcessing.Should().BeFalse();
+
+        vm.CancelledCount.Should().Be(1, "успех после отмены обязан быть нормализован в Cancelled");
+        vm.SucceededCount.Should().Be(0);
+        vm.FailedCount.Should().Be(0);
+        ExecutionResult result = vm.TypedItemResults.Should().ContainSingle().Subject;
+        result.Status.Should().Be(ExecutionStatus.Cancelled);
+        result.ErrorCode.Should().Be("cancelled");
+        result.Messages.Should().ContainSingle()
+            .Which.Should().Be("Готово: C:\\media\\slow.mkv",
+                "нормализация статуса обязана сохранять сообщения исходного результата");
+
+        vm.LastQueueResult.Should().NotBeNull();
+        vm.LastQueueResult!.Status.Should().Be(ExecutionStatus.Cancelled);
+        vm.LastQueueResult.ErrorCode.Should().Be("queue-cancelled");
+
+        _logMock.Verify(
+            l => l.Write(It.Is<LogEvent>(e =>
+                e.EventId == "exec.item.cancelled"
+                && e.Status == LogStatus.Cancelled
+                && e.ErrorCode == "cancelled")),
+            Times.Once,
+            "отменённый элемент очереди фиксируется структурированным событием");
     }
 
     /// <summary>
@@ -261,7 +393,7 @@ public class WorkPanelViewModelExecutionTests : IsolatedMessengerTestBase
             _settingsMock.Object,
             MockBuilders.CreatePathManagerMock().Object,
             supportsParallel: true);
-        script.ExecuteHandler = async (file, settings) =>
+        script.ExecuteHandler = async (file, settings, context) =>
         {
             lock (gate)
             {
@@ -274,7 +406,7 @@ public class WorkPanelViewModelExecutionTests : IsolatedMessengerTestBase
             {
                 concurrent--;
             }
-            return new List<string> { $"✅ Готово: {file}" };
+            return ExecutionResult.Succeeded(context, $"Готово: {file}");
         };
         var vm = CreateViewModel();
         var files = CreateFiles(
@@ -289,9 +421,14 @@ public class WorkPanelViewModelExecutionTests : IsolatedMessengerTestBase
         maxConcurrent.Should().BeGreaterThan(1,
             "в параллельном режиме обработчики должны перекрываться (лимит 3)");
         maxConcurrent.Should().BeLessThanOrEqualTo(3, "не должно быть больше MaxParallelTasks одновременных задач");
-        script.SavedStatusText.Should().Be("Обработка завершена");
+        script.SavedStatusText.Should().Be("Все файлы успешно обработаны");
         script.SavedGlobalProgress.Should().Be(100);
-        script.SavedLogText.Should().Contain("🎉 Все файлы успешно обработаны");
+        script.SavedLogText.Should().Contain("Все файлы успешно обработаны");
+        vm.SucceededCount.Should().Be(5,
+            "каждый параллельно обработанный элемент обязан получить ровно один типизированный результат");
+        vm.TypedItemResults.Should().HaveCount(5);
+        vm.TypedItemResults.Should().OnlyContain(r => r.Status == ExecutionStatus.Succeeded);
+        vm.TypedItemResults.Select(r => r.Context.ItemIndex).Should().BeEquivalentTo(new[] { 0, 1, 2, 3, 4 });
     }
 
     /// <summary>
@@ -311,7 +448,7 @@ public class WorkPanelViewModelExecutionTests : IsolatedMessengerTestBase
             _settingsMock.Object,
             MockBuilders.CreatePathManagerMock().Object,
             supportsParallel: true);
-        script.ExecuteHandler = async (file, settings) =>
+        script.ExecuteHandler = async (file, settings, context) =>
         {
             lock (gate)
             {
@@ -322,7 +459,7 @@ public class WorkPanelViewModelExecutionTests : IsolatedMessengerTestBase
             {
                 concurrent--;
             }
-            return new List<string> { "✅ Готово" };
+            return ExecutionResult.Succeeded(context, "Готово");
         };
         var vm = CreateViewModel();
         vm.Initialize(script, CreateFiles("C:\\s\\a.mkv", "C:\\s\\b.mkv", "C:\\s\\c.mkv"));
@@ -332,7 +469,10 @@ public class WorkPanelViewModelExecutionTests : IsolatedMessengerTestBase
 
         // Assert
         maxConcurrent.Should().Be(1, "при выключенной параллельной настройке файлы обрабатываются по одному");
-        script.SavedStatusText.Should().Be("Обработка завершена");
+        script.SavedStatusText.Should().Be("Все файлы успешно обработаны");
+        vm.SucceededCount.Should().Be(3);
+        vm.TypedItemResults.Should().HaveCount(3);
+        vm.TypedItemResults.Should().OnlyContain(r => r.Status == ExecutionStatus.Succeeded);
     }
 
     /// <summary>
@@ -346,11 +486,11 @@ public class WorkPanelViewModelExecutionTests : IsolatedMessengerTestBase
         // Arrange
         var executionCount = 0;
         var release = new TaskCompletionSource();
-        var script = CreateScript(async (file, settings) =>
+        var script = CreateScript(async (file, settings, context) =>
         {
             Interlocked.Increment(ref executionCount);
             await release.Task;
-            return new List<string> { "✅ Готово" };
+            return ExecutionResult.Succeeded(context, "Готово");
         });
         var vm = CreateViewModel();
         vm.Initialize(script, CreateFiles("C:\\busy\\file.mkv"));
@@ -368,8 +508,9 @@ public class WorkPanelViewModelExecutionTests : IsolatedMessengerTestBase
     }
 
     /// <summary>
-    /// Проверяет round-trip SaveState/RestoreState: сохранённые логи, статус,
-    /// прогресс и выходной путь восстанавливаются при повторной Initialize.
+    /// Проверяет round-trip SaveState/RestoreState: сохранённые статус,
+    /// прогресс и выходной путь восстанавливаются при повторной Initialize,
+    /// а журнал панели восстанавливается из журнала скрипта.
     /// </summary>
     [TestMethod]
     public void SaveAndRestoreState_ModifiedValues_AreRestoredOnReinitialize()
@@ -388,17 +529,20 @@ public class WorkPanelViewModelExecutionTests : IsolatedMessengerTestBase
         vm.SaveState();
 
         // Assert — Saved-состояния скрипта обновлены
-        script.SavedLogText.Should().Be("Накопленный лог выполнения");
         script.SavedStatusText.Should().Be("Обработка файла 3 из 5 (42.0%)");
         script.SavedGlobalProgress.Should().Be(42.0);
         script.SavedOutputPath.Should().Be("C:\\output\\results");
+        script.SavedLogText.Should().BeEmpty(
+            "журнал принадлежит скрипту: SaveState не переносит текст журнала панели в журнал скрипта");
 
         // Act — создаем новый VM (симуляция повторного открытия страницы) и восстанавливаем
         var vm2 = CreateViewModel();
+        script.SavedLogText = "Накопленный лог выполнения";
         vm2.Initialize(script, files);
 
         // Assert — состояние восстановлено из скрипта
-        vm2.LogText.Should().Be("Накопленный лог выполнения");
+        vm2.LogText.Should().Be("Накопленный лог выполнения",
+            "журнал панели восстанавливается из журнала скрипта");
         vm2.StatusText.Should().Be("Обработка файла 3 из 5 (42.0%)");
         vm2.GlobalProgressValue.Should().Be(42.0);
         vm2.OutputPath.Should().Be("C:\\output\\results");
@@ -420,10 +564,11 @@ public class WorkPanelViewModelExecutionTests : IsolatedMessengerTestBase
 
         // Act — новый VM без изменений
         var vm2 = CreateViewModel();
+        script.SavedLogText = "line1";
         vm2.Initialize(script, CreateFiles("C:\\media\\x.mkv"));
 
         // Assert
-        vm2.LogText.Should().Be("line1", "лог восстанавливается");
+        vm2.LogText.Should().Be("line1", "лог панели восстанавливается из журнала скрипта");
         vm2.GlobalProgressValue.Should().Be(0);
         vm2.IsProcessing.Should().BeFalse();
         vm2.IsStartButtonEnabled.Should().BeTrue("после восстановления кнопка запуска доступна");
@@ -546,7 +691,7 @@ public class WorkPanelViewModelExecutionTests : IsolatedMessengerTestBase
 
     /// <summary>
     /// Проверяет, что после успешного выполнения повторная Initialize восстанавливает
-    /// итоговое состояние (статус "Обработка завершена", прогресс 100).
+    /// итоговое состояние (статус "Все файлы успешно обработаны", прогресс 100).
     /// </summary>
     [TestMethod]
     public async Task FullExecutionRoundTrip_SaveRestoreAfterExecution_StatePersisted()
@@ -566,10 +711,13 @@ public class WorkPanelViewModelExecutionTests : IsolatedMessengerTestBase
         vm2.Initialize(script, files);
 
         // Assert
-        vm2.StatusText.Should().Be("Обработка завершена", "финальный статус сохраняется между визитами");
+        vm2.StatusText.Should().Be("Все файлы успешно обработаны", "финальный статус сохраняется между визитами");
         vm2.GlobalProgressValue.Should().Be(100);
-        vm2.LogText.Should().Contain("🎉 Все файлы успешно обработаны");
+        vm2.LogText.Should().Contain("Все файлы успешно обработаны");
         vm2.IsStartButtonEnabled.Should().BeTrue("после завершения доступен повторный запуск");
+        vm.SucceededCount.Should().Be(1,
+            "типизированные счётчики результатов наполняются при выполнении очереди");
+        vm.LastQueueResult!.Status.Should().Be(ExecutionStatus.Succeeded);
     }
 
     /// <summary>
@@ -580,10 +728,10 @@ public class WorkPanelViewModelExecutionTests : IsolatedMessengerTestBase
     {
         // Arrange
         Dictionary<string, object>? capturedSettings = null;
-        var script = CreateScript((file, settings) =>
+        var script = CreateScript((file, settings, context) =>
         {
             capturedSettings = settings;
-            return Task.FromResult(new List<string> { "✅ Готово" });
+            return Task.FromResult(ExecutionResult.Succeeded(context, "Готово"));
         });
         var vm = CreateViewModel();
         vm.Initialize(script, CreateFiles("C:\\media\\sel.mkv"));
@@ -622,7 +770,8 @@ public class WorkPanelViewModelExecutionTests : IsolatedMessengerTestBase
             _logMock.Object,
             _settingsMock.Object,
             MockBuilders.CreatePathManagerMock().Object);
-        script.ExecuteHandler = (file, settings) => Task.FromResult(new List<string> { "✅ Готово" });
+        script.ExecuteHandler = (file, settings, context) =>
+            Task.FromResult(ExecutionResult.Succeeded(context, "Готово"));
         var vm = CreateViewModel();
         vm.Initialize(script, CreateFiles("C:\\media\\out.mkv"));
         vm.OutputPath = "C:\\custom\\out";
@@ -631,8 +780,10 @@ public class WorkPanelViewModelExecutionTests : IsolatedMessengerTestBase
         await vm.StartExecutionCommand.ExecuteAsync(null);
 
         // Assert — выполнение успешно завершается с кастомным OutputPath
-        script.SavedStatusText.Should().Be("Обработка завершена");
-        script.SavedLogText.Should().Contain("✅ Готово");
+        script.SavedStatusText.Should().Be("Все файлы успешно обработаны");
+        script.SavedLogText.Should().Contain("Готово");
+        vm.SucceededCount.Should().Be(1);
+        vm.LastQueueResult!.Status.Should().Be(ExecutionStatus.Succeeded);
     }
 
     /// <summary>
@@ -659,8 +810,8 @@ public class WorkPanelViewModelExecutionTests : IsolatedMessengerTestBase
     public async Task StartExecutionAsync_SuccessfulExecution_LogExpanderRemainsClosed()
     {
         // Arrange
-        var script = CreateScript((file, settings) =>
-            Task.FromResult(new List<string> { $"✅ Готово: {file}" }));
+        var script = CreateScript((file, settings, context) =>
+            Task.FromResult(ExecutionResult.Succeeded(context, $"Готово: {file}")));
         var vm = CreateViewModel();
         vm.Initialize(script, CreateFiles("C:\\media\\file1.mkv", "C:\\media\\file2.mp4"));
         vm.IsLogExpanded = false;
@@ -670,19 +821,26 @@ public class WorkPanelViewModelExecutionTests : IsolatedMessengerTestBase
 
         // Assert
         vm.IsLogExpanded.Should().BeFalse("при успешном выполнении очереди лог не должен раскрываться автоматически");
-        script.SavedStatusText.Should().Be("Обработка завершена");
+        script.SavedStatusText.Should().Be("Все файлы успешно обработаны");
+        vm.SucceededCount.Should().Be(2);
+        vm.FailedCount.Should().Be(0);
     }
 
     /// <summary>
-    /// Проверяет, что при возникновении ошибки выполнения файла в результатах (префикс "❌")
-    /// панель журнала выполнения автоматически открывается (IsLogExpanded == true).
+    /// Проверяет, что при типизированном результате Failed панель журнала выполнения
+    /// автоматически открывается (IsLogExpanded == true).
     /// </summary>
     [TestMethod]
     public async Task StartExecutionAsync_WithError_LogExpanderOpens()
     {
         // Arrange
-        var script = CreateScript((file, settings) =>
-            Task.FromResult(new List<string> { "❌ Ошибка обработки файла" }));
+        var script = CreateScript((file, settings, context) =>
+            Task.FromResult(ExecutionResult.Failed(
+                context,
+                "Ошибка обработки файла",
+                errorCode: "encode-failed",
+                outputFile: "C:\\media\\file_with_error.mkv",
+                outputExists: false)));
         var vm = CreateViewModel();
         vm.Initialize(script, CreateFiles("C:\\media\\file_with_error.mkv"));
         vm.IsLogExpanded = false;
@@ -692,6 +850,7 @@ public class WorkPanelViewModelExecutionTests : IsolatedMessengerTestBase
 
         // Assert
         vm.IsLogExpanded.Should().BeTrue("при ошибке в результатах выполнения лог должен автоматически раскрыться");
+        vm.FailedCount.Should().Be(1);
     }
 
     /// <summary>
@@ -702,7 +861,7 @@ public class WorkPanelViewModelExecutionTests : IsolatedMessengerTestBase
     public async Task StartExecutionAsync_HandlerThrows_LogExpanderOpens()
     {
         // Arrange
-        var script = CreateScript((file, settings) =>
+        var script = CreateScript((file, settings, context) =>
             throw new InvalidOperationException("Фатальная ошибка кодирования"));
         var vm = CreateViewModel();
         vm.Initialize(script, CreateFiles("C:\\media\\fatal.mkv"));
@@ -713,6 +872,7 @@ public class WorkPanelViewModelExecutionTests : IsolatedMessengerTestBase
 
         // Assert
         vm.IsLogExpanded.Should().BeTrue("при исключении в процессе обработки файла лог должен автоматически раскрыться");
+        vm.FailedCount.Should().Be(1);
     }
 
     /// <summary>

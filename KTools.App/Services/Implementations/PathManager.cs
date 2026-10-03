@@ -1,6 +1,8 @@
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
 using System;
 using System.IO;
+
+using KTools_App.Diagnostics;
 using KTools_App.Services.Contracts;
 
 namespace KTools_App.Core;
@@ -10,6 +12,8 @@ namespace KTools_App.Core;
 /// </summary>
 public sealed class PathManager : IPathManager
 {
+    private const string SourceName = nameof(PathManager);
+
     private readonly string _baseDir;
     private readonly ILogService _logService;
     private string? _binDirectory;
@@ -274,7 +278,15 @@ public sealed class PathManager : IPathManager
             if (result > 0)
             {
                 string shortPath = sb.ToString();
-                _logService.DebugLog($"Путь успешно преобразован в формат 8.3: '{path}' -> '{shortPath}'", "PathManager");
+                _logService.Write(
+                    "path.short_name.resolved",
+                    LogLevel.Debug,
+                    LogStatus.Succeeded,
+                    "Путь преобразован в короткую форму 8.3",
+                    source: SourceName,
+                    properties: LogProps
+                        .Create("FileName", LogProps.FileName(path))
+                        .With("Extension", Path.GetExtension(path)));
                 return shortPath;
             }
 
@@ -285,16 +297,43 @@ public sealed class PathManager : IPathManager
                 if (result > 0)
                 {
                     string shortPath = sb.ToString();
-                    _logService.DebugLog($"Путь успешно преобразован в формат 8.3 с расширением буфера: '{path}' -> '{shortPath}'", "PathManager");
+                    _logService.Write(
+                        "path.short_name.resolved_retry",
+                        LogLevel.Debug,
+                        LogStatus.Succeeded,
+                        "Путь преобразован в короткую форму 8.3 после расширения буфера",
+                        source: SourceName,
+                        properties: LogProps
+                            .Create("FileName", LogProps.FileName(path))
+                            .With("Extension", Path.GetExtension(path)));
                     return shortPath;
                 }
             }
 
-            _logService.Warn($"Не удалось преобразовать путь '{path}' в формат 8.3. Код системной ошибки: {System.Runtime.InteropServices.Marshal.GetLastWin32Error()}", "PathManager");
+            int lastError = System.Runtime.InteropServices.Marshal.GetLastWin32Error();
+            _logService.Write(
+                "path.short_name.unavailable",
+                LogLevel.Debug,
+                LogStatus.Skipped,
+                "Короткая форма пути 8.3 недоступна, используется исходный путь",
+                source: SourceName,
+                properties: LogProps
+                    .Create("FileName", LogProps.FileName(path))
+                    .With("ErrorCode", "SHORT_PATH_UNAVAILABLE")
+                    .With("ExitCode", lastError));
         }
         catch (Exception ex)
         {
-            _logService.Exception(ex, $"Непредвиденное исключение при попытке получить короткий путь для '{path}'", "PathManager");
+            _logService.Write(
+                "path.short_name.failed",
+                LogLevel.Debug,
+                LogStatus.Skipped,
+                "Короткая форма пути 8.3 не получена, используется исходный путь",
+                ex,
+                SourceName,
+                properties: LogProps
+                    .Create("FileName", LogProps.FileName(path))
+                    .With("ErrorCode", "SHORT_PATH_FAILED"));
         }
 
         return path;

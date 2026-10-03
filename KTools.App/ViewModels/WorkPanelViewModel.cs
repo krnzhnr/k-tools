@@ -1,5 +1,6 @@
 // -*- coding: utf-8 -*-
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
@@ -7,12 +8,18 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using CommunityToolkit.Mvvm.Messaging;
+
 using KTools_App.Core;
-using KTools_App.UI.Controls;
+using KTools_App.Diagnostics;
+using KTools_App.Models;
 using KTools_App.Services.Contracts;
+using KTools_App.UI.Controls;
+
+using ExecutionContext = KTools_App.Models.ExecutionContext;
 
 namespace KTools_App.ViewModels;
 
@@ -22,6 +29,7 @@ namespace KTools_App.ViewModels;
 /// </summary>
 public partial class WorkPanelViewModel : ThreadSafeViewModel
 {
+    private const string SourceName = nameof(WorkPanelViewModel);
     private readonly INavigationService _navigationService;
     private readonly IDialogService _dialogService;
     private readonly ISettingsManager _settingsManager;
@@ -40,7 +48,89 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
     private readonly Dictionary<int, string> _activeBitrates = new();
     private Dictionary<string, List<int>> _selectedTracks = new();
     private Dictionary<string, List<int>> _selectedAttachments = new();
-    private bool _hasQueueErrors;
+    private readonly object _resultLock = new();
+    private readonly Dictionary<string, ExecutionResult> _itemResults = new(StringComparer.Ordinal);
+    private List<ExecutionContext> _itemContexts = new();
+    private ExecutionContext? _batchContext;
+    private int _succeededCount;
+    private int _failedCount;
+    private int _cancelledCount;
+    private int _skippedCount;
+    private int _partiallySucceededCount;
+    private ExecutionResult? _lastQueueResult;
+    private AbstractScript? _executionScript;
+
+    public string? CurrentOperationId => _batchContext?.OperationId;
+
+    public ExecutionResult? LastQueueResult => _lastQueueResult;
+
+    public IReadOnlyList<ExecutionResult> TypedItemResults
+    {
+        get
+        {
+            lock (_resultLock)
+            {
+                return _itemResults.Values
+                    .OrderBy(result => result.Context.ItemIndex)
+                    .ToArray();
+            }
+        }
+    }
+
+    public int SucceededCount
+    {
+        get
+        {
+            lock (_resultLock)
+            {
+                return _succeededCount;
+            }
+        }
+    }
+
+    public int FailedCount
+    {
+        get
+        {
+            lock (_resultLock)
+            {
+                return _failedCount;
+            }
+        }
+    }
+
+    public int CancelledCount
+    {
+        get
+        {
+            lock (_resultLock)
+            {
+                return _cancelledCount;
+            }
+        }
+    }
+
+    public int SkippedCount
+    {
+        get
+        {
+            lock (_resultLock)
+            {
+                return _skippedCount;
+            }
+        }
+    }
+
+    public int PartiallySucceededCount
+    {
+        get
+        {
+            lock (_resultLock)
+            {
+                return _partiallySucceededCount;
+            }
+        }
+    }
 
     /// <summary>
     /// Активный исполняемый скрипт обработки медиаданных.
@@ -160,7 +250,7 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
     /// с моделью представления.
     /// </summary>
     public void Initialize(
-        AbstractScript script, 
+        AbstractScript script,
         ObservableCollection<FileQueueItem> files)
     {
         if (ActiveScript != null)
@@ -183,7 +273,7 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
 
         IsTracksTabVisible = script.UseCustomWidget;
         var fullSchema = script.GetFullSettingsSchema();
-        IsSettingsTabVisible = fullSchema != null && 
+        IsSettingsTabVisible = fullSchema != null &&
                                fullSchema.Count > 0;
 
         RestoreState();
@@ -219,7 +309,7 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
 
         if (!allInstalled)
         {
-            DependencyWarningText = 
+            DependencyWarningText =
                 "Для работы требуются отсутствующие компоненты: " +
                 string.Join(", ", missingDeps);
             IsDependencyWarningOpen = true;
@@ -258,7 +348,7 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
         LogText = ActiveScript.SavedLogText ?? string.Empty;
         OutputPath = ActiveScript.SavedOutputPath ?? string.Empty;
 
-        StatusText = 
+        StatusText =
             ActiveScript.SavedStatusText ?? "Ожидание запуска...";
         GlobalProgressValue = ActiveScript.SavedGlobalProgress;
         IsProcessing = ActiveScript.IsProcessing;
@@ -273,12 +363,26 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
     {
         if (ActiveScript == null) return;
 
-        ActiveScript.StateChanged -= OnScriptStateChanged;
+        AbstractScript script = ActiveScript;
+        script.StateChanged -= OnScriptStateChanged;
 
-        ActiveScript.SavedLogText = LogText;
-        ActiveScript.SavedStatusText = StatusText;
-        ActiveScript.SavedGlobalProgress = GlobalProgressValue;
-        ActiveScript.SavedOutputPath = OutputPath;
+        try
+        {
+            if (!script.IsProcessing)
+            {
+                lock (_progressLock)
+                {
+                    script.SavedStatusText = StatusText;
+                    script.SavedGlobalProgress = GlobalProgressValue;
+                }
+            }
+
+            script.SavedOutputPath = OutputPath;
+        }
+        finally
+        {
+            script.StateChanged += OnScriptStateChanged;
+        }
     }
 
     /// <summary>
@@ -302,48 +406,65 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
     private async Task StartExecutionAsync(
         Dictionary<string, object>? settings)
     {
-        if (ActiveScript == null || IsProcessing) return;
+        AbstractScript? script = ActiveScript;
+        if (script == null || IsProcessing) return;
 
-        var filesList = ActiveScript.GetProcessableFiles(Files.ToList());
-        if (filesList.Count == 0)
+        var filesList = new List<FileQueueItem>();
+        bool queueStarted = false;
+        try
         {
-            AppendLog("❌ Ошибка: В очереди нет файлов для обработки.\r\n");
-            return;
+            filesList = script.GetProcessableFiles(Files.ToList());
+            if (filesList.Count == 0)
+            {
+                HandleEmptyQueue(script);
+                return;
+            }
+
+            PrepareExecutionState(script, filesList);
+            queueStarted = true;
+
+            var activeSettings = settings ?? new Dictionary<string, object>();
+            if (!activeSettings.ContainsKey("selected_tracks_per_file") && _selectedTracks.Count > 0)
+            {
+                activeSettings["selected_tracks_per_file"] = _selectedTracks;
+            }
+            if (!activeSettings.ContainsKey("selected_attachments_per_file") && _selectedAttachments.Count > 0)
+            {
+                activeSettings["selected_attachments_per_file"] = _selectedAttachments;
+            }
+
+            string? outPath = string.IsNullOrEmpty(OutputPath)
+                ? null
+                : OutputPath;
+
+            await Task.Run(async () =>
+            {
+                await ProcessQueueAsync(
+                    script,
+                    filesList,
+                    activeSettings,
+                    outPath);
+            });
         }
-
-        PrepareExecutionState(filesList);
-
-        var activeSettings = settings ?? new Dictionary<string, object>();
-        if (!activeSettings.ContainsKey("selected_tracks_per_file") && _selectedTracks.Count > 0)
+        catch (Exception ex)
         {
-            activeSettings["selected_tracks_per_file"] = _selectedTracks;
+            if (queueStarted)
+            {
+                HandleBatchException(script, filesList, ex);
+            }
+            else
+            {
+                HandleQueueStartFailure(script, filesList, ex);
+            }
         }
-        if (!activeSettings.ContainsKey("selected_attachments_per_file") && _selectedAttachments.Count > 0)
-        {
-            activeSettings["selected_attachments_per_file"] = _selectedAttachments;
-        }
-
-        string? outPath = string.IsNullOrEmpty(OutputPath) 
-            ? null 
-            : OutputPath;
-
-        await Task.Run(async () =>
-        {
-            await ProcessQueueAsync(
-                filesList, 
-                activeSettings, 
-                outPath);
-        });
     }
 
     /// <summary>
     /// Инициализирует состояние скрипта перед началом обработки очереди.
     /// </summary>
-    private void PrepareExecutionState(List<FileQueueItem> filesList)
+    private void PrepareExecutionState(AbstractScript script, List<FileQueueItem> filesList)
     {
-        if (ActiveScript == null) return;
-
-        _startTime = DateTime.Now;
+        _startTime = DateTime.UtcNow;
         _filesProgress.Clear();
         _progressSumTotal = 0.0;
         _finishedCountIndex = 0;
@@ -351,8 +472,25 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
         _finishedIndices.Clear();
         _activeFps.Clear();
         _activeBitrates.Clear();
-        _hasQueueErrors = false;
+        lock (_resultLock)
+        {
+            _itemResults.Clear();
+            _succeededCount = 0;
+            _failedCount = 0;
+            _cancelledCount = 0;
+            _skippedCount = 0;
+            _partiallySucceededCount = 0;
+            _lastQueueResult = null;
+        }
+
+        _executionScript = script;
+        _batchContext = ExecutionContext.CreateBatch(script.GetType().Name, filesList.Count);
+        _itemContexts = filesList
+            .Select((_, index) => _batchContext!.ForItem(index))
+            .ToList();
+
         IsLogExpanded = false;
+        IsProcessing = true;
 
         for (int i = 0; i < filesList.Count; i++)
         {
@@ -361,65 +499,83 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
 
         foreach (var item in filesList)
         {
-            item.Status = "Ожидание";
-            item.Progress = 0.0;
-            item.State = FileProcessingState.Pending;
+            item.ResetStateForRetry();
             item.IsProcessing = true;
         }
 
-        ActiveScript.IsProcessing = true;
-        ActiveScript.SavedLogText = string.Empty;
-        ActiveScript.SavedGlobalProgress = 0;
-        ActiveScript.SavedStatusText = "Подготовка к обработке...";
-        
-        ActiveScript.PrepareBatch(filesList.Select(f => f.FilePath));
-        ActiveScript.ResetCancellation();
-        ActiveScript.RaiseStateChanged();
+        script.IsProcessing = true;
+        script.ClearSavedLog();
+        script.SavedGlobalProgress = 0;
+        script.SavedStatusText = "Подготовка к обработке...";
 
-        AppendLog($"🚀 Запуск скрипта '{ActiveScript.Name}' " +
-                  $"для {filesList.Count} файлов.\r\n");
+        script.PrepareBatch(filesList.Select(f => f.FilePath));
+        script.ResetCancellation();
+        script.RaiseStateChanged();
+
+        AppendJournalText(
+            $"Начало обработки: {filesList.Count} файлов.",
+            _batchContext);
+        AppendJournalText(
+            $"🚀 Запуск скрипта '{script.Name}' для {filesList.Count} файлов.",
+            _batchContext);
+        WriteQueueEvent(
+            "exec.queue.started",
+            LogLevel.Info,
+            LogStatus.Running,
+            "Очередь обработки запущена",
+            _batchContext,
+            new Dictionary<string, object?>
+            {
+                ["Total"] = filesList.Count,
+                ["ScriptId"] = _batchContext.ScriptId
+            });
     }
 
     private async Task ProcessQueueAsync(
+        AbstractScript script,
         List<FileQueueItem> filesList,
         Dictionary<string, object> settings,
         string? outPath)
     {
-        if (ActiveScript == null) return;
-
         int total = filesList.Count;
-        bool supportsParallel = ActiveScript.SupportsParallel && _settingsManager.EnableParallel;
+        bool supportsParallel = script.SupportsParallel && _settingsManager.EnableParallel;
         int maxParallel = supportsParallel ? Math.Max(1, _settingsManager.MaxParallelTasks) : 1;
 
         if (supportsParallel && maxParallel > 1 && total > 1)
         {
-            var semaphore = new System.Threading.SemaphoreSlim(maxParallel);
-            var tasks = new List<Task>();
+            using var semaphore = new System.Threading.SemaphoreSlim(maxParallel);
+            var tasks = new List<Task>(total);
 
             for (int i = 0; i < total; i++)
             {
-                if (ActiveScript.IsCancelled)
+                if (script.IsCancelled)
                 {
                     break;
                 }
 
                 await semaphore.WaitAsync();
 
-                var fileItem = filesList[i];
+                if (script.IsCancelled)
+                {
+                    semaphore.Release();
+                    break;
+                }
+
                 int index = i;
+                FileQueueItem fileItem = filesList[index];
+                ExecutionContext context = _itemContexts[index];
                 tasks.Add(Task.Run(async () =>
                 {
                     try
                     {
-                        if (!ActiveScript.IsCancelled)
-                        {
-                            await ProcessQueueItemAsync(
-                                fileItem,
-                                settings,
-                                outPath,
-                                index,
-                                total);
-                        }
+                        await ProcessQueueItemAsync(
+                            script,
+                            fileItem,
+                            settings,
+                            outPath,
+                            index,
+                            total,
+                            context);
                     }
                     finally
                     {
@@ -434,182 +590,809 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
         {
             for (int i = 0; i < total; i++)
             {
-                if (ActiveScript.IsCancelled)
+                if (script.IsCancelled)
                 {
                     break;
                 }
 
-                var fileItem = filesList[i];
                 await ProcessQueueItemAsync(
-                    fileItem,
+                    script,
+                    filesList[i],
                     settings,
                     outPath,
                     i,
-                    total);
+                    total,
+                    _itemContexts[i]);
             }
         }
 
-        FinalizeExecution();
+        MarkUnprocessedItems(script, filesList);
+        FinalizeExecution(script, filesList);
     }
 
-    /// <summary>
-    /// Выполняет обработку одного элемента очереди.
-    /// </summary>
     private async Task ProcessQueueItemAsync(
+        AbstractScript script,
         FileQueueItem fileItem,
         Dictionary<string, object> settings,
         string? outPath,
         int index,
-        int total)
+        int total,
+        ExecutionContext context)
     {
-        if (ActiveScript == null) return;
-
         UpdateFileStatus(fileItem, "Обработка...", 0.0, FileProcessingState.Processing);
         UpdateProgressState(
-            index, 
-            total, 
-            $"Обработка файла {index + 1} из {total}", 
+            index,
+            total,
+            $"Обработка файла {index + 1} из {total}",
             0.0);
+        WriteItemEvent(
+            fileItem,
+            context,
+            "exec.item.started",
+            LogLevel.Info,
+            LogStatus.Running,
+            "Элемент очереди запущен",
+            null,
+            0);
 
         try
         {
-            ScriptProgressCallback progressCallback = 
+            long startedTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
+
+            ScriptProgressCallback progressCallback =
                 (currIdx, totCount, msg, percent, fps, bitrate) =>
                 {
                     double percentValue = percent ?? 0.0;
-
-                    // Троттлинг: поток stdout может выдавать десятки обновлений в секунду.
-                    // Пропускаем промежуточные обновления, кроме финального значения.
                     if (percentValue < 100.0 && !ShouldEmitProgress(index, percentValue, msg, fps, bitrate))
                     {
                         return;
                     }
 
-                    // Один RaiseStateChanged на цикл обработки прогресса
-                    // вместо двух (UpdateFileStatus + UpdateProgressState).
                     UpdateFileStatus(
-                        fileItem, 
-                        msg, 
+                        fileItem,
+                        msg,
                         percentValue,
                         FileProcessingState.Processing,
                         syncScriptState: false);
-                        
                     UpdateProgressState(
-                        index, 
-                        total, 
-                        $"Файл {index + 1} из {total} ({percent:F0}%)", 
+                        index,
+                        total,
+                        $"Файл {index + 1} из {total} ({percentValue:F0}%)",
                         percentValue,
                         fps,
                         bitrate,
                         syncScriptState: false);
-
-                    ActiveScript.RaiseStateChanged();
+                    script.RaiseStateChanged();
                 };
 
-            var results = await ActiveScript.ExecuteSingleAsync(
+            ExecutionResult? result = await script.ExecuteSingleAsync(
                 fileItem.FilePath,
                 settings,
                 outPath,
                 progressCallback,
                 index,
-                total);
+                total,
+                context);
 
-            AppendLogs(results);
-
-            if (ActiveScript.IsCancelled)
-            {
-                UpdateFileStatus(fileItem, "Отменено", 0.0, FileProcessingState.Cancelled);
-                return;
-            }
-
-            bool hasError = results.Any(r => r.StartsWith("❌") || 
-                                             r.Contains("Ошибка", StringComparison.OrdinalIgnoreCase) || 
-                                             r.Contains("ОШИБКА", StringComparison.OrdinalIgnoreCase));
-            if (hasError)
-            {
-                _hasQueueErrors = true;
-                UpdateFileStatus(fileItem, "Ошибка", 0.0, FileProcessingState.Failed);
-            }
-            else
-            {
-                UpdateFileStatus(fileItem, "Завершено", 100.0, FileProcessingState.Completed);
-            }
+            double measuredMs = System.Diagnostics.Stopwatch.GetElapsedTime(startedTimestamp).TotalMilliseconds;
+            result = NormalizeResult(result, context, script);
+            result = WithMeasuredDuration(result, context, measuredMs);
+            RecordTerminalResult(fileItem, index, total, context, result);
         }
         catch (Exception ex)
         {
-            _hasQueueErrors = true;
-            _logService.Exception(
-                ex, 
-                $"Ошибка выполнения скрипта на файле " +
-                $"'{fileItem.FileName}': {ex.Message}", 
-                "WorkPanelViewModel");
-                
-            UpdateFileStatus(fileItem, "Ошибка", 0.0, FileProcessingState.Failed);
-            AppendLogs(new List<string> { 
-                $"❌ Критическая ошибка: {ex.Message}" 
-            });
+            _logService.Write(
+                "exec.item.exception",
+                LogLevel.Error,
+                LogStatus.Failed,
+                $"Элемент очереди '{LogProps.FileName(fileItem.FilePath)}' не обработан",
+                ex,
+                SourceName,
+                context: context.ToLogContext(),
+                properties: LogProps
+                    .Create("ErrorCode", "ITEM_EXECUTION_FAILED")
+                    .With("FileName", LogProps.FileName(fileItem.FilePath)));
+            ExecutionResult result = ExecutionResult.FromException(
+                context,
+                ex,
+                new[] { "Критическая ошибка выполнения." },
+                errorCode: "execution-exception",
+                cleanupState: CleanupState.Unknown);
+            RecordTerminalResult(fileItem, index, total, context, result);
         }
     }
 
     /// <summary>
-    /// Финализирует состояние скрипта после окончания обработки очереди.
+    /// Дополняет результат измеренной длительностью выполнения элемента очереди,
+    /// если скрипт не сообщил её самостоятельно.
     /// </summary>
-    private void FinalizeExecution()
+    private static ExecutionResult WithMeasuredDuration(
+        ExecutionResult result,
+        ExecutionContext context,
+        double measuredMs)
     {
-        if (ActiveScript == null) return;
-
-        // Обновляем состояние обработки элементов списка и видимость журнала логов.
-        // Журнал автоматически раскрывается только при возникновении ошибок в очереди.
-        if (App.CurrentMainWindow?.DispatcherQueue != null)
+        if (result.DurationMs > 0 || !double.IsFinite(measuredMs) || measuredMs <= 0)
         {
-            App.CurrentMainWindow.DispatcherQueue.TryEnqueue(() =>
+            return result;
+        }
+
+        ItemResult measured = ItemResult.Create(
+            result.ItemId,
+            result.Status,
+            result.Messages,
+            result.ErrorCode,
+            result.ExitCode,
+            result.OutputFile,
+            result.OutputExists,
+            result.ExceptionInfo,
+            result.Exception,
+            result.Retryable,
+            result.CleanupState,
+            measuredMs,
+            result.OperationId);
+
+        return ExecutionResult.FromItemResult(context, measured);
+    }
+
+    private void MarkUnprocessedItems(AbstractScript script, List<FileQueueItem> filesList)
+    {
+        for (int index = 0; index < filesList.Count; index++)
+        {
+            ExecutionContext context = _itemContexts[index];
+            bool hasResult;
+            lock (_resultLock)
             {
-                foreach (var item in Files)
+                hasResult = _itemResults.ContainsKey(context.ItemId);
+            }
+
+            if (!hasResult)
+            {
+                ExecutionResult result = ExecutionResult.Cancelled(
+                    context,
+                    new[] { "Обработка отменена до запуска элемента." },
+                    errorCode: "cancelled-before-start",
+                    cleanupState: CleanupState.NotStarted);
+                RecordTerminalResult(filesList[index], index, filesList.Count, context, result);
+            }
+        }
+    }
+
+    private void RecordTerminalResult(
+        FileQueueItem fileItem,
+        int index,
+        int total,
+        ExecutionContext context,
+        ExecutionResult result)
+    {
+        bool added;
+        lock (_resultLock)
+        {
+            added = _itemResults.TryAdd(context.ItemId, result);
+            if (added)
+            {
+                switch (result.Status)
                 {
-                    item.IsProcessing = false;
+                    case ExecutionStatus.Succeeded:
+                        _succeededCount++;
+                        break;
+                    case ExecutionStatus.Failed:
+                        _failedCount++;
+                        break;
+                    case ExecutionStatus.Cancelled:
+                        _cancelledCount++;
+                        break;
+                    case ExecutionStatus.Skipped:
+                        _skippedCount++;
+                        break;
+                    case ExecutionStatus.PartiallySucceeded:
+                        _partiallySucceededCount++;
+                        break;
                 }
-                IsLogExpanded = _hasQueueErrors;
-            });
+            }
+        }
+
+        if (!added)
+        {
+            return;
+        }
+
+        AppendJournalMessages(context, result);
+        WriteItemEvent(fileItem, context, ItemEventId(result.Status), ItemLevel(result.Status), result.LogStatus, "Элемент очереди завершён", result, result.DurationMs);
+        RunOnUi(() => fileItem.ApplyExecutionResult(result));
+        UpdateProgressState(
+            index,
+            total,
+            $"Файл {index + 1} из {total} завершён",
+            100.0,
+            syncScriptState: false);
+        _executionScript?.RaiseStateChanged();
+    }
+
+    private ExecutionResult NormalizeResult(
+        ExecutionResult? result,
+        ExecutionContext context,
+        AbstractScript script)
+    {
+        if (result is null)
+        {
+            return ExecutionResult.Failed(
+                context,
+                new[] { "Скрипт вернул пустой результат." },
+                errorCode: "null-result",
+                retryable: true,
+                cleanupState: CleanupState.NotStarted);
+        }
+
+        if (script.IsCancelled && result.Status != ExecutionStatus.Cancelled)
+        {
+            return RecreateResult(
+                result,
+                context,
+                ExecutionStatus.Cancelled,
+                PreferErrorCode(result.ErrorCode, "cancelled"));
+        }
+
+        if (result.Status == ExecutionStatus.Succeeded &&
+            result.OutputFile is not null &&
+            !result.OutputExists)
+        {
+            return RecreateResult(
+                result,
+                context,
+                ExecutionStatus.Failed,
+                PreferErrorCode(result.ErrorCode, "output-missing"),
+                outputExists: false,
+                retryable: true);
+        }
+
+        return result;
+    }
+
+    private static string PreferErrorCode(string? current, string fallback)
+    {
+        return string.IsNullOrWhiteSpace(current) ||
+            string.Equals(current, "execution-failed", StringComparison.Ordinal)
+            ? fallback
+            : current!;
+    }
+
+    /// <summary>
+    /// Создаёт производный результат с новым статусом, сохраняя диагностические данные
+    /// исходного результата (ExceptionInfo, Exception, Retryable, CleanupState, ExitCode, DurationMs).
+    /// </summary>
+    private static ExecutionResult RecreateResult(
+        ExecutionResult source,
+        ExecutionContext context,
+        ExecutionStatus status,
+        string? errorCode,
+        bool? outputExists = null,
+        bool? retryable = null)
+    {
+        ItemResult recreated = ItemResult.Create(
+            source.ItemId,
+            status,
+            source.Messages,
+            errorCode,
+            source.ExitCode,
+            source.OutputFile,
+            outputExists ?? source.OutputExists,
+            source.ExceptionInfo,
+            source.Exception,
+            retryable ?? source.Retryable,
+            source.CleanupState,
+            source.DurationMs,
+            source.OperationId);
+
+        return ExecutionResult.FromItemResult(context, recreated);
+    }
+
+    private void FinalizeExecution(AbstractScript script, List<FileQueueItem> filesList)
+    {
+        int total = filesList.Count;
+        int succeeded;
+        int failed;
+        int cancelled;
+        int skipped;
+        int partial;
+        int terminal;
+        lock (_resultLock)
+        {
+            succeeded = _succeededCount;
+            failed = _failedCount;
+            cancelled = _cancelledCount;
+            skipped = _skippedCount;
+            partial = _partiallySucceededCount;
+            terminal = _itemResults.Count;
+        }
+
+        bool allTerminal = total > 0 && terminal == total;
+        bool hasProblems = failed > 0 || cancelled > 0 || partial > 0;
+        bool anyTerminalOutcome = succeeded > 0 || failed > 0 || cancelled > 0 || skipped > 0 || partial > 0;
+        ExecutionStatus aggregateStatus;
+        string finalStatus;
+        if (allTerminal && succeeded == total)
+        {
+            aggregateStatus = ExecutionStatus.Succeeded;
+            finalStatus = "Все файлы успешно обработаны";
+        }
+        else if (allTerminal && failed == total)
+        {
+            aggregateStatus = ExecutionStatus.Failed;
+            finalStatus = "Обработка завершилась ошибкой";
+        }
+        else if (cancelled > 0 && cancelled == total)
+        {
+            aggregateStatus = ExecutionStatus.Cancelled;
+            finalStatus = $"Обработка отменена: {cancelled} из {total}";
+        }
+        else if (anyTerminalOutcome)
+        {
+            aggregateStatus = ExecutionStatus.PartiallySucceeded;
+            finalStatus =
+                $"Завершено частично: успешно {succeeded}, с ошибкой {failed + partial}, отменено {cancelled}, пропущено {skipped} из {total}";
         }
         else
         {
-            foreach (var item in Files)
+            aggregateStatus = ExecutionStatus.Cancelled;
+            finalStatus = $"Обработка отменена: {cancelled} из {total}";
+        }
+
+        if (allTerminal)
+        {
+            script.SavedGlobalProgress = 100;
+        }
+        else
+        {
+            script.SavedGlobalProgress = 0;
+        }
+        script.SavedStatusText = finalStatus;
+        script.IsProcessing = false;
+
+        ExecutionContext? batch = _batchContext;
+        if (batch is not null)
+        {
+            // При Succeeded ErrorCode обязан быть пустым: потребитель, ищущий отказы
+            // по errorCode != null, иначе получал бы ложное срабатывание на успехе.
+            // Диагностика успеха остаётся в отдельном свойстве Status.
+            string? queueErrorCode = aggregateStatus == ExecutionStatus.Succeeded
+                ? null
+                : aggregateStatus == ExecutionStatus.Cancelled
+                    ? "queue-cancelled"
+                    : hasProblems ? "queue-partial" : "queue-incomplete";
+            CleanupState queueCleanupState = aggregateStatus switch
+            {
+                ExecutionStatus.Succeeded => CleanupState.Completed,
+                ExecutionStatus.Cancelled => CleanupState.Partial,
+                ExecutionStatus.Skipped => CleanupState.NotRequired,
+                _ => CleanupState.Partial
+            };
+            ExecutionResult queueResult = ExecutionResult.Create(
+                batch,
+                aggregateStatus,
+                new[] { finalStatus },
+                errorCode: queueErrorCode,
+                cleanupState: queueCleanupState,
+                durationMs: (DateTime.UtcNow - _startTime).TotalMilliseconds);
+            lock (_resultLock)
+            {
+                _lastQueueResult = queueResult;
+            }
+            AppendJournalText(finalStatus, batch);
+            if (aggregateStatus == ExecutionStatus.Succeeded)
+            {
+                AppendJournalText("🎉 Все файлы успешно обработаны.", batch);
+            }
+            WriteQueueEvent(
+                "exec.queue.ended",
+                QueueEventLevel(aggregateStatus),
+                queueResult.LogStatus,
+                finalStatus,
+                batch,
+                new Dictionary<string, object?>
+                {
+                    ["Total"] = total,
+                    ["Succeeded"] = succeeded,
+                    ["Failed"] = failed,
+                    ["Cancelled"] = cancelled,
+                    ["Skipped"] = skipped,
+                    ["PartiallySucceeded"] = partial,
+                    ["Status"] = aggregateStatus.ToString(),
+                    ["CleanupState"] = queueCleanupState.ToString(),
+                    ["DurationMs"] = queueResult.DurationMs
+                },
+                queueErrorCode);
+        }
+
+        RunOnUi(() =>
+        {
+            foreach (FileQueueItem item in filesList)
             {
                 item.IsProcessing = false;
             }
-            IsLogExpanded = _hasQueueErrors;
+            IsProcessing = false;
+            IsLogExpanded = hasProblems || aggregateStatus != ExecutionStatus.Succeeded;
+            StatusText = finalStatus;
+            GlobalProgressValue = allTerminal ? 100 : 0;
+        });
+        script.RaiseStateChanged();
+    }
+
+    private static LogLevel QueueEventLevel(ExecutionStatus status)
+    {
+        return status switch
+        {
+            ExecutionStatus.Failed => LogLevel.Error,
+            ExecutionStatus.PartiallySucceeded => LogLevel.Warning,
+            ExecutionStatus.Cancelled => LogLevel.Warning,
+            _ => LogLevel.Info
+        };
+    }
+
+    private void HandleEmptyQueue(AbstractScript script)
+    {
+        _executionScript = script;
+        _batchContext = ExecutionContext.CreateBatch(script.GetType().Name, 0);
+        _itemContexts = new List<ExecutionContext>();
+        lock (_resultLock)
+        {
+            _itemResults.Clear();
+            _succeededCount = 0;
+            _failedCount = 0;
+            _cancelledCount = 0;
+            _skippedCount = 0;
+            _partiallySucceededCount = 0;
         }
 
-        if (ActiveScript.IsCancelled)
+        ExecutionResult queueResult = ExecutionResult.Create(
+            _batchContext,
+            ExecutionStatus.Failed,
+            new[] { "Очередь не содержит файлов для обработки." },
+            errorCode: "queue-empty",
+            cleanupState: CleanupState.Completed);
+        lock (_resultLock)
         {
-            ActiveScript.AppendToLog(
-                "⚠ Обработка прервана пользователем.\r\n");
-            ActiveScript.SavedStatusText = "Обработка отменена";
-            ActiveScript.SavedGlobalProgress = 0;
-        }
-        else
-        {
-            ActiveScript.AppendToLog(
-                "🎉 Все файлы успешно обработаны.\r\n");
-            ActiveScript.SavedStatusText = "Обработка завершена";
-            ActiveScript.SavedGlobalProgress = 100;
+            _lastQueueResult = queueResult;
         }
 
-        ActiveScript.IsProcessing = false;
-        ActiveScript.RaiseStateChanged();
+        AppendJournalText(queueResult.Messages[0], _batchContext);
+        WriteQueueEvent(
+            "exec.queue.empty",
+            LogLevel.Error,
+            LogStatus.Failed,
+            "Очередь не содержит файлов для обработки",
+            _batchContext,
+            new Dictionary<string, object?>
+            {
+                ["Total"] = 0,
+                ["Status"] = ExecutionStatus.Failed.ToString(),
+                ["ErrorCode"] = "queue-empty"
+            },
+            "queue-empty");
+
+        script.IsProcessing = false;
+        script.SavedStatusText = "Очередь пуста";
+        script.SavedGlobalProgress = 0;
+        script.RaiseStateChanged();
+        RunOnUi(() =>
+        {
+            IsProcessing = false;
+            IsLogExpanded = true;
+            StatusText = "Очередь пуста";
+            GlobalProgressValue = 0;
+        });
+    }
+
+    private void HandleBatchException(AbstractScript script, List<FileQueueItem> filesList, Exception exception)
+    {
+        if (_batchContext is null)
+        {
+            _executionScript = script;
+            _batchContext = ExecutionContext.CreateBatch(script.GetType().Name, 0);
+        }
+
+        _logService.Write(
+            "exec.queue.failed",
+            LogLevel.Error,
+            LogStatus.Failed,
+            "Очередь обработки прервана непредвиденной ошибкой",
+            exception,
+            SourceName,
+            context: _batchContext.ToLogContext(),
+            properties: LogProps
+                .Create("ErrorCode", "QUEUE_EXECUTION_FAILED")
+                .With("Retryable", true));
+
+        int total = filesList.Count;
+        for (int index = 0; index < _itemContexts.Count; index++)
+        {
+            ExecutionContext context = _itemContexts[index];
+            bool hasResult;
+            lock (_resultLock)
+            {
+                hasResult = _itemResults.ContainsKey(context.ItemId);
+            }
+
+            if (!hasResult && index < total)
+            {
+                ExecutionResult result = ExecutionResult.FromException(
+                    context,
+                    exception,
+                    new[] { "Критическая ошибка выполнения очереди." },
+                    errorCode: "queue-exception",
+                    cleanupState: CleanupState.Unknown);
+                RecordTerminalResult(filesList[index], index, total, context, result);
+            }
+        }
+
+        FinalizeExecution(script, filesList);
+    }
+
+    private void HandleQueueStartFailure(
+        AbstractScript script,
+        List<FileQueueItem> filesList,
+        Exception exception)
+    {
+        List<FileQueueItem> items = filesList.Count > 0 ? filesList : Files.ToList();
+        int total = items.Count;
+        EnsureQueueContexts(script, total);
+
+        ExecutionContext batch = _batchContext!;
+        _logService.Write(
+            "exec.queue.start_failed",
+            LogLevel.Error,
+            LogStatus.Failed,
+            "Запуск очереди обработки не выполнен",
+            exception,
+            SourceName,
+            context: batch.ToLogContext(),
+            properties: LogProps
+                .Create("ErrorCode", "QUEUE_START_FAILED")
+                .With("Retryable", true)
+                .With("Total", total));
+
+        for (int index = 0; index < total; index++)
+        {
+            ExecutionContext context = _itemContexts[index];
+            bool hasResult;
+            lock (_resultLock)
+            {
+                hasResult = _itemResults.ContainsKey(context.ItemId);
+            }
+
+            if (!hasResult)
+            {
+                ExecutionResult result = ExecutionResult.Failed(
+                    context,
+                    "Очередь не запущена из-за критической ошибки подготовки.",
+                    errorCode: "queue-start-failed",
+                    retryable: true,
+                    cleanupState: CleanupState.NotStarted);
+                RecordTerminalResult(items[index], index, total, context, result);
+            }
+        }
+
+        FinalizeExecution(script, items);
+        script.SavedGlobalProgress = 0;
+        RunOnUi(() => GlobalProgressValue = 0);
+    }
+
+    /// <summary>
+    /// Гарантирует наличие контекста очереди и элементов для отчётности о сбое запуска,
+    /// чтобы терминальные события не потеряли корреляцию.
+    /// </summary>
+    private void EnsureQueueContexts(AbstractScript script, int total)
+    {
+        if (_batchContext is not null && _executionScript == script && _itemContexts.Count == total)
+        {
+            return;
+        }
+
+        _executionScript = script;
+        _batchContext = ExecutionContext.CreateBatch(script.GetType().Name, total);
+        _itemContexts = Enumerable
+            .Range(0, total)
+            .Select(index => _batchContext!.ForItem(index))
+            .ToList();
+        lock (_resultLock)
+        {
+            _itemResults.Clear();
+            _succeededCount = 0;
+            _failedCount = 0;
+            _cancelledCount = 0;
+            _skippedCount = 0;
+            _partiallySucceededCount = 0;
+            _lastQueueResult = null;
+        }
+    }
+
+    private void AppendJournalText(string message, ExecutionContext? context)
+    {
+        AbstractScript? script = _executionScript;
+        if (script is null)
+        {
+            return;
+        }
+
+        script.AppendToLog($"{message}{Environment.NewLine}");
+        script.RaiseStateChanged();
+    }
+
+    private void AppendJournalMessages(ExecutionContext context, ExecutionResult result)
+    {
+        if (result.Messages.Count == 0)
+        {
+            AppendJournalText(
+                result.Status == ExecutionStatus.Succeeded ? "Элемент завершён." : "Элемент не завершён.",
+                context);
+            return;
+        }
+
+        foreach (string message in result.Messages)
+        {
+            AppendJournalText(message, context);
+        }
+    }
+
+    private void WriteQueueEvent(
+        string eventId,
+        LogLevel level,
+        LogStatus status,
+        string message,
+        ExecutionContext context,
+        IReadOnlyDictionary<string, object?>? properties,
+        string? errorCode = null)
+    {
+        Dictionary<string, object?> merged = new(StringComparer.Ordinal);
+        foreach (KeyValuePair<string, object?> pair in context.ToLogProperties())
+        {
+            merged[pair.Key] = pair.Value;
+        }
+        if (properties is not null)
+        {
+            foreach (KeyValuePair<string, object?> pair in properties)
+            {
+                merged[pair.Key] = pair.Value;
+            }
+        }
+
+        if (!string.IsNullOrEmpty(errorCode))
+        {
+            merged["ErrorCode"] = errorCode;
+        }
+
+        _logService.Write(new LogEvent
+        {
+            EventId = eventId,
+            Level = level,
+            Status = status,
+            Source = "WorkPanel",
+            OperationId = context.OperationId,
+            Message = message,
+            ErrorCode = string.IsNullOrEmpty(errorCode) ? null : errorCode,
+            Properties = merged
+        });
+    }
+
+    private void WriteItemEvent(
+        FileQueueItem fileItem,
+        ExecutionContext context,
+        string eventId,
+        LogLevel level,
+        LogStatus status,
+        string message,
+        ExecutionResult? result,
+        double durationMs)
+    {
+        Dictionary<string, object?> properties = new(StringComparer.Ordinal);
+        foreach (KeyValuePair<string, object?> pair in context.ToLogProperties())
+        {
+            properties[pair.Key] = pair.Value;
+        }
+
+        properties["FileName"] = SafeFileName(fileItem.FilePath);
+
+        string? errorCode = null;
+        double resolvedDuration = durationMs;
+        if (result is not null)
+        {
+            errorCode = result.Status == ExecutionStatus.Succeeded ? null : result.ErrorCode;
+            resolvedDuration = durationMs > 0 ? durationMs : result.DurationMs;
+
+            properties["Status"] = result.Status.ToString();
+            properties["OutputExists"] = result.OutputExists;
+            properties["Retryable"] = result.Retryable;
+            properties["CleanupState"] = result.CleanupState.ToString();
+            properties["MessageCount"] = result.Messages.Count;
+            properties["DurationMs"] = resolvedDuration;
+            if (!string.IsNullOrEmpty(errorCode))
+            {
+                properties["ErrorCode"] = errorCode;
+            }
+
+            if (result.ExitCode is not null)
+            {
+                properties["ExitCode"] = result.ExitCode.Value;
+            }
+        }
+
+        LogEvent logEvent = new LogEvent
+        {
+            EventId = eventId,
+            Level = level,
+            Status = status,
+            Source = "WorkPanel",
+            OperationId = context.OperationId,
+            ItemId = context.ItemId,
+            Message = message,
+            DurationMs = resolvedDuration > 0 ? resolvedDuration : null,
+            ErrorCode = errorCode,
+            ExitCode = result?.ExitCode,
+            Properties = properties,
+            Exception = result?.ExceptionInfo
+        };
+        _logService.Write(logEvent);
+    }
+
+    private static string ItemEventId(ExecutionStatus status)
+    {
+        return status switch
+        {
+            ExecutionStatus.Succeeded => "exec.item.succeeded",
+            ExecutionStatus.Failed => "exec.item.failed",
+            ExecutionStatus.Cancelled => "exec.item.cancelled",
+            ExecutionStatus.Skipped => "exec.item.skipped",
+            ExecutionStatus.PartiallySucceeded => "exec.item.partial",
+            _ => "exec.item.failed"
+        };
+    }
+
+    private static LogLevel ItemLevel(ExecutionStatus status)
+    {
+        return status switch
+        {
+            ExecutionStatus.Failed => LogLevel.Error,
+            ExecutionStatus.PartiallySucceeded => LogLevel.Warning,
+            _ => LogLevel.Info
+        };
+    }
+
+    private static string SafeFileName(string path)
+    {
+        if (Uri.TryCreate(path, UriKind.Absolute, out Uri? uri) &&
+            (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
+        {
+            return "media";
+        }
+
+        string name = Path.GetFileName(path);
+        return string.IsNullOrWhiteSpace(name) ? "item" : name;
+    }
+
+    private void RunOnUi(Action action)
+    {
+        var dispatcher = App.CurrentMainWindow?.DispatcherQueue;
+        if (dispatcher is null || dispatcher.HasThreadAccess)
+        {
+            action();
+            return;
+        }
+
+        if (!dispatcher.TryEnqueue(() => action()))
+        {
+            action();
+        }
     }
 
     private void OnScriptStateChanged(object? sender, EventArgs e)
     {
-        App.CurrentMainWindow?.DispatcherQueue?.TryEnqueue(() =>
+        RunOnUi(() =>
         {
             if (ActiveScript == null) return;
+            if (sender is AbstractScript source && !ReferenceEquals(source, ActiveScript)) return;
 
             string savedLogText = ActiveScript.SavedLogText;
             if (!string.Equals(LogText, savedLogText, StringComparison.Ordinal))
             {
-                // Обновляем только реально изменившийся текст журнала,
-                // чтобы не переустанавливать весь TextBox на каждом событии.
                 LogText = savedLogText;
             }
             StatusText = ActiveScript.SavedStatusText;
@@ -635,8 +1418,8 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
         {
             int now = Environment.TickCount;
             bool isFirst = !_lastProgressEmit.TryGetValue(fileIndex, out var last);
-            bool changed = isFirst || 
-                Math.Abs(percent - last.Percent) > 0.0001 || 
+            bool changed = isFirst ||
+                Math.Abs(percent - last.Percent) > 0.0001 ||
                 !string.Equals(last.Msg, msg ?? "", StringComparison.Ordinal) ||
                 (fps.HasValue && Math.Abs(fps.Value - last.Fps) > 0.0001) ||
                 !string.Equals(last.Bitrate ?? "", bitrate ?? "", StringComparison.Ordinal);
@@ -654,13 +1437,13 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
     }
 
     private void UpdateFileStatus(
-        FileQueueItem fileItem, 
-        string status, 
+        FileQueueItem fileItem,
+        string status,
         double progress,
         FileProcessingState? state = null,
         bool syncScriptState = true)
     {
-        App.CurrentMainWindow?.DispatcherQueue?.TryEnqueue(() =>
+        RunOnUi(() =>
         {
             fileItem.Status = status;
             fileItem.Progress = progress;
@@ -668,42 +1451,37 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
             {
                 fileItem.State = state.Value;
             }
-            else
-            {
-                fileItem.State = InferStateFromStatus(status);
-            }
         });
 
         if (syncScriptState)
         {
-            ActiveScript?.RaiseStateChanged();
+            (_executionScript ?? ActiveScript)?.RaiseStateChanged();
         }
-    }
-
-    private FileProcessingState InferStateFromStatus(string status)
-    {
-        if (status == "Завершено") return FileProcessingState.Completed;
-        if (status == "Ошибка") return FileProcessingState.Failed;
-        if (status == "Отменено") return FileProcessingState.Cancelled;
-        if (status.StartsWith("Пропуск") || status.StartsWith("Пропущен")) return FileProcessingState.Skipped;
-        if (status == "Обработка" || status.StartsWith("Обработка") || status.Contains("%")) return FileProcessingState.Processing;
-        if (status == "Ожидание") return FileProcessingState.Pending;
-        
-        return FileProcessingState.Processing;
     }
 
     private readonly object _progressLock = new();
 
     private void UpdateProgressState(
-        int fileIndex, 
-        int totalCount, 
-        string status, 
+        int fileIndex,
+        int totalCount,
+        string status,
         double filePercent,
         double? fps = null,
         string? bitrate = null,
         bool syncScriptState = true)
     {
-        if (ActiveScript == null) return;
+        AbstractScript? script = _executionScript ?? ActiveScript;
+        if (script == null || totalCount <= 0) return;
+        if (fileIndex >= 0 && fileIndex < _itemContexts.Count)
+        {
+            lock (_resultLock)
+            {
+                if (_itemResults.ContainsKey(_itemContexts[fileIndex].ItemId))
+                {
+                    return;
+                }
+            }
+        }
 
         double overallPercent;
         int finishedCount;
@@ -745,7 +1523,7 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
             overallPercent = Math.Min(Math.Max(overallPercent, 0.0), 100.0);
 
             // 3. Рассчитываем общее оставшееся время (ETA) для очереди
-            double elapsedSeconds = (DateTime.Now - _startTime).TotalSeconds;
+            double elapsedSeconds = (DateTime.UtcNow - _startTime).TotalSeconds;
 
             if (overallPercent > 1.0) // Начинаем расчет после 1% для стабильности
             {
@@ -801,31 +1579,15 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
 
             // Публикуем состояние под тем же lock: при параллельной обработке
             // более старый поток иначе мог бы записать данные после более новых.
-            ActiveScript.SavedStatusText =
+            script.SavedStatusText =
                 $"Выполнение: готово {finishedCount} из {totalCount} ({overallPercent:F1}%){metricsText} | Осталось: {etaStr}";
-            ActiveScript.SavedGlobalProgress = overallPercent;
+            script.SavedGlobalProgress = overallPercent;
         }
 
         if (syncScriptState)
         {
-            ActiveScript.RaiseStateChanged();
+            script.RaiseStateChanged();
         }
-    }
-
-    private void AppendLog(string message)
-    {
-        if (ActiveScript == null) return;
-
-        ActiveScript.AppendToLog(message);
-        ActiveScript.RaiseStateChanged();
-    }
-
-    private void AppendLogs(List<string> lines)
-    {
-        if (ActiveScript == null) return;
-
-        ActiveScript.AppendLinesToLog(lines);
-        ActiveScript.RaiseStateChanged();
     }
 
     /// <summary>
@@ -842,20 +1604,15 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
                     .ProbeAsync(item.FilePath);
                 if (structure != null)
                 {
-                    App.CurrentMainWindow?.DispatcherQueue?
-                        .TryEnqueue(() =>
-                        {
-                            item.MediaInfo = structure;
-                        });
+                    RunOnUi(() =>
+                    {
+                        item.MediaInfo = structure;
+                    });
                 }
             }
             catch (Exception ex)
             {
-                _logService.Exception(
-                    ex,
-                    $"Ошибка фонового анализа при восстановлении " +
-                    $"файла '{item.FileName}': {ex.Message}",
-                    "WorkPanelViewModel");
+                _logService.Write("media.probe.restore_failed", LogLevel.Warning, LogStatus.Failed, $"Фоновый анализ файла '{LogProps.FileName(item.FilePath)}' при восстановлении не выполнен", ex, SourceName, properties: LogProps.Create("FileName", LogProps.FileName(item.FilePath)).With("ErrorCode", "RESTORE_PROBE_FAILED"));
             }
         });
     }
@@ -885,7 +1642,7 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
                 var firstFile = Files[0].FilePath;
                 if (!string.IsNullOrEmpty(firstFile))
                 {
-                    if (firstFile.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || 
+                    if (firstFile.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
                         firstFile.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
                     {
                         baseDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");

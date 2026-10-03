@@ -1,22 +1,29 @@
 // -*- coding: utf-8 -*-
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+
+using KTools_App.Core;
+using KTools_App.Diagnostics;
+using KTools_App.Services.Contracts;
+
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
+
 using Windows.ApplicationModel.DataTransfer;
-using KTools_App.Services.Contracts;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace KTools_App.UI.Pages;
 
 /// <summary>
 /// Страница «Калькулятор сдвига таймингов» с поддержкой маскированного ввода времени в стиле Aegisub.
 /// </summary>
-public sealed partial class TimingCalculatorPage : Page
+public sealed partial class TimingCalculatorPage
 {
+    private const string SourceName = nameof(TimingCalculatorPage);
     private readonly ILogService _logService;
     private bool _isUpdatingText = false;
 
@@ -62,7 +69,13 @@ public sealed partial class TimingCalculatorPage : Page
             {
                 InputsPanel.Orientation = Orientation.Vertical;
                 InputsPanel.Spacing = 16;
-                _logService.Info("[Калькулятор сдвига] Переключение макета в вертикальный режим.", "TimingCalculatorPage");
+                _logService.Write(
+                "ui.timing_calculator.layout_changed",
+                LogLevel.Debug,
+                LogStatus.Changed,
+                "Макет калькулятора сдвига переключён в вертикальный режим",
+                source: SourceName,
+                properties: LogProps.Create("Theme", "Vertical"));
             }
         }
         else
@@ -71,7 +84,13 @@ public sealed partial class TimingCalculatorPage : Page
             {
                 InputsPanel.Orientation = Orientation.Horizontal;
                 InputsPanel.Spacing = 24;
-                _logService.Info("[Калькулятор сдвига] Переключение макета в горизонтальный режим.", "TimingCalculatorPage");
+                _logService.Write(
+                "ui.timing_calculator.layout_changed",
+                LogLevel.Debug,
+                LogStatus.Changed,
+                "Макет калькулятора сдвига переключён в горизонтальный режим",
+                source: SourceName,
+                properties: LogProps.Create("Theme", "Horizontal"));
             }
         }
     }
@@ -106,33 +125,70 @@ public sealed partial class TimingCalculatorPage : Page
     private async System.Threading.Tasks.Task PasteFromClipboardAsync(TextBox textBox)
     {
         var dataPackageView = Clipboard.GetContent();
-        if (dataPackageView.Contains(StandardDataFormats.Text))
+        if (!dataPackageView.Contains(StandardDataFormats.Text))
         {
-            try
+            return;
+        }
+
+        try
+        {
+            string text = await dataPackageView.GetTextAsync();
+            if (string.IsNullOrWhiteSpace(text))
             {
-                string text = await dataPackageView.GetTextAsync();
-                if (!string.IsNullOrWhiteSpace(text))
+                return;
+            }
+
+            text = text.Trim();
+            string? formattedTime = NormalizeTimeText(text);
+            if (formattedTime is null)
+            {
+                _logService.Write(
+                    "timing_calculator.clipboard_rejected",
+                    LogLevel.Debug,
+                    LogStatus.Skipped,
+                    "В буфере обмена обнаружено значение, не соответствующее формату времени",
+                    null,
+                    "TimingCalculatorPage",
+                    properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                    {
+                        ["Stage"] = "clipboard",
+                        ["ErrorCode"] = "invalid-time-format"
+                    });
+                return;
+            }
+
+            _logService.Write(
+                "timing_calculator.clipboard_applied",
+                LogLevel.Debug,
+                LogStatus.Changed,
+                "Время вставлено из буфера обмена",
+                null,
+                "TimingCalculatorPage",
+                properties: new Dictionary<string, object?>(StringComparer.Ordinal)
                 {
-                    text = text.Trim();
-                    string? formattedTime = NormalizeTimeText(text);
-                    if (formattedTime != null)
-                    {
-                        _logService.Info($"Вставка времени из буфера: '{text}' -> '{formattedTime}'", "TimingCalculatorPage");
-                        _isUpdatingText = true;
-                        textBox.Text = formattedTime;
-                        _isUpdatingText = false;
-                        UpdateCalculation();
-                    }
-                    else
-                    {
-                        _logService.Warn($"Некорректный формат времени в буфере обмена для вставки: '{text}'", "TimingCalculatorPage");
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                _logService.Exception(ex, "Ошибка при чтении из буфера обмена", "TimingCalculatorPage");
-            }
+                    ["Stage"] = "clipboard",
+                    ["Changed"] = true
+                });
+
+            _isUpdatingText = true;
+            textBox.Text = formattedTime;
+            _isUpdatingText = false;
+            UpdateCalculation();
+        }
+        catch (Exception ex)
+        {
+            _logService.Write(
+                "timing_calculator.clipboard_failed",
+                LogLevel.Warning,
+                LogStatus.PartiallySucceeded,
+                "Не удалось прочитать значение времени из буфера обмена",
+                ex,
+                "TimingCalculatorPage",
+                properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["Stage"] = "clipboard",
+                    ["ErrorCode"] = "clipboard-read-failed"
+                });
         }
     }
 
@@ -208,7 +264,7 @@ public sealed partial class TimingCalculatorPage : Page
     /// </summary>
     private void ResetButton_Click(object sender, RoutedEventArgs e)
     {
-        _logService.Info("Сброс полей калькулятора сдвига", "TimingCalculatorPage");
+        _logService.Write("ui.timing_calculator.reset", LogLevel.Debug, LogStatus.Changed, "Поля калькулятора сдвига сброшены", source: SourceName);
         TimeBeforeBox.Text = DefaultTime;
         TimeAfterBox.Text = DefaultTime;
         TimeBeforeBox.Focus(FocusState.Programmatic);
@@ -227,7 +283,13 @@ public sealed partial class TimingCalculatorPage : Page
             var package = new DataPackage();
             package.SetText(textToCopy);
             Clipboard.SetContent(package);
-            _logService.Info($"Результат сдвига '{textToCopy}' скопирован в буфер обмена", "TimingCalculatorPage");
+            _logService.Write(
+                "ui.clipboard.copied",
+                LogLevel.Debug,
+                LogStatus.Succeeded,
+                "Результат расчёта сдвига скопирован в буфер обмена",
+                source: SourceName,
+                properties: LogProps.Create("Count", textToCopy.Length));
         }
     }
 
@@ -249,7 +311,13 @@ public sealed partial class TimingCalculatorPage : Page
             var package = new DataPackage();
             package.SetText(cleanMs);
             Clipboard.SetContent(package);
-            _logService.Info($"Сдвиг в миллисекундах '{cleanMs}' скопирован в буфер обмена", "TimingCalculatorPage");
+            _logService.Write(
+                "ui.clipboard.copied",
+                LogLevel.Debug,
+                LogStatus.Succeeded,
+                "Значение сдвига в миллисекундах скопировано в буфер обмена",
+                source: SourceName,
+                properties: LogProps.Create("Count", cleanMs.Length));
         }
     }
 
@@ -339,11 +407,11 @@ public sealed partial class TimingCalculatorPage : Page
             if (caretIndex < MaskLength)
             {
                 char digitChar = GetDigitChar(e.Key);
-                
+
                 // Перезаписываем символ в текущей позиции
                 char[] chars = currentText.ToCharArray();
                 chars[caretIndex] = digitChar;
-                
+
                 _isUpdatingText = true;
                 textBox.Text = new string(chars);
                 _isUpdatingText = false;
@@ -377,7 +445,7 @@ public sealed partial class TimingCalculatorPage : Page
                 {
                     char[] chars = currentText.ToCharArray();
                     chars[prevCaret] = '0';
-                    
+
                     _isUpdatingText = true;
                     textBox.Text = new string(chars);
                     _isUpdatingText = false;

@@ -1,18 +1,23 @@
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+
+using KTools_App.Core;
+using KTools_App.Diagnostics;
+using KTools_App.Scripts;
+using KTools_App.Services.Contracts;
+
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Storage.Pickers;
+
 using WinRT.Interop;
-using KTools_App.Core;
-using KTools_App.Services.Contracts;
-using KTools_App.Scripts;
 
 namespace KTools_App.UI.Controls;
 
@@ -23,6 +28,7 @@ namespace KTools_App.UI.Controls;
 /// </summary>
 public sealed partial class AudioTransplantControl : UserControl
 {
+    private const string SourceName = nameof(AudioTransplantControl);
     private readonly IMediaProbeService _mediaProbeService;
     private readonly ISettingsManager _settingsManager;
     private readonly ILogService _logService;
@@ -298,7 +304,16 @@ public sealed partial class AudioTransplantControl : UserControl
         }
         catch (Exception ex)
         {
-            _logService.Exception(ex, $"Ошибка сканирования дорожек источника '{filePath}'", "AudioTransplantControl");
+            _logService.Write(
+                "ui.audio_transplant.source_scan_failed",
+                LogLevel.Warning,
+                LogStatus.Failed,
+                $"Дорожки источника '{LogProps.FileName(filePath)}' просканировать не удалось, выбрана дорожка по умолчанию",
+                ex,
+                SourceName,
+                properties: LogProps
+                    .Create("InputName", LogProps.FileName(filePath))
+                    .With("ErrorCode", "SOURCE_SCAN_FAILED"));
             SourceTrackComboBox.Items.Add(new ComboBoxItem { Content = "[Дорожка #0] Исходное аудио", Tag = 0 });
             SourceTrackComboBox.SelectedIndex = 0;
         }
@@ -368,7 +383,16 @@ public sealed partial class AudioTransplantControl : UserControl
         }
         catch (Exception ex)
         {
-            _logService.Exception(ex, $"Ошибка сканирования дорожек целевого видео '{filePath}'", "AudioTransplantControl");
+            _logService.Write(
+                "ui.audio_transplant.target_scan_failed",
+                LogLevel.Warning,
+                LogStatus.Failed,
+                $"Дорожки целевого видео '{LogProps.FileName(filePath)}' просканировать не удалось, выбрана дорожка по умолчанию",
+                ex,
+                SourceName,
+                properties: LogProps
+                    .Create("InputName", LogProps.FileName(filePath))
+                    .With("ErrorCode", "TARGET_SCAN_FAILED"));
             DestTrackComboBox.Items.Add(new ComboBoxItem { Content = "[Дорожка #0] Основное аудио", Tag = 0 });
             DestTrackComboBox.SelectedIndex = 0;
         }

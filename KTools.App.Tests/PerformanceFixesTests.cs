@@ -258,20 +258,19 @@ public class PerformanceFixesTests
     }
 
     /// <summary>
-    /// AddLog не превышает лимит в 2000 записей при динамическом потоке.
+    /// Динамический поток событий не превышает лимит в 2000 записей.
     /// </summary>
     [TestMethod]
-    public void AddLog_DynamicStream_KeepsLastTwoThousand()
+    public void AddLogs_DynamicStream_KeepsLastTwoThousand()
     {
         var logVm = new LogViewModel(
             _logServiceMock.Object,
             _settingsManagerMock.Object,
             _pathManagerMock.Object);
 
-        for (int i = 0; i < 2010; i++)
-        {
-            logVm.AddLog($"msg_{i}", LogLevel.Info);
-        }
+        logVm.AddLogs(Enumerable.Range(0, 2010)
+            .Select(i => new Models.LogItem { Message = $"msg_{i}", Level = LogLevel.Info })
+            .ToArray());
 
         logVm.Logs.Should().HaveCount(2000);
         ((Models.LogItem)logVm.Logs[0]).Message.Should().Be("msg_10");

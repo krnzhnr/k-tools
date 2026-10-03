@@ -1,11 +1,14 @@
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
+
 using CommunityToolkit.Mvvm.ComponentModel;
+
 using KTools_App.Core;
+using KTools_App.Diagnostics;
 using KTools_App.Services.Contracts;
 using KTools_App.UI.Controls;
 
@@ -17,6 +20,7 @@ namespace KTools_App.ViewModels;
 /// </summary>
 public sealed partial class TrackSelectionViewModel : ThreadSafeViewModel
 {
+    private const string SourceName = nameof(TrackSelectionViewModel);
     private readonly ILogService _logService;
 
     [ObservableProperty]
@@ -91,7 +95,7 @@ public sealed partial class TrackSelectionViewModel : ThreadSafeViewModel
                 {
                     string lang = !string.IsNullOrEmpty(track.Language) && track.Language != "und" ? track.Language.ToUpperInvariant() : "Неизвестный";
                     string codec = !string.IsNullOrEmpty(track.Codec) ? track.Codec.ToUpperInvariant() : "Неизвестный";
-                    
+
                     DynamicOptions["video"]["language"].Add(lang);
                     DynamicOptions["video"]["codec"].Add(codec);
                     if (!string.IsNullOrEmpty(track.Resolution))
@@ -151,11 +155,28 @@ public sealed partial class TrackSelectionViewModel : ThreadSafeViewModel
             // Автоматически очищаем устаревшие правила фильтров, которых нет в новом наборе файлов
             PruneObsoleteRules();
 
-            _logService.Info("Сбор уникальных свойств медиадорожек для фильтрации успешно завершен во ViewModel", "TrackSelectionViewModel");
+            _logService.Write(
+                "ui.track_filter.options_refreshed",
+                LogLevel.Debug,
+                LogStatus.Succeeded,
+                "Набор доступных свойств дорожек для фильтрации обновлён",
+                source: SourceName,
+                properties: LogProps
+                    .Create("Count", DynamicOptions.Count)
+                    .With("Group", "TrackFilter"));
         }
         catch (Exception ex)
         {
-            _logService.Exception(ex, "Ошибка при сборе уникальных свойств дорожек для фильтрации во ViewModel", "TrackSelectionViewModel");
+            _logService.Write(
+                "ui.track_filter.options_failed",
+                LogLevel.Warning,
+                LogStatus.Failed,
+                "Набор доступных свойств дорожек для фильтрации не обновлён",
+                ex,
+                SourceName,
+                properties: LogProps
+                    .Create("Group", "TrackFilter")
+                    .With("ErrorCode", "TRACK_FILTER_OPTIONS_FAILED"));
         }
     }
 

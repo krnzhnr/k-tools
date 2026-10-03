@@ -6,7 +6,9 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+
 using KTools_App.Core;
+using KTools_App.Diagnostics;
 using KTools_App.Services.Contracts;
 
 namespace KTools_App.Infrastructure;
@@ -18,6 +20,8 @@ namespace KTools_App.Infrastructure;
 /// </summary>
 public sealed class DeeRunner : AbstractProcessRunner
 {
+    private const string SourceName = nameof(DeeRunner);
+
     [DllImport("kernel32.dll", EntryPoint = "GetShortPathNameW", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern uint GetShortPathName(string lpszLongPath, StringBuilder lpszShortPath, uint cchBuffer);
 
@@ -45,9 +49,7 @@ public sealed class DeeRunner : AbstractProcessRunner
             uint result = GetShortPathName(path, sb, (uint)sb.Capacity);
             if (result > 0)
             {
-                string shortPath = sb.ToString();
-                logService.DebugLog($"Путь преобразован в формат 8.3: '{path}' -> '{shortPath}'", "DeeRunner");
-                return shortPath;
+                return sb.ToString();
             }
 
             if (result > sb.Capacity)
@@ -56,17 +58,38 @@ public sealed class DeeRunner : AbstractProcessRunner
                 result = GetShortPathName(path, sb, result);
                 if (result > 0)
                 {
-                    string shortPath = sb.ToString();
-                    logService.DebugLog($"Путь преобразован в формат 8.3 с увеличенным буфером: '{path}' -> '{shortPath}'", "DeeRunner");
-                    return shortPath;
+                    return sb.ToString();
                 }
             }
 
-            logService.Warn($"Не удалось получить короткий путь для '{path}'. Код ошибки: {Marshal.GetLastWin32Error()}", "DeeRunner");
+            logService.Write(
+                ProcessEventIds.PostconditionFailed,
+                LogLevel.Debug,
+                LogStatus.PartiallySucceeded,
+                "Не удалось получить короткий путь 8.3 для временного файла DEE",
+                null,
+                "DeeRunner",
+                context: ProcessExecutionContext.NewOperation("dee").ToLogContext(),
+                properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["Stage"] = "short_path",
+                    ["ErrorCode"] = Marshal.GetLastWin32Error().ToString(System.Globalization.CultureInfo.InvariantCulture)
+                });
         }
         catch (Exception ex)
         {
-            logService.Exception(ex, $"Исключение при получении короткого пути для '{path}'", "DeeRunner");
+            logService.Write(
+                ProcessEventIds.PostconditionFailed,
+                LogLevel.Warning,
+                LogStatus.PartiallySucceeded,
+                "Исключение при получении короткого пути 8.3 для временного файла DEE",
+                ex,
+                "DeeRunner",
+                context: ProcessExecutionContext.NewOperation("dee").ToLogContext(),
+                properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["Stage"] = "short_path"
+                });
         }
 
         return path;
@@ -101,7 +124,7 @@ public sealed class DeeRunner : AbstractProcessRunner
     /// <param name="dialnorm">Значение нормализации диалогов (по умолчанию -31).</param>
     /// <param name="cancellationToken">Токен отмены задачи.</param>
     /// <returns>True при успешном завершении, иначе false.</returns>
-    public async Task<bool> RunAsync(
+    public async Task<ProcessResult> RunAsync(
         string inputPath,
         string outputPath,
         string bitrate,
@@ -110,9 +133,14 @@ public sealed class DeeRunner : AbstractProcessRunner
         string drcProfile = "film_standard",
         int dialnorm = -31,
         Action<double>? onProgress = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        ProcessExecutionContext? context = null)
     {
-        Log.Info($"Начало кодирования Dolby ({outputFormat.ToUpper()}) для файла: '{Path.GetFileName(inputPath)}'", "DeeRunner");
+        string inputName = Path.GetFileName(inputPath);
+        ProcessExecutionContext executionContext = (context ?? ProcessExecutionContext.NewOperation("dee"))
+            .WithExpectedArtifact(outputPath);
+
+        Log.Write(ProcessEventIds.Started, LogLevel.Info, LogStatus.Running, $"Запущено кодирование Dolby в формате {outputFormat.ToUpperInvariant()} для файла '{LogProps.FileName(inputName)}'", source: SourceName, context: executionContext.ToLogContext(), properties: LogProps.Create("Tool", "DEE").With("InputName", LogProps.FileName(inputName)).With("Container", outputFormat.ToUpperInvariant()));
 
         // Создаем изолированную временную директорию для работы
         string tempDir = Path.Combine(PathManager.GetSettingsDirectory(), "temp_dee_" + Guid.NewGuid().ToString("N"));
@@ -122,8 +150,23 @@ public sealed class DeeRunner : AbstractProcessRunner
         }
         catch (Exception ex)
         {
-            Log.Error($"Не удалось создать временную директорию для DEE: {ex.Message}", "DeeRunner");
-            return false;
+            Log.Write(
+                "dee.temp_directory_failed",
+                LogLevel.Error,
+                LogStatus.Failed,
+                "Не удалось создать временную директорию для DEE",
+                ex,
+                "DeeRunner",
+                executionContext.ToLogContext(),
+                new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["ErrorCode"] = "temp-directory-failed"
+                });
+            return ProcessResult.NotStarted(
+                executionContext,
+                "temp-directory-failed",
+                "Не удалось создать временную директорию для DEE",
+                ex);
         }
 
         string tempWavPath = Path.Combine(tempDir, "input.wav");
@@ -132,18 +175,27 @@ public sealed class DeeRunner : AbstractProcessRunner
         try
         {
             // Шаг 1. Конвертация исходного аудио во временный PCM WAV с помощью FFmpeg
-            int inputChannels = await GetInputChannelsAsync(inputPath);
-            
+            int inputChannels = await GetInputChannelsAsync(inputPath, executionContext);
+
             // Если выходное число каналов не задано, наследуем количество входных
             int targetChannels = downmixChannels > 0 ? downmixChannels : inputChannels;
-            
+
             // Защита от выхода за рамки ограничений Dolby
             if (targetChannels != 1 && targetChannels != 2 && targetChannels != 6 && targetChannels != 8)
             {
                 targetChannels = 2; // По умолчанию стерео
             }
 
-            Log.Info($"Раскодирование входного файла во временный WAV ({targetChannels} каналов)...", "DeeRunner");
+            Log.Write(
+                ProcessEventIds.Launched,
+                LogLevel.Debug,
+                LogStatus.Running,
+                $"Входной файл раскодируется во временный WAV, целевых каналов: {targetChannels}",
+                source: SourceName,
+                context: executionContext.ToLogContext(),
+                properties: LogProps
+                    .Create("Tool", "DEE")
+                    .With("AudioChannels", targetChannels));
 
             var ffmpegArgs = new List<string>();
             if (targetChannels == 2)
@@ -167,19 +219,49 @@ public sealed class DeeRunner : AbstractProcessRunner
                 };
             }
 
-            bool decodeSuccess = await _ffmpegRunner.RunAsync(
+            ProcessResult decodeResult = await _ffmpegRunner.RunAsync(
                 inputPath,
                 tempWavPath,
                 extraArgs: ffmpegArgs,
                 overwrite: true,
                 onProgress: decodeProgressCallback,
-                cancellationToken: cancellationToken
-            );
+                cancellationToken: cancellationToken,
+                context: executionContext);
 
-            if (!decodeSuccess || !File.Exists(tempWavPath))
+            if (!decodeResult.IsSuccess || !File.Exists(tempWavPath))
             {
-                Log.Error("Не удалось раскодировать исходный файл во временный WAV", "DeeRunner");
-                return false;
+                Dictionary<string, object?> decodeProperties = decodeResult.ToLogProperties();
+                Log.Write(
+                    "dee.decode_failed",
+                    LogLevel.Error,
+                    LogStatus.Failed,
+                    "Не удалось раскодировать исходный файл во временный WAV",
+                    null,
+                    "DeeRunner",
+                    decodeResult.Context.ToLogContext().WithProcess(decodeResult.ProcessId),
+                    decodeProperties.With("ErrorCode", decodeResult.ErrorCode ?? "DEE_DECODE_FAILED"));
+                return decodeResult.IsCancelled
+                    ? ProcessResult.Cancelled(
+                        executionContext,
+                        ProcessResult.MessageCancelled,
+                        decodeResult.ProcessId,
+                        decodeResult.Pid,
+                        decodeResult.ExitCode,
+                        decodeResult.DurationMs,
+                        terminationVerified: decodeResult.TerminationVerified)
+                    : ProcessResult.Failed(
+                        executionContext,
+                        ProcessResult.ErrorArtifactMissing,
+                        "Не удалось раскодировать исходный файл во временный WAV",
+                        decodeResult.ProcessId,
+                        decodeResult.Pid,
+                        decodeResult.ExitCode,
+                        decodeResult.DurationMs,
+                        false,
+                        decodeResult.OutputTail,
+                        decodeResult.OutputTruncated,
+                        decodeResult.WarningCount,
+                        decodeResult.ErrorLineCount);
             }
 
             // Шаг 2. Генерация XML-конфигурации для Dolby Encoding Engine
@@ -190,18 +272,27 @@ public sealed class DeeRunner : AbstractProcessRunner
             }
 
             string xmlContent = GenerateXmlConfig(
-                tempWavPath, 
-                outputPath, 
-                encoderMode, 
-                bitrate, 
-                targetChannels, 
-                drcProfile, 
-                dialnorm, 
+                tempWavPath,
+                outputPath,
+                encoderMode,
+                bitrate,
+                targetChannels,
+                drcProfile,
+                dialnorm,
                 tempDir
             );
 
             await File.WriteAllTextAsync(tempXmlPath, xmlContent, cancellationToken);
-            Log.DebugLog("XML-конфигурация для Dolby Encoding Engine сгенерирована", "DeeRunner");
+            Log.Write(
+                "dee.config.generated",
+                LogLevel.Debug,
+                LogStatus.Succeeded,
+                "XML-конфигурация Dolby Encoding Engine сформирована",
+                source: SourceName,
+                context: executionContext.ToLogContext(),
+                properties: LogProps
+                    .Create("Tool", "DEE")
+                    .With("Container", "xml"));
 
             // Шаг 3. Запуск dee.exe с сгенерированным XML
             string shortXmlPath = GetShortPath(tempXmlPath, Log);
@@ -214,75 +305,99 @@ public sealed class DeeRunner : AbstractProcessRunner
                 arguments,
                 onOutputLine: line =>
                 {
-                    Log.DebugLog($"[DEE STDOUT] {line}", "DeeRunner");
-
-                    if (line.Contains("Step: measuring"))
+                    if (line.Contains("Step: measuring", StringComparison.Ordinal))
                     {
                         currentStep = "measuring";
                     }
-                    else if (line.Contains("Step: encoding"))
+                    else if (line.Contains("Step: encoding", StringComparison.Ordinal))
                     {
                         currentStep = "encoding";
                     }
 
-                    if (onProgress != null && line.Contains("Stage progress:"))
+                    if (onProgress is null || !line.Contains("Stage progress:", StringComparison.Ordinal))
                     {
-                        try
+                        return;
+                    }
+
+                    try
+                    {
+                        int idx = line.IndexOf("Stage progress:", StringComparison.Ordinal);
+                        string part = line.Substring(idx + "Stage progress:".Length).Trim();
+                        int commaIdx = part.IndexOf(',');
+                        if (commaIdx != -1)
                         {
-                            int idx = line.IndexOf("Stage progress:");
-                            string part = line.Substring(idx + "Stage progress:".Length).Trim();
-                            int commaIdx = part.IndexOf(',');
-                            if (commaIdx != -1)
-                            {
-                                part = part.Substring(0, commaIdx).Trim();
-                            }
-
-                            if (double.TryParse(part, System.Globalization.CultureInfo.InvariantCulture, out double stageProgress))
-                            {
-                                double progressVal = 30.0;
-                                if (currentStep == "measuring")
-                                {
-                                    double norm = (stageProgress - 25.0) / 75.0;
-                                    if (norm < 0) norm = 0;
-                                    if (norm > 1) norm = 1;
-                                    progressVal = 30.0 + (norm * 10.0);
-                                }
-                                else if (currentStep == "encoding")
-                                {
-                                    double norm = (stageProgress - 25.0) / 75.0;
-                                    if (norm < 0) norm = 0;
-                                    if (norm > 1) norm = 1;
-                                    progressVal = 40.0 + (norm * 60.0);
-                                }
-                                else
-                                {
-                                    progressVal = 30.0 + (stageProgress * 0.05); // В начале от 30% до 31.25%
-                                }
-
-                                onProgress(progressVal);
-                            }
+                            part = part.Substring(0, commaIdx).Trim();
                         }
-                        catch (Exception ex)
+
+                        if (double.TryParse(part, System.Globalization.CultureInfo.InvariantCulture, out double stageProgress))
                         {
-                            Log.Exception(ex, "Ошибка расчета прогресса DEE", "DeeRunner");
+                            double progressVal;
+                            if (currentStep == "measuring")
+                            {
+                                double norm = (stageProgress - 25.0) / 75.0;
+                                if (norm < 0) norm = 0;
+                                if (norm > 1) norm = 1;
+                                progressVal = 30.0 + (norm * 10.0);
+                            }
+                            else if (currentStep == "encoding")
+                            {
+                                double norm = (stageProgress - 25.0) / 75.0;
+                                if (norm < 0) norm = 0;
+                                if (norm > 1) norm = 1;
+                                progressVal = 40.0 + (norm * 60.0);
+                            }
+                            else
+                            {
+                                progressVal = 30.0 + (stageProgress * 0.05); // В начале от 30% до 31.25%
+                            }
+
+                            onProgress(progressVal);
                         }
                     }
+                    catch (Exception ex)
+                    {
+                        Log.Write(
+                            "dee.progress_failed",
+                            LogLevel.Debug,
+                            LogStatus.Failed,
+                            "Ошибка расчёта прогресса DEE по строке вывода",
+                            ex,
+                            "DeeRunner",
+                            executionContext.ToLogContext(),
+                            new Dictionary<string, object?>(StringComparer.Ordinal)
+                            {
+                                ["Stage"] = "progress"
+                            });
+                    }
                 },
-                onErrorLine: line => Log.DebugLog($"[DEE STDERR] {line}", "DeeRunner"),
-                cancellationToken: cancellationToken
-            );
+                onErrorLine: null,
+                cancellationToken: cancellationToken,
+                context: executionContext);
 
             if (!result.IsSuccess)
             {
-                Log.Error($"Ошибка при работе Dolby Encoding Engine (Код: {result.ExitCode})", "DeeRunner");
-                return false;
+                if (!result.IsCancelled)
+                {
+                    Dictionary<string, object?> encodeProperties = result.ToLogProperties();
+                    Log.Write(
+                        "dee.encode_failed",
+                        LogLevel.Error,
+                        LogStatus.Failed,
+                        $"Ошибка при работе Dolby Encoding Engine (код: {result.ExitCode?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "н/д"})",
+                        null,
+                        "DeeRunner",
+                        result.Context.ToLogContext().WithProcess(result.ProcessId),
+                        encodeProperties.With("ErrorCode", result.ErrorCode ?? "DEE_ENCODE_FAILED"));
+                }
+
+                return result;
             }
 
             // Dolby Encoding Engine генерирует файл в выходную папку с оригинальным именем WAV и расширением .ac3/.ec3
             // Нам нужно переименовать и перенести его по целевому пути outputPath
             string expectedExt = outputFormat.ToLowerInvariant() == "dd" ? ".ac3" : ".ec3";
             string generatedFile = Path.Combine(Path.GetDirectoryName(outputPath) ?? tempDir, Path.GetFileNameWithoutExtension(tempWavPath) + expectedExt);
-            
+
             // Если .ec3 не найден, проверяем альтернативное расширение .eac3
             if (!File.Exists(generatedFile) && expectedExt == ".ec3")
             {
@@ -295,18 +410,73 @@ public sealed class DeeRunner : AbstractProcessRunner
                 {
                     File.Delete(outputPath);
                 }
+
                 File.Move(generatedFile, outputPath);
-                Log.Info($"Кодирование Dolby успешно завершено: '{Path.GetFileName(outputPath)}'", "DeeRunner");
-                return true;
+                Log.Write(
+                ProcessEventIds.Exit,
+                LogLevel.Info,
+                LogStatus.Succeeded,
+                $"Кодирование Dolby завершено, результат: '{LogProps.FileName(outputPath)}'",
+                source: SourceName,
+                context: executionContext.ToLogContext(),
+                properties: LogProps
+                    .Create("Tool", "DEE")
+                    .With("OutputName", LogProps.FileName(outputPath))
+                    .With("ArtifactVerified", true));
+
+                return result with
+                {
+                    OutputExists = true
+                };
             }
 
-            Log.Error("Завершено без ошибок, но выходной файл не был найден на диске", "DeeRunner");
-            return false;
+            Log.Write(
+                ProcessEventIds.ArtifactMissing,
+                LogLevel.Error,
+                LogStatus.Failed,
+                "Завершено без ошибок, но выходной файл не был найден на диске",
+                null,
+                "DeeRunner",
+                result.Context.ToLogContext().WithProcess(result.ProcessId),
+                new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["ErrorCode"] = ProcessResult.ErrorArtifactMissing,
+                    ["OutputExists"] = false
+                });
+
+            return result with
+            {
+                Status = KTools_App.Diagnostics.LogStatus.Failed,
+                OutputExists = false,
+                ErrorCode = ProcessResult.ErrorArtifactMissing
+            };
+        }
+        catch (OperationCanceledException)
+        {
+            return ProcessResult.Cancelled(
+                executionContext,
+                ProcessResult.MessageCancelled,
+                terminationVerified: false);
         }
         catch (Exception ex)
         {
-            Log.Exception(ex, "Критический сбой при обработке Dolby аудио", "DeeRunner");
-            return false;
+            Log.Write(
+                "dee.critical_failure",
+                LogLevel.Error,
+                LogStatus.Failed,
+                "Критический сбой при обработке Dolby аудио",
+                ex,
+                "DeeRunner",
+                executionContext.ToLogContext(),
+                new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["ErrorCode"] = "dee-critical-failure"
+                });
+            return ProcessResult.Failed(
+                executionContext,
+                "dee-critical-failure",
+                "Критический сбой при обработке Dolby аудио",
+                exception: ex);
         }
         finally
         {
@@ -320,21 +490,33 @@ public sealed class DeeRunner : AbstractProcessRunner
             }
             catch (Exception ex)
             {
-                Log.DebugLog($"Не удалось удалить временную папку DEE: {ex.Message}", "DeeRunner");
+                Log.Write(
+                    "dee.cleanup_failed",
+                    LogLevel.Warning,
+                    LogStatus.PartiallySucceeded,
+                    "Не удалось удалить временную папку DEE",
+                    ex,
+                    "DeeRunner",
+                    executionContext.ToLogContext(),
+                    new Dictionary<string, object?>(StringComparer.Ordinal)
+                    {
+                        ["Stage"] = "cleanup",
+                        ["CleanupState"] = "failed"
+                    });
             }
         }
     }
 
-    private async Task<int> GetInputChannelsAsync(string filePath)
+    private async Task<int> GetInputChannelsAsync(string filePath, ProcessExecutionContext? context)
     {
         try
         {
-            var info = await _ffmpegRunner.GetVideoInfoAsync(filePath);
+            var info = await _ffmpegRunner.GetVideoInfoAsync(filePath, context);
             if (info != null && info.RootElement.TryGetProperty("streams", out var streamsProp))
             {
                 foreach (var stream in streamsProp.EnumerateArray())
                 {
-                    if (stream.TryGetProperty("codec_type", out var typeProp) && 
+                    if (stream.TryGetProperty("codec_type", out var typeProp) &&
                         typeProp.GetString() == "audio" &&
                         stream.TryGetProperty("channels", out var channelsProp))
                     {
@@ -343,10 +525,23 @@ public sealed class DeeRunner : AbstractProcessRunner
                 }
             }
         }
-        catch
+        catch (Exception ex)
         {
-            // В случае ошибок возвращаем стерео
+            Log.Write(
+                "dee.probe_failed",
+                LogLevel.Debug,
+                LogStatus.Skipped,
+                "Не удалось определить количество аудиоканалов, используется стерео по умолчанию",
+                ex,
+                "DeeRunner",
+                context?.ToLogContext(),
+                new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["Stage"] = "probe",
+                    ["InputName"] = Path.GetFileName(filePath)
+                });
         }
+
         return 2;
     }
 

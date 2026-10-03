@@ -1,9 +1,11 @@
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
 using System.Linq;
+
 using Microsoft.UI;
 using Microsoft.UI.Xaml.Controls;
+
 using Windows.UI;
 
 namespace KTools_App.Core;
@@ -181,18 +183,18 @@ public static class AppConstants
         public const string AudioConverterName = "Кодирование аудио";
         public const string AudioConverterDesc = "Перекодирование аудио в QAAC, AAC, FLAC, WAV, E-AC3, AC3 и др. с настройкой качества";
 
-        public const string AudioDownmixName = "Даунмикс в Stereo";
-        public const string AudioDownmixDesc = "Даунмикс 5.1/7.1 в Stereo 2.0 (DDP/DD) через Dolby Encoding Engine";
+        public const string AudioDownmixName = "Сведение в стерео";
+        public const string AudioDownmixDesc = "Сведение аудио 5.1/7.1 в стерео 2.0 (DDP/DD) с помощью Dolby Encoding Engine";
 
         public const string AudioSpeedName = "Изменение скорости аудио";
         public const string AudioSpeedDesc = "Изменение скорости/тона аудио (PAL ↔ NTSC) с помощью eac3to.";
 
         public const string AudioSplitName = "Разделение каналов";
-        public const string AudioSplitDesc = "Разделение многоканального аудио на моно-WAV файлы с опциональной склейкой в стереопары";
+        public const string AudioSplitDesc = "Разделение многоканального аудио на монофайлы WAV с опциональной склейкой в стереопары";
 
         // --- Видео скрипты ---
         public const string ContainerConvName = "Конвертация контейнера";
-        public const string ContainerConvDesc = "Перемещение видео/аудио потоков в другой контейнер без перекодирования";
+        public const string ContainerConvDesc = "Перемещение видео- и аудиодорожек в другой контейнер без перекодирования";
 
         public const string MetadataCleanName = "Очистка метаданных";
         public const string MetadataCleanDesc = "Удаление метаданных из видеофайлов с сохранением оригинального качества";
@@ -202,23 +204,23 @@ public static class AppConstants
 
         // --- Контейнерные скрипты ---
         public const string MuxerName = "Сборка MKV";
-        public const string MuxerDesc = "Сборка контейнера MKV из отдельных потоков видео, аудио и субтитров с сопоставлением по имени";
+        public const string MuxerDesc = "Сборка контейнера MKV из отдельных медиапотоков видео, аудио и субтитров с сопоставлением по имени";
 
-        public const string StreamMgrName = "Управление потоками";
-        public const string StreamMgrDesc = "Удаление или сохранение выбранных дорожек (видео, аудио, субтитры) в MKV и MP4 файлах.";
+        public const string StreamMgrName = "Управление дорожками";
+        public const string StreamMgrDesc = "Удаление или сохранение выбранных дорожек (видео, аудио, субтитры) в файлах MKV и MP4.";
 
-        public const string StreamReplName = "Замена потоков";
+        public const string StreamReplName = "Замена дорожек";
         public const string StreamReplDesc = "Заменяет дорожки в MKV/MP4 на внешние файлы (видео, аудио, субтитры).";
 
         public const string TrackExtrName = "Разборка контейнера";
-        public const string TrackExtrDesc = "Массовое извлечение потоков из контейнера с авто-именованием.";
+        public const string TrackExtrDesc = "Массовое извлечение медиапотоков из контейнера с авто-именованием.";
 
         // --- Скрипты субтитров ---
         public const string AssToVttName = "Конвертация субтитров";
         public const string AssToVttDesc = "Конвертация субтитров ASS/SSA/SRT в WebVTT с фильтрацией по актёрам и очисткой тегов.";
 
         public const string AudioShiftName = "Сдвиг аудио";
-        public const string AudioShiftDesc = "Изменение временного сдвига (задержки) аудиопотока с сохранением в Lossless-форматы FLAC/WAV.";
+        public const string AudioShiftDesc = "Изменение временного сдвига (задержки) аудиодорожки с сохранением в форматы без потерь (FLAC/WAV).";
 
         public const string AudioTransplantName = "Пересадка аудио";
         public const string AudioTransplantDesc = "Пересадка аудиодорожки в видеоконтейнер с визуальной синхронизацией по нативной осциллограмме (Win2D).";
@@ -512,12 +514,12 @@ public static class AppConstants
     }
 
     /// <summary>
-    /// Константы для обработки аудио через FFmpeg (даунмикс, ресемплинг).
+    /// Константы для обработки аудио через FFmpeg (сведение в стерео, ресемплинг).
     /// </summary>
     public static class FFmpegAudio
     {
         /// <summary>
-        /// Фильтр pan для даунмикса многоканального аудио в стерео с коэффициентами HandBrake.
+        /// Фильтр pan для сведения многоканального аудио в стерео с коэффициентами HandBrake.
         /// Центральный и окружающие каналы подмешиваются с коэффициентом 0.7071 (-3 дБ), LFE отбрасывается.
         /// Использование фильтра pan обходит автоматическую нормализацию матрицы (rematrix_maxval) в libswresample,
         /// сохраняя оригинальную громкость фронтальных каналов.

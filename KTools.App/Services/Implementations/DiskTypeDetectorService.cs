@@ -1,8 +1,11 @@
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
 using System;
 using System.Collections.Concurrent;
 using System.IO;
 using System.Runtime.InteropServices;
+
+using KTools_App.Core;
+using KTools_App.Diagnostics;
 using KTools_App.Services.Contracts;
 
 namespace KTools_App.Services.Implementations;
@@ -14,6 +17,8 @@ namespace KTools_App.Services.Implementations;
 /// </summary>
 public sealed class DiskTypeDetectorService : IDiskTypeDetectorService
 {
+    private const string SourceName = nameof(DiskTypeDetectorService);
+
     private readonly ILogService _logService;
     private readonly ConcurrentDictionary<string, DriveMediaType> _cache = new(StringComparer.OrdinalIgnoreCase);
 
@@ -36,7 +41,15 @@ public sealed class DiskTypeDetectorService : IDiskTypeDetectorService
 
         DriveMediaType type = DetectDriveTypeWin32(root);
         _cache[root] = type;
-        _logService.Info($"Определен тип накопителя для диск-корня '{root}': {type}", "DiskTypeDetectorService");
+        _logService.Write(
+            "storage.drive_type.detected",
+            LogLevel.Debug,
+            type == DriveMediaType.Unknown ? LogStatus.Skipped : LogStatus.Succeeded,
+            $"Тип накопителя для диска определён: {type}",
+            source: SourceName,
+            properties: LogProps
+                .Create("FileName", LogProps.RootName(root))
+                .With("Container", type.ToString()));
         return type;
     }
 
@@ -93,14 +106,14 @@ public sealed class DiskTypeDetectorService : IDiskTypeDetectorService
                 if (success && bytesReturned > 0)
                 {
                     STORAGE_DEVICE_DESCRIPTOR descriptor = Marshal.PtrToStructure<STORAGE_DEVICE_DESCRIPTOR>(bufPtr);
-                    
+
                     // Запрос Seek Penalty (HDD имеет задержку позиционирования, SSD - 0)
                     STORAGE_PROPERTY_QUERY seekQuery = new()
                     {
                         PropertyId = StorageDeviceSeekPenaltyProperty,
                         QueryType = PropertyStandardQuery
                     };
-                    
+
                     IntPtr seekQueryPtr = Marshal.AllocHGlobal(Marshal.SizeOf(seekQuery));
                     Marshal.StructureToPtr(seekQuery, seekQueryPtr, false);
 
@@ -140,7 +153,16 @@ public sealed class DiskTypeDetectorService : IDiskTypeDetectorService
         }
         catch (Exception ex)
         {
-            _logService.Exception(ex, $"Ошибка Win32 определения типа диска для '{driveRoot}'", "DiskTypeDetectorService");
+            _logService.Write(
+                "storage.drive_type.query_failed",
+                LogLevel.Debug,
+                LogStatus.Skipped,
+                "Тип накопителя через Win32 определить не удалось",
+                ex,
+                SourceName,
+                properties: LogProps
+                    .Create("FileName", LogProps.RootName(driveRoot))
+                    .With("ErrorCode", "DRIVE_TYPE_QUERY_FAILED"));
         }
 
         return DriveMediaType.Unknown;

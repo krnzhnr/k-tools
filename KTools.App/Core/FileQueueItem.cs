@@ -1,14 +1,17 @@
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
 using System;
 using System.ComponentModel;
 using System.IO;
 using System.Runtime.CompilerServices;
-using Microsoft.UI.Xaml;
+
+using KTools_App.Models;
+using KTools_App.Services.Contracts;
+
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Dispatching;
+using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
-using Microsoft.Extensions.DependencyInjection;
-using KTools_App.Services.Contracts;
 
 namespace KTools_App.Core;
 
@@ -19,21 +22,23 @@ public enum FileProcessingState
 {
     /// <summary>Файл ожидает начала обработки.</summary>
     Pending,
-    
+
     /// <summary>Файл находится в процессе активной обработки.</summary>
     Processing,
-    
+
     /// <summary>Обработка файла успешно завершена.</summary>
     Completed,
-    
+
     /// <summary>Обработка файла была пропущена.</summary>
     Skipped,
-    
+
     /// <summary>Во время обработки файла возникла ошибка.</summary>
     Failed,
-    
+
     /// <summary>Обработка файла была отменена пользователем.</summary>
-    Cancelled
+    Cancelled,
+
+    PartiallySucceeded
 }
 
 /// <summary>
@@ -49,6 +54,8 @@ public sealed class FileQueueItem : INotifyPropertyChanged
     private bool _isProcessing;
     private MediaStructure? _mediaInfo;
     private string? _cropBadgeText;
+    private string? _executionItemId;
+    private ExecutionResult? _executionResult;
 
     public FileQueueItem(string filePath)
     {
@@ -62,10 +69,10 @@ public sealed class FileQueueItem : INotifyPropertyChanged
             _dispatcherQueue = null;
         }
         FilePath = filePath;
-        FileName = Path.GetFileName(filePath);
-        
+        FileName = Diagnostics.LogProps.FileName(filePath);
+
         bool isUrl = !string.IsNullOrEmpty(filePath) && (
-            filePath.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || 
+            filePath.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
             filePath.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
         );
 
@@ -90,6 +97,12 @@ public sealed class FileQueueItem : INotifyPropertyChanged
     public string FilePath { get; }
     public string FileName { get; }
     public string FileSizeStr { get; }
+
+    public string? ExecutionItemId => _executionItemId;
+
+    public ExecutionResult? ExecutionResult => _executionResult;
+
+    public ExecutionResult? LastResult => _executionResult;
 
     public MediaStructure? MediaInfo
     {
@@ -254,6 +267,7 @@ public sealed class FileQueueItem : INotifyPropertyChanged
         State == FileProcessingState.Completed ||
         State == FileProcessingState.Failed ||
         State == FileProcessingState.Cancelled ||
+        State == FileProcessingState.PartiallySucceeded ||
         State == FileProcessingState.Skipped);
 
     /// <summary>
@@ -264,6 +278,49 @@ public sealed class FileQueueItem : INotifyPropertyChanged
         Progress = 0.0;
         Status = "Ожидание";
         State = FileProcessingState.Pending;
+        _executionItemId = null;
+        _executionResult = null;
+    }
+
+    public void ApplyResult(ExecutionResult result)
+    {
+        ApplyExecutionResult(result);
+    }
+
+    public void ApplyExecutionResult(ExecutionResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        _executionResult = result;
+        _executionItemId = result.ItemId;
+        IsProcessing = false;
+
+        if (result.Status == ExecutionStatus.Succeeded)
+        {
+            Progress = 100.0;
+        }
+        else if (Progress >= 100.0)
+        {
+            Progress = 0.0;
+        }
+
+        State = result.Status switch
+        {
+            ExecutionStatus.Succeeded => FileProcessingState.Completed,
+            ExecutionStatus.PartiallySucceeded => FileProcessingState.PartiallySucceeded,
+            ExecutionStatus.Failed => FileProcessingState.Failed,
+            ExecutionStatus.Cancelled => FileProcessingState.Cancelled,
+            ExecutionStatus.Skipped => FileProcessingState.Skipped,
+            _ => FileProcessingState.Failed
+        };
+        Status = result.Status switch
+        {
+            ExecutionStatus.Succeeded => "Завершено",
+            ExecutionStatus.PartiallySucceeded => "Завершено частично",
+            ExecutionStatus.Failed => "Ошибка",
+            ExecutionStatus.Cancelled => "Отменено",
+            ExecutionStatus.Skipped => "Пропущено",
+            _ => "Ошибка"
+        };
     }
 
     /// <summary>
@@ -277,6 +334,7 @@ public sealed class FileQueueItem : INotifyPropertyChanged
             {
                 case FileProcessingState.Completed:
                 case FileProcessingState.Skipped:
+                case FileProcessingState.PartiallySucceeded:
                     return Symbol.Accept;
                 case FileProcessingState.Failed:
                 case FileProcessingState.Cancelled:

@@ -1,13 +1,18 @@
 // -*- coding: utf-8 -*-
 using System;
+
+using KTools_App.Core;
+using KTools_App.Diagnostics;
 using KTools_App.Services.Contracts;
+using KTools_App.ViewModels;
+
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Microsoft.Extensions.DependencyInjection;
+
 using Windows.Storage.Pickers;
+
 using WinRT.Interop;
-using KTools_App.ViewModels;
-using KTools_App.Core;
 
 namespace KTools_App.UI.Pages;
 
@@ -17,8 +22,17 @@ namespace KTools_App.UI.Pages;
 /// </summary>
 public partial class SettingsPage : Page
 {
+    private const string SourceName = nameof(SettingsPage);
+    private static readonly TimeSpan HelpFlyoutRebuildDelay = TimeSpan.FromMilliseconds(400);
+
     private ISettingsManager _settingsManager => App.Services.GetRequiredService<ISettingsManager>();
     private IDialogService _dialogService => App.Services.GetRequiredService<IDialogService>();
+    private ILogService _logService => App.Services.GetRequiredService<ILogService>();
+
+    private List<TemplateItem> _searchTemplates = new();
+    private List<TemplateItem> _replaceTemplates = new();
+    private DispatcherTimer? _helpFlyoutRebuildTimer;
+    private TextBlock? _commitStatusBlock;
 
     /// <summary>
     /// Предоставляет доступ к модели представления страницы настроек.
@@ -34,12 +48,87 @@ public partial class SettingsPage : Page
         InitializeComponent();
         this.Loaded += SettingsPage_Loaded;
 
+        AttachCommitStatusHost();
+        SubscribeToCommitStatus();
+        UpdateCommitStatus(ViewModel.LastCommitStatusText);
+
         // Сброс фокуса при клике на свободную область страницы
         this.PointerPressed += (s, e) =>
         {
             this.IsTabStop = true;
             this.Focus(FocusState.Programmatic);
         };
+
+        this.Unloaded += (s, e) => UnsubscribeFromCommitStatus();
+    }
+
+    private void SubscribeToCommitStatus()
+    {
+        ViewModel.PropertyChanged -= OnViewModelPropertyChanged;
+        ViewModel.PropertyChanged += OnViewModelPropertyChanged;
+    }
+
+    private void UnsubscribeFromCommitStatus()
+    {
+        ViewModel.PropertyChanged -= OnViewModelPropertyChanged;
+    }
+
+    /// <summary>
+    /// Размещает строку статуса фиксации настроек над первым разделом страницы.
+    /// Разметка XAML не меняется: строка добавляется в код-behind.
+    /// </summary>
+    private void AttachCommitStatusHost()
+    {
+        if (RootScrollViewer.Content is not StackPanel root)
+        {
+            return;
+        }
+
+        _commitStatusBlock = new TextBlock
+        {
+            FontSize = 12,
+            Margin = new Thickness(0, 0, 0, 4),
+            TextWrapping = TextWrapping.Wrap
+        };
+
+        root.Children.Insert(0, _commitStatusBlock);
+    }
+
+    private void OnViewModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(SettingsViewModel.LastCommitStatusText))
+        {
+            UpdateCommitStatus(ViewModel.LastCommitStatusText);
+        }
+    }
+
+    private void UpdateCommitStatus(string text)
+    {
+        if (_commitStatusBlock == null)
+        {
+            return;
+        }
+
+        _commitStatusBlock.Text = string.IsNullOrWhiteSpace(text)
+            ? string.Empty
+            : text;
+
+        if (ViewModel.LastCommitState == SettingCommitState.Failed &&
+            Application.Current.Resources.TryGetValue("SystemFillColorCriticalBrush", out object? failedBrush) &&
+            failedBrush is Microsoft.UI.Xaml.Media.Brush failure)
+        {
+            _commitStatusBlock.Foreground = failure;
+            return;
+        }
+
+        if (Application.Current.Resources.TryGetValue("TextFillColorSecondaryBrush", out object? secondaryBrush) &&
+            secondaryBrush is Microsoft.UI.Xaml.Media.Brush normal)
+        {
+            _commitStatusBlock.Foreground = normal;
+            return;
+        }
+
+        _commitStatusBlock.ClearValue(TextBlock.ForegroundProperty);
     }
 
     /// <summary>
@@ -70,7 +159,7 @@ public partial class SettingsPage : Page
         try
         {
             var folderPicker = new FolderPicker();
-            
+
             // Получаем HWND главного окна для интеграции COM
             var hwnd = WindowNative.GetWindowHandle(App.CurrentMainWindow);
             InitializeWithWindow.Initialize(folderPicker, hwnd);
@@ -81,14 +170,26 @@ public partial class SettingsPage : Page
             var folder = await folderPicker.PickSingleFolderAsync();
             if (folder != null)
             {
-                ViewModel.SetLogDirectory(folder.Path);
+                PersistenceResult result = ViewModel.SetLogDirectory(folder.Path);
+                if (result.IsSuccess && result.Persisted)
+                {
+                    await _dialogService.ShowMessageAsync(
+                        "Каталог сохранён",
+                        PersistenceSummaries.NextLaunchOnly);
+                    return;
+                }
+
+                await _dialogService.ShowMessageAsync(
+                    "Каталог не сохранён",
+                    $"{PersistenceSummaries.NextLaunchLost} Код ошибки: {result.ErrorCode}. {result.UserSummary}");
             }
         }
         catch (Exception ex)
         {
+            App.Services.GetRequiredService<ILogService>().Write("ui.settings.log_directory_picker_failed", LogLevel.Warning, LogStatus.Failed, "Каталог журналирования не выбран", ex, nameof(SettingsPage), properties: LogProps.Create("ErrorCode", "LOG_DIRECTORY_PICKER_FAILED"));
             await _dialogService.ShowMessageAsync(
                 "Ошибка выбора директории",
-                $"Не удалось открыть окно выбора папки: {ex.Message}");
+                "Не удалось открыть окно выбора папки. Подробности записаны в журнал.");
         }
     }
 
@@ -162,13 +263,15 @@ public partial class SettingsPage : Page
             }
             catch (Exception ex)
             {
-                App.Services.GetRequiredService<ILogService>().Exception(ex, "Ошибка при копировании переменной в буфер обмена", "SettingsPage");
+                App.Services.GetRequiredService<ILogService>().Write("ui.clipboard.write_failed", LogLevel.Warning, LogStatus.Failed, "Значение не скопировано в буфер обмена", ex, nameof(SettingsPage), properties: LogProps.Create("ErrorCode", "CLIPBOARD_WRITE_FAILED"));
             }
         }
     }
 
     private void SettingsPage_Loaded(object sender, RoutedEventArgs e)
     {
+        SubscribeToCommitStatus();
+        UpdateCommitStatus(ViewModel.LastCommitStatusText);
         LoadTemplatesUI();
     }
 
@@ -189,23 +292,63 @@ public partial class SettingsPage : Page
 
     private void LoadTemplatesUI()
     {
+        // Менеджер отдаёт глубокую копию: правки идут в локальный рабочий список,
+        // а в настройки попадают только явной фиксацией с проверкой PersistenceResult.
+        _searchTemplates = _settingsManager.SearchTemplates;
+        _replaceTemplates = _settingsManager.ReplaceTemplates;
+
         SearchTemplatesContainer.Children.Clear();
-        var searchList = _settingsManager.SearchTemplates;
-        foreach (var item in searchList)
+        foreach (TemplateItem item in _searchTemplates)
         {
             item.Description = CleanDescription(item.Description);
             SearchTemplatesContainer.Children.Add(CreateTemplateRow(item, true));
         }
 
         ReplaceTemplatesContainer.Children.Clear();
-        var replaceList = _settingsManager.ReplaceTemplates;
-        foreach (var item in replaceList)
+        foreach (TemplateItem item in _replaceTemplates)
         {
             item.Description = CleanDescription(item.Description);
             ReplaceTemplatesContainer.Children.Add(CreateTemplateRow(item, false));
         }
 
         UpdateHelpFlyouts();
+    }
+
+    /// <summary>
+    /// Фиксирует отложенные правки шаблонов одной записью и проверяет подтверждение диска.
+    /// Вызывается при потере фокуса полем шаблона, а не на каждый keystroke.
+    /// Дополнительный SaveSettings не выполняется: SetSetting сам фиксирует на диск
+    /// (или планирует одну отложенную запись), поэтому правка не вызывает двойной fsync.
+    /// </summary>
+    /// <param name="isSearch">Шаблоны поиска (true) или шаблоны замены (false).</param>
+    private void PersistTemplates(bool isSearch)
+    {
+        string key = isSearch ? "SearchTemplates" : "ReplaceTemplates";
+        List<TemplateItem> working = isSearch ? _searchTemplates : _replaceTemplates;
+
+        PersistenceResult result = PersistenceResult.Normalize(
+            _settingsManager.SetSetting("General", key, working));
+
+        if (result.IsSuccess && result.Persisted)
+        {
+            UpdateCommitStatus($"Шаблоны {(isSearch ? "поиска" : "замены")}: сохранено.");
+            return;
+        }
+
+        if (result.IsPending)
+        {
+            UpdateCommitStatus(
+                $"Шаблоны {(isSearch ? "поиска" : "замены")}: применено в текущем сеансе, запись на диск отложена.");
+            return;
+        }
+
+        ReportTemplateCommitFailure(key, result);
+    }
+
+    private void ReportTemplateCommitFailure(string key, PersistenceResult result)
+    {
+        UpdateCommitStatus($"Шаблоны не сохранены ({result.ErrorCode}). {result.UserSummary}");
+        _logService.Write(SettingsEventIds.DefaultsDeferred, LogLevel.Warning, LogStatus.Changed, $"Шаблон применён только в текущем сеансе: настройка {LogRedactor.CompactSafeToken(key)} не сохранена", source: SourceName, properties: LogProps.Create("Key", LogRedactor.CompactSafeToken(key)).With("Persisted", false).With("ErrorCode", result.ErrorCode));
     }
 
     private FrameworkElement CreateTemplateRow(TemplateItem item, bool isSearch)
@@ -226,9 +369,9 @@ public partial class SettingsPage : Page
         patternBox.TextChanged += (s, e) =>
         {
             item.Pattern = patternBox.Text;
-            _settingsManager.SaveSettings();
-            UpdateHelpFlyouts();
+            ScheduleHelpFlyoutRebuild();
         };
+        patternBox.LostFocus += (s, e) => PersistTemplates(isSearch);
         Grid.SetColumn(patternBox, 0);
         rowGrid.Children.Add(patternBox);
 
@@ -243,9 +386,9 @@ public partial class SettingsPage : Page
         descBox.TextChanged += (s, e) =>
         {
             item.Description = CleanDescription(descBox.Text);
-            _settingsManager.SaveSettings();
-            UpdateHelpFlyouts();
+            ScheduleHelpFlyoutRebuild();
         };
+        descBox.LostFocus += (s, e) => PersistTemplates(isSearch);
         Grid.SetColumn(descBox, 1);
         rowGrid.Children.Add(descBox);
 
@@ -262,16 +405,14 @@ public partial class SettingsPage : Page
         {
             if (isSearch)
             {
-                var list = _settingsManager.SearchTemplates;
-                list.Remove(item);
-                _settingsManager.SearchTemplates = list;
+                _searchTemplates.Remove(item);
             }
             else
             {
-                var list = _settingsManager.ReplaceTemplates;
-                list.Remove(item);
-                _settingsManager.ReplaceTemplates = list;
+                _replaceTemplates.Remove(item);
             }
+
+            PersistTemplates(isSearch);
             LoadTemplatesUI();
         };
         Grid.SetColumn(deleteBtn, 2);
@@ -282,18 +423,36 @@ public partial class SettingsPage : Page
 
     private void AddSearchTemplate_Click(object sender, RoutedEventArgs e)
     {
-        var list = _settingsManager.SearchTemplates;
-        list.Add(new TemplateItem { Pattern = "", Description = "" });
-        _settingsManager.SearchTemplates = list;
+        _searchTemplates.Add(new TemplateItem { Pattern = "", Description = "" });
+        PersistTemplates(true);
         LoadTemplatesUI();
     }
 
     private void AddReplaceTemplate_Click(object sender, RoutedEventArgs e)
     {
-        var list = _settingsManager.ReplaceTemplates;
-        list.Add(new TemplateItem { Pattern = "", Description = "" });
-        _settingsManager.ReplaceTemplates = list;
+        _replaceTemplates.Add(new TemplateItem { Pattern = "", Description = "" });
+        PersistTemplates(false);
         LoadTemplatesUI();
+    }
+
+    /// <summary>
+    /// Откладывает перестроение всплывающих подсказок: полное дерево кнопок
+    /// пересобирается один раз после паузы в наборе, а не на каждый keystroke.
+    /// </summary>
+    private void ScheduleHelpFlyoutRebuild()
+    {
+        if (_helpFlyoutRebuildTimer == null)
+        {
+            _helpFlyoutRebuildTimer = new DispatcherTimer { Interval = HelpFlyoutRebuildDelay };
+            _helpFlyoutRebuildTimer.Tick += (s, e) =>
+            {
+                _helpFlyoutRebuildTimer.Stop();
+                UpdateHelpFlyouts();
+            };
+        }
+
+        _helpFlyoutRebuildTimer.Stop();
+        _helpFlyoutRebuildTimer.Start();
     }
 
     private void UpdateHelpFlyouts()
@@ -331,8 +490,7 @@ public partial class SettingsPage : Page
         mainStack.Children.Add(title);
         mainStack.Children.Add(desc);
 
-        var variables = _settingsManager.SearchTemplates;
-        foreach (var item in variables)
+        foreach (TemplateItem item in _searchTemplates)
         {
             if (string.IsNullOrEmpty(item.Pattern)) continue;
 
@@ -449,8 +607,7 @@ public partial class SettingsPage : Page
         mainStack.Children.Add(title);
         mainStack.Children.Add(desc);
 
-        var variables = _settingsManager.ReplaceTemplates;
-        foreach (var item in variables)
+        foreach (TemplateItem item in _replaceTemplates)
         {
             if (string.IsNullOrEmpty(item.Pattern)) continue;
 

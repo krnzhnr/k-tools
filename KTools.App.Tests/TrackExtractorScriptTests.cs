@@ -8,6 +8,8 @@ using KTools_App.Scripts;
 using KTools_App.Core;
 using KTools_App.Services.Contracts;
 using KTools_App.Infrastructure;
+using KTools_App.Tests.TestHelpers;
+
 
 namespace KTools_App.Tests;
 
@@ -226,15 +228,15 @@ public class TrackExtractorScriptTests
                 It.IsAny<double>(),
                 It.IsAny<Action<ProgressInfo>>(),
                 It.IsAny<CancellationToken>()))
-            .Callback<string, string?, List<string>?, List<string>?, bool, double, Action<ProgressInfo>?, CancellationToken>(
-                (inP, outP, args, inArgs, ow, dur, prog, ct) =>
+            .Callback<string, string?, List<string>?, List<string>?, bool, double, Action<ProgressInfo>?, CancellationToken, ProcessExecutionContext>(
+                (inP, outP, args, inArgs, ow, dur, prog, ct, processContext)=>
                 {
                     if (args != null)
                     {
                         capturedExtraArgs = new List<string>(args);
                     }
                 })
-            .ReturnsAsync(true);
+            .ReturnsAsync(MockBuilders.ProcessSucceeded());
 
         var settings = new Dictionary<string, object>
         {
@@ -303,15 +305,15 @@ public class TrackExtractorScriptTests
                 It.IsAny<double>(),
                 It.IsAny<Action<ProgressInfo>>(),
                 It.IsAny<CancellationToken>()))
-            .Callback<string, string?, List<string>?, List<string>?, bool, double, Action<ProgressInfo>?, CancellationToken>(
-                (inP, outP, args, inArgs, ow, dur, prog, ct) =>
+            .Callback<string, string?, List<string>?, List<string>?, bool, double, Action<ProgressInfo>?, CancellationToken, ProcessExecutionContext>(
+                (inP, outP, args, inArgs, ow, dur, prog, ct, processContext)=>
                 {
                     if (args != null)
                     {
                         capturedExtraArgs = new List<string>(args);
                     }
                 })
-            .ReturnsAsync(true);
+            .ReturnsAsync(MockBuilders.ProcessSucceeded());
 
         var settings = new Dictionary<string, object>
         {

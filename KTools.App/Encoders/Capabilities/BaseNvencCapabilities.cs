@@ -1,8 +1,9 @@
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+
 using KTools_App.Core;
 using KTools_App.Models;
 
@@ -380,7 +381,7 @@ public abstract class BaseNvencCapabilities : INvencCodecCapabilities
                 SettingType.Checkbox,
                 temporalAqSupported,
                 "Видео:Расширенные параметры",
-                comment: temporalAqSupported 
+                comment: temporalAqSupported
                     ? "Временное адаптивное квантование (сохраняет детали в динамике)"
                     : "Не поддерживается вашей видеокартой / драйвером NVIDIA",
                 column: 1,

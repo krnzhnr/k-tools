@@ -1,4 +1,4 @@
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -6,8 +6,13 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+
 using KTools_App.Core;
+using KTools_App.Diagnostics;
+using KTools_App.Infrastructure;
+using KTools_App.Models;
 using KTools_App.Services.Contracts;
+using ExecutionContext = KTools_App.Models.ExecutionContext;
 
 namespace KTools_App.Scripts;
 
@@ -55,24 +60,44 @@ public sealed class MediaDownloaderScript : AbstractScript
     {
     }
 
-    public override async Task<List<string>> ExecuteSingleAsync(
+    public override async Task<ExecutionResult> ExecuteSingleAsync(
         string filePath,
         Dictionary<string, object> settings,
         string? outputPath,
         ScriptProgressCallback progressCallback,
         int fileIndex,
-        int totalCount)
+        int totalCount,
+        ExecutionContext context)
     {
-        ResetCancellation();
         var results = new List<string>();
+        string hostLabel = SafeHostLabel(filePath);
+        ProcessExecutionContext processContext = ProcessExecutionContext.FromOperation(
+            context.OperationId,
+            "yt-dlp",
+            context.ItemId);
 
-        if (string.IsNullOrWhiteSpace(filePath) || 
-            !Uri.TryCreate(filePath, UriKind.Absolute, out var validatedUri) || 
+        if (string.IsNullOrWhiteSpace(filePath) ||
+            !Uri.TryCreate(filePath, UriKind.Absolute, out var validatedUri) ||
             (validatedUri.Scheme != Uri.UriSchemeHttp && validatedUri.Scheme != Uri.UriSchemeHttps))
         {
-            _logService.Warn($"Отклонена невалидная ссылка для скачивания: '{filePath}'", "MediaDownloaderScript");
-            results.Add($"❌ Ошибка: Невалидный URL адрес '{filePath}' (поддерживаются только http:// и https://)");
-            return results;
+            WriteOutcome(
+                "media_download.rejected",
+                LogLevel.Warning,
+                LogStatus.Skipped,
+                "Отклонена невалидная ссылка для скачивания",
+                processContext,
+                null,
+                new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["ErrorCode"] = "invalid-url",
+                    ["Stage"] = "validate"
+                });
+            results.Add("Недопустимый URL: поддерживаются только http:// и https://");
+            return ExecutionResult.Failed(
+                context,
+                results,
+                errorCode: "invalid-url",
+                retryable: false);
         }
 
         // Настройки скрипта
@@ -89,12 +114,16 @@ public sealed class MediaDownloaderScript : AbstractScript
         string formatArgValue = queueItem?.SelectedFormat?.FormatArg ?? "bv*+ba/b";
         bool isAudioOnly = queueItem?.SelectedFormat?.IsAudioOnly ?? (formatArgValue == "ba" || formatArgValue == "ba/b");
         string subtitleCode = queueItem?.SelectedSubtitle?.Code ?? "none";
-        string displayName = queueItem?.DisplayName ?? filePath;
 
         // Определяем директорию сохранения
         string targetDir = string.IsNullOrEmpty(outputPath)
             ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads")
             : outputPath;
+        DateTime downloadStartedUtc = DateTime.UtcNow;
+        HashSet<string> filesBefore = Directory.Exists(targetDir)
+            ? Directory.GetFiles(targetDir, "*", SearchOption.TopDirectoryOnly)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase)
+            : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         if (!Directory.Exists(targetDir))
         {
@@ -104,28 +133,62 @@ public sealed class MediaDownloaderScript : AbstractScript
             }
             catch (Exception ex)
             {
-                results.Add($"❌ Ошибка создания папки сохранения: {ex.Message}");
-                return results;
+                WriteOutcome(
+                    "media_download.output_directory_failed",
+                    LogLevel.Error,
+                    LogStatus.Failed,
+                    "Не удалось создать папку сохранения",
+                    processContext,
+                    ex,
+                    new Dictionary<string, object?>(StringComparer.Ordinal)
+                    {
+                        ["ErrorCode"] = "output-directory-failed",
+                        ["HostLabel"] = hostLabel,
+                        ["Stage"] = "prepare"
+                    });
+                results.Add("Ошибка создания папки сохранения");
+                return ExecutionResult.FromException(
+                    context,
+                    ex,
+                    results,
+                    errorCode: "output-directory-failed",
+                    cleanupState: CleanupState.NotStarted);
             }
         }
 
         string ytdlpPath = _pathManager.GetBinaryPath("yt-dlp");
         if (!File.Exists(ytdlpPath))
         {
-            results.Add("❌ Ошибка: отсутствует исполняемый файл yt-dlp");
-            return results;
+            WriteOutcome(
+                "media_download.dependency_missing",
+                LogLevel.Error,
+                LogStatus.Failed,
+                "Отсутствует исполняемый файл внешней утилиты 'yt-dlp'",
+                processContext,
+                null,
+                new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["ErrorCode"] = "missing-dependency",
+                    ["HostLabel"] = hostLabel,
+                    ["Stage"] = "prepare"
+                });
+            results.Add("Отсутствует исполняемый файл yt-dlp");
+            return ExecutionResult.Failed(
+                context,
+                results,
+                errorCode: "missing-dependency",
+                retryable: false);
         }
 
         progressCallback(fileIndex, totalCount, "Запуск скачивания...", 0.0);
 
-        // Формируем аргументы
+        // Формируем аргументы. Пользовательские AdditionalArgs, адрес ссылки и её
+        // query-часть в журнал не попадают: только количество аргументов и их хеш.
         var args = new List<string>
         {
             $"-f \"{formatArgValue}\"",
             $"--paths \"{targetDir}\"",
-            // Переименовываем скачиваемый файл по стандартному шаблону названия
             "--output \"%(title)s.%(ext)s\"",
-            // Оптимизация стабильности при блокировках и сбросах сети (ТСПУ / обрывы SSL)
             "--http-chunk-size 10M",
             "--concurrent-fragments 4",
             "--retries 25",
@@ -144,7 +207,6 @@ public sealed class MediaDownloaderScript : AbstractScript
         // Централизованное управление форматом сохранения:
         if (isAudioOnly)
         {
-            // Для аудио: извлечение в указанный пользователем формат
             switch (audioFormatSetting)
             {
                 case "MP3 (320k)":
@@ -165,13 +227,11 @@ public sealed class MediaDownloaderScript : AbstractScript
                     args.Add("--audio-format opus");
                     break;
                 default:
-                    // "Исходный" - оставляем оригинальный аудиопоток без транскодирования
                     break;
             }
         }
         else
         {
-            // Для видео: централизованный выбор контейнера
             if (videoContainer.Equals("MP4", StringComparison.OrdinalIgnoreCase))
             {
                 args.Add("--merge-output-format mp4");
@@ -202,7 +262,6 @@ public sealed class MediaDownloaderScript : AbstractScript
             if (subtitleCode != "none" && embedSubs && !isAudioOnly)
             {
                 args.Add("--embed-subs");
-                // Если не задан MP4 принудительно, используем универсальный MKV для субтитров
                 if (!videoContainer.Equals("MP4", StringComparison.OrdinalIgnoreCase))
                 {
                     if (!args.Contains("--merge-output-format mkv"))
@@ -231,146 +290,256 @@ public sealed class MediaDownloaderScript : AbstractScript
             args.Add($"--js-runtimes \"node:{nodePath}\"");
         }
 
-        // Ссылка
         args.Add($"\"{filePath}\"");
 
         string argumentsString = string.Join(" ", args);
+        var runner = new DirectProcessRunner(_logService);
+        var journalLimiter = new ProcessOutputRateLimiter(4, 1000);
+        int lastRaiseTick = Environment.TickCount;
+        var outputArtifacts = new List<string>();
 
-        var startInfo = new ProcessStartInfo
+        void AppendJournal(string prefix, string line)
         {
-            FileName = ytdlpPath,
-            Arguments = argumentsString,
-            CreateNoWindow = true,
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true
-        };
+            if (!journalLimiter.TryAcquire())
+            {
+                return;
+            }
 
+            lock (results)
+            {
+                AppendToLog(prefix + LogRedactor.Default.RedactDetailToken(line) + "\r\n");
+                TrimSavedLogToTail(50000, 40000);
+            }
+        }
+
+        ProcessResult runResult;
         try
         {
-            using var process = new Process { StartInfo = startInfo };
-            process.Start();
-            ActiveProcessTracker.Register(process);
-
-            try
-            {
-                // Читаем stdout для прогресса и логов
-                var outputReaderTask = Task.Run(async () =>
+            runResult = await runner.RunAsync(
+                ytdlpPath,
+                "yt-dlp",
+                argumentsString,
+                processContext,
+                onOutputLine: line =>
                 {
-                    int lastRaiseTime = Environment.TickCount;
-                    while (!process.StandardOutput.EndOfStream)
+                    var match = ProgressRegex.Match(line);
+                    double? percent = null;
+                    if (match.Success && double.TryParse(match.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture, out double p))
                     {
-                        string? line = await process.StandardOutput.ReadLineAsync();
-                        if (line == null) continue;
-
-                        if (IsCancelled)
-                        {
-                            try { process.Kill(true); } catch (Exception killEx) { _logService.Warn($"Не удалось завершить процесс yt-dlp при отмене: {killEx.Message}", "MediaDownloaderScript"); }
-                            break;
-                        }
-
-                        // Вывод в лог в реальном времени
-                        lock (results)
-                        {
-                            AppendToLog(line + "\r\n");
-                            TrimSavedLogToTail(50000, 40000);
-                        }
-
-                        int now = Environment.TickCount;
-                        if (Math.Abs(now - lastRaiseTime) > 250)
-                        {
-                            lastRaiseTime = now;
-                            RaiseStateChanged();
-                        }
-
-                        // Парсим прогресс
-                        var match = ProgressRegex.Match(line);
-                        double? percent = null;
-                        if (match.Success && double.TryParse(match.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture, out double p))
-                        {
-                            percent = p;
-                        }
-
-                        progressCallback(fileIndex, totalCount, line, percent);
-                    }
-                });
-
-                // Читаем stderr для логирования
-                var errorReaderTask = Task.Run(async () =>
-                {
-                    int lastRaiseTime = Environment.TickCount;
-                    while (!process.StandardError.EndOfStream)
-                    {
-                        string? line = await process.StandardError.ReadLineAsync();
-                        if (line == null) continue;
-
-                        _logService.Warn($"[yt-dlp stderr] {line}", "MediaDownloaderScript");
-
-                        // Вывод в лог в реальном времени
-                        lock (results)
-                        {
-                            AppendToLog($"[stderr] {line}\r\n");
-                            TrimSavedLogToTail(50000, 40000);
-                        }
-
-                        int now = Environment.TickCount;
-                        if (Math.Abs(now - lastRaiseTime) > 250)
-                        {
-                            lastRaiseTime = now;
-                            RaiseStateChanged();
-                        }
-
-                        if (IsCancelled)
-                        {
-                            try { process.Kill(true); } catch (Exception killEx) { _logService.Warn($"Не удалось завершить процесс yt-dlp при отмене: {killEx.Message}", "MediaDownloaderScript"); }
-                            break;
-                        }
-                    }
-                });
-
-                await Task.WhenAll(process.WaitForExitAsync(), outputReaderTask, errorReaderTask);
-                RaiseStateChanged();
-
-                if (IsCancelled)
-                {
-                    results.Add($"⚠ Отменено: {displayName}");
-                    return results;
-                }
-
-                if (process.ExitCode == 0)
-                {
-                    if (downloadSubs && cleanSubs)
-                    {
-                        try
-                        {
-                            CleanDownloadedVttFiles(targetDir);
-                        }
-                        catch (Exception ex)
-                        {
-                            _logService.Error($"Ошибка автоматической очистки VTT: {ex.Message}", "MediaDownloaderScript");
-                        }
+                        percent = p;
                     }
 
-                    progressCallback(fileIndex, totalCount, "Загрузка успешно завершена!", 100.0);
-                    results.Add($"✅ Скачано: {displayName}");
-                }
-                else
-                {
-                    progressCallback(fileIndex, totalCount, "Ошибка", 0.0);
-                    results.Add($"❌ Ошибка загрузки (Код: {process.ExitCode}) для {displayName}");
-                }
-            }
-            finally
-            {
-                ActiveProcessTracker.Unregister(process);
-            }
+                    AppendJournal(string.Empty, line);
+                    progressCallback(fileIndex, totalCount, line, percent);
+
+                    if (Environment.TickCount - lastRaiseTick > 250)
+                    {
+                        lastRaiseTick = Environment.TickCount;
+                        RaiseStateChanged();
+                    }
+                },
+                onErrorLine: line => AppendJournal("[stderr] ", line),
+                isCancellationRequested: () => IsCancelled,
+                cancellationToken: CancellationToken,
+                workingDir: targetDir);
         }
         catch (Exception ex)
         {
-            results.Add($"❌ Критическая ошибка при загрузке {displayName}: {ex.Message}");
+            WriteOutcome(
+                "media_download.critical_failure",
+                LogLevel.Error,
+                LogStatus.Failed,
+                "Критическая ошибка при загрузке",
+                processContext,
+                ex,
+                new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["ErrorCode"] = "download-exception",
+                    ["HostLabel"] = hostLabel
+                });
+            results.Add("Критическая ошибка при загрузке");
+            return ExecutionResult.FromException(
+                context,
+                ex,
+                results,
+                errorCode: "download-exception",
+                cleanupState: CleanupState.Unknown);
         }
 
-        return results;
+        RaiseStateChanged();
+
+        if (Directory.Exists(targetDir))
+        {
+            outputArtifacts = Directory.GetFiles(targetDir, "*", SearchOption.TopDirectoryOnly)
+                .Where(path => !filesBefore.Contains(path) || File.GetLastWriteTimeUtc(path) >= downloadStartedUtc.AddSeconds(-2))
+                .Where(IsDownloadedArtifact)
+                .ToList();
+        }
+
+        if (runResult.IsCancelled)
+        {
+            results.Add("Загрузка отменена");
+            return ExecutionResult.Cancelled(
+                context,
+                results,
+                errorCode: "cancelled",
+                exitCode: runResult.ExitCode,
+                outputFile: outputArtifacts.FirstOrDefault(),
+                outputExists: outputArtifacts.Count > 0,
+                cleanupState: CleanupState.Partial);
+        }
+
+        bool cleanupFailed = false;
+        if (runResult.ExitCode == 0 && downloadSubs && cleanSubs && outputArtifacts.Count > 0)
+        {
+            try
+            {
+                CleanDownloadedVttFiles(targetDir);
+            }
+            catch (Exception ex)
+            {
+                cleanupFailed = true;
+                WriteOutcome(
+                    "media_download.subtitle_cleanup_failed",
+                    LogLevel.Warning,
+                    LogStatus.PartiallySucceeded,
+                    "Ошибка автоматической очистки загруженных субтитров",
+                    processContext,
+                    ex,
+                    new Dictionary<string, object?>(StringComparer.Ordinal)
+                    {
+                        ["ErrorCode"] = "subtitle-cleanup-failed",
+                        ["HostLabel"] = hostLabel,
+                        ["CleanupState"] = "failed"
+                    });
+            }
+        }
+
+        if (runResult.ExitCode == 0 && outputArtifacts.Count == 0)
+        {
+            results.Add("Загрузка завершена без выходного файла");
+            return ExecutionResult.Failed(
+                context,
+                results,
+                errorCode: "artifact-missing",
+                exitCode: runResult.ExitCode,
+                outputExists: false,
+                retryable: true,
+                cleanupState: CleanupState.Completed);
+        }
+
+        if (!runResult.IsSuccess)
+        {
+            results.Add($"Ошибка загрузки (код: {runResult.ExitCode?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "н/д"})");
+            return ExecutionResult.Failed(
+                context,
+                results,
+                errorCode: runResult.ErrorCode ?? "process-exit",
+                exitCode: runResult.ExitCode,
+                outputFile: outputArtifacts.FirstOrDefault(),
+                outputExists: outputArtifacts.Count > 0,
+                retryable: true,
+                cleanupState: CleanupState.Completed);
+        }
+
+        progressCallback(fileIndex, totalCount, "Загрузка успешно завершена!", 100.0);
+        results.Add("Загрузка завершена");
+        if (cleanupFailed)
+        {
+            return ExecutionResult.PartiallySucceeded(
+                context,
+                results,
+                errorCode: "subtitle-cleanup-failed",
+                exitCode: runResult.ExitCode,
+                outputFile: outputArtifacts[0],
+                outputExists: true,
+                cleanupState: CleanupState.Partial);
+        }
+
+        return ExecutionResult.Succeeded(
+            context,
+            results,
+            outputFile: outputArtifacts[0],
+            outputExists: true,
+            exitCode: runResult.ExitCode,
+            cleanupState: CleanupState.Completed);
+    }
+
+    private void WriteOutcome(
+        string eventId,
+        LogLevel level,
+        LogStatus status,
+        string message,
+        ProcessExecutionContext context,
+        Exception? exception,
+        IReadOnlyDictionary<string, object?>? properties)
+    {
+        try
+        {
+            Dictionary<string, object?> merged = context.ToLogProperties();
+            if (properties is not null)
+            {
+                foreach (KeyValuePair<string, object?> pair in properties)
+                {
+                    merged[pair.Key] = pair.Value;
+                }
+            }
+
+            ExceptionInfo? info = null;
+            if (exception is not null)
+            {
+                try
+                {
+                    info = ExceptionInfo.FromException(exception);
+                }
+                catch (Exception)
+                {
+                    info = null;
+                }
+            }
+
+            _logService.Write(new LogEvent
+            {
+                EventId = eventId,
+                Level = level,
+                Status = status,
+                Source = "MediaDownloaderScript",
+                Message = message,
+                OperationId = context.OperationId,
+                ItemId = context.ItemId,
+                Attempt = context.Attempt,
+                Tool = context.Tool,
+                Properties = merged,
+                Exception = info
+            });
+        }
+        catch (Exception)
+        {
+        }
+    }
+
+    private static string SafeHostLabel(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            return "unknown";
+        }
+
+        if (!Uri.TryCreate(url, UriKind.Absolute, out Uri? uri))
+        {
+            return "unknown";
+        }
+
+        return string.IsNullOrEmpty(uri.Host) ? "unknown" : LogRedactor.CompactSafeToken(uri.Host);
+    }
+
+    private static bool IsDownloadedArtifact(string path)
+    {
+        string extension = Path.GetExtension(path);
+        return !extension.Equals(".part", StringComparison.OrdinalIgnoreCase)
+            && !extension.Equals(".ytdl", StringComparison.OrdinalIgnoreCase)
+            && !extension.Equals(".tmp", StringComparison.OrdinalIgnoreCase)
+            && !extension.Equals(".download", StringComparison.OrdinalIgnoreCase);
     }
 
     private void CleanDownloadedVttFiles(string directory)
@@ -437,11 +606,30 @@ public sealed class MediaDownloaderScript : AbstractScript
             }
 
             File.WriteAllLines(filePath, cleanedLines, System.Text.Encoding.UTF8);
-            _logService.Info($"Субтитры успешно отформатированы: {Path.GetFileName(filePath)}", "MediaDownloaderScript");
+            _logService.Write(
+                "script.download.subtitles_formatted",
+                LogLevel.Debug,
+                LogStatus.Succeeded,
+                $"Субтитры загружены и приведены к выбранному формату: '{LogProps.FileName(filePath)}'",
+                source: Name,
+                properties: LogProps
+                    .Create("InputName", LogProps.FileName(filePath))
+                    .With("Extension", Path.GetExtension(filePath)));
         }
         catch (Exception ex)
         {
-            _logService.Error($"Не удалось отформатировать файл субтитров '{filePath}': {ex.Message}", "MediaDownloaderScript");
+            _logService.Write(
+                "media_download.subtitle_format_failed",
+                LogLevel.Warning,
+                LogStatus.PartiallySucceeded,
+                $"Файл субтитров '{LogProps.FileName(filePath)}' не приведён к выбранному формату",
+                ex,
+                "MediaDownloaderScript",
+                properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["Stage"] = "subtitle_format",
+                    ["FileName"] = LogProps.FileName(filePath)
+                });
         }
     }
 }

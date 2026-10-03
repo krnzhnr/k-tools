@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.Messaging;
 using FluentAssertions;
 using KTools_App.Core;
+using KTools_App.Models;
 using KTools_App.Services.Contracts;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
@@ -151,7 +152,8 @@ public sealed class TestInfrastructureTests
         script.SupportsParallel.Should().BeFalse();
         script.UseCustomWidget.Should().BeFalse();
         script.RequiredDependencies.Should().BeEmpty();
-        result.Should().ContainSingle().Which.Should().StartWith("✅ Готово:");
+        result.Status.Should().Be(ExecutionStatus.Succeeded);
+        result.Should().ContainSingle().Which.Should().StartWith("Готово:");
     }
 
     /// <summary>

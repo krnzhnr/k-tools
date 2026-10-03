@@ -1,12 +1,14 @@
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
 using System;
-using Microsoft.UI.Xaml;
-using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Input;
-using Microsoft.Extensions.DependencyInjection;
+
 using KTools_App.Core;
 using KTools_App.Services.Contracts;
 using KTools_App.ViewModels;
+
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Input;
 
 namespace KTools_App.UI.Pages;
 
@@ -48,7 +50,7 @@ public sealed partial class HomePage : Page
     /// </summary>
     private void Card_PointerExited(object sender, PointerRoutedEventArgs e)
     {
-        if (sender is Border border && 
+        if (sender is Border border &&
             border.Tag is ScriptInfo scriptInfo)
         {
             border.Opacity = scriptInfo.CardOpacity;

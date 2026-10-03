@@ -1,0 +1,4 @@
+eac3to v3.52
+command line: "F:\Programing\Utils\k-tools\bin\eac3to\eac3to.exe" dummy.wav dummy2.wav -changeTo24.000
+------------------------------------------------------------------------------
+Source file "dummy.wav" not found.  <ERROR>

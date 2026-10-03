@@ -7,6 +7,7 @@ using FluentAssertions;
 using Moq;
 using KTools_App;
 using KTools_App.Core;
+using KTools_App.Diagnostics;
 using KTools_App.Services.Contracts;
 using KTools_App.Tests.TestHelpers;
 using KTools_App.UI.Pages;
@@ -166,9 +167,9 @@ public class MainViewModelTests : IsolatedMessengerTestBase
 
         // Assert
         _navigationMock.Verify(n => n.NavigateTo(typeof(LogPage), It.IsAny<object?>()), Times.Once);
-        vm.HeaderTitle.Should().Be("Логи");
+        vm.HeaderTitle.Should().Be("Журнал");
         vm.HeaderSubtitle.Should()
-            .Be("Просмотр журналов выполнения и системных сообщений в реальном времени");
+            .Be("Просмотр журнала выполнения и системных сообщений в реальном времени");
     }
 
     /// <summary>
@@ -341,7 +342,8 @@ public class MainViewModelTests : IsolatedMessengerTestBase
     }
 
     /// <summary>
-    /// Проверяет, что CloseUpdateBannerCommand скрывает баннер обновлений.
+    /// Проверяет, что CloseUpdateBannerCommand скрывает баннер обновлений
+    /// и не порождает шумных записей журнала (чистое изменение состояния UI).
     /// </summary>
     [TestMethod]
     public async Task CloseUpdateBannerCommand_BannerVisible_HidesBanner()
@@ -354,13 +356,14 @@ public class MainViewModelTests : IsolatedMessengerTestBase
         vm.InitializeCommand.Execute(null);
         await PollUntilAsync(() => vm.IsUpdateBannerVisible, TimeSpan.FromSeconds(2));
         vm.IsUpdateBannerVisible.Should().BeTrue();
+        _logServiceMock.Invocations.Clear();
 
         // Act
         vm.CloseUpdateBannerCommand.Execute(null);
 
         // Assert
         vm.IsUpdateBannerVisible.Should().BeFalse();
-        _logServiceMock.Verify(l => l.Info(It.Is<string>(s => s.Contains("закрыл баннер")), It.IsAny<string>()), Times.Once);
+        _logServiceMock.VerifyNoEvents();
     }
 
     /// <summary>
@@ -420,7 +423,17 @@ public class MainViewModelTests : IsolatedMessengerTestBase
             () => _script.FilesQueue.Count == 1 && _script.FilesQueue.All(f => f.FilePath.EndsWith(".mkv", StringComparison.OrdinalIgnoreCase)),
             TimeSpan.FromSeconds(2));
         settled.Should().BeTrue("должен быть добавлен только поддерживаемый .mkv-файл");
-        _logServiceMock.Verify(l => l.Warn(It.Is<string>(s => s.Contains("не поддерживается")), It.IsAny<string>()), Times.AtLeast(2));
+        _logServiceMock.Verify(
+            l => l.Write(
+                "ui.file.unsupported_extension",
+                LogLevel.Warning,
+                LogStatus.Skipped,
+                It.IsAny<string>(),
+                It.IsAny<Exception>(),
+                "MainPage",
+                It.IsAny<LogContext?>(),                It.Is<IReadOnlyDictionary<string, object?>>(p => Equals(p["ErrorCode"], "UNSUPPORTED_EXTENSION"))),
+            Times.Exactly(2),
+            "каждый неподдерживаемый файл фиксируется структурированным предупреждением с кодом ошибки");
     }
 
     /// <summary>

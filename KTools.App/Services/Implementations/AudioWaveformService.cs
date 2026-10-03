@@ -1,4 +1,4 @@
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
 using System;
 using System.Diagnostics;
 using System.IO;
@@ -6,6 +6,9 @@ using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
+
+using KTools_App.Core;
+using KTools_App.Diagnostics;
 using KTools_App.Services.Contracts;
 
 namespace KTools_App.Services.Implementations;
@@ -16,6 +19,8 @@ namespace KTools_App.Services.Implementations;
 /// </summary>
 public sealed class AudioWaveformService : IAudioWaveformService
 {
+    private const string SourceName = nameof(AudioWaveformService);
+
     private readonly ILogService _logService;
     private readonly IDependencyManager _dependencyManager;
     private readonly IPathManager _pathManager;
@@ -43,12 +48,33 @@ public sealed class AudioWaveformService : IAudioWaveformService
         }
 
         string originalName = Path.GetFileName(mediaFilePath);
-        _logService.Info($"Начало сверхточной генерации осциллограммы Audition-уровня для файла '{originalName}', дорожка: a:{audioTrackIndex}", "AudioWaveformService");
+        _logService.Write(
+            "waveform.generation_started",
+            LogLevel.Debug,
+            LogStatus.Running,
+            $"Начинается построение детализированной осциллограммы для '{originalName}', аудиодорожка a:{audioTrackIndex}",
+            source: SourceName,
+            properties: LogProps
+                .Create("InputName", originalName)
+                .With("Index", audioTrackIndex)
+                .With("Channel", "a:" + audioTrackIndex.ToString(System.Globalization.CultureInfo.InvariantCulture)));
 
         string ffmpegPath = _pathManager.GetBinaryPath("ffmpeg");
         if (string.IsNullOrWhiteSpace(ffmpegPath) || !File.Exists(ffmpegPath))
         {
-            _logService.Warn("kt-ffmpeg не найден, построение осциллограммы невозможно", "AudioWaveformService");
+            _logService.Write(
+                "waveform.dependency_missing",
+                LogLevel.Warning,
+                LogStatus.Skipped,
+                "Внешний декодер не найден, построение осциллограммы невозможно",
+                null,
+                SourceName,
+                properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["Stage"] = "decode",
+                    ["ErrorCode"] = "dependency-missing",
+                    ["InputName"] = originalName
+                });
             return new WaveformLevelData
             {
                 SampleRate = 44100,
@@ -121,14 +147,37 @@ public sealed class AudioWaveformService : IAudioWaveformService
 
             var waveformData = await Task.Run(() => ComputePeaksFromWavFile(tempWavPath, progressCallback, cancellationToken), cancellationToken);
 
-            _logService.Info($"Осциллограмма сверхвысокой детализации для '{originalName}' сгенерирована. Длительность: {waveformData.TotalDurationSeconds:F2} сек.", "AudioWaveformService");
+            _logService.Write(
+                "waveform.generation_completed",
+                LogLevel.Info,
+                LogStatus.Succeeded,
+                string.Format(
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    "Осциллограмма высокой детализации для '{0}' построена, длительность {1:F2} с",
+                    originalName,
+                    waveformData.TotalDurationSeconds),
+                source: SourceName,
+                properties: LogProps
+                    .Create("InputName", originalName)
+                    .With("DurationMs", waveformData.TotalDurationSeconds * 1000d));
             progressCallback?.Invoke(100.0, "Готово");
 
             return waveformData;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _logService.Exception(ex, $"Ошибка генерации осциллограммы для файла '{originalName}': {ex.Message}", "AudioWaveformService");
+            _logService.Write(
+                "waveform.generation_failed",
+                LogLevel.Error,
+                LogStatus.Failed,
+                $"Ошибка генерации осциллограммы для файла '{originalName}'",
+                ex,
+                SourceName,
+                properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["ErrorCode"] = "waveform-failed",
+                    ["InputName"] = originalName
+                });
             throw;
         }
         finally
@@ -141,7 +190,18 @@ public sealed class AudioWaveformService : IAudioWaveformService
                 }
                 catch (Exception ex)
                 {
-                    _logService.DebugLog($"Не удалось удалить временный файл осциллограммы '{tempWavPath}': {ex.Message}", "AudioWaveformService");
+                    _logService.Write(
+                        "waveform.cleanup_failed",
+                        LogLevel.Warning,
+                        LogStatus.PartiallySucceeded,
+                        "Не удалось удалить временный файл осциллограммы",
+                        ex,
+                        SourceName,
+                        properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                        {
+                            ["Stage"] = "cleanup",
+                            ["CleanupState"] = "failed"
+                        });
                 }
             }
         }

@@ -8,7 +8,9 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+
 using KTools_App.Core;
+using KTools_App.Diagnostics;
 using KTools_App.Infrastructure;
 using KTools_App.Services.Contracts;
 
@@ -22,6 +24,7 @@ namespace KTools_App.Services.Implementations;
 /// </summary>
 public sealed class BitrateAnalyzerService : AbstractProcessRunner, IBitrateAnalyzerService
 {
+    private const string SourceName = nameof(BitrateAnalyzerService);
     private readonly IMediaProbeService _mediaProbeService;
 
     public BitrateAnalyzerService(
@@ -40,11 +43,11 @@ public sealed class BitrateAnalyzerService : AbstractProcessRunner, IBitrateAnal
     {
         if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
         {
-            Log.Error($"Файл не найден для анализа битрейта: '{filePath}'", "BitrateAnalyzerService");
+            Log.Write("bitrate.analysis.input_missing", LogLevel.Error, LogStatus.Failed, $"Файл для анализа битрейта не найден: '{LogProps.FileName(filePath)}'", source: SourceName, properties: LogProps.Create("ErrorCode", "INPUT_MISSING").With("InputName", LogProps.FileName(filePath)));
             return null;
         }
 
-        Log.Info($"Начало покадрового анализа битрейта для файла '{Path.GetFileName(filePath)}'", "BitrateAnalyzerService");
+        Log.Write("bitrate.analysis.started", LogLevel.Debug, LogStatus.Running, $"Начат покадровый анализ битрейта файла '{LogProps.FileName(filePath)}'", source: SourceName, properties: LogProps.Create("InputName", LogProps.FileName(filePath)));
         progressCallback?.Invoke(0, "Анализ структуры метаданных...");
 
         // 1. Получаем структуру медиафайла
@@ -111,7 +114,7 @@ public sealed class BitrateAnalyzerService : AbstractProcessRunner, IBitrateAnal
             string arguments = $"-hide_banner -loglevel quiet -select_streams {streamSelector} " +
                               $"-show_entries packet=flags,size,pts_time,dts_time -print_format compact \"{filePath}\"";
 
-            Log.Info($"Попытка чтения пакетов битрейта с селектором '{streamSelector}' для '{Path.GetFileName(filePath)}'", "BitrateAnalyzerService");
+            Log.Write("bitrate.analysis.selector_attempt", LogLevel.Debug, LogStatus.Running, $"Выполняется чтение пакетов битрейта с селектором '{LogRedactor.CompactSafeToken(streamSelector)}'", source: SourceName, properties: LogProps.Create("Key", LogRedactor.CompactSafeToken(streamSelector)).With("InputName", LogProps.FileName(filePath)));
 
             var runResult = await RunProcessAsync(
                 "ffprobe",
@@ -125,7 +128,7 @@ public sealed class BitrateAnalyzerService : AbstractProcessRunner, IBitrateAnal
 
                     // Быстрый zero-allocation парсинг компактной строки: packet|flags=K_|pts_time=0.000000|dts_time=0.000000|size=12345
                     ReadOnlySpan<char> span = line.AsSpan();
-                    
+
                     long size = 0;
                     double pts = -1.0;
                     double dts = -1.0;
@@ -136,7 +139,7 @@ public sealed class BitrateAnalyzerService : AbstractProcessRunner, IBitrateAnal
                     {
                         int pipeIdx = span.Slice(start).IndexOf('|');
                         ReadOnlySpan<char> segment = pipeIdx < 0 ? span.Slice(start) : span.Slice(start, pipeIdx);
-                        
+
                         int eqIdx = segment.IndexOf('=');
                         if (eqIdx > 0)
                         {
@@ -204,18 +207,18 @@ public sealed class BitrateAnalyzerService : AbstractProcessRunner, IBitrateAnal
 
             if (runResult.IsSuccess && perSecondBits.Count > 0)
             {
-                Log.Info($"Успешно извлечено {totalPacketsCount} пакетов с селектором '{streamSelector}'", "BitrateAnalyzerService");
+                Log.Write("bitrate.analysis.packets_read", LogLevel.Debug, LogStatus.Succeeded, $"Пакеты битрейта прочитаны, получено: {totalPacketsCount}", source: SourceName, properties: LogProps.Create("Count", totalPacketsCount).With("Key", LogRedactor.CompactSafeToken(streamSelector)));
                 break;
             }
             else
             {
-                Log.Warn($"Селектор '{streamSelector}' не вернул пакетов (RunSuccess: {runResult.IsSuccess}, Packets: {totalPacketsCount}), проверяем следующий вариант...", "BitrateAnalyzerService");
+                Log.Write("bitrate.analysis.selector_empty", LogLevel.Debug, LogStatus.Skipped, $"Селектор '{LogRedactor.CompactSafeToken(streamSelector)}' не вернул пакетов, проверяется следующий вариант", source: SourceName, properties: LogProps.Create("Key", LogRedactor.CompactSafeToken(streamSelector)).With("Count", totalPacketsCount).With("Verified", runResult.IsSuccess));
             }
         }
 
         if (perSecondBits.Count == 0)
         {
-            Log.Error($"Не удалось извлечь пакеты битрейта из файла '{filePath}' (все селекторы вернули 0 пакетов)", "BitrateAnalyzerService");
+            Log.Write("bitrate.analysis.no_packets", LogLevel.Error, LogStatus.Failed, $"Пакеты битрейта из файла '{LogProps.FileName(filePath)}' извлечь не удалось", source: SourceName, properties: LogProps.Create("ErrorCode", "NO_PACKETS").With("InputName", LogProps.FileName(filePath)));
             return null;
         }
 
@@ -255,7 +258,7 @@ public sealed class BitrateAnalyzerService : AbstractProcessRunner, IBitrateAnal
         double mean = perSecondMbps.Length > 0 ? perSecondMbps.Average() : 0.0;
         double min = perSecondMbps.Length > 0 ? perSecondMbps.Min() : 0.0;
         double max = perSecondMbps.Length > 0 ? perSecondMbps.Max() : 0.0;
-        
+
         double sumSquares = perSecondMbps.Sum(val => Math.Pow(val - mean, 2));
         double stdDev = perSecondMbps.Length > 1 ? Math.Sqrt(sumSquares / (perSecondMbps.Length - 1)) : 0.0;
 
@@ -276,7 +279,7 @@ public sealed class BitrateAnalyzerService : AbstractProcessRunner, IBitrateAnal
         };
 
         progressCallback?.Invoke(100, "Завершено!");
-        Log.Info($"Анализ битрейта завершен для '{Path.GetFileName(filePath)}'. Средний: {result.MeanMbps} Mbps, Мин: {result.MinMbps} Mbps, Макс: {result.MaxMbps} Mbps, Ключевых кадров: {result.KeyframeTimes.Length}", "BitrateAnalyzerService");
+        Log.Write("bitrate.analysis.completed", LogLevel.Info, LogStatus.Succeeded, $"Анализ битрейта завершён для '{LogProps.FileName(filePath)}': средний {result.MeanMbps:0.###} Мбит/с, минимум {result.MinMbps:0.###} Мбит/с, максимум {result.MaxMbps:0.###} Мбит/с, ключевых кадров {result.KeyframeTimes.Length}", source: SourceName, properties: LogProps.Create("InputName", LogProps.FileName(filePath)).With("BitrateKbps", result.MeanMbps * 1000d).With("Count", result.KeyframeTimes.Length));
 
         return result;
     }

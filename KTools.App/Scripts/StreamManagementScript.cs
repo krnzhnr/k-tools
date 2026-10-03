@@ -1,4 +1,3 @@
-using KTools_App.Services.Contracts;
 // -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
@@ -8,7 +7,11 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using KTools_App.Core;
+using KTools_App.Diagnostics;
 using KTools_App.Infrastructure;
+using KTools_App.Models;
+using KTools_App.Services.Contracts;
+using ExecutionContext = KTools_App.Models.ExecutionContext;
 
 namespace KTools_App.Scripts;
 
@@ -88,10 +91,13 @@ public sealed class StreamManagementScript : AbstractScript
         ),
         new SettingField(
             "overwrite_source",
-            "Подменить оригинал финальным файлом",
+            "Заменить исходный файл готовым результатом после успешной проверки",
             SettingType.Checkbox,
             false,
-            "Вывод"
+            "Вывод",
+            requiresWarning: true,
+            warningTitle: "Замена исходного файла",
+            warningText: "Исходный файл заменяется готовым результатом только после успешной проверки. До подтверждения результата исходный файл сохраняется."
         ),
         new SettingField(
             "delete_source",
@@ -107,18 +113,18 @@ public sealed class StreamManagementScript : AbstractScript
     /// <summary>
     /// Асинхронно выполняет фильтрацию дорожек для отдельного файла.
     /// </summary>
-    public override async Task<List<string>> ExecuteSingleAsync(
+    public override async Task<ExecutionResult> ExecuteSingleAsync(
         string filePath,
         Dictionary<string, object> settings,
         string? outputPath,
         ScriptProgressCallback progressCallback,
         int fileIndex,
-        int totalCount)
+        int totalCount,
+        ExecutionContext context)
     {
-        ResetCancellation();
         var results = new List<string>();
 
-        _logService.Info($"Начало управления потоками для файла '{Path.GetFileName(filePath)}'", "StreamManagementScript");
+        _logService.Write("script.stream_management.started", LogLevel.Debug, LogStatus.Running, $"Начато управление дорожками файла '{LogProps.FileName(filePath)}'", source: Name, properties: LogProps.Create("InputName", LogProps.FileName(filePath)));
 
         // 1. Считываем выбранные пользователем дорожки для текущего файла
         var tracksPerFile = GetSettingValue<Dictionary<string, List<int>>?>(settings, "selected_tracks_per_file", null);
@@ -127,11 +133,14 @@ public sealed class StreamManagementScript : AbstractScript
 
         if (selectedTrackIds == null || selectedTrackIds.Count == 0)
         {
-            string skipMsg = $"踩 ПРОПУСК (нет выбранных дорожек): {Path.GetFileName(filePath)}";
-            _logService.Info(skipMsg, "StreamManagementScript");
+            string skipMsg = $"Обработка пропущена: не выбраны дорожки для '{LogProps.FileName(filePath)}'";
+            _logService.Write("script.stream_management.skipped", LogLevel.Info, LogStatus.Skipped, skipMsg, source: Name, properties: LogProps.Create("InputName", LogProps.FileName(filePath)));
             progressCallback(fileIndex, totalCount, $"Пропуск (нет выбора): {Path.GetFileName(filePath)}", 100.0);
             results.Add(skipMsg);
-            return results;
+            return ExecutionResult.Skipped(
+                context,
+                results,
+                errorCode: "no-track-selection");
         }
 
         // 2. Выполняем зондирование структуры файла
@@ -143,19 +152,28 @@ public sealed class StreamManagementScript : AbstractScript
         catch (Exception ex)
         {
             string probeErr = $"❌ Ошибка анализа метаданных файла: {ex.Message}";
-            _logService.Exception(ex, $"Исключение при анализе метаданных для '{filePath}': {ex.Message}", "StreamManagementScript");
+            _logService.Write("script.stream_management.probe_failed", LogLevel.Warning, LogStatus.Skipped, $"Метаданные файла '{LogProps.FileName(filePath)}' не прочитаны, анализ дорожек пропущен", ex, Name, properties: LogProps.Create("ErrorCode", "PROBE_FAILED").With("InputName", LogProps.FileName(filePath)));
             progressCallback(fileIndex, totalCount, "Ошибка ffprobe", 0.0);
             results.Add(probeErr);
-            return results;
+            return ExecutionResult.FromException(
+                context,
+                ex,
+                results,
+                errorCode: "probe-failed",
+                cleanupState: CleanupState.NotStarted);
         }
 
         if (structure == null)
         {
             string err = $"❌ ОШИБКА анализа: {Path.GetFileName(filePath)}";
-            _logService.Error(err, "StreamManagementScript");
+            _logService.Write("script.stream_management.failed", LogLevel.Error, LogStatus.Failed, err, source: Name, properties: LogProps.Create("ErrorCode", "STREAM_MANAGEMENT_FAILED").With("InputName", LogProps.FileName(filePath)).With("Retryable", true));
             progressCallback(fileIndex, totalCount, "Ошибка ffprobe", 0.0);
             results.Add(err);
-            return results;
+            return ExecutionResult.Failed(
+                context,
+                results,
+                errorCode: "probe-empty",
+                retryable: true);
         }
 
         // 3. Вычисляем ID сохраняемых дорожек на основе режима работы
@@ -173,7 +191,7 @@ public sealed class StreamManagementScript : AbstractScript
         }
 
         var keptTracks = structure.Tracks.Where(t => keepIds.Contains(t.TrackId)).ToList();
-        _logService.Info($"Определено к сохранению {keptTracks.Count} из {allTrackIds.Count} дорожек.", "StreamManagementScript");
+        _logService.Write("script.stream_management.tracks_selected", LogLevel.Debug, LogStatus.Succeeded, $"К сохранению определено дорожек: {keptTracks.Count} из {allTrackIds.Count}", source: Name, properties: LogProps.Create("Count", keptTracks.Count).With("Total", allTrackIds.Count));
 
         // 4. Подготавливаем параметры запуска
         string ext = Path.GetExtension(filePath).ToLowerInvariant();
@@ -256,10 +274,15 @@ public sealed class StreamManagementScript : AbstractScript
         if (File.Exists(finalOutputFile) && !overwrite)
         {
             string skipExist = $"⏭ ПРОПУСК (файл существует): {Path.GetFileName(finalOutputFile)}";
-            _logService.Info(skipExist, "StreamManagementScript");
+            _logService.Write("script.stream_management.output_exists", LogLevel.Info, LogStatus.Skipped, skipExist, source: Name, properties: LogProps.Create("OutputName", LogProps.FileName(finalOutputFile)).With("ArtifactExists", true));
             progressCallback(fileIndex, totalCount, $"Пропуск (существует): {Path.GetFileName(finalOutputFile)}", 100.0);
             results.Add(skipExist);
-            return results;
+            return ExecutionResult.Skipped(
+                context,
+                results,
+                errorCode: "output-exists",
+                outputFile: finalOutputFile,
+                outputExists: true);
         }
 
         // 6. Запуск процесса сборки
@@ -278,12 +301,12 @@ public sealed class StreamManagementScript : AbstractScript
             }
         });
 
-        bool success = false;
+        ProcessResult? success = null;
         try
         {
             if (useFfmpeg)
             {
-                _logService.Info($"Запуск FFmpeg для фильтрации дорожек '{Path.GetFileName(filePath)}' в '{Path.GetFileName(finalOutputFile)}'", "StreamManagementScript");
+                _logService.Write("script.stream_management.ffmpeg_started", LogLevel.Debug, LogStatus.Running, $"Запущен FFmpeg для фильтрации дорожек '{LogProps.FileName(filePath)}' -> '{LogProps.FileName(finalOutputFile)}'", source: Name, properties: LogProps.Create("Tool", "ffmpeg").With("InputName", LogProps.FileName(filePath)).With("OutputName", LogProps.FileName(finalOutputFile)));
                 success = await _ffmpegRunner.RunAsync(
                     inputPath: filePath,
                     outputPath: finalOutputFile,
@@ -299,7 +322,7 @@ public sealed class StreamManagementScript : AbstractScript
             }
             else
             {
-                _logService.Info($"Запуск mkvmerge для фильтрации дорожек '{Path.GetFileName(filePath)}' в '{Path.GetFileName(finalOutputFile)}'", "StreamManagementScript");
+                _logService.Write("script.stream_management.mkvmerge_started", LogLevel.Debug, LogStatus.Running, $"Запущен mkvmerge для фильтрации дорожек '{LogProps.FileName(filePath)}' -> '{LogProps.FileName(finalOutputFile)}'", source: Name, properties: LogProps.Create("Tool", "mkvmerge").With("InputName", LogProps.FileName(filePath)).With("OutputName", LogProps.FileName(finalOutputFile)));
                 var mkvmergeArgs = BuildTrackArgs(structure.Tracks, keepIds);
 
                 var mkvInputs = new List<MkvInputSource>
@@ -318,8 +341,8 @@ public sealed class StreamManagementScript : AbstractScript
         }
         catch (Exception ex)
         {
-            string runErr = $"❌ Критическая ошибка при обработке потоков для '{stem}': {ex.Message}";
-            _logService.Exception(ex, $"Исключение в процессе фильтрации для '{filePath}': {ex.Message}", "StreamManagementScript");
+            string runErr = $"Критическая ошибка при обработке потоков для '{stem}'";
+            _logService.Write("script.stream_management.filter_failed", LogLevel.Error, LogStatus.Failed, $"Фильтрация дорожек для '{LogProps.FileName(filePath)}' не выполнена", ex, Name, properties: LogProps.Create("ErrorCode", "TRACK_FILTER_FAILED").With("InputName", LogProps.FileName(filePath)).With("Retryable", true));
             results.Add(runErr);
         }
         finally
@@ -333,26 +356,33 @@ public sealed class StreamManagementScript : AbstractScript
         {
             CleanupIfCancelled(finalOutputFile);
             string cancelMsg = $"⚠ Обработка отменена пользователем: {Path.GetFileName(finalOutputFile)}";
-            _logService.Info(cancelMsg, "StreamManagementScript");
+            _logService.Write("script.stream_management.cancelled", LogLevel.Info, LogStatus.Cancelled, cancelMsg, source: Name, properties: LogProps.Create("Reason", "UserRequested").With("CleanupState", "NotStarted"));
             results.Add(cancelMsg);
-            return results;
+            return ExecutionResult.Cancelled(
+                context,
+                results,
+                errorCode: "cancelled",
+                outputFile: finalOutputFile,
+                outputExists: File.Exists(finalOutputFile),
+                cleanupState: CleanupState.Completed);
         }
+
+        bool overwriteSource = GetSettingValue(settings, "overwrite_source", false);
+        bool deleteSource = GetSettingValue(settings, "delete_source", false);
+        bool sourceReplaced = false;
 
         try
         {
-            if (success)
+            if (success?.IsSuccess == true)
             {
                 progressCallback(fileIndex, totalCount, "Завершено!", 100.0);
                 string successMsg = $"✅ ОБРАБОТАНО: {Path.GetFileName(finalOutputFile)}";
-                _logService.Info(successMsg, "StreamManagementScript");
+                _logService.Write("script.stream_management.completed", LogLevel.Info, LogStatus.Succeeded, successMsg, source: Name, properties: LogProps.Create("OutputName", LogProps.FileName(finalOutputFile)).With("Verified", true));
                 results.Add(successMsg);
-
-                bool overwriteSource = GetSettingValue(settings, "overwrite_source", false);
-                bool deleteSource = GetSettingValue(settings, "delete_source", false);
 
                 if (overwriteSource && string.IsNullOrEmpty(outputPath))
                 {
-                    await ReplaceSourceWithResultAsync(filePath, finalOutputFile, results);
+                    sourceReplaced = await ReplaceSourceWithResultAsync(filePath, finalOutputFile, results);
                 }
                 else if (deleteSource)
                 {
@@ -363,7 +393,7 @@ public sealed class StreamManagementScript : AbstractScript
             {
                 await CleanupFailedOutputFileAsync(finalOutputFile);
                 string failMsg = $"❌ ОШИБКА обработки файла: {Path.GetFileName(filePath)}";
-                _logService.Error(failMsg, "StreamManagementScript");
+                _logService.Write("script.stream_management.failed", LogLevel.Error, LogStatus.Failed, failMsg, source: Name, properties: LogProps.Create("ErrorCode", "TRACK_FILTER_FAILED").With("InputName", LogProps.FileName(filePath)).With("Retryable", true));
                 results.Add(failMsg);
             }
         }
@@ -372,10 +402,78 @@ public sealed class StreamManagementScript : AbstractScript
             await CleanupFailedOutputFileAsync(finalOutputFile);
             string errorMsg = $"❌ Ошибка выполнения скрипта для {Path.GetFileName(filePath)}: {ex.Message}";
             results.Add(errorMsg);
-            _logService.Exception(ex, $"Ошибка при выполнении фильтрации потоков для '{stem}': {ex.Message}", "StreamManagementScript");
+            _logService.Write("script.stream_management.failed", LogLevel.Error, LogStatus.Failed, $"Фильтрация дорожек для '{stem}' не выполнена", ex, Name, properties: LogProps.Create("ErrorCode", "TRACK_FILTER_FAILED").With("Retryable", true));
         }
 
-        return results;
+        if (sourceReplaced)
+        {
+            return ExecutionResult.Succeeded(
+                context,
+                results,
+                outputFile: filePath,
+                outputExists: File.Exists(filePath),
+                cleanupState: CleanupState.Completed);
+        }
+
+        bool outputReady = File.Exists(finalOutputFile);
+        if (overwriteSource && string.IsNullOrEmpty(outputPath))
+        {
+            if (success?.IsSuccess != true)
+            {
+                return ExecutionResult.Failed(
+                    context,
+                    results,
+                    errorCode: "output-missing",
+                    outputFile: finalOutputFile,
+                    outputExists: false,
+                    cleanupState: CleanupState.Completed);
+            }
+
+            string replacementFailMsg = $"❌ Исходный файл не заменён готовым результатом обработки дорожек: '{Path.GetFileName(filePath)}', исходник сохранён";
+            _logService.Write("script.source.replaced_failed", LogLevel.Error, LogStatus.PartiallySucceeded, replacementFailMsg, source: Name, properties: LogProps.Create("ErrorCode", "SOURCE_REPLACE_FAILED").With("InputName", LogProps.FileName(filePath)).With("CleanupState", "SourcePreserved"));
+            return File.Exists(filePath)
+                ? ExecutionResult.PartiallySucceeded(
+                    context,
+                    results,
+                    errorCode: "source-replacement-failed",
+                    outputFile: finalOutputFile,
+                    outputExists: outputReady,
+                    cleanupState: CleanupState.Failed)
+                : ExecutionResult.Failed(
+                    context,
+                    results,
+                    errorCode: "source-replacement-failed",
+                    outputFile: finalOutputFile,
+                    outputExists: outputReady,
+                    cleanupState: CleanupState.Failed);
+        }
+
+        if (success?.IsSuccess == true && outputReady)
+        {
+            if (deleteSource && File.Exists(filePath))
+            {
+                return ExecutionResult.PartiallySucceeded(
+                    context,
+                    results,
+                    errorCode: "source-cleanup-failed",
+                    outputFile: finalOutputFile,
+                    outputExists: true,
+                    cleanupState: CleanupState.Failed);
+            }
+            return ExecutionResult.Succeeded(
+                context,
+                results,
+                outputFile: finalOutputFile,
+                outputExists: true,
+                cleanupState: deleteSource ? CleanupState.Completed : CleanupState.NotRequired);
+        }
+        return ExecutionResult.Failed(
+            context,
+            results,
+            errorCode: "output-missing",
+            outputFile: finalOutputFile,
+            outputExists: false,
+            cleanupState: CleanupState.Completed);
     }
 
     /// <summary>

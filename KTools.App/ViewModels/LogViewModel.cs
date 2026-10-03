@@ -1,35 +1,38 @@
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
 using System;
-using System.IO;
+using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
+using System.IO;
+using System.Linq;
+using System.Text;
+
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using Windows.ApplicationModel.DataTransfer;
+
 using KTools_App.Core;
+using KTools_App.Diagnostics;
 using KTools_App.Models;
 using KTools_App.Services.Contracts;
 
+using Windows.ApplicationModel.DataTransfer;
+
 namespace KTools_App.ViewModels;
 
-/// <summary>
-/// Модель представления для страницы просмотра системных журналов (LogPage).
-/// Обеспечивает загрузку истории логов, динамическое обновление в реальном времени,
-/// а также команды копирования, очистки и открытия каталога логов.
-/// </summary>
 public partial class LogViewModel : ThreadSafeViewModel
 {
+    private const string SourceName = nameof(LogViewModel);
+    public const int RecentEventsLimit = 1000;
+    public const int RingLimit = 2000;
+    public const int ExportEventLimit = 2000;
+    public const int ExportCharLimit = 512 * 1024;
+
     private readonly ILogService _logService;
     private readonly ISettingsManager _settingsManager;
     private readonly IPathManager _pathManager;
 
-    /// <summary>
-    /// Предоставляет коллекцию записей логов для привязки к элементу управления ListView.
-    /// </summary>
     public ObservableRangeCollection<LogItem> Logs { get; } = new();
 
-    /// <summary>
-    /// Инициализирует новый экземпляр LogViewModel с внедрением зависимостей.
-    /// </summary>
     public LogViewModel(
         ILogService logService,
         ISettingsManager settingsManager,
@@ -40,202 +43,392 @@ public partial class LogViewModel : ThreadSafeViewModel
         _pathManager = pathManager ?? throw new ArgumentNullException(nameof(pathManager));
     }
 
-    /// <summary>
-    /// Возвращает полный текущий текст логов с диска.
-    /// </summary>
-    public string GetCurrentLogText()
-    {
-        return _logService.ReadCurrentLog();
-    }
-
-    /// <summary>
-    /// Загружает историю логов с диска (последние 1000 строк) для оптимизации отрисовки.
-    /// </summary>
-    public void LoadLogs()
+    public IReadOnlyList<LogEvent> LoadLogs()
     {
         try
         {
-            Logs.Clear();
-            string allLogs = GetCurrentLogText();
-            if (string.IsNullOrEmpty(allLogs))
+            IReadOnlyList<LogEvent>? events = _logService.ReadRecentEvents(RecentEventsLimit);
+            if (events is null)
             {
-                _logService.DebugLog("Лог-файл пуст или не инициализирован при загрузке во ViewModel", "LogViewModel");
-                return;
+                events = Array.Empty<LogEvent>();
             }
 
-            string[] lines = allLogs.Split(new[] { Environment.NewLine, "\n" }, StringSplitOptions.RemoveEmptyEntries);
-
-            // Загружаем последние 1000 строк для предотвращения перегрузки графического интерфейса
-            int startIdx = Math.Max(0, lines.Length - 1000);
-
-            var items = new List<LogItem>(lines.Length - startIdx);
-            for (int i = startIdx; i < lines.Length; i++)
-            {
-                string line = lines[i];
-                LogLevel level = ParseLevelFromLogLine(line);
-                items.Add(new LogItem { Message = line, Level = level });
-            }
-
-            Logs.AddRange(items);
-            
-            _logService.DebugLog($"Успешно загружено {Logs.Count} записей истории в графическую панель", "LogViewModel");
+            Logs.ReplaceRange(events.Select(LogItem.FromEvent));
+            _logService.Write(
+                "log.history.loaded",
+                LogLevel.Debug,
+                LogStatus.Succeeded,
+                "История журнала событий загружена в панель",
+                source: SourceName,
+                properties: LogProps.Create("Count", events.Count));
+            return events;
         }
         catch (Exception ex)
         {
-            _logService.Exception(ex, "Критическая ошибка при загрузке и разборе файла логов во ViewModel", "LogViewModel");
+            _logService.Write(
+                "log.history.load_failed",
+                LogLevel.Error,
+                LogStatus.Failed,
+                "Не удалось загрузить историю журнала событий",
+                ex,
+                SourceName,
+                properties: LogProps.Create("ErrorCode", "LOG_HISTORY_LOAD_FAILED"));
+            return Array.Empty<LogEvent>();
         }
     }
 
-    /// <summary>
-    /// Добавляет новое сообщение лога в коллекцию и удаляет старые элементы, если превышен лимит в 2000 строк.
-    /// </summary>
-    public void AddLog(string formattedMessage, LogLevel level)
+    public void AddLogs(IEnumerable<LogItem> items)
     {
-        try
+        if (items is null)
         {
-            Logs.Add(new LogItem { Message = formattedMessage, Level = level });
-            
-            // Быстрое усечение коллекции O(1)
-            while (Logs.Count > 2000)
-            {
-                Logs.RemoveAt(0);
-            }
+            return;
         }
-        catch (Exception ex)
-        {
-            // Используем системную отладку для предотвращения бесконечной рекурсии в логгере
-            Debug.WriteLine($"[Error] Ошибка при динамическом добавлении лога в коллекцию ViewModel: {ex.Message}");
-        }
-    }
 
-    /// <summary>
-    /// Добавляет пачку сообщений лога одной операцией и удаляет старые элементы, если превышен лимит в 2000 строк.
-    /// </summary>
-    public void AddLogs(System.Collections.Generic.IEnumerable<LogItem> items)
-    {
         try
         {
             Logs.AddRange(items);
-
-            // Усечение переполнения одной операцией (без сдвига элементов по одному)
-            if (Logs.Count > 2000)
-            {
-                int overflow = Logs.Count - 2000;
-                Logs.RemoveRangeFront(overflow);
-            }
+            TrimToLimit();
         }
         catch (Exception ex)
         {
-            // Используем системную отладку для предотвращения бесконечной рекурсии в логгере
-            Debug.WriteLine($"[Error] Ошибка при пакетном добавлении логов в коллекцию ViewModel: {ex.Message}");
+            _logService.Write(
+                "log.collection.append_failed",
+                LogLevel.Error,
+                LogStatus.Failed,
+                "Не удалось добавить пакет событий в коллекцию панели журнала",
+                ex,
+                SourceName,
+                properties: LogProps.Create("ErrorCode", "LOG_COLLECTION_APPEND_FAILED"));
         }
     }
 
-    /// <summary>
-    /// Анализирует строку лога для определения ее уровня критичности.
-    /// </summary>
-    private LogLevel ParseLevelFromLogLine(string line)
+    public void ClearLogsCollection()
     {
-        if (line.Contains("| DEBUG   |")) return LogLevel.Debug;
-        if (line.Contains("| INFO    |")) return LogLevel.Info;
-        if (line.Contains("| WARNING |")) return LogLevel.Warning;
-        if (line.Contains("| ERROR   |")) return LogLevel.Error;
-        if (line.Contains("| FATAL   |")) return LogLevel.Fatal;
-        return LogLevel.Info;
+        Logs.Clear();
     }
 
-    /// <summary>
-    /// Команда для копирования всей истории логов с диска в системный буфер обмена Windows.
-    /// </summary>
+    public string GetEffectiveLogDirectory()
+    {
+        string? effective = _logService.EffectiveLogDirectory;
+        if (!string.IsNullOrWhiteSpace(effective))
+        {
+            return effective;
+        }
+
+        string custom = _settingsManager.LogDir;
+        if (!string.IsNullOrWhiteSpace(custom))
+        {
+            return custom;
+        }
+
+        try
+        {
+            return Path.Combine(_pathManager.GetSettingsDirectory(), "logs");
+        }
+        catch (Exception)
+        {
+            return AppContext.BaseDirectory;
+        }
+    }
+
     [RelayCommand]
     private void CopyAllLogs()
     {
         try
         {
-            string text = GetCurrentLogText();
+            string text = BuildBoundedExportText();
             if (string.IsNullOrEmpty(text))
             {
-                _logService.Warn("Попытка скопировать пустые логи в буфер обмена", "LogViewModel");
+                _logService.Write(
+                    "log.export.empty",
+                    LogLevel.Info,
+                    LogStatus.Skipped,
+                    "Копирование журнала пропущено: история текущего сеанса пуста",
+                    source: SourceName);
                 return;
             }
 
-            var dataPackage = new DataPackage();
+            DataPackage dataPackage = new();
             dataPackage.SetText(text);
             Clipboard.SetContent(dataPackage);
 
-            _logService.DebugLog("Все строки журналов событий успешно извлечены и скопированы в буфер обмена Windows", "LogViewModel");
+            _logService.Write(
+                "log.export.copied",
+                LogLevel.Warning,
+                LogStatus.Succeeded,
+                "Ограниченная копия диагностического журнала помещена в буфер обмена",
+                source: SourceName,
+                properties: LogProps
+                    .Create("Count", text.Length)
+                    .With("TotalBytes", text.Length)
+                    .With("Truncated", text.Length >= ExportCharLimit)
+                    .With("Schema", "log.export.bounded.v1"));
         }
         catch (Exception ex)
         {
-            _logService.Exception(ex, "Критическая ошибка при попытке записи логов в системный буфер обмена", "LogViewModel");
+            _logService.Write(
+                "log.export.copy_failed",
+                LogLevel.Warning,
+                LogStatus.Failed,
+                "Не удалось поместить журнал в буфер обмена",
+                ex,
+                SourceName,
+                properties: LogProps.Create("ErrorCode", "CLIPBOARD_WRITE_FAILED"));
         }
     }
 
-    /// <summary>
-    /// Копирует переданный список выделенных элементов логов в системный буфер обмена Windows.
-    /// </summary>
-    public void CopySelectedLogs(System.Collections.Generic.IEnumerable<LogItem> selectedItems)
+    public static string BuildBoundedExportText(IReadOnlyList<LogEvent> events)
+    {
+        if (events is null || events.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        int total = events.Count;
+        StringBuilder builder = new();
+        int used = 0;
+        int omitted = 0;
+
+        foreach (LogEvent logEvent in events)
+        {
+            string line = LogEvent.Format(logEvent, includeDetail: true);
+            int cost = line.Length + Environment.NewLine.Length;
+            if (used + cost > ExportCharLimit)
+            {
+                omitted++;
+                continue;
+            }
+
+            used += cost;
+            builder.Append(line).Append(Environment.NewLine);
+        }
+
+        if (omitted > 0)
+        {
+            builder
+                .Append($"Записей в копии: {omitted.ToString(CultureInfo.InvariantCulture)} из {total.ToString(CultureInfo.InvariantCulture)}. Превышен лимит экспорта {ExportCharLimit.ToString(CultureInfo.InvariantCulture)} символов.")
+                .Append(Environment.NewLine);
+        }
+
+        return builder.ToString();
+    }
+
+    private string BuildBoundedExportText()
     {
         try
         {
-            var lines = selectedItems.Select(x => x.Message).ToList();
-            if (lines.Count == 0) return;
-
-            string text = string.Join(Environment.NewLine, lines);
-            var dataPackage = new DataPackage();
-            dataPackage.SetText(text);
-            Clipboard.SetContent(dataPackage);
-
-            _logService.DebugLog($"Успешно скопировано {lines.Count} выделенных строк логов в буфер обмена Windows", "LogViewModel");
+            IReadOnlyList<LogEvent> events = _logService.ReadRecentEvents(ExportEventLimit);
+            return BuildBoundedExportText(events);
         }
         catch (Exception ex)
         {
-            _logService.Exception(ex, "Ошибка при копировании выделенных строк логов", "LogViewModel");
+            _logService.Write(
+                "log.export.build_failed",
+                LogLevel.Warning,
+                LogStatus.Failed,
+                "Не удалось сформировать ограниченную копию журнала",
+                ex,
+                SourceName,
+                properties: LogProps.Create("ErrorCode", "LOG_EXPORT_BUILD_FAILED"));
+            return string.Empty;
         }
     }
 
-    /// <summary>
-    /// Команда для очистки графического окна логов и отправки информационного сообщения.
-    /// </summary>
+    public void CopySelectedLogs(IEnumerable<LogItem> selectedItems)
+    {
+        try
+        {
+            if (selectedItems is null)
+            {
+                return;
+            }
+
+            List<string> lines = selectedItems
+                .Where(static item => item is not null)
+                .Select(static item => item.Message)
+                .Where(static message => !string.IsNullOrEmpty(message))
+                .ToList();
+            if (lines.Count == 0)
+            {
+                _logService.Write(
+                    "log.export.selection_empty",
+                    LogLevel.Debug,
+                    LogStatus.Skipped,
+                    "Копирование выделенных записей пропущено: выделение пусто",
+                    source: SourceName);
+                return;
+            }
+
+            string text = BuildBoundedExportText(lines);
+            DataPackage dataPackage = new();
+            dataPackage.SetText(text);
+            Clipboard.SetContent(dataPackage);
+
+            _logService.Write(
+                "log.export.selection_copied",
+                LogLevel.Warning,
+                LogStatus.Succeeded,
+                "Выделенные записи журнала скопированы в буфер обмена",
+                source: SourceName,
+                properties: LogProps
+                    .Create("Count", lines.Count)
+                    .With("Truncated", text.Length >= ExportCharLimit));
+        }
+        catch (Exception ex)
+        {
+            _logService.Write(
+                "log.export.selection_copy_failed",
+                LogLevel.Warning,
+                LogStatus.Failed,
+                "Не удалось скопировать выделенные записи журнала в буфер обмена",
+                ex,
+                SourceName,
+                properties: LogProps.Create("ErrorCode", "CLIPBOARD_WRITE_FAILED"));
+        }
+    }
+
     [RelayCommand]
     private void ClearLogs()
     {
         try
         {
             Logs.Clear();
-            _logService.Info("Графическое окно отображения журналов успешно очищено пользователем", "LogViewModel");
+            _logService.Write(
+                "log.history.window_cleared",
+                LogLevel.Info,
+                LogStatus.Changed,
+                "Панель журнала событий очищена пользователем",
+                source: SourceName);
         }
         catch (Exception ex)
         {
-            _logService.Exception(ex, "Не удалось выполнить очистку графического списка логов во ViewModel", "LogViewModel");
+            _logService.Write(
+                "log.history.window_clear_failed",
+                LogLevel.Error,
+                LogStatus.Failed,
+                "Не удалось очистить панель журнала событий",
+                ex,
+                SourceName,
+                properties: LogProps.Create("ErrorCode", "LOG_WINDOW_CLEAR_FAILED"));
         }
     }
 
-    /// <summary>
-    /// Команда для открытия директории с файлами логов в Проводнике Windows.
-    /// </summary>
     [RelayCommand]
-    private void OpenLogDirectory()
+    private void ClearPersistedLogs()
     {
         try
         {
-            string settingsDir = _pathManager.GetSettingsDirectory();
-            string defaultLogDir = Path.Combine(settingsDir, "logs");
-            string logDir = string.IsNullOrEmpty(_settingsManager.LogDir)
-                ? defaultLogDir
-                : _settingsManager.LogDir;
-
-            if (!Directory.Exists(logDir))
+            if (_logService.ClearCurrentLog())
             {
-                Directory.CreateDirectory(logDir);
+                _logService.Write(
+                    LogEventMarkerNames.PersistedLogsCleared,
+                    LogLevel.Info,
+                    LogStatus.Changed,
+                    "Файл журнала текущего сеанса очищен пользователем",
+                    null,
+                    SourceName);
+                return;
             }
 
-            _logService.DebugLog($"Запуск Проводника Windows для папки логов: '{logDir}'", "LogViewModel");
+            _logService.Write(
+                LogEventMarkerNames.PersistedLogsClearFailed,
+                LogLevel.Error,
+                LogStatus.Failed,
+                "Файл журнала текущего сеанса не очищен",
+                null,
+                SourceName,
+                properties: LogProps.Create("ErrorCode", "LOG_FILE_CLEAR_FAILED"));
+        }
+        catch (Exception ex)
+        {
+            _logService.Write(
+                "log.file.clear_failed",
+                LogLevel.Error,
+                LogStatus.Failed,
+                "Не удалось очистить файл журнала",
+                ex,
+                SourceName,
+                properties: LogProps.Create("ErrorCode", "LOG_FILE_CLEAR_FAILED"));
+        }
+    }
+
+    [RelayCommand]
+    private void OpenLogDirectory()
+    {
+        string logDir = GetEffectiveLogDirectory();
+        string label = SafeDirectoryLabel(logDir);
+        try
+        {
+            Directory.CreateDirectory(logDir);
+            _logService.Write(
+                "log.directory.opened",
+                LogLevel.Debug,
+                LogStatus.Succeeded,
+                $"Открыт проводник для каталога журнала '{label}'",
+                source: SourceName,
+                properties: LogProps.Create("FileName", label));
             Process.Start("explorer.exe", $"\"{logDir}\"");
         }
         catch (Exception ex)
         {
-            _logService.Exception(ex, $"Не удалось открыть директорию с файлами логов по пути '{_settingsManager.LogDir}'", "LogViewModel");
+            _logService.Write(
+                "log.directory.open_failed",
+                LogLevel.Warning,
+                LogStatus.Failed,
+                $"Не удалось открыть каталог журнала '{label}'",
+                ex,
+                SourceName,
+                properties: LogProps
+                    .Create("FileName", label)
+                    .With("ErrorCode", "LOG_DIRECTORY_OPEN_FAILED"));
+        }
+    }
+
+    private static string BuildBoundedExportText(List<string> lines)
+    {
+        StringBuilder builder = new();
+        int used = 0;
+        int omitted = 0;
+
+        foreach (string line in lines)
+        {
+            int cost = line.Length + Environment.NewLine.Length;
+            if (used + cost > ExportCharLimit)
+            {
+                omitted++;
+                continue;
+            }
+
+            used += cost;
+            builder.Append(line).Append(Environment.NewLine);
+        }
+
+        if (omitted > 0)
+        {
+            builder
+                .Append($"Записей в копии: {omitted.ToString(CultureInfo.InvariantCulture)} из {lines.Count.ToString(CultureInfo.InvariantCulture)}. Превышен лимит экспорта {ExportCharLimit.ToString(CultureInfo.InvariantCulture)} символов.")
+                .Append(Environment.NewLine);
+        }
+
+        return builder.ToString();
+    }
+
+    private static string SafeDirectoryLabel(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return LogRedactor.UnknownIdentifier;
+        }
+
+        return LogProps.FileNameOnly(path);
+    }
+
+    private void TrimToLimit()
+    {
+        int excess = Logs.Count - RingLimit;
+        if (excess > 0)
+        {
+            Logs.RemoveRangeFront(excess);
         }
     }
 }

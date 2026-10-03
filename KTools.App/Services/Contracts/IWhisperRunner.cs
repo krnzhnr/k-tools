@@ -2,6 +2,7 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+
 using KTools_App.Infrastructure;
 
 namespace KTools_App.Services.Contracts;
@@ -18,12 +19,14 @@ public interface IWhisperRunner
     /// <param name="onProgress">Делегат уведомления о прогрессе транскрибации в процентах (0..100).</param>
     /// <param name="onSegment">Делегат получения распознанных сегментов субтитров в реальном времени.</param>
     /// <param name="cancellationToken">Токен отмены задачи.</param>
-    /// <returns>Результат выполнения дочернего процесса.</returns>
+    /// <param name="context">Корреляционный контекст операции.</param>
+    /// <returns>Типизированный результат выполнения дочернего процесса.</returns>
     Task<ProcessResult> TranscribeAsync(
         WhisperTranscribeOptions options,
         Action<int>? onProgress = null,
         Action<string>? onSegment = null,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        ProcessExecutionContext? context = null);
 
     /// <summary>
     /// Проверяет, доступен ли исполняемый файл whisper-cli для указанного бэкенда.

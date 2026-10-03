@@ -1,8 +1,10 @@
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
 using System;
 using System.ComponentModel;
-using Microsoft.UI.Dispatching;
+
 using CommunityToolkit.Mvvm.ComponentModel;
+
+using Microsoft.UI.Dispatching;
 
 namespace KTools_App.ViewModels;
 

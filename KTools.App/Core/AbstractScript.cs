@@ -1,10 +1,15 @@
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
-using KTools_App.Services.Contracts;
 using System.Collections.ObjectModel;
 using System.Text.Json;
 using System.Threading.Tasks;
+
+using KTools_App.Diagnostics;
+using KTools_App.Models;
+using KTools_App.Services.Contracts;
+
+using ExecutionContext = KTools_App.Models.ExecutionContext;
 
 namespace KTools_App.Core;
 
@@ -32,6 +37,7 @@ public delegate void ScriptProgressCallback(
 /// </summary>
 public abstract class AbstractScript
 {
+    protected const string ScriptSource = nameof(AbstractScript);
     private volatile bool _isCancelled;
 
     /// <summary>
@@ -86,7 +92,7 @@ public abstract class AbstractScript
     public virtual List<SettingField> GetFullSettingsSchema(Dictionary<string, object>? currentSettings = null)
     {
         var schema = new List<SettingField>(GetSettingsSchema(currentSettings));
-        
+
         // Добавляем вкладку "Переименование" с полями локального переопределения
         schema.Add(new SettingField(
             "LocalRenameOverride",
@@ -182,7 +188,16 @@ public abstract class AbstractScript
         }
         catch (Exception ex)
         {
-            _logService?.Warn($"Исключение при отмене CancellationTokenSource в {GetType().Name}: {ex.Message}", GetType().Name);
+            _logService?.Write(
+                "script.cancellation_token.dispose_failed",
+                LogLevel.Warning,
+                LogStatus.Failed,
+                "Токен отмены операции не освобождён",
+                ex,
+                GetType().Name,
+                properties: LogProps
+                    .Create("ErrorCode", "CANCELLATION_TOKEN_DISPOSE_FAILED")
+                    .With("CleanupState", "NotStarted"));
         }
     }
 
@@ -222,20 +237,22 @@ public abstract class AbstractScript
                 {
                     SelectedTrackIds.Remove(item.FilePath);
                     SelectedAttachmentIds.Remove(item.FilePath);
-                    _logService.DebugLog(
-                        $"Очищен сохраненный выбор дорожек для удаленного файла: '{item.FileName}'", 
-                        "AbstractScript");
                 }
             }
             else if (e.Action == System.Collections.Specialized.NotifyCollectionChangedAction.Reset)
             {
                 if (SelectedTrackIds.Count > 0 || SelectedAttachmentIds.Count > 0)
                 {
+                    int cleared = SelectedTrackIds.Count + SelectedAttachmentIds.Count;
                     SelectedTrackIds.Clear();
                     SelectedAttachmentIds.Clear();
-                    _logService.DebugLog(
-                        "Очищен весь сохраненный выбор дорожек в связи со сбросом очереди файлов", 
-                        "AbstractScript");
+                    _logService.Write(
+                        "script.selection.cleared",
+                        LogLevel.Debug,
+                        LogStatus.Changed,
+                        "Сохранённый выбор дорожек и вложений очищен из-за сброса очереди файлов",
+                        source: ScriptSource,
+                        properties: LogProps.Create("Count", cleared));
                 }
             }
         };
@@ -274,6 +291,11 @@ public abstract class AbstractScript
     public void AppendToLog(string message)
     {
         lock (_logLock) { _logBuilder.Append(message); }
+    }
+
+    public void ClearSavedLog()
+    {
+        lock (_logLock) { _logBuilder.Clear(); }
     }
 
     /// <summary>
@@ -398,22 +420,22 @@ public abstract class AbstractScript
         string replacement = "";
 
         string settingsGroup = _settingsManager.GetSafeGroupName(Name);
-        bool localOverride = settings != null 
+        bool localOverride = settings != null
             ? GetSettingValue(settings, "LocalRenameOverride", false)
             : _settingsManager.GetSetting(settingsGroup, "LocalRenameOverride", false);
 
         if (localOverride)
         {
-            pattern = settings != null 
+            pattern = settings != null
                 ? GetSettingValue(settings, "LocalRenameSearch", string.Empty)
                 : _settingsManager.GetSetting(settingsGroup, "LocalRenameSearch", string.Empty);
-            replacement = settings != null 
+            replacement = settings != null
                 ? GetSettingValue(settings, "LocalRenameReplace", string.Empty)
                 : _settingsManager.GetSetting(settingsGroup, "LocalRenameReplace", string.Empty);
-            useRegex = settings != null 
+            useRegex = settings != null
                 ? GetSettingValue(settings, "LocalRenameUseRegex", true)
                 : _settingsManager.GetSetting(settingsGroup, "LocalRenameUseRegex", true);
-            caseSensitive = settings != null 
+            caseSensitive = settings != null
                 ? GetSettingValue(settings, "LocalRenameCaseSensitive", false)
                 : _settingsManager.GetSetting(settingsGroup, "LocalRenameCaseSensitive", false);
             renameEnabled = !string.IsNullOrEmpty(pattern);
@@ -440,29 +462,46 @@ public abstract class AbstractScript
                 // 2. Выполняем поиск и замену (через Regex или стандартный текст)
                 if (useRegex)
                 {
-                    var options = caseSensitive 
-                        ? System.Text.RegularExpressions.RegexOptions.None 
+                    var options = caseSensitive
+                        ? System.Text.RegularExpressions.RegexOptions.None
                         : System.Text.RegularExpressions.RegexOptions.IgnoreCase;
-                    
+
                     stem = System.Text.RegularExpressions.Regex.Replace(stem, pattern, resolvedReplacement, options);
                 }
                 else
                 {
-                    var options = caseSensitive 
-                        ? System.Text.RegularExpressions.RegexOptions.None 
+                    var options = caseSensitive
+                        ? System.Text.RegularExpressions.RegexOptions.None
                         : System.Text.RegularExpressions.RegexOptions.IgnoreCase;
-                    
+
                     stem = System.Text.RegularExpressions.Regex.Replace(stem, System.Text.RegularExpressions.Regex.Escape(pattern), resolvedReplacement, options);
                 }
 
                 if (oldStem != stem)
                 {
-                    _logService.Info($"Применено переименование PowerRename: '{oldStem}' -> '{stem}'", "AbstractScript");
+                    _logService.Write(
+                        "script.rename.applied",
+                        LogLevel.Debug,
+                        LogStatus.Changed,
+                        "К имени выходного файла применено правило переименования",
+                        source: ScriptSource,
+                        properties: LogProps
+                            .Create("OutputName", LogProps.FileName(stem))
+                            .With("Index", fileNum));
                 }
             }
             catch (Exception ex)
             {
-                _logService.Exception(ex, $"Ошибка применения переименования '{pattern}' -> '{replacement}': {ex.Message}", "AbstractScript");
+                _logService.Write(
+                    "script.rename.failed",
+                    LogLevel.Warning,
+                    LogStatus.Skipped,
+                    "Правило переименования не применено, исходное имя выходного файла сохранено",
+                    ex,
+                    ScriptSource,
+                    properties: LogProps
+                        .Create("ErrorCode", "RENAME_RULE_FAILED")
+                        .With("OutputName", LogProps.FileName(stem)));
             }
         }
 
@@ -488,7 +527,7 @@ public abstract class AbstractScript
             if (_settingsManager.UseAutoSubfolder)
             {
                 string inputDir = Path.GetDirectoryName(inResolved) ?? "";
-                
+
                 // Если пользователь не выбрал кастомный путь или выбрал ту же папку, что и исходный файл
                 if (string.IsNullOrEmpty(dir) || dir.Equals(inputDir, StringComparison.OrdinalIgnoreCase))
                 {
@@ -504,12 +543,29 @@ public abstract class AbstractScript
                         if (!Directory.Exists(targetSubdir))
                         {
                             Directory.CreateDirectory(targetSubdir);
-                            _logService.Info($"Автоматически создана папка результатов: '{targetSubdir}'", "AbstractScript");
+                            _logService.Write(
+                                "script.output.subfolder_created",
+                                LogLevel.Debug,
+                                LogStatus.Succeeded,
+                                "Автоматически создана папка для результатов обработки",
+                                source: ScriptSource,
+                                properties: LogProps
+                                    .Create("FileName", LogProps.FileName(targetSubdir))
+                                    .With("InputName", LogProps.FileName(inResolved)));
                         }
                     }
                     catch (Exception ex)
                     {
-                        _logService.Exception(ex, $"Не удалось автоматически создать папку результатов '{targetSubdir}': {ex.Message}", "AbstractScript");
+                        _logService.Write(
+                            "script.output.subfolder_failed",
+                            LogLevel.Warning,
+                            LogStatus.Failed,
+                            "Не удалось создать папку для результатов обработки",
+                            ex,
+                            ScriptSource,
+                            properties: LogProps
+                                .Create("FileName", LogProps.FileName(targetSubdir))
+                                .With("ErrorCode", "OUTPUT_SUBFOLDER_FAILED"));
                     }
 
                     dir = targetSubdir;
@@ -537,7 +593,15 @@ public abstract class AbstractScript
             if (inResolved.Equals(outResolved, StringComparison.OrdinalIgnoreCase))
             {
                 outResolved = Path.Combine(dir, $"{stem}_processed{ext}");
-                _logService.Info($"Защита исходника: добавлено '_processed' к имени файла: '{outResolved}'", "AbstractScript");
+                _logService.Write(
+                    "script.output.collision_avoided",
+                    LogLevel.Debug,
+                    LogStatus.Changed,
+                    "Выходной путь совпал с исходным, к имени результата добавлен суффикс _processed",
+                    source: ScriptSource,
+                    properties: LogProps
+                        .Create("InputName", LogProps.FileName(inResolved))
+                        .With("OutputName", LogProps.FileName(outResolved)));
             }
 
             // 2. Защита от коллизий имен при пакетной обработке
@@ -556,12 +620,21 @@ public abstract class AbstractScript
 
                 _batchReservedPaths.Add(outResolved);
             }
-            
+
             return outResolved;
         }
         catch (Exception ex)
         {
-            _logService.Exception(ex, $"Ошибка при получении безопасного выходного пути для '{inputPath}': {ex.Message}", "AbstractScript");
+            _logService.Write(
+                "script.output.path_resolve_failed",
+                LogLevel.Warning,
+                LogStatus.Failed,
+                $"Не удалось определить безопасный выходной путь для '{LogProps.FileName(inputPath)}', используется исходный путь результата",
+                ex,
+                ScriptSource,
+                properties: LogProps
+                    .Create("InputName", LogProps.FileName(inputPath))
+                    .With("ErrorCode", "OUTPUT_PATH_RESOLVE_FAILED"));
             return outputPath;
         }
     }
@@ -601,7 +674,14 @@ public abstract class AbstractScript
         }
         catch (Exception ex)
         {
-            _logService?.DebugLog($"Ошибка при резолвинге выходного пути шаблона: {ex.Message}", "AbstractScript");
+            _logService?.Write(
+                "script.output.preview_path_resolve_failed",
+                LogLevel.Debug,
+                LogStatus.Skipped,
+                "Предпросмотр имени результата недоступен, используется исходное имя",
+                ex,
+                ScriptSource,
+                properties: LogProps.Create("ErrorCode", "PREVIEW_PATH_RESOLVE_FAILED"));
             return outputPath;
         }
     }
@@ -615,7 +695,7 @@ public abstract class AbstractScript
 
         // Генерация UUID
         replacement = replacement.Replace("${ruuidv4}", Guid.NewGuid().ToString(), StringComparison.OrdinalIgnoreCase);
-        
+
         // Временные метки
         replacement = replacement.Replace("${YYYY}", time.ToString("yyyy"), StringComparison.OrdinalIgnoreCase);
         replacement = replacement.Replace("${MM}", time.ToString("MM"), StringComparison.OrdinalIgnoreCase);
@@ -623,7 +703,7 @@ public abstract class AbstractScript
         replacement = replacement.Replace("${hh}", time.ToString("HH"), StringComparison.OrdinalIgnoreCase);
         replacement = replacement.Replace("${mm}", time.ToString("mm"), StringComparison.OrdinalIgnoreCase);
         replacement = replacement.Replace("${ss}", time.ToString("ss"), StringComparison.OrdinalIgnoreCase);
-        
+
         // Автонумерация ${num} и ${num:N}
         replacement = System.Text.RegularExpressions.Regex.Replace(replacement, @"\$\{num\}", fileNum.ToString(), System.Text.RegularExpressions.RegexOptions.IgnoreCase);
         replacement = System.Text.RegularExpressions.Regex.Replace(replacement, @"\$\{num:(\d+)\}", m =>
@@ -654,79 +734,319 @@ public abstract class AbstractScript
                 if (File.Exists(filePath))
                 {
                     File.Delete(filePath);
-                    string msg = $"🗑 Удален исходник: {Path.GetFileName(filePath)}";
+                    string msg = $"🗑 Исходный файл удалён: {LogProps.FileName(filePath)}";
                     results.Add(msg);
-                    _logService.Info(msg, "AbstractScript");
+                    _logService.Write(
+                        "script.source.deleted",
+                        LogLevel.Info,
+                        LogStatus.Succeeded,
+                        $"Исходный файл '{LogProps.FileName(filePath)}' удалён",
+                        source: ScriptSource,
+                        properties: LogProps
+                            .Create("InputName", LogProps.FileName(filePath))
+                            .With("Verified", true));
                     return;
                 }
             }
             catch (IOException ioEx) when (attempt < maxRetries)
             {
                 string lockingInfo = FileLockDetector.GetLockingProcessesInfo(filePath, _logService);
-                string procSuffix = string.IsNullOrEmpty(lockingInfo) ? "процесс неизвестен" : $"заблокирован процессами: {lockingInfo}";
-                _logService.Warn($"Попытка удаления исходника {attempt}/{maxRetries} не удалась (файл занят, {procSuffix}): {ioEx.Message}. Повторная попытка через {delayMs} мс.", "AbstractScript");
+                _logService.Write(
+                    "script.source.delete_retry",
+                    LogLevel.Warning,
+                    LogStatus.RetryScheduled,
+                    $"Исходный файл занят, запланирована повторная попытка удаления {attempt}/{maxRetries} через {delayMs} мс",
+                    ioEx,
+                    ScriptSource,
+                    properties: LogProps
+                        .Create("ErrorCode", "SOURCE_FILE_BUSY")
+                        .With("InputName", LogProps.FileName(filePath))
+                        .With("Attempt", attempt)
+                        .With("MaxAttempts", maxRetries)
+                        .With("ElapsedMs", delayMs)
+                        .With("Retryable", true)
+                        .With("Count", string.IsNullOrEmpty(lockingInfo) ? 0 : 1));
                 await Task.Delay(delayMs);
             }
             catch (Exception ex)
             {
-                _logService.Exception(ex, $"Критическая ошибка при удалении исходного файла '{filePath}': {ex.Message}", "AbstractScript");
-                results.Add($"⚠ Не удалось удалить: {Path.GetFileName(filePath)}");
+                _logService.Write(
+                    "script.source.delete_failed",
+                    LogLevel.Error,
+                    LogStatus.Failed,
+                    $"Не удалось удалить исходный файл '{LogProps.FileName(filePath)}'",
+                    ex,
+                    ScriptSource,
+                    properties: LogProps
+                        .Create("InputName", LogProps.FileName(filePath))
+                        .With("ErrorCode", "SOURCE_DELETE_FAILED")
+                        .With("Retryable", false));
+                results.Add($"⚠ Не удалось удалить: {LogProps.FileName(filePath)}");
                 return;
             }
         }
 
         string finalLockInfo = FileLockDetector.GetLockingProcessesInfo(filePath, _logService);
         string finalProcStr = string.IsNullOrEmpty(finalLockInfo) ? "процесс неизвестен" : $"занят процессами: {finalLockInfo}";
-        string failMsg = $"⚠ Не удалось удалить: {Path.GetFileName(filePath)} после {maxRetries} попыток ({finalProcStr}).";
+        string failMsg = $"⚠ Не удалось удалить: {LogProps.FileName(filePath)} после {maxRetries} попыток ({finalProcStr}).";
         results.Add(failMsg);
-        _logService.Error($"Не удалось физически удалить исходный файл '{filePath}' после {maxRetries} попыток. Файл {finalProcStr}.", "AbstractScript");
+        _logService.Write(
+            "script.source.delete_exhausted",
+            LogLevel.Error,
+            LogStatus.Failed,
+            $"Исходный файл '{LogProps.FileName(filePath)}' не удалён после {maxRetries} попыток, файл {finalProcStr}",
+            source: ScriptSource,
+            properties: LogProps
+                .Create("InputName", LogProps.FileName(filePath))
+                .With("ErrorCode", "SOURCE_DELETE_EXHAUSTED")
+                .With("MaxAttempts", maxRetries)
+                .With("Retryable", false)
+                .With("CleanupState", "NotStarted"));
     }
 
     /// <summary>
     /// Физически заменяет исходный файл полученным результатом с сохранением имени оригинала (асинхронно).
+    /// Исходный файл никогда не удаляется до гарантированной подмены: сначала проверяется наличие результата,
+    /// затем применяется атомарная замена (File.Replace) либо безопасная последовательность
+    /// «перенос исходника во временную резервную копию → перенос результата → удаление резервной копии»
+    /// с восстановлением исходника при любой ошибке.
     /// При возникновении ошибок доступа (например, файл занят другим процессом) выполняется несколько попыток повтора с задержкой.
     /// </summary>
+    /// <param name="sourcePath">Путь к заменяемому исходному файлу.</param>
+    /// <param name="resultPath">Путь к подготовленному файлу результата.</param>
+    /// <param name="results">Список сообщений журнала выполнения.</param>
+    /// <returns>true, если подмена выполнена; иначе false, причём исходный файл остаётся на диске.</returns>
     protected async Task<bool> ReplaceSourceWithResultAsync(string sourcePath, string resultPath, List<string> results)
     {
         const int maxRetries = 5;
         const int delayMs = 500;
 
-        for (int attempt = 1; attempt <= maxRetries; attempt++)
+        if (string.IsNullOrWhiteSpace(resultPath) || !File.Exists(resultPath))
+        {
+            string missingMsg = $"❌ Ошибка замены: результат '{LogProps.FileName(resultPath)}' не найден, исходник сохранён";
+            results.Add(missingMsg);
+            _logService.Write(
+                "script.source.replace_result_missing",
+                LogLevel.Error,
+                LogStatus.Failed,
+                "Исходный файл не заменён: подготовленный результат не найден",
+                source: ScriptSource,
+                properties: LogProps
+                    .Create("InputName", LogProps.FileName(sourcePath))
+                    .With("OutputName", LogProps.FileName(resultPath))
+                    .With("ErrorCode", "REPLACE_RESULT_MISSING")
+                    .With("CleanupState", "SourcePreserved"));
+            return false;
+        }
+
+        string? backupPath = null;
+        try
+        {
+            for (int attempt = 1; attempt <= maxRetries; attempt++)
+            {
+                try
+                {
+                    ReplaceFilesAtomically(sourcePath, resultPath, ref backupPath);
+                    TryDeleteBackupFile(backupPath);
+                    backupPath = null;
+
+                    string msg = $"🔄 Исходный файл заменён результатом обработки: {LogProps.FileName(sourcePath)}";
+                    results.Add(msg);
+                    _logService.Write(
+                        "script.source.replaced",
+                        LogLevel.Info,
+                        LogStatus.Succeeded,
+                        $"Исходный файл '{LogProps.FileName(sourcePath)}' заменён результатом обработки '{LogProps.FileName(resultPath)}'",
+                        source: ScriptSource,
+                        properties: LogProps
+                            .Create("InputName", LogProps.FileName(sourcePath))
+                            .With("OutputName", LogProps.FileName(sourcePath))
+                            .With("Verified", true)
+                            .With("CleanupState", "BackupRemoved"));
+                    return true;
+                }
+                catch (IOException ioEx)
+                {
+                    if (attempt < maxRetries)
+                    {
+                        string lockingInfo = FileLockDetector.GetLockingProcessesInfo(sourcePath, _logService);
+                        _logService.Write(
+                            "script.source.replace_retry",
+                            LogLevel.Warning,
+                            LogStatus.RetryScheduled,
+                            $"Исходный файл занят, запланирована повторная попытка замены {attempt}/{maxRetries} через {delayMs} мс",
+                            ioEx,
+                            ScriptSource,
+                            properties: LogProps
+                                .Create("ErrorCode", "SOURCE_FILE_BUSY")
+                                .With("InputName", LogProps.FileName(sourcePath))
+                                .With("Attempt", attempt)
+                                .With("MaxAttempts", maxRetries)
+                                .With("ElapsedMs", delayMs)
+                                .With("Retryable", true)
+                                .With("Count", string.IsNullOrEmpty(lockingInfo) ? 0 : 1));
+                        await Task.Delay(delayMs);
+                        continue;
+                    }
+
+                    _logService.Write(
+                        "script.source.replace_exhausted_attempts",
+                        LogLevel.Error,
+                        LogStatus.Failed,
+                        $"Исходный файл '{LogProps.FileName(sourcePath)}' не удалось заменить после {maxRetries} попыток",
+                        ioEx,
+                        ScriptSource,
+                        properties: LogProps
+                            .Create("ErrorCode", "SOURCE_REPLACE_LOCKED")
+                            .With("InputName", LogProps.FileName(sourcePath))
+                            .With("MaxAttempts", maxRetries)
+                            .With("Retryable", false)
+                            .With("CleanupState", "SourcePreserved"));
+                    break;
+                }
+            }
+
+            string finalLockInfo = FileLockDetector.GetLockingProcessesInfo(sourcePath, _logService);
+            string finalProcStr = string.IsNullOrEmpty(finalLockInfo) ? "процесс неизвестен" : $"занят процессами: {finalLockInfo}";
+            string failMsg = $"❌ Ошибка замены: {LogProps.FileName(sourcePath)} ({finalProcStr}), исходник сохранён";
+            results.Add(failMsg);
+            _logService.Write(
+                "script.source.replace_failed",
+                LogLevel.Error,
+                LogStatus.Failed,
+                $"Исходный файл '{LogProps.FileName(sourcePath)}' не заменён результатом '{LogProps.FileName(resultPath)}' после {maxRetries} попыток, файл {finalProcStr}. Исходный файл сохранён.",
+                source: ScriptSource,
+                properties: LogProps
+                    .Create("InputName", LogProps.FileName(sourcePath))
+                    .With("OutputName", LogProps.FileName(resultPath))
+                    .With("ErrorCode", "SOURCE_REPLACE_FAILED")
+                    .With("MaxAttempts", maxRetries)
+                    .With("Retryable", false)
+                    .With("CleanupState", "SourcePreserved"));
+            return false;
+        }
+        catch (Exception ex)
+        {
+            _logService.Write(
+                "script.source.replace_error",
+                LogLevel.Error,
+                LogStatus.Failed,
+                $"Не удалось заменить исходный файл '{LogProps.FileName(sourcePath)}' результатом '{LogProps.FileName(resultPath)}', исходник сохранён",
+                ex,
+                ScriptSource,
+                properties: LogProps
+                    .Create("InputName", LogProps.FileName(sourcePath))
+                    .With("OutputName", LogProps.FileName(resultPath))
+                    .With("ErrorCode", "SOURCE_REPLACE_ERROR")
+                    .With("Retryable", false)
+                    .With("CleanupState", "SourcePreserved"));
+            results.Add($"❌ Ошибка замены: {LogProps.FileName(sourcePath)}, исходник сохранён");
+            return false;
+        }
+        finally
+        {
+            RestoreBackupFile(backupPath, sourcePath);
+        }
+    }
+
+    /// <summary>
+    /// Выполняет подмену исходника результатом, не позволяя потерять исходные данные:
+    /// приоритет — атомарная операция <see cref="File.Replace(string, string, string?, bool)"/>,
+    /// при её недоступности исходник переносится во временную резервную копию рядом с ним,
+    /// и возврат выполняется только после успешного переноса результата.
+    /// </summary>
+    private static void ReplaceFilesAtomically(string sourcePath, string resultPath, ref string? backupPath)
+    {
+        if (!File.Exists(sourcePath))
+        {
+            File.Move(resultPath, sourcePath);
+            return;
+        }
+
+        bool sameVolume = string.Equals(
+            Path.GetPathRoot(Path.GetFullPath(sourcePath)),
+            Path.GetPathRoot(Path.GetFullPath(resultPath)),
+            StringComparison.OrdinalIgnoreCase);
+
+        if (sameVolume)
         {
             try
             {
-                if (File.Exists(sourcePath))
-                {
-                    File.Delete(sourcePath);
-                }
-                File.Move(resultPath, sourcePath);
-
-                string msg = $"🔄 Подменен оригинал: {Path.GetFileName(sourcePath)}";
-                results.Add(msg);
-                _logService.Info(msg, "AbstractScript");
-                return true;
+                File.Replace(resultPath, sourcePath, null, true);
+                return;
             }
-            catch (IOException ioEx) when (attempt < maxRetries)
+            catch (PlatformNotSupportedException)
             {
-                string lockingInfo = FileLockDetector.GetLockingProcessesInfo(sourcePath, _logService);
-                string procSuffix = string.IsNullOrEmpty(lockingInfo) ? "процесс неизвестен" : $"заблокирован процессами: {lockingInfo}";
-                _logService.Warn($"Попытка подмены оригинала {attempt}/{maxRetries} не удалась (файл занят, {procSuffix}): {ioEx.Message}. Повторная попытка через {delayMs} мс.", "AbstractScript");
-                await Task.Delay(delayMs);
             }
-            catch (Exception ex)
+            catch (IOException)
             {
-                _logService.Exception(ex, $"Ошибка при подмене оригинального файла '{sourcePath}' результатом '{resultPath}': {ex.Message}", "AbstractScript");
-                results.Add($"❌ Ошибка подмены: {Path.GetFileName(sourcePath)}");
-                return false;
+            }
+            catch (UnauthorizedAccessException)
+            {
             }
         }
 
-        string finalLockInfo = FileLockDetector.GetLockingProcessesInfo(sourcePath, _logService);
-        string finalProcStr = string.IsNullOrEmpty(finalLockInfo) ? "процесс неизвестен" : $"занят процессами: {finalLockInfo}";
-        string failMsg = $"❌ Ошибка подмены: {Path.GetFileName(sourcePath)} ({finalProcStr})";
-        results.Add(failMsg);
-        _logService.Error($"Не удалось подменить оригинальный файл '{sourcePath}' результатом '{resultPath}' после {maxRetries} попыток. Файл {finalProcStr}.", "AbstractScript");
-        return false;
+        string? directory = Path.GetDirectoryName(sourcePath);
+        if (string.IsNullOrEmpty(directory))
+        {
+            directory = AppContext.BaseDirectory;
+        }
+
+        string backup = Path.Combine(
+            directory,
+            $"{Path.GetFileName(sourcePath)}.ktools-replace-{Guid.NewGuid():N}.bak");
+        File.Move(sourcePath, backup);
+        backupPath = backup;
+
+        try
+        {
+            File.Move(resultPath, sourcePath);
+        }
+        catch
+        {
+            RestoreBackupFile(backup, sourcePath);
+            backupPath = null;
+            throw;
+        }
+    }
+
+    private static void RestoreBackupFile(string? backupPath, string sourcePath)
+    {
+        if (string.IsNullOrEmpty(backupPath) || !File.Exists(backupPath))
+        {
+            return;
+        }
+
+        try
+        {
+            if (!File.Exists(sourcePath))
+            {
+                File.Move(backupPath, sourcePath);
+            }
+            else
+            {
+                File.Delete(backupPath);
+            }
+        }
+        catch (Exception)
+        {
+        }
+    }
+
+    private static void TryDeleteBackupFile(string? backupPath)
+    {
+        if (string.IsNullOrEmpty(backupPath) || !File.Exists(backupPath))
+        {
+            return;
+        }
+
+        try
+        {
+            File.Delete(backupPath);
+        }
+        catch (Exception)
+        {
+        }
     }
 
     /// <summary>
@@ -741,12 +1061,30 @@ public abstract class AbstractScript
             if (File.Exists(filePath))
             {
                 File.Delete(filePath);
-                _logService.DebugLog($"Удален неполный выходной файл: '{Path.GetFileName(filePath)}'", "AbstractScript");
+                _logService.Write(
+                    "script.output.cancelled_cleanup",
+                    LogLevel.Debug,
+                    LogStatus.Succeeded,
+                    "Неполный выходной файл удалён после отмены операции",
+                    source: ScriptSource,
+                    properties: LogProps
+                        .Create("OutputName", LogProps.FileName(filePath))
+                        .With("CleanupState", "Removed"));
             }
         }
         catch (Exception ex)
         {
-            _logService.Warn($"Не удалось удалить временный файл '{filePath}' при отмене: {ex.Message}", "AbstractScript");
+            _logService.Write(
+                "script.output.cancelled_cleanup_failed",
+                LogLevel.Warning,
+                LogStatus.Failed,
+                "Не удалось удалить временный выходной файл при отмене операции",
+                ex,
+                ScriptSource,
+                properties: LogProps
+                    .Create("OutputName", LogProps.FileName(filePath))
+                    .With("ErrorCode", "CANCELLED_CLEANUP_FAILED")
+                    .With("CleanupState", "Failed"));
         }
     }
 
@@ -767,7 +1105,15 @@ public abstract class AbstractScript
                 try
                 {
                     File.Delete(filePath);
-                    _logService.DebugLog($"Удален поврежденный выходной файл после сбоя или ошибки: '{Path.GetFileName(filePath)}'", "AbstractScript");
+                    _logService.Write(
+                        "script.output.failed_cleanup",
+                        LogLevel.Debug,
+                        LogStatus.Succeeded,
+                        "Повреждённый выходной файл удалён после сбоя обработки",
+                        source: ScriptSource,
+                        properties: LogProps
+                            .Create("OutputName", LogProps.FileName(filePath))
+                            .With("CleanupState", "Removed"));
                     break;
                 }
                 catch
@@ -779,7 +1125,17 @@ public abstract class AbstractScript
         }
         catch (Exception ex)
         {
-            _logService.Warn($"Не удалось очистить поврежденный выходной файл '{filePath}' после сбоя: {ex.Message}", "AbstractScript");
+            _logService.Write(
+                "script.output.failed_cleanup_failed",
+                LogLevel.Warning,
+                LogStatus.Failed,
+                "Не удалось очистить повреждённый выходной файл после сбоя обработки",
+                ex,
+                ScriptSource,
+                properties: LogProps
+                    .Create("OutputName", LogProps.FileName(filePath))
+                    .With("ErrorCode", "FAILED_OUTPUT_CLEANUP_FAILED")
+                    .With("CleanupState", "Failed"));
         }
     }
 
@@ -805,13 +1161,64 @@ public abstract class AbstractScript
     /// <param name="fileIndex">Порядковый индекс обрабатываемого файла в очереди.</param>
     /// <param name="totalCount">Общее число файлов в очереди.</param>
     /// <returns>Список сообщений о результатах выполнения (ошибки, успехи, пути подмены).</returns>
-    public abstract Task<List<string>> ExecuteSingleAsync(
+    public abstract Task<ExecutionResult> ExecuteSingleAsync(
         string filePath,
         Dictionary<string, object> settings,
         string? outputPath,
         ScriptProgressCallback progressCallback,
         int fileIndex,
-        int totalCount);
+        int totalCount,
+        ExecutionContext context);
+
+    public Task<ExecutionResult> ExecuteSingleAsync(
+        string filePath,
+        Dictionary<string, object> settings,
+        string? outputPath,
+        ScriptProgressCallback progressCallback,
+        int fileIndex,
+        int totalCount)
+    {
+        ExecutionContext batch = ExecutionContext.CreateBatch(GetType().Name, Math.Max(totalCount, 0));
+        ExecutionContext context = totalCount > 0 && fileIndex >= 0 && fileIndex < totalCount
+            ? batch.ForItem(fileIndex)
+            : batch;
+        return ExecuteSingleAsync(
+            filePath,
+            settings,
+            outputPath,
+            progressCallback,
+            fileIndex,
+            totalCount,
+            context);
+    }
+
+    protected static ExecutionResult CreateExecutionResult(
+        ExecutionContext context,
+        ExecutionStatus status,
+        IEnumerable<string> messages,
+        string? errorCode = null,
+        int? exitCode = null,
+        string? outputFile = null,
+        bool? outputExists = null,
+        Exception? exception = null,
+        bool retryable = false,
+        CleanupState cleanupState = CleanupState.Unknown,
+        double durationMs = 0)
+    {
+        return ExecutionResult.Create(
+            context,
+            status,
+            messages,
+            errorCode,
+            exitCode,
+            outputFile,
+            outputExists,
+            exceptionInfo: exception is null ? null : ExceptionInfo.FromException(exception),
+            exception: exception,
+            retryable: retryable,
+            cleanupState: cleanupState,
+            durationMs: durationMs);
+    }
 
     /// <summary>
     /// Безопасно извлекает значение параметра из словаря настроек.
@@ -832,7 +1239,7 @@ public abstract class AbstractScript
                 {
                     if (typeof(T) == typeof(bool))
                     {
-                        return (T)(object)(jsonElem.ValueKind == 
+                        return (T)(object)(jsonElem.ValueKind ==
                             System.Text.Json.JsonValueKind.True);
                     }
                     if (typeof(T) == typeof(int))
@@ -843,7 +1250,7 @@ public abstract class AbstractScript
                     {
                         return (T)(object)jsonElem.GetString()!;
                     }
-                    
+
                     var deserialized = jsonElem.Deserialize<T>();
                     if (deserialized != null)
                     {

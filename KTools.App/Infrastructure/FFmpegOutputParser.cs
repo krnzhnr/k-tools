@@ -1,7 +1,8 @@
-using System;
+﻿using System;
 using System.Text.RegularExpressions;
 
 using KTools_App.Core;
+using KTools_App.Diagnostics;
 using KTools_App.Services.Contracts;
 
 namespace KTools_App.Infrastructure;
@@ -31,6 +32,7 @@ public record ProgressInfo(
 /// </summary>
 public static class FFmpegOutputParser
 {
+    private const string SourceName = nameof(FFmpegOutputParser);
     // Регулярное выражение для извлечения времени (поддерживает разделители точку и запятую, опциональную дробную часть и часы любой длины)
     private static readonly Regex TimeRegex = new(
         @"(?:^|[\s(\[])time=(-?\d+):(\d{2}):(\d{2})(?:[\.\,](\d+))?",
@@ -39,19 +41,19 @@ public static class FFmpegOutputParser
 
     // Регулярное выражение для извлечения FPS
     private static readonly Regex FpsRegex = new(
-        @"fps=\s*([\d\.]+)", 
+        @"fps=\s*([\d\.]+)",
         RegexOptions.Compiled
     );
 
     // Регулярное выражение для извлечения битрейта
     private static readonly Regex BitrateRegex = new(
-        @"bitrate=\s*([\d\.N/A]+\s*[kmg]?bits/s|N/A)", 
+        @"bitrate=\s*([\d\.N/A]+\s*[kmg]?bits/s|N/A)",
         RegexOptions.Compiled
     );
 
     // Регулярное выражение для извлечения относительной скорости обработки (например, "1.5x")
     private static readonly Regex SpeedRegex = new(
-        @"speed=\s*([\d\.]+)x", 
+        @"speed=\s*([\d\.]+)x",
         RegexOptions.Compiled
     );
 
@@ -92,7 +94,15 @@ public static class FFmpegOutputParser
         }
         catch (Exception ex)
         {
-            logService.DebugLog($"Не удалось распарсить заголовочную длительность: {ex.Message}", "FFmpegOutputParser");
+            logService.Write(
+                "ffmpeg_parser.duration.parse.failed",
+                LogLevel.Debug,
+                LogStatus.Skipped,
+                "Заголовочная длительность не распознана",
+                ex,
+                SourceName,
+                properties: LogProps
+                    .Create("ErrorCode", "DURATION_PARSE_FAILED"));
             return 0.0;
         }
     }
@@ -116,7 +126,7 @@ public static class FFmpegOutputParser
             int m = int.Parse(timeMatch.Groups[2].Value);
             int s = int.Parse(timeMatch.Groups[3].Value);
             string msStr = timeMatch.Groups[4].Value;
-            
+
             // Расчет дробной части миллисекунд с учетом ее длины
             double ms = 0.0;
             if (!string.IsNullOrEmpty(msStr))
@@ -170,8 +180,8 @@ public static class FFmpegOutputParser
                 int remM = (int)((remainingSec % 3600) / 60);
                 int remS = (int)(remainingSec % 60);
 
-                eta = remH > 0 
-                    ? $"{remH}:{remM:D2}:{remS:D2}" 
+                eta = remH > 0
+                    ? $"{remH}:{remM:D2}:{remS:D2}"
                     : $"{remM:D2}:{remS:D2}";
             }
 
@@ -180,7 +190,16 @@ public static class FFmpegOutputParser
         catch (Exception ex)
         {
             // Молчаливый пропуск при ошибках парсинга некорректных строк
-            logService.DebugLog($"Не удалось распарсить строку прогресса: {ex.Message}", "FFmpegOutputParser");
+            logService.Write(
+                "ffmpeg_parser.progress.parse.failed",
+                LogLevel.Debug,
+                LogStatus.Skipped,
+                "Строка прогресса не распознана",
+                ex,
+                SourceName,
+                properties: LogProps
+                    .Create("StreamName", "stderr")
+                    .With("ErrorCode", "PROGRESS_PARSE_FAILED"));
             return null;
         }
     }

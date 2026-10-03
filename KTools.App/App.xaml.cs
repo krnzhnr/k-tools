@@ -1,18 +1,25 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
-using Microsoft.UI.Xaml;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Windows.AppLifecycle;
+using System.Threading;
+using System.Threading.Tasks;
+
 using CommunityToolkit.Mvvm.Messaging;
-using Polly;
-using Polly.Extensions.Http;
+
 using KTools_App.Core;
+using KTools_App.Diagnostics;
+using KTools_App.Encoders;
 using KTools_App.Infrastructure;
 using KTools_App.Services.Contracts;
 using KTools_App.Services.Implementations;
 using KTools_App.ViewModels;
-using KTools_App.Encoders;
+
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.UI.Xaml;
+using Microsoft.Windows.AppLifecycle;
+
+using Polly;
+using Polly.Extensions.Http;
 
 namespace KTools_App;
 
@@ -30,7 +37,83 @@ public partial class App : Application
     internal static IServiceProvider Services { get; private set; }
         = null!;
 
+    internal const string CrashShutdownReasonUnhandled = "crash.unhandled_exception";
+    internal const string CrashShutdownReasonWindowClosed = "window.closed";
+
+    /// <summary>
+    /// Имя переменной окружения для явного переопределения минимального уровня журналирования.
+    /// </summary>
+    public const string MinLevelEnvironmentVariable = "KTOOLS_LOG_MIN_LEVEL";
+    internal static readonly LogLevel ReleaseMinLevel = LogLevel.Info;
+    internal static readonly TimeSpan ProcessTerminationTimeout = TimeSpan.FromSeconds(3);
+    internal static readonly TimeSpan ShutdownFlushTimeout = TimeSpan.FromSeconds(1);
+
     private static ILogService? _logService;
+    private static ISettingsManager? _settingsManager;
+    private static CrashCoordinator? _crashCoordinator;
+    private static int _servicesDisposed;
+    private static readonly object ArgsWatcherGate = new();
+    private static readonly object SettingsStageGate = new();
+    private static FileSystemWatcher? _argsWatcher;
+    private static Func<SettingsPersistenceResult>? _settingsPersistenceStage;
+
+    /// <summary>
+    /// Признак диагностической сборки, в которой по умолчанию включается уровень Debug.
+    /// </summary>
+    internal static bool IsDiagnosticBuild =>
+#if DEBUG
+        true;
+#else
+        false;
+#endif
+
+    /// <summary>
+    /// Определяет минимальный уровень журналирования при запуске.
+    /// Release-сборка по умолчанию ограничивается уровнем Info, чтобы Debug-диагностика
+    /// не попадала в пользовательский журнал; диагностическая сборка и явное
+    /// переопределение переменной KTOOLS_LOG_MIN_LEVEL включают Debug.
+    /// </summary>
+    public static LogLevel ResolveStartupLogLevel(bool diagnosticBuild, string? rawOverride)
+    {
+        return TryParseLogLevel(rawOverride, out LogLevel level)
+            ? level
+            : diagnosticBuild ? LogLevel.Debug : ReleaseMinLevel;
+    }
+
+    private static bool TryParseLogLevel(string? raw, out LogLevel level)
+    {
+        level = ReleaseMinLevel;
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return false;
+        }
+
+        switch (raw.Trim().ToLowerInvariant())
+        {
+            case "debug":
+            case "dbg":
+            case "trace":
+                level = LogLevel.Debug;
+                return true;
+            case "info":
+            case "information":
+                level = LogLevel.Info;
+                return true;
+            case "warning":
+            case "warn":
+                level = LogLevel.Warning;
+                return true;
+            case "error":
+                level = LogLevel.Error;
+                return true;
+            case "fatal":
+            case "critical":
+                level = LogLevel.Fatal;
+                return true;
+            default:
+                return false;
+        }
+    }
 
     /// <summary>
     /// Глобальная ссылка на главное окно приложения.
@@ -50,153 +133,574 @@ public partial class App : Application
     /// </summary>
     public App()
     {
-        // === Глобальные перехватчики исключений для диагностики крашей ===
-        
-        // 1. WinUI 3 UnhandledException — ловит исключения на UI-потоке XAML
-        this.UnhandledException += (sender, e) =>
-        {
-            string report = FormatCrashReport("WinUI3 UnhandledException", e.Exception);
-            WriteCrashReport(report);
-            try
-            {
-                _logService?.Fatal(report, "App.UnhandledException");
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"[FATAL] Ошибка при записи в лог перехваченного WinUI3 исключения: {ex.Message}");
-            }
-            e.Handled = true; // Попытка не дать процессу упасть
-        };
-
-        // 2. .NET AppDomain — ловит необработанные managed-исключения
-        AppDomain.CurrentDomain.UnhandledException += (sender, e) =>
-        {
-            var ex = e.ExceptionObject as Exception;
-            string report = FormatCrashReport(
-                $"AppDomain.UnhandledException (IsTerminating={e.IsTerminating})",
-                ex);
-            WriteCrashReport(report);
-            try
-            {
-                _logService?.Fatal(report, "AppDomain.UnhandledException");
-            }
-            catch (Exception logEx)
-            {
-                System.Diagnostics.Debug.WriteLine($"[FATAL] Ошибка при записи в лог перехваченного AppDomain исключения: {logEx.Message}");
-            }
-        };
-
-        // 3. TaskScheduler — ловит исключения из fire-and-forget async Task
-        System.Threading.Tasks.TaskScheduler.UnobservedTaskException += (sender, e) =>
-        {
-            string report = FormatCrashReport("TaskScheduler.UnobservedTaskException", e.Exception);
-            WriteCrashReport(report);
-            try
-            {
-                _logService?.Error(report, "TaskScheduler.UnobservedException");
-            }
-            catch (Exception logEx)
-            {
-                System.Diagnostics.Debug.WriteLine($"[FATAL] Ошибка при записи в лог перехваченного TaskScheduler исключения: {logEx.Message}");
-            }
-            e.SetObserved();
-        };
-
-        // Регистрируем провайдер кодировок для поддержки чтения файлов
-        // в локальных кодировках (например, Windows-1251 / CP1251).
-        System.Text.Encoding.RegisterProvider(
-            System.Text.CodePagesEncodingProvider.Instance);
-
+        Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
         InitializeComponent();
         Services = ConfigureServices();
-        _logService = Services.GetRequiredService<ILogService>();
+        AppStartupPipeline.Run(
+            Services.GetRequiredService<ILogService>(),
+            () =>
+            {
+                _logService = Services.GetRequiredService<ILogService>();
+                RegisterCrashHandlers(Services.GetRequiredService<CrashCoordinator>());
+            },
+            () =>
+            {
+                _settingsManager = Services.GetRequiredService<ISettingsManager>();
+                return _settingsManager;
+            });
     }
 
-    /// <summary>
-    /// Формирует полный отчёт о крахе с информацией об исключении,
-    /// внутренних исключениях и стеке вызовов для диагностики.
-    /// </summary>
-    private static string FormatCrashReport(string source, Exception? ex)
+    private void RegisterCrashHandlers(CrashCoordinator coordinator)
     {
-        var sb = new System.Text.StringBuilder();
-        sb.AppendLine($"=== АВАРИЙНЫЙ ОТЧЁТ: {source} ===");
-        sb.AppendLine($"Время: {DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}");
-        sb.AppendLine($"Версия: {typeof(App).Assembly.GetName().Version}");
+        _crashCoordinator = coordinator ?? throw new ArgumentNullException(nameof(coordinator));
 
-        if (ex == null)
+        UnhandledException += (_, args) =>
         {
-            sb.AppendLine("Исключение: (null — объект исключения отсутствует)");
-        }
-        else
+            args.Handled = coordinator.TryHandleWinUiUnhandled(
+                args.Exception,
+                "App.WinUi",
+                BeginUnhandledShutdown,
+                out CrashWriteResult? _);
+        };
+
+        AppDomain.CurrentDomain.UnhandledException += (_, args) =>
         {
-            var current = ex;
-            int depth = 0;
-            while (current != null)
+            CrashCoordinator? current = _crashCoordinator;
+            Exception? exception = args.ExceptionObject as Exception;
+            if (current is null)
             {
-                string prefix = depth == 0 ? "Исключение" : $"Внутреннее исключение [{depth}]";
-                sb.AppendLine($"{prefix}: {current.GetType().FullName}");
-                sb.AppendLine($"  Сообщение: {current.Message}");
-                sb.AppendLine($"  Источник: {current.Source}");
-                sb.AppendLine($"  Стек вызовов:");
-                sb.AppendLine(current.StackTrace ?? "  (стек отсутствует)");
-                current = current.InnerException;
-                depth++;
+                WriteEmergencyFallback(exception, args.IsTerminating);
+                return;
             }
 
-            // AggregateException — развернуть все внутренние
-            if (ex is AggregateException aggEx)
+            current.RecordAppDomainTerminating(
+                exception,
+                args.IsTerminating,
+                current.LastControlledShutdownCrashId);
+        };
+
+        TaskScheduler.UnobservedTaskException += (_, args) =>
+        {
+            CrashCoordinator? current = _crashCoordinator;
+            if (current is not null && current.TryRecordUnobservedTaskException(args.Exception, out CrashWriteResult _))
             {
-                sb.AppendLine("--- Развёрнутые внутренние исключения AggregateException ---");
-                foreach (var inner in aggEx.Flatten().InnerExceptions)
+                args.SetObserved();
+            }
+        };
+    }
+
+    internal static bool BeginUnhandledShutdown()
+    {
+        return TryBeginControlledShutdown(CrashShutdownReasonUnhandled);
+    }
+
+    public static bool TryBeginControlledShutdown(string reason)
+    {
+        return StartControlledShutdown(reason, out _);
+    }
+
+    public static bool TryBeginControlledShutdownAndWait(string reason, TimeSpan timeout)
+    {
+        if (!StartControlledShutdown(reason, out Task<CrashShutdownResult>? task))
+        {
+            return false;
+        }
+
+        if (task is null)
+        {
+            return IsControlledShutdownStarted;
+        }
+
+        try
+        {
+            return task.Wait(timeout) && task.Result.Succeeded;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    private static bool StartControlledShutdown(string reason, out Task<CrashShutdownResult>? task)
+    {
+        task = null;
+        CrashCoordinator? coordinator = _crashCoordinator;
+        if (coordinator is null)
+        {
+            return false;
+        }
+
+        bool accepted;
+        try
+        {
+            accepted = coordinator.TryBeginControlledShutdown(
+                reason,
+                BeginProcessIntakeStop,
+                out CrashShutdownStartResult startResult);
+            if (!accepted)
+            {
+                WriteShutdownFailureEvent(
+                    "Контролируемое завершение не запущено",
+                    null,
+                    startResult.ErrorCode);
+                return false;
+            }
+
+            if (!startResult.Initiated)
+            {
+                return true;
+            }
+        }
+        catch (Exception ex)
+        {
+            WriteShutdownFailureEvent("При запуске контролируемого завершения возникло исключение", ex, "shutdown-start-exception");
+            return false;
+        }
+
+        task = RunControlledShutdownTask(coordinator, reason);
+        return true;
+    }
+
+    private static Task<CrashShutdownResult> RunControlledShutdownTask(
+        CrashCoordinator coordinator,
+        string reason)
+    {
+        Task<CrashShutdownResult> task;
+        try
+        {
+            task = Task.Run(() => RunControlledShutdownStagesAsync(coordinator, reason));
+        }
+        catch (Exception ex)
+        {
+            RecordShutdownFailure(coordinator, ex);
+            return Task.FromResult(BuildFaultedShutdownResult());
+        }
+
+        _ = task.ContinueWith(
+            completed => CompleteControlledShutdown(coordinator, completed),
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+        return task;
+    }
+
+    internal static void RegisterShutdownSettingsStage(Func<SettingsPersistenceResult> stage)
+    {
+        if (stage is null)
+        {
+            return;
+        }
+
+        lock (SettingsStageGate)
+        {
+            _settingsPersistenceStage ??= stage;
+        }
+    }
+
+    private static bool BeginProcessIntakeStop()
+    {
+        if (!ActiveProcessTracker.TryBeginShutdown())
+        {
+            return false;
+        }
+
+        return !ActiveProcessTracker.IsAcceptingRegistrations;
+    }
+
+    private static Task<CrashShutdownResult> RunControlledShutdownStagesAsync(
+        CrashCoordinator coordinator,
+        string reason)
+    {
+        return coordinator.RunControlledShutdownStagesAsync(
+            reason,
+            stopOperations: _ => Task.FromResult(BeginProcessIntakeStop()),
+            stopWatcher: _ => Task.FromResult(StopArgsWatcher()),
+            terminateProcesses: _ => Task.FromResult(KillTrackedProcesses()),
+            flush: _ => Task.FromResult(TryFlushLog()),
+            disposeServices: () => Task.FromResult(DisposeServices()),
+            requestExit: RequestExit,
+            cancellationToken: CancellationToken.None,
+            persistSettings: RunSettingsPersistenceStage,
+            writeTerminalEvent: WriteTerminalShutdownEvent);
+    }
+
+    private static void CompleteControlledShutdown(
+        CrashCoordinator coordinator,
+        Task<CrashShutdownResult> task)
+    {
+        CrashShutdownResult result;
+        try
+        {
+            result = task.Status == TaskStatus.RanToCompletion
+                ? task.Result
+                : BuildFaultedShutdownResult();
+        }
+        catch (Exception ex)
+        {
+            RecordShutdownFailure(coordinator, ex);
+            return;
+        }
+
+        if (task.IsFaulted)
+        {
+            RecordShutdownFailure(coordinator, task.Exception);
+            return;
+        }
+
+        if (!CrashCoordinator.IsShutdownOutcomeFailed(result))
+        {
+            return;
+        }
+
+        RecordShutdownStageFailure(coordinator, result);
+    }
+
+    private static CrashShutdownResult BuildFaultedShutdownResult()
+    {
+        return new CrashShutdownResult(
+            shutdownRequested: true,
+            operationsStopped: false,
+            settingsPersisted: false,
+            processesVerified: false,
+            watcherStopped: false,
+            flushSucceeded: false,
+            servicesDisposed: false,
+            exitRequested: false,
+            CrashShutdownResult.ErrorStageFailed,
+            ProcessTerminationSummary.Unavailable(CrashShutdownResult.ErrorStageFailed));
+    }
+
+    private static void RecordShutdownFailure(CrashCoordinator coordinator, Exception? exception)
+    {
+        WriteShutdownFailureEvent("Сбой выполнения задачи контролируемого завершения приложения", exception, CrashShutdownResult.ErrorStageFailed);
+        try
+        {
+            coordinator.Record(coordinator.CreateRelatedRecord(
+                "App.Shutdown",
+                exception,
+                "Задача контролируемого завершения не выполнена",
+                LogLevel.Fatal,
+                CrashEventKind.ControlledShutdown,
+                emergencyRequired: true,
+                coordinator.LastControlledShutdownCrashId));
+        }
+        catch (Exception)
+        {
+        }
+
+        DisposeServices();
+        RequestExit();
+    }
+
+    private static void RecordShutdownStageFailure(CrashCoordinator coordinator, CrashShutdownResult result)
+    {
+        string errorCode = string.IsNullOrEmpty(result.ErrorCode)
+            ? CrashShutdownResult.ErrorStageFailed
+            : result.ErrorCode!;
+        Dictionary<string, object?> properties = CrashCoordinator.BuildStageProperties(result);
+        properties["ErrorCode"] = errorCode;
+        if (result.ProcessSummary is { } summary)
+        {
+            foreach (KeyValuePair<string, object?> pair in summary.ToLogProperties())
+            {
+                properties[pair.Key] = pair.Value;
+            }
+        }
+
+        try
+        {
+            coordinator.Record(
+                coordinator.CreateRelatedRecord(
+                    "App.Shutdown",
+                    null,
+                    "Контролируемое завершение приложения завершилось с ошибками: " + errorCode,
+                    LogLevel.Error,
+                    CrashEventKind.ControlledShutdown,
+                    emergencyRequired: true,
+                    coordinator.LastControlledShutdownCrashId),
+                properties);
+        }
+        catch (Exception)
+        {
+        }
+    }
+
+    private static Task<SettingsPersistenceResult> RunSettingsPersistenceStage(CancellationToken cancellationToken)
+    {
+        _ = cancellationToken;
+        Func<SettingsPersistenceResult>? stage;
+        lock (SettingsStageGate)
+        {
+            stage = _settingsPersistenceStage;
+        }
+
+        if (stage is null)
+        {
+            return Task.FromResult(SettingsPersistenceResult.StageUnavailable);
+        }
+
+        try
+        {
+            return Task.FromResult(stage());
+        }
+        catch (Exception)
+        {
+            return Task.FromResult(SettingsPersistenceResult.Failure("settings-persistence-exception"));
+        }
+    }
+
+    private static Task WriteTerminalShutdownEvent(CrashShutdownResult result, CancellationToken cancellationToken)
+    {
+        _ = cancellationToken;
+        bool pending = string.IsNullOrEmpty(result.ErrorCode)
+            || string.Equals(result.ErrorCode, CrashShutdownResult.ErrorExitRequestPending, StringComparison.Ordinal);
+        if (!result.ProcessesVerified)
+        {
+            ProcessTerminationSummary summary = result.ProcessSummary
+                ?? ProcessTerminationSummary.Unavailable("process-summary-missing");
+            Dictionary<string, object?> properties = summary.ToLogProperties();
+            properties["ErrorCode"] = summary.ErrorCode ?? AppErrorCodes.ShutdownProcessFailure;
+            WriteAppEvent(
+                AppEventIds.ControlledShutdownProcessFailure,
+                LogLevel.Error,
+                LogStatus.Failed,
+                "Активные процессы не подтверждены как завершённые при контролируемом завершении",
+                null,
+                properties);
+        }
+
+        if (!result.SettingsPersisted)
+        {
+            WriteAppEvent(
+                AppEventIds.ControlledShutdownSettingsPersistenceFailed,
+                LogLevel.Error,
+                LogStatus.Failed,
+                "Настройки не сохранены при контролируемом завершении",
+                null,
+                new Dictionary<string, object?>(StringComparer.Ordinal)
                 {
-                    sb.AppendLine($"  Тип: {inner.GetType().FullName}");
-                    sb.AppendLine($"  Сообщение: {inner.Message}");
-                    sb.AppendLine($"  Стек: {inner.StackTrace}");
-                }
-            }
+                    ["Stage"] = "settings_persistence",
+                    ["Persisted"] = false,
+                    ["ErrorCode"] = string.IsNullOrEmpty(result.ErrorCode)
+                        ? CrashShutdownResult.ErrorSettingsPersistenceFailed
+                        : result.ErrorCode!
+                });
         }
 
-        sb.AppendLine("=== КОНЕЦ АВАРИЙНОГО ОТЧЁТА ===");
-        return sb.ToString();
+        if (!result.WatcherStopped)
+        {
+            WriteAppEvent(
+                AppEventIds.ControlledShutdownWatcherFailure,
+                LogLevel.Error,
+                LogStatus.Failed,
+                "Наблюдатель аргументов остановлен некорректно",
+                null,
+                new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["Stage"] = "watcher",
+                    ["ErrorCode"] = CrashShutdownResult.ErrorWatcherStopFailed
+                });
+        }
+
+        WriteAppEvent(
+            CrashCoordinator.ControlledShutdownCompletedEventId,
+            pending ? LogLevel.Info : LogLevel.Error,
+            pending ? LogStatus.Succeeded : LogStatus.Failed,
+            "Этапы контролируемого завершения выполнены до запроса выхода",
+            null,
+            CrashCoordinator.BuildStageProperties(result));
+        return Task.CompletedTask;
     }
 
-    /// <summary>
-    /// Записывает аварийный отчёт в файл crash_report.txt рядом с exe приложения.
-    /// Использует прямой File.AppendAllText без зависимости от LogService,
-    /// чтобы отчёт был доступен даже при сбое логгера.
-    /// </summary>
-    private static void WriteCrashReport(string report)
+    private static ProcessTerminationSummary KillTrackedProcesses()
     {
-        // 1. Попытка записи в LocalAppData (всегда доступно для записи)
         try
         {
-            string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-            string ktoolsFolder = System.IO.Path.Combine(localAppData, "KTools");
-            System.IO.Directory.CreateDirectory(ktoolsFolder);
-            string localCrashFile = System.IO.Path.Combine(ktoolsFolder, "crash_report.txt");
-            System.IO.File.AppendAllText(
-                localCrashFile,
-                report + Environment.NewLine,
-                System.Text.Encoding.UTF8);
+            return ActiveProcessTracker.KillAll(ProcessTerminationTimeout);
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"[FATAL] Ошибка при записи файла краш-отчёта в LocalAppData: {ex.Message}");
+            ProcessTerminationSummary faulted = ProcessTerminationSummary.Faulted("termination-exception");
+            Dictionary<string, object?> properties = faulted.ToLogProperties();
+            properties["ErrorCode"] = AppErrorCodes.ShutdownProcessTerminationException;
+            WriteAppEvent(
+                AppEventIds.ControlledShutdownProcessFailure,
+                LogLevel.Error,
+                LogStatus.Failed,
+                "Завершение процессов вызвало исключение при контролируемом завершении",
+                ex,
+                properties);
+            return faulted;
+        }
+    }
+
+    private static void WriteShutdownFailureEvent(string message, Exception? exception, string? errorCode)
+    {
+        WriteAppEvent(
+            CrashCoordinator.ControlledShutdownFailedEventId,
+            LogLevel.Error,
+            LogStatus.Failed,
+            message,
+            exception,
+            new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["Stage"] = "controlled_shutdown",
+                ["Succeeded"] = false,
+                ["Failed"] = true,
+                ["ErrorCode"] = string.IsNullOrEmpty(errorCode) ? AppErrorCodes.ShutdownStageFailed : errorCode
+            });
+    }
+
+    private static void WriteEmergencyFallback(Exception? exception, bool terminating)
+    {
+        try
+        {
+            EmergencyLogSink.Shared.Write(
+                terminating ? "Критическое завершающее исключение AppDomain" : "Необработанное исключение AppDomain",
+                exception,
+                "App.Domain",
+                "domain-" + Guid.NewGuid().ToString("N"),
+                _crashCoordinator?.SessionId ?? Guid.Empty,
+                LogLevel.Fatal);
+        }
+        catch (Exception)
+        {
+        }
+    }
+
+    private static bool TryFlushLog()
+    {
+        try
+        {
+            bool flushed = _logService?.Flush(ShutdownFlushTimeout) == true;
+            if (!flushed)
+            {
+                WriteAppEvent(
+                    AppEventIds.ControlledShutdownFlushFailure,
+                    LogLevel.Error,
+                    LogStatus.Failed,
+                    "Сброс буфера журнала не завершён при контролируемом завершении",
+                    null,
+                    new Dictionary<string, object?>(StringComparer.Ordinal)
+                    {
+                        ["Stage"] = "flush",
+                        ["ErrorCode"] = AppErrorCodes.ShutdownFlushIncomplete
+                    });
+            }
+
+            return flushed;
+        }
+        catch (Exception ex)
+        {
+            WriteAppEvent(
+                AppEventIds.ControlledShutdownFlushFailure,
+                LogLevel.Error,
+                LogStatus.Failed,
+                "Сброс буфера журнала не удался при контролируемом завершении",
+                ex,
+                new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["Stage"] = "flush",
+                    ["ErrorCode"] = AppErrorCodes.ShutdownFlushException
+                });
+            return false;
+        }
+    }
+
+    internal static Task<bool> RequestExit()
+    {
+        if (Application.Current is null)
+        {
+            WriteShutdownFailureEvent(
+                "У запроса выхода нет целевого приложения",
+                null,
+                ExitRequestExecutor.ErrorTargetMissing);
+            return Task.FromResult(false);
         }
 
-        // 2. Попытка записи рядом с exe
+        Microsoft.UI.Dispatching.DispatcherQueue? queue = UiDispatcherQueue;
+        Func<Action, bool>? enqueue = queue is null
+            ? null
+            : action => queue.TryEnqueue(() => action());
+        return ExitRequestExecutor.RequestAsync(
+            enqueue,
+            static () => Application.Current?.Exit(),
+            ExitRequestExecutor.DefaultTimeout,
+            static errorCode => WriteShutdownFailureEvent(
+                "Запрос выхода не выполнен",
+                null,
+                errorCode));
+    }
+
+    internal static bool StopArgsWatcher()
+    {
+        FileSystemWatcher? watcher;
+        lock (ArgsWatcherGate)
+        {
+            watcher = _argsWatcher;
+            _argsWatcher = null;
+        }
+
+        if (watcher is null)
+        {
+            return true;
+        }
+
         try
         {
-            string exeDir = AppContext.BaseDirectory;
-            string crashFile = System.IO.Path.Combine(exeDir, "crash_report.txt");
-            System.IO.File.AppendAllText(
-                crashFile,
-                report + Environment.NewLine,
-                System.Text.Encoding.UTF8);
+            watcher.EnableRaisingEvents = false;
+            watcher.Dispose();
+            return true;
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            System.Diagnostics.Debug.WriteLine($"[FATAL] Ошибка при записи файла краш-отчёта в папку exe: {ex.Message}");
+            return false;
+        }
+    }
+
+    internal static bool DisposeServices()
+    {
+        if (Interlocked.Exchange(ref _servicesDisposed, 1) != 0)
+        {
+            return true;
+        }
+
+        try
+        {
+            (Services as IDisposable)?.Dispose();
+            return true;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    internal static bool IsControlledShutdownStarted =>
+        _crashCoordinator?.IsControlledShutdownStarted == true;
+
+    private static void WriteAppEvent(
+        AppEventId eventId,
+        LogLevel level,
+        LogStatus status,
+        string message,
+        Exception? exception,
+        IReadOnlyDictionary<string, object?> properties)
+    {
+        try
+        {
+            _logService?.Write(
+                eventId.Value,
+                level,
+                status,
+                message,
+                exception,
+                "App",
+                context: null,
+                properties: properties);
+        }
+        catch (Exception)
+        {
         }
     }
 
@@ -214,14 +718,19 @@ public partial class App : Application
                 .HandleTransientHttpError()
                 .WaitAndRetryAsync(3, retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt))));
 
-        // 1. Регистрация служб ядра через чистый DI
-        services.AddSingleton<ILogService, LogService>();
+        services.AddSingleton<LogService>();
+        services.AddSingleton<ILogService>(provider => provider.GetRequiredService<LogService>());
+        services.AddSingleton<EmergencyLogSink>();
+        services.AddSingleton<CrashCoordinator>(provider => new CrashCoordinator(
+            provider.GetRequiredService<EmergencyLogSink>(),
+            provider.GetRequiredService<ILogService>()));
+        services.AddSingleton<ICrashCoordinator>(provider => provider.GetRequiredService<CrashCoordinator>());
         services.AddSingleton<ISystemInfoService, SystemInfoService>();
         services.AddSingleton<IPathManager, PathManager>();
         services.AddSingleton<ISettingsManager, SettingsManager>();
         services.AddSingleton<IDependencyManager, DependencyManager>();
         services.AddSingleton<IScriptRegistry, ScriptRegistry>();
-        
+
         services.AddSingleton<IHardwareCapabilityCache, HardwareCapabilityCache>();
         services.AddSingleton<IVideoEncoder, NvencEncoder>();
         services.AddSingleton<IVideoEncoder, X265Encoder>();
@@ -237,6 +746,7 @@ public partial class App : Application
         services.AddSingleton<IBitrateAnalyzerService, BitrateAnalyzerService>();
         services.AddSingleton<IDiskTypeDetectorService, DiskTypeDetectorService>();
         services.AddSingleton<IAudioWaveformService, AudioWaveformService>();
+        services.AddSingleton<IVttParser, VttParser>();
         services.AddSingleton<IAssParser, AssParser>();
         services.AddSingleton<IWhisperModelManager, WhisperModelManager>();
         services.AddSingleton<IWhisperRunner, WhisperRunner>();
@@ -291,6 +801,23 @@ public partial class App : Application
         try
         {
             // Инициализируем логирование при старте приложения
+            ILogService logService = _logService ?? Services.GetRequiredService<ILogService>();
+            LogLevel startupMinLevel = ResolveStartupLogLevel(
+                IsDiagnosticBuild,
+                Environment.GetEnvironmentVariable(MinLevelEnvironmentVariable));
+            logService.MinLevel = startupMinLevel;
+            WriteAppEvent(
+                AppEventIds.DiagnosticsLoggingArmed,
+                LogLevel.Info,
+                LogStatus.Changed,
+                "Минимальный уровень журналирования установлен",
+                null,
+                new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["Stage"] = "logging",
+                    ["Level"] = logService.MinLevel.ToString()
+                });
+
             bool isAdmin = false;
             try
             {
@@ -302,15 +829,30 @@ public partial class App : Application
             }
             catch (Exception ex)
             {
-                _logService?.Exception(
+                WriteAppEvent(
+                    AppEventIds.AdminCheckFailed,
+                    LogLevel.Error,
+                    LogStatus.Failed,
+                    "Не удалось проверить статус администратора",
                     ex,
-                    "Не удалось определить, запущено ли приложение с правами администратора",
-                    "App");
+                    new Dictionary<string, object?>(StringComparer.Ordinal)
+                    {
+                        ["Stage"] = "administrator_check",
+                        ["ErrorCode"] = AppErrorCodes.AdminCheckFailed
+                    });
             }
 
-            _logService?.Info(
-                $"=== Запуск приложения K-Tools C# Edition (Права администратора: {(isAdmin ? "Да" : "Нет")}) ===",
-                "App");
+            WriteAppEvent(
+                AppEventIds.Started,
+                LogLevel.Info,
+                LogStatus.Running,
+                "Запуск приложения начат",
+                null,
+                new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["IsAdmin"] = isAdmin,
+                    ["Platform"] = Environment.Is64BitProcess ? "x64" : "x86"
+                });
 
             // Логирование основных аппаратных и системных характеристик
             try
@@ -319,28 +861,49 @@ public partial class App : Application
             }
             catch (Exception ex)
             {
-                _logService?.Exception(ex, "Не удалось вывести характеристики системы при запуске", "App");
+                WriteAppEvent(
+                    AppEventIds.SystemInfoFailed,
+                    LogLevel.Error,
+                    LogStatus.Failed,
+                    "Не удалось получить характеристики системы",
+                    ex,
+                    new Dictionary<string, object?>(StringComparer.Ordinal)
+                    {
+                        ["Stage"] = "system_info",
+                        ["ErrorCode"] = AppErrorCodes.SystemInfoFailed
+                    });
             }
 
-            string settingsDir = Services.GetRequiredService<IPathManager>().GetSettingsDirectory();
-            _logService?.Info(
-                $"Конфигурация приложения успешно "
-                + $"инициализирована. Папка: {settingsDir}",
-                "SettingsManager");
+            WriteAppEvent(
+                AppEventIds.SettingsResolved,
+                LogLevel.Info,
+                LogStatus.Succeeded,
+                "Служба настроек получена",
+                null,
+                new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["Stage"] = "settings"
+                });
 
             // При первом запуске автоматически инициализируем
             // все настройки по умолчанию
-            _logService?.DebugLog(
-                "Выполняется автоматическая инициализация "
-                + "настроек по умолчанию...",
-                "App");
+            WriteAppEvent(
+                AppEventIds.DefaultSettingsInitializationStarted,
+                LogLevel.Info,
+                LogStatus.Running,
+                "Инициализация настроек по умолчанию начата",
+                null,
+                new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["Stage"] = "default_settings"
+                });
             _ = Services.GetRequiredService<IScriptRegistry>().Scripts;
             _ = Task.Run(() => Services.GetRequiredService<KTools_App.Encoders.IHardwareCapabilityCache>().InitializeAsync());
 
             // Автоматически обновляем ключи контекстного меню в реестре, если интеграция включена
             try
             {
-                var settingsManager = Services.GetRequiredService<ISettingsManager>();
+                ISettingsManager settingsManager = _settingsManager ?? Services.GetRequiredService<ISettingsManager>();
                 if (settingsManager.GetSetting("Shell", "IsContextMenuEnabled", false))
                 {
                     var exePath = Environment.ProcessPath;
@@ -351,32 +914,38 @@ public partial class App : Application
                         if (ShellIntegration.NeedsUpdate(exePath, scripts))
                         {
                             ShellIntegration.Register(exePath, scripts);
-                            _logService?.Info("Реестр контекстного меню успешно обновлен при запуске", "App");
+                            WriteAppEvent(
+                                AppEventIds.ShellIntegrationUpdated,
+                                LogLevel.Info,
+                                LogStatus.Succeeded,
+                                "Интеграция с оболочкой обновлена",
+                                null,
+                                new Dictionary<string, object?>(StringComparer.Ordinal)
+                                {
+                                    ["Stage"] = "shell_integration"
+                                });
                         }
                     }
                 }
             }
             catch (Exception ex)
             {
-                _logService?.Exception(ex, "Не удалось обновить контекстное меню при запуске", "App");
+                WriteAppEvent(
+                    AppEventIds.ShellIntegrationFailed,
+                    LogLevel.Error,
+                    LogStatus.Failed,
+                    "Не удалось обновить интеграцию с оболочкой",
+                    ex,
+                    new Dictionary<string, object?>(StringComparer.Ordinal)
+                    {
+                        ["Stage"] = "shell_integration",
+                        ["ErrorCode"] = AppErrorCodes.ShellIntegrationFailed
+                    });
             }
 
             // Создаём и активируем главное окно
             var window = Services.GetRequiredService<MainWindow>();
             CurrentMainWindow = window;
-            window.Closed += (s, e) =>
-            {
-                try
-                {
-                    _argsWatcher?.Dispose();
-                    _argsWatcher = null;
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine($"[App] Ошибка при освобождении FileSystemWatcher: {ex.Message}");
-                }
-            };
-
             // Инициализируем провайдер дескриптора окна
             var handleProvider = Services
                 .GetRequiredService<IWindowHandleProvider>();
@@ -394,7 +963,17 @@ public partial class App : Application
             var (script, filesList) = ParseCommandLineArray(ownArgs);
             if (!string.IsNullOrEmpty(script) || filesList.Count > 0)
             {
-                _logService?.Info($"Обработка собственных аргументов запуска. Скрипт: {script ?? "нет"}, файлов: {filesList.Count}", "App");
+                WriteAppEvent(
+                    AppEventIds.OwnArgumentsReceived,
+                    LogLevel.Info,
+                    LogStatus.Running,
+                    "Получены аргументы собственного процесса",
+                    null,
+                    new Dictionary<string, object?>(StringComparer.Ordinal)
+                    {
+                        ["Count"] = filesList.Count,
+                        ["Reason"] = string.IsNullOrEmpty(script) ? "files-only" : "script-and-files"
+                    });
                 WeakReferenceMessenger.Default.Send(new ShellActivationMessage(script, filesList));
             }
 
@@ -403,15 +982,54 @@ public partial class App : Application
 
             // Запускаем отслеживание новых аргументов через FileSystemWatcher
             StartArgsWatcher();
+
+            WriteDiagnosticsStatus(logService);
         }
         catch (Exception ex)
         {
-            _logService?.Exception(
+            WriteAppEvent(
+                AppEventIds.StartupFailed,
+                LogLevel.Fatal,
+                LogStatus.Failed,
+                "Запуск приложения не выполнен",
                 ex,
-                "Критическая ошибка при инициализации приложения.",
-                "App");
+                new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["Stage"] = "startup",
+                    ["ErrorCode"] = AppErrorCodes.StartupFailed
+                });
             throw;
         }
+    }
+
+    /// <summary>
+    /// Публикует снимок счётчиков журналирования, чтобы потери и отказы записи
+    /// были наблюдаемы в production без доступа к внутреннему состоянию сервиса.
+    /// </summary>
+    private static void WriteDiagnosticsStatus(ILogService logService)
+    {
+        LogServiceStatus status = logService.Status;
+        WriteAppEvent(
+            AppEventIds.DiagnosticsStatus,
+            LogLevel.Info,
+            LogStatus.Succeeded,
+            "Снимок счётчиков журналирования",
+            null,
+            new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["Stage"] = "logging",
+                ["Level"] = status.MinLevel.ToString(),
+                ["QueueLength"] = status.QueuedEvents,
+                ["QueuedBytes"] = status.QueuedBytes,
+                ["DroppedCount"] = status.DroppedEvents,
+                ["RejectedCount"] = status.RejectedEvents,
+                ["WriteErrors"] = status.WriteErrors,
+                ["RotationErrors"] = status.RotationErrors,
+                ["SubscriberErrors"] = status.SubscriberErrors,
+                ["SubscriberDropped"] = status.SubscriberDropped,
+                ["DisposeErrors"] = status.DisposeErrors,
+                ["ReadErrors"] = status.ReadErrors
+            });
     }
 
     /// <summary>
@@ -421,75 +1039,170 @@ public partial class App : Application
     {
         if (UiDispatcherQueue == null)
         {
-            _logService?.Warn("Пропуск обработки отложенных аргументов: UiDispatcherQueue еще не инициализирован.", "App");
+            WriteAppEvent(
+                AppEventIds.PendingArgsDeferred,
+                LogLevel.Info,
+                LogStatus.Skipped,
+                "Обработка отложенных аргументов перенесена до готовности диспетчера интерфейса",
+                null,
+                new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["Stage"] = "pending_args"
+                });
             return;
         }
 
         try
         {
-            string appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-            string dir = Path.Combine(appData, "KTools", "PendingArgs");
-            if (!Directory.Exists(dir)) return;
+            string directory = PendingArgsChannel.ResolveDirectory();
+            if (!Directory.Exists(directory))
+            {
+                return;
+            }
 
-            string[] files = Directory.GetFiles(dir, "*.txt");
-            foreach (string file in files)
+            int pruned = PendingArgsChannel.Prune(directory, PendingArgsChannel.MaxAge, PendingArgsChannel.MaxRetainedFiles);
+            if (pruned > 0)
+            {
+                WriteAppEvent(
+                    AppEventIds.PendingArgsPruned,
+                    LogLevel.Info,
+                    LogStatus.Succeeded,
+                    "Просроченные файлы отложенных аргументов удалены",
+                    null,
+                    new Dictionary<string, object?>(StringComparer.Ordinal)
+                    {
+                        ["Count"] = pruned,
+                        ["Stage"] = "pending_args"
+                    });
+            }
+
+            foreach (string file in PendingArgsChannel.EnumeratePendingFiles(directory, PendingArgsChannel.MaxRetainedFiles))
             {
                 string[]? args = null;
                 for (int attempt = 0; attempt < 3; attempt++)
                 {
                     try
                     {
-                        if (!File.Exists(file)) break;
+                        if (!File.Exists(file))
+                        {
+                            break;
+                        }
+
                         args = File.ReadAllLines(file);
-                        File.Delete(file);
+                        PendingArgsChannel.TryDelete(file);
                         break;
                     }
-                    catch (IOException ioEx)
+                    catch (IOException ex)
                     {
-                        System.Diagnostics.Debug.WriteLine($"[PendingArgs] Попытка {attempt + 1}/3: файл '{file}' занят другом процессом: {ioEx.Message}");
+                        WriteAppEvent(
+                            AppEventIds.PendingArgsRetry,
+                            LogLevel.Warning,
+                            LogStatus.RetryScheduled,
+                            "Файл отложенных аргументов занят",
+                            ex,
+                            new Dictionary<string, object?>(StringComparer.Ordinal)
+                            {
+                                ["Attempt"] = attempt + 1,
+                                ["Stage"] = "pending_args"
+                            });
                         if (attempt < 2)
                         {
-                            System.Threading.Thread.Sleep((attempt + 1) * 150);
+                            Thread.Sleep((attempt + 1) * 150);
                         }
                     }
                     catch (Exception ex)
                     {
-                        _logService?.Exception(ex, $"Ошибка при чтении файла отложенных аргументов: {file}", "App");
+                        WriteAppEvent(
+                            AppEventIds.PendingArgsReadFailed,
+                            LogLevel.Error,
+                            LogStatus.Failed,
+                            "Не удалось прочитать файл отложенных аргументов",
+                            ex,
+                            new Dictionary<string, object?>(StringComparer.Ordinal)
+                            {
+                                ["Stage"] = "pending_args",
+                                ["ErrorCode"] = AppErrorCodes.PendingArgsReadFailed
+                            });
                         break;
                     }
                 }
 
-                if (args == null || args.Length == 0) continue;
+                if (args == null || args.Length == 0)
+                {
+                    continue;
+                }
 
                 try
                 {
                     var (script, filesList) = ParseCommandLineArray(args);
                     if (UiDispatcherQueue is Microsoft.UI.Dispatching.DispatcherQueue dispatcherQueue)
                     {
-                        dispatcherQueue.TryEnqueue(() =>
+                        bool enqueued = dispatcherQueue.TryEnqueue(() =>
                         {
-                            _logService?.Info($"Обработка перенаправленных файлов из файла аргументов. Скрипт: {script ?? "нет"}, файлов: {filesList.Count}", "App");
+                            WriteAppEvent(
+                                AppEventIds.PendingArgsProcessed,
+                                LogLevel.Info,
+                                LogStatus.Succeeded,
+                                "Отложенные аргументы обработаны",
+                                null,
+                                new Dictionary<string, object?>(StringComparer.Ordinal)
+                                {
+                                    ["Count"] = filesList.Count,
+                                    ["Reason"] = string.IsNullOrEmpty(script) ? "files-only" : "script-and-files"
+                                });
                             BringMainWindowToFront();
                             if (!string.IsNullOrEmpty(script) || filesList.Count > 0)
                             {
                                 WeakReferenceMessenger.Default.Send(new ShellActivationMessage(script, filesList));
                             }
                         });
+                        if (!enqueued)
+                        {
+                            WriteAppEvent(
+                                AppEventIds.PendingArgsDispatchFailed,
+                                LogLevel.Error,
+                                LogStatus.Failed,
+                                "Не удалось передать отложенные аргументы",
+                                null,
+                                new Dictionary<string, object?>(StringComparer.Ordinal)
+                                {
+                                    ["Stage"] = "pending_args",
+                                    ["ErrorCode"] = AppErrorCodes.PendingArgsDispatchFailed
+                                });
+                        }
                     }
                 }
                 catch (Exception ex)
                 {
-                    _logService?.Exception(ex, "Ошибка при обработке разобранных аргументов", "App");
+                    WriteAppEvent(
+                        AppEventIds.PendingArgsParseFailed,
+                        LogLevel.Error,
+                        LogStatus.Failed,
+                        "Не удалось разобрать отложенные аргументы",
+                        ex,
+                        new Dictionary<string, object?>(StringComparer.Ordinal)
+                        {
+                            ["Stage"] = "pending_args",
+                            ["ErrorCode"] = AppErrorCodes.PendingArgsParseFailed
+                        });
                 }
             }
         }
         catch (Exception ex)
         {
-            _logService?.Exception(ex, "Ошибка при доступе к папке отложенных аргументов", "App");
+            WriteAppEvent(
+                AppEventIds.PendingArgsDirectoryFailed,
+                LogLevel.Error,
+                LogStatus.Failed,
+                "Нет доступа к каталогу отложенных аргументов",
+                ex,
+                new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["Stage"] = "pending_args",
+                    ["ErrorCode"] = AppErrorCodes.PendingArgsDirectoryFailed
+                });
         }
     }
-
-    private static FileSystemWatcher? _argsWatcher;
 
     /// <summary>
     /// Запускает FileSystemWatcher для отслеживания новых файлов аргументов в директории PendingArgs.
@@ -498,33 +1211,36 @@ public partial class App : Application
     {
         try
         {
-            string appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-            string dir = Path.Combine(appData, "KTools", "PendingArgs");
-            if (!Directory.Exists(dir))
-            {
-                Directory.CreateDirectory(dir);
-            }
-
-            _argsWatcher = new FileSystemWatcher(dir, "*.txt")
+            string directory = PendingArgsChannel.ResolveDirectory();
+            Directory.CreateDirectory(directory);
+            FileSystemWatcher watcher = new(directory, PendingArgsChannel.FileSearchPattern)
             {
                 EnableRaisingEvents = true
             };
-
-            _argsWatcher.Created += (s, e) =>
+            watcher.Created += (_, _) =>
             {
-                // Небольшая задержка, чтобы дать другому процессу завершить запись в файл
-                System.Threading.Thread.Sleep(50);
+                Thread.Sleep(50);
                 ProcessPendingArgsFiles();
             };
-
-            _argsWatcher.Changed += (s, e) =>
+            watcher.Changed += (_, _) => ProcessPendingArgsFiles();
+            lock (ArgsWatcherGate)
             {
-                ProcessPendingArgsFiles();
-            };
+                _argsWatcher = watcher;
+            }
         }
         catch (Exception ex)
         {
-            _logService?.Exception(ex, "Ошибка при инициализации FileSystemWatcher для аргументов запуска", "App");
+            WriteAppEvent(
+                AppEventIds.PendingArgsWatcherFailed,
+                LogLevel.Error,
+                LogStatus.Failed,
+                "Не удалось запустить наблюдатель отложенных аргументов",
+                ex,
+                new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["Stage"] = "pending_args",
+                    ["ErrorCode"] = AppErrorCodes.PendingArgsWatcherFailed
+                });
         }
     }
 
@@ -570,7 +1286,17 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
-            _logService?.Error($"Не удалось вывести главное окно на передний план: {ex.Message}", "App");
+            WriteAppEvent(
+                AppEventIds.WindowActivationFailed,
+                LogLevel.Error,
+                LogStatus.Failed,
+                "Не удалось активировать главное окно",
+                ex,
+                new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["Stage"] = "window_activation",
+                    ["ErrorCode"] = AppErrorCodes.WindowActivationFailed
+                });
         }
     }
 
@@ -580,22 +1306,6 @@ public partial class App : Application
     public static void HandleActivation(AppActivationArguments args)
     {
         ProcessPendingArgsFiles();
-    }
-
-    private static (string? Script, List<string> Files) ParseActivationArgs(AppActivationArguments args)
-    {
-        string? script = null;
-        var files = new List<string>();
-
-        if (args.Kind == ExtendedActivationKind.Launch)
-        {
-            if (args.Data is Windows.ApplicationModel.Activation.ILaunchActivatedEventArgs launchArgs)
-            {
-                var rawArgs = SplitCommandLine(launchArgs.Arguments);
-                (script, files) = ParseCommandLineArray(rawArgs);
-            }
-        }
-        return (script, files);
     }
 
     public static (string? Script, List<string> Files) ParseCommandLineArray(string[] args)
@@ -668,6 +1378,36 @@ public partial class App : Application
 }
 
 /// <summary>
+/// Зафиксированный порядок стартовой инициализации приложения:
+/// журналирование поднимается первым, глобальные обработчики сбоя
+/// регистрируются до разрешения менеджера настроек, а менеджер настроек
+/// настраивает фактический каталог журнала до первого бизнес-события.
+/// </summary>
+public static class AppStartupPipeline
+{
+    public const string LoggerStage = "logger-resolved";
+    public const string CrashHandlersStage = "crash-handlers-registered";
+    public const string SettingsStage = "settings-resolved";
+
+    public static IReadOnlyList<string> Run(
+        ILogService logger,
+        Action registerCrashHandlers,
+        Func<ISettingsManager> resolveSettings)
+    {
+        ArgumentNullException.ThrowIfNull(logger);
+        ArgumentNullException.ThrowIfNull(registerCrashHandlers);
+        ArgumentNullException.ThrowIfNull(resolveSettings);
+
+        List<string> completed = new(3) { LoggerStage };
+        registerCrashHandlers();
+        completed.Add(CrashHandlersStage);
+        resolveSettings();
+        completed.Add(SettingsStage);
+        return completed;
+    }
+}
+
+/// <summary>
 /// Сообщение активации через командную строку/Проводник.
 /// </summary>
 public sealed class ShellActivationMessage
@@ -679,5 +1419,126 @@ public sealed class ShellActivationMessage
     {
         ScriptTag = scriptTag;
         Files = files;
+    }
+}
+
+/// <summary>
+/// Ограниченный по времени исполнитель запроса выхода из приложения.
+/// Возвращает фактический результат: успех возможен только когда запрос
+/// поставлен в очередь диспетчера и действие выхода выполнено без исключения.
+/// </summary>
+public static class ExitRequestExecutor
+{
+    public const string ErrorTargetMissing = "exit-target-missing";
+    public const string ErrorEnqueueFailed = "exit-enqueue-failed";
+    public const string ErrorExecuteFailed = "exit-execute-failed";
+    public const string ErrorTimeout = "exit-timeout";
+
+    public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(2);
+
+    public static async Task<bool> RequestAsync(
+        Func<Action, bool>? enqueue,
+        Action exit,
+        TimeSpan timeout,
+        Action<string>? onFailure)
+    {
+        if (exit is null)
+        {
+            Report(onFailure, ErrorTargetMissing);
+            return false;
+        }
+
+        TaskCompletionSource<bool> completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (enqueue is null)
+        {
+            if (!TryExecute(exit, completion))
+            {
+                Report(onFailure, ErrorExecuteFailed);
+                return false;
+            }
+        }
+        else
+        {
+            bool enqueued;
+            try
+            {
+                enqueued = enqueue(() => TryExecute(exit, completion));
+            }
+            catch (Exception)
+            {
+                Report(onFailure, ErrorEnqueueFailed);
+                return false;
+            }
+
+            if (!enqueued)
+            {
+                Report(onFailure, ErrorEnqueueFailed);
+                return false;
+            }
+        }
+
+        Task completed;
+        try
+        {
+            completed = await Task.WhenAny(completion.Task, Task.Delay(timeout)).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            Observe(completion.Task);
+            Report(onFailure, ErrorTimeout);
+            return false;
+        }
+
+        if (!ReferenceEquals(completed, completion.Task))
+        {
+            Observe(completion.Task);
+            Report(onFailure, ErrorTimeout);
+            return false;
+        }
+
+        try
+        {
+            return await completion.Task.ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            Report(onFailure, ErrorExecuteFailed);
+            return false;
+        }
+    }
+
+    private static bool TryExecute(Action exit, TaskCompletionSource<bool> completion)
+    {
+        try
+        {
+            exit();
+            completion.TrySetResult(true);
+            return true;
+        }
+        catch (Exception)
+        {
+            completion.TrySetException(new InvalidOperationException(ErrorExecuteFailed));
+            return false;
+        }
+    }
+
+    private static void Observe(Task task)
+    {
+        _ = task.ContinueWith(
+            static observed => _ = observed.Exception,
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
+    private static void Report(Action<string>? onFailure, string errorCode)
+    {
+        try
+        {
+            onFailure?.Invoke(errorCode);
+        }
+        catch (Exception)
+        {
+        }
     }
 }

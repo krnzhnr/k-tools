@@ -1,5 +1,6 @@
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
 using System.Collections.Generic;
+
 using KTools_App.Core;
 
 namespace KTools_App.Encoders.Capabilities;

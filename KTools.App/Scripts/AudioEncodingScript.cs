@@ -1,4 +1,3 @@
-using KTools_App.Services.Contracts;
 // -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
@@ -9,7 +8,12 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using KTools_App.Core;
+using KTools_App.Diagnostics;
 using KTools_App.Infrastructure;
+using KTools_App.Models;
+using KTools_App.Services.Contracts;
+
+using ExecutionContext = KTools_App.Models.ExecutionContext;
 
 namespace KTools_App.Scripts;
 
@@ -264,15 +268,15 @@ public sealed class AudioEncodingScript : AbstractScript
     /// <summary>
     /// Выполняет конвертацию одного аудио- или видеофайла.
     /// </summary>
-    public override async Task<List<string>> ExecuteSingleAsync(
+    public override async Task<ExecutionResult> ExecuteSingleAsync(
         string filePath,
         Dictionary<string, object> settings,
         string? outputPath,
         ScriptProgressCallback progressCallback,
         int fileIndex,
-        int totalCount)
+        int totalCount,
+        ExecutionContext context)
     {
-        ResetCancellation();
         var results = new List<string>();
 
         // 1. Извлекаем настройки пользователя
@@ -283,10 +287,7 @@ public sealed class AudioEncodingScript : AbstractScript
         string originalName = Path.GetFileName(filePath);
         string inputExt = Path.GetExtension(filePath).ToLowerInvariant();
 
-        _logService.Info(
-            $"Начало кодирования аудио для '{originalName}'. " +
-            $"Целевой формат: {targetFormat}",
-            "AudioEncodingScript");
+        _logService.Write("script.audio_encoding.started", LogLevel.Debug, LogStatus.Running, $"Начато кодирование аудио '{originalName}' в формат {LogRedactor.CompactSafeToken(targetFormat)}", source: Name, properties: LogProps.Create("InputName", LogProps.FileName(filePath)).With("Extension", LogRedactor.CompactSafeToken(targetFormat)));
 
         // 2. Определяем расширение и кодек
         var (targetExt, codec) = ResolveExtension(targetFormat, useM4a);
@@ -296,14 +297,19 @@ public sealed class AudioEncodingScript : AbstractScript
             !LossyFormats.Contains(targetFormat))
         {
             string skipMsg = $"⏭ ПРОПУСК (уже в формате {targetFormat}): {originalName}";
-            _logService.Info(skipMsg, "AudioEncodingScript");
+            _logService.Write("script.audio_encoding.skipped", LogLevel.Info, LogStatus.Skipped, skipMsg, source: Name, properties: LogProps.Create("InputName", LogProps.FileName(filePath)));
             progressCallback(
                 fileIndex,
                 totalCount,
                 $"Пропуск (уже {targetFormat}): {originalName}",
                 100.0);
             results.Add(skipMsg);
-            return results;
+            return ExecutionResult.Skipped(
+                context,
+                results,
+                errorCode: "already-target-format",
+                outputFile: filePath,
+                outputExists: File.Exists(filePath));
         }
 
         // 4. Формируем безопасный выходной путь
@@ -323,14 +329,19 @@ public sealed class AudioEncodingScript : AbstractScript
         if (File.Exists(outputFilePath) && !overwrite)
         {
             string skipMsg = $"⏭ ПРОПУСК (существует): {outputFileName}";
-            _logService.Info(skipMsg, "AudioEncodingScript");
+            _logService.Write("script.audio_encoding.skipped", LogLevel.Info, LogStatus.Skipped, skipMsg, source: Name, properties: LogProps.Create("InputName", LogProps.FileName(filePath)));
             progressCallback(
                 fileIndex,
                 totalCount,
                 $"Пропуск (существует): {outputFileName}",
                 100.0);
             results.Add(skipMsg);
-            return results;
+            return ExecutionResult.Skipped(
+                context,
+                results,
+                errorCode: "output-exists",
+                outputFile: outputFilePath,
+                outputExists: true);
         }
 
         // 6. Считываем длительность медиафайла и количество каналов для расчета прогресса и валидации кодеков
@@ -402,19 +413,14 @@ public sealed class AudioEncodingScript : AbstractScript
         }
         catch (Exception ex)
         {
-            _logService.Exception(
-                ex,
-                $"Не удалось прочесть метаданные для '{originalName}': {ex.Message}",
-                "AudioEncodingScript");
+            _logService.Write("script.audio_encoding.probe_failed", LogLevel.Warning, LogStatus.Skipped, $"Метаданные для '{originalName}' не прочитаны, кодирование продолжится с начальными параметрами", ex, Name, properties: LogProps.Create("ErrorCode", "PROBE_FAILED").With("InputName", LogProps.FileName(filePath)));
         }
 
-        _logService.DebugLog(
-            $"Медиафайл '{originalName}': длительность {duration:F2} сек., аудиоканалов: {audioChannels}",
-            "AudioEncodingScript");
+        _logService.Write("media.metadata.detected", LogLevel.Debug, LogStatus.Succeeded, $"Медиафайл '{originalName}': длительность {duration:F2} с, аудиоканалов: {audioChannels}", source: Name, properties: LogProps.Create("InputName", LogProps.FileName(filePath)).With("DurationMs", duration * 1000d).With("AudioChannels", audioChannels));
 
         // 7. Подготавливаем процесс кодирования
         var cts = new CancellationTokenSource();
-        bool success = false;
+        ProcessResult? success = null;
 
         if (targetFormat.Equals("QAAC", StringComparison.OrdinalIgnoreCase))
         {
@@ -431,9 +437,7 @@ public sealed class AudioEncodingScript : AbstractScript
                 : qaacBitrate;
 
             progressCallback(fileIndex, totalCount, "Запуск QAAC...", 0.0);
-            _logService.Info(
-                $"Запуск кодирования QAAC для '{originalName}' -> '{outputFileName}' (Режим: {qaacMode}, Значение: {selectedVal})",
-                "AudioEncodingScript");
+            _logService.Write("script.audio_encoding.qaac_started", LogLevel.Debug, LogStatus.Running, $"Запущено кодирование QAAC '{originalName}' -> '{LogProps.FileName(outputFilePath)}'", source: Name, properties: LogProps.Create("Tool", "qaac").With("InputName", LogProps.FileName(filePath)).With("OutputName", LogProps.FileName(outputFilePath)));
 
             var qaacTask = _qaacRunner.RunAsync(
                 inputPath: filePath,
@@ -457,9 +461,7 @@ public sealed class AudioEncodingScript : AbstractScript
             {
                 if (IsCancelled)
                 {
-                    _logService.Warn(
-                        $"Отмена кодирования QAAC пользователем для '{originalName}'",
-                        "AudioEncodingScript");
+                    _logService.Write("script.audio_encoding.qaac_cancelled", LogLevel.Info, LogStatus.Cancelled, $"Кодирование QAAC для '{originalName}' отменено", source: Name, properties: LogProps.Create("Tool", "qaac").With("Reason", "UserRequested").With("CleanupState", "NotStarted"));
                     cts.Cancel();
                     break;
                 }
@@ -472,10 +474,7 @@ public sealed class AudioEncodingScript : AbstractScript
             }
             catch (Exception ex)
             {
-                _logService.Exception(
-                    ex,
-                    $"Ошибка кодирования QAAC для '{originalName}': {ex.Message}",
-                    "AudioEncodingScript");
+                _logService.Write("script.audio_encoding.qaac_failed", LogLevel.Error, LogStatus.Failed, $"Кодирование QAAC для '{originalName}' не выполнено", ex, Name, properties: LogProps.Create("ErrorCode", "QAAC_ENCODING_FAILED").With("Tool", "qaac").With("InputName", LogProps.FileName(filePath)).With("Retryable", true));
             }
         }
         else
@@ -511,7 +510,7 @@ public sealed class AudioEncodingScript : AbstractScript
                     {
                         string adjustedBitrate = "224k";
                         string note = $"ℹ️ Для моно-аудио в формате OGG (Vorbis) битрейт скорректирован с {bitrate} до максимально допустимого {adjustedBitrate}";
-                        _logService.Info(note, "AudioEncodingScript");
+                        _logService.Write("script.audio_encoding.note", LogLevel.Debug, LogStatus.Changed, note, source: Name, properties: LogProps.Create("InputName", LogProps.FileName(filePath)));
                         results.Add(note);
                         bitrate = adjustedBitrate;
                     }
@@ -519,7 +518,7 @@ public sealed class AudioEncodingScript : AbstractScript
                     {
                         string adjustedBitrate = "448k";
                         string note = $"ℹ️ Для стерео-аудио в формате OGG (Vorbis) битрейт скорректирован с {bitrate} до максимально допустимого {adjustedBitrate}";
-                        _logService.Info(note, "AudioEncodingScript");
+                        _logService.Write("script.audio_encoding.note", LogLevel.Debug, LogStatus.Changed, note, source: Name, properties: LogProps.Create("InputName", LogProps.FileName(filePath)));
                         results.Add(note);
                         bitrate = adjustedBitrate;
                     }
@@ -542,9 +541,7 @@ public sealed class AudioEncodingScript : AbstractScript
             }
 
             progressCallback(fileIndex, totalCount, "Запуск FFmpeg...", 0.0);
-            _logService.Info(
-                $"Запуск FFmpeg для кодирования '{originalName}' -> '{outputFileName}'",
-                "AudioEncodingScript");
+            _logService.Write("script.audio_encoding.ffmpeg_started", LogLevel.Debug, LogStatus.Running, $"Запущен FFmpeg для кодирования '{originalName}' -> '{LogProps.FileName(outputFilePath)}'", source: Name, properties: LogProps.Create("Tool", "ffmpeg").With("InputName", LogProps.FileName(filePath)).With("OutputName", LogProps.FileName(outputFilePath)));
 
             var ffmpegTask = _ffmpegRunner.RunAsync(
                 inputPath: filePath,
@@ -564,9 +561,7 @@ public sealed class AudioEncodingScript : AbstractScript
             {
                 if (IsCancelled)
                 {
-                    _logService.Warn(
-                        $"Отмена кодирования FFmpeg пользователем для '{originalName}'",
-                        "AudioEncodingScript");
+                    _logService.Write("script.audio_encoding.ffmpeg_cancelled", LogLevel.Info, LogStatus.Cancelled, $"Кодирование FFmpeg для '{originalName}' отменено", source: Name, properties: LogProps.Create("Tool", "ffmpeg").With("Reason", "UserRequested").With("CleanupState", "NotStarted"));
                     cts.Cancel();
                     break;
                 }
@@ -579,19 +574,14 @@ public sealed class AudioEncodingScript : AbstractScript
             }
             catch (Exception ex)
             {
-                _logService.Exception(
-                    ex,
-                    $"Ошибка кодирования FFmpeg для '{originalName}': {ex.Message}",
-                    "AudioEncodingScript");
+                _logService.Write("script.audio_encoding.ffmpeg_failed", LogLevel.Error, LogStatus.Failed, $"Кодирование FFmpeg для '{originalName}' не выполнено", ex, Name, properties: LogProps.Create("ErrorCode", "FFMPEG_ENCODING_FAILED").With("Tool", "ffmpeg").With("InputName", LogProps.FileName(filePath)).With("Retryable", true));
             }
         }
 
         // 8. Обрабатываем результаты
-        if (success)
+        if (success?.IsSuccess == true)
         {
-            _logService.Info(
-                $"Кодирование аудио завершено успешно. Выходной файл: '{outputFileName}'",
-                "AudioEncodingScript");
+            _logService.Write("script.audio_encoding.completed", LogLevel.Info, LogStatus.Succeeded, $"Кодирование аудио завершено, выходной файл: '{LogProps.FileName(outputFilePath)}'", source: Name, properties: LogProps.Create("OutputName", LogProps.FileName(outputFilePath)).With("Verified", true));
             progressCallback(fileIndex, totalCount, "Успешно завершено!", 100.0);
             results.Add($"✅ Кодирован: {outputFileName}");
 
@@ -610,15 +600,47 @@ public sealed class AudioEncodingScript : AbstractScript
             }
             else
             {
-                _logService.Error(
-                    $"Сбой при кодировании файла '{originalName}'",
-                    "AudioEncodingScript");
+                _logService.Write("script.audio_encoding.failed", LogLevel.Error, LogStatus.Failed, $"Кодирование аудио для '{originalName}' не выполнено", source: Name, properties: LogProps.Create("ErrorCode", "AUDIO_ENCODING_FAILED").With("InputName", LogProps.FileName(filePath)).With("Retryable", true));
                 progressCallback(fileIndex, totalCount, "Ошибка обработки!", 0.0);
                 results.Add($"❌ ОШИБКА: {originalName}");
             }
         }
 
-        return results;
+        if (IsCancelled)
+        {
+            return ExecutionResult.Cancelled(
+                context,
+                results,
+                errorCode: "cancelled",
+                outputFile: outputFilePath,
+                outputExists: File.Exists(outputFilePath),
+                cleanupState: CleanupState.Completed);
+        }
+        if (success?.IsSuccess == true && File.Exists(outputFilePath))
+        {
+            if (deleteOriginal && File.Exists(filePath))
+            {
+                return ExecutionResult.PartiallySucceeded(
+                    context,
+                    results,
+                    errorCode: "source-cleanup-failed",
+                    outputFile: outputFilePath,
+                    outputExists: true,
+                    cleanupState: CleanupState.Failed);
+            }
+            return ExecutionResult.Succeeded(
+                context,
+                results,
+                outputFile: outputFilePath,
+                outputExists: true,
+                cleanupState: deleteOriginal ? CleanupState.Completed : CleanupState.NotRequired);
+        }
+        return ExecutionResult.Failed(
+            context,
+            results,
+            errorCode: "output-missing",
+            outputFile: outputFilePath,
+            outputExists: File.Exists(outputFilePath));
     }
 
     /// <summary>

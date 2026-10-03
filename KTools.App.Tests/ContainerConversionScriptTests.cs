@@ -12,6 +12,8 @@ using KTools_App.Core;
 using KTools_App.Scripts;
 using KTools_App.Services.Contracts;
 using KTools_App.Infrastructure;
+using KTools_App.Tests.TestHelpers;
+
 
 namespace KTools_App.Tests;
 
@@ -103,9 +105,9 @@ public class ContainerConversionScriptTests
         List<string>? capturedExtraArgs = null;
         _ffmpegRunnerMock.Setup(r => r.RunAsync(
             tempSourceFile, It.IsAny<string>(), It.IsAny<List<string>>(), null, false, 120.5, It.IsAny<Action<ProgressInfo>>(), It.IsAny<CancellationToken>()
-        )).Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken>(
-            (inP, outP, extArgs, inArgs, ovr, dur, prog, ct) => capturedExtraArgs = extArgs
-        ).ReturnsAsync(true);
+        )).Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken, ProcessExecutionContext>(
+            (inP, outP, extArgs, inArgs, ovr, dur, prog, ct, processContext) =>capturedExtraArgs = extArgs
+        ).ReturnsAsync(MockBuilders.ProcessSucceeded());
 
         var settings = new Dictionary<string, object>
         {
@@ -227,7 +229,7 @@ public class ContainerConversionScriptTests
         _ffmpegRunnerMock.Setup(r => r.GetVideoInfoAsync(tempSourceFile)).ReturnsAsync((JsonDocument?)null);
         _ffmpegRunnerMock.Setup(r => r.RunAsync(
             tempSourceFile, It.IsAny<string>(), It.IsAny<List<string>>(), null, false, 0.0, It.IsAny<Action<ProgressInfo>>(), It.IsAny<CancellationToken>()
-        )).ReturnsAsync(true);
+        )).ReturnsAsync(MockBuilders.ProcessSucceeded());
 
         var settings = new Dictionary<string, object>
         {
@@ -275,7 +277,7 @@ public class ContainerConversionScriptTests
         _ffmpegRunnerMock.Setup(r => r.GetVideoInfoAsync(tempSourceFile)).ReturnsAsync(jsonDoc);
         _ffmpegRunnerMock.Setup(r => r.RunAsync(
             tempSourceFile, It.IsAny<string>(), It.IsAny<List<string>>(), null, false, 10.0, It.IsAny<Action<ProgressInfo>>(), It.IsAny<CancellationToken>()
-        )).ReturnsAsync(true);
+        )).ReturnsAsync(MockBuilders.ProcessSucceeded());
 
         var settings = new Dictionary<string, object>
         {

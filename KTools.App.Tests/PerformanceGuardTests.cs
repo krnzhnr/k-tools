@@ -254,7 +254,7 @@ public class PerformanceGuardTests
     public void LogService_BufferedWriter_FlushKeepsAllLinesOnDisk()
     {
         using var temp = new TempDirectoryScope();
-        var service = new LogService();
+        using var service = new LogService();
         service.InitializeLogFile(temp.RootPath);
 
         const int lines = 500;
@@ -397,7 +397,7 @@ public class PerformanceGuardTests
     {
         string source = File.ReadAllText(GetRepositoryFile("KTools.App", "Infrastructure", "FFmpegRunner.cs"));
 
-        int index = source.IndexOf("public async Task<bool> ExtractAttachmentAsync", StringComparison.Ordinal);
+        int index = source.IndexOf("public async Task<ProcessResult> ExtractAttachmentAsync", StringComparison.Ordinal);
         index.Should().BeGreaterThan(0);
 
         string methodBody = source.Substring(index, Math.Min(1600, source.Length - index));
@@ -447,12 +447,24 @@ public class PerformanceGuardTests
                 BindingFlags.NonPublic | BindingFlags.Instance);
             method.Should().NotBeNull();
 
-            method!.Invoke(runner, new object[] { protectedDir });
+            method!.Invoke(
+                runner,
+                new object[]
+                {
+                    protectedDir,
+                    KTools_App.Infrastructure.ProcessExecutionContext.NewOperation("qaac64")
+                });
             Directory.Exists(protectedDir).Should().BeTrue(
                 "установленная папка QAAC не должна удаляться при очистке временного окружения");
             File.Exists(Path.Combine(protectedDir, "qaac64.exe")).Should().BeTrue();
 
-            method.Invoke(runner, new object[] { ownTempDir });
+            method.Invoke(
+                runner,
+                new object[]
+                {
+                    ownTempDir,
+                    KTools_App.Infrastructure.ProcessExecutionContext.NewOperation("qaac64")
+                });
             Directory.Exists(ownTempDir).Should().BeFalse(
                 "собственная временная папка должна удаляться");
         }

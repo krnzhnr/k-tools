@@ -2,14 +2,19 @@
 namespace KTools_App.Infrastructure;
 
 /// <summary>
-/// Интерфейс парсера файлов субтитров в форматах ASS/SSA и SRT.
+/// Интерфейс парсера файлов субтитров в форматах ASS/SSA, SRT и WebVTT.
 /// </summary>
 public interface IAssParser
 {
     /// <summary>
-    /// Распарсить файл субтитров (ASS/SSA или SRT).
+    /// Распарсить файл субтитров (ASS/SSA, SRT или WebVTT).
     /// </summary>
     AssData Parse(string filePath);
+
+    /// <summary>
+    /// Распарсить файл субтитров формата WebVTT (.vtt) в модель диалогов AssData.
+    /// </summary>
+    AssData ParseVtt(string filePath);
 
     /// <summary>
     /// Удалить теги форматирования ASS/SRT/VTT из текста.

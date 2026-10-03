@@ -2,15 +2,17 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+
+using CommunityToolkit.WinUI.Controls;
+
+using KTools_App.Core;
+using KTools_App.Services.Contracts;
+using KTools_App.ViewModels;
+
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
-using CommunityToolkit.WinUI.Controls;
-using KTools_App.Core;
-
-using KTools_App.Services.Contracts;
-using KTools_App.ViewModels;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace KTools_App.UI.Controls;
 
@@ -81,6 +83,9 @@ public sealed partial class ScriptSettingsControl : UserControl
                 _whisperModelManager.DownloadProgressChanged -= OnWhisperDownloadProgressChanged;
                 _whisperModelManager.DownloadCompleted -= OnWhisperDownloadCompleted;
             }
+
+            // Несохранённые правки фиксируются одним проходом при уходе со вкладки.
+            ViewModel.FlushStaged();
         };
 
         // Страница может кэшироваться навигационным фреймом, поэтому после выгрузки
@@ -160,7 +165,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                     string currentModel = _settingsManager.GetSetting(settingsGroup, "whisper_model", string.Empty);
                     if (string.IsNullOrWhiteSpace(currentModel) || currentModel.Contains("Нет загруженных", StringComparison.OrdinalIgnoreCase))
                     {
-                        _settingsManager.SetSetting(settingsGroup, "whisper_model", modelKey);
+                        ViewModel.CommitSetting("whisper_model", modelKey);
                     }
                 }
                 UpdateVisibility(settingsGroup);
@@ -489,7 +494,7 @@ public sealed partial class ScriptSettingsControl : UserControl
             if (field.Type == SettingType.Checkbox)
             {
                 var checkContent = new StackPanel { Spacing = 2 };
-                
+
                 checkContent.Children.Add(new TextBlock
                 {
                     Text = field.Label,
@@ -521,8 +526,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                 checkBox.Checked += (s, e) =>
                 {
                     if (_isInternalCheckBoxUpdate) return;
-                    _settingsManager.SetSetting(
-                        settingsGroup, field.Key, true);
+                    ViewModel.CommitSetting(field.Key, true);
                     UpdateVisibility(settingsGroup);
                     if (field.Key == "auto_bitrate")
                     {
@@ -556,8 +560,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                         }
                     }
 
-                    _settingsManager.SetSetting(
-                        settingsGroup, field.Key, false);
+                    ViewModel.CommitSetting(field.Key, false);
                     UpdateVisibility(settingsGroup);
 
                     UpdatePreview();
@@ -608,7 +611,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                     toggleSwitch.Toggled += (s, e) =>
                     {
                         bool isOn = toggleSwitch.IsOn;
-                        _settingsManager.SetSetting(settingsGroup, field.Key, isOn);
+                        ViewModel.CommitSetting(field.Key, isOn);
 
                         // Переключаем активность дочерних карточек напрямую — это единственное,
                         // что реально нужно при переключении тумблера экспандера.
@@ -661,19 +664,19 @@ public sealed partial class ScriptSettingsControl : UserControl
                 HorizontalAlignment = HorizontalAlignment.Stretch,
                 VerticalAlignment = VerticalAlignment.Center
             };
-            
+
             bool isRenameField = field.Key == "LocalRenameSearch" || field.Key == "LocalRenameReplace";
 
-            rowGrid.ColumnDefinitions.Add(new ColumnDefinition 
-                { Width = isRenameField ? GridLength.Auto : new GridLength(1, GridUnitType.Star) });
-            rowGrid.ColumnDefinitions.Add(new ColumnDefinition 
-                { Width = isRenameField ? new GridLength(1, GridUnitType.Star) : GridLength.Auto });
+            rowGrid.ColumnDefinitions.Add(new ColumnDefinition
+            { Width = isRenameField ? GridLength.Auto : new GridLength(1, GridUnitType.Star) });
+            rowGrid.ColumnDefinitions.Add(new ColumnDefinition
+            { Width = isRenameField ? new GridLength(1, GridUnitType.Star) : GridLength.Auto });
 
-            var textStack = new StackPanel 
-            { 
-                Spacing = 2, 
+            var textStack = new StackPanel
+            {
+                Spacing = 2,
                 Margin = new Thickness(0, 0, 16, 0),
-                VerticalAlignment = VerticalAlignment.Center 
+                VerticalAlignment = VerticalAlignment.Center
             };
 
             textStack.Children.Add(new TextBlock
@@ -694,7 +697,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                 TextWrapping = TextWrapping.Wrap,
                 Visibility = string.IsNullOrEmpty(field.Comment) ? Visibility.Collapsed : Visibility.Visible
             });
-            
+
             Grid.SetColumn(textStack, 0);
             rowGrid.Children.Add(textStack);
 
@@ -763,8 +766,8 @@ public sealed partial class ScriptSettingsControl : UserControl
                 };
                 textBox.TextChanged += (s, e) =>
                 {
-                    _settingsManager.SetSetting(
-                        settingsGroup, field.Key, textBox.Text);
+                    // На каждый keystroke только обновляется in-memory значение без записи и журнала.
+                    ViewModel.StageSetting(field.Key, textBox.Text);
                     if (isRenameField)
                     {
                         UpdatePreview();
@@ -772,8 +775,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                 };
                 textBox.LostFocus += (s, e) =>
                 {
-                    _settingsManager.SetSetting(
-                        settingsGroup, field.Key, textBox.Text);
+                    ViewModel.CommitSetting(field.Key, textBox.Text);
                     UpdateVisibility(settingsGroup);
                     if (isRenameField)
                     {
@@ -866,14 +868,14 @@ public sealed partial class ScriptSettingsControl : UserControl
                         if (isFloat)
                         {
                             double roundedVal = Math.Round(numberBox.Value, 2);
-                            _settingsManager.SetSetting(settingsGroup, field.Key, roundedVal);
+                            ViewModel.CommitSetting(field.Key, roundedVal);
                             UpdateVisibility(settingsGroup);
                             HandleIntSettingChanged(settingsGroup, field.Key, (int)roundedVal);
                         }
                         else
                         {
                             int valInt = (int)numberBox.Value;
-                            _settingsManager.SetSetting(settingsGroup, field.Key, valInt);
+                            ViewModel.CommitSetting(field.Key, valInt);
                             UpdateVisibility(settingsGroup);
                             HandleIntSettingChanged(settingsGroup, field.Key, valInt);
                         }
@@ -893,7 +895,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                 {
                     comboBox.Items.Add(opt);
                 }
-                
+
                 string defaultValStr = field.DefaultValue?
                     .ToString() ?? string.Empty;
                 if (field.Key == "nvenc_preset" && _settingsManager.GetSetting(settingsGroup, "lossless", false))
@@ -910,16 +912,28 @@ public sealed partial class ScriptSettingsControl : UserControl
                         settingsGroup,
                         field.Key,
                         defaultValStr);
-                
+
+                string matchedOption = field.Options
+                    .FirstOrDefault(opt => opt.Equals(
+                        currentSelection,
+                        StringComparison.OrdinalIgnoreCase))
+                    ?? field.Options.FirstOrDefault()
+                    ?? defaultValStr;
+
+                comboBox.SelectedItem = matchedOption;
+
+                if (comboBox.SelectedIndex == -1 &&
+                    comboBox.Items.Count > 0)
+                {
+                    comboBox.SelectedIndex = 0;
+                }
+
                 comboBox.SelectionChanged += (s, e) =>
                 {
                     if (comboBox.SelectedItem != null)
                     {
                         string selectedVal = comboBox.SelectedItem.ToString() ?? string.Empty;
-                        _settingsManager.SetSetting(
-                            settingsGroup,
-                            field.Key,
-                            selectedVal);
+                        ViewModel.CommitSetting(field.Key, selectedVal);
                         UpdateVisibility(settingsGroup);
                         if (field.Key == "encoder" && _settingsManager.GetSetting(settingsGroup, "lossless", false))
                         {
@@ -930,20 +944,6 @@ public sealed partial class ScriptSettingsControl : UserControl
                     }
                 };
 
-                string matchedOption = field.Options
-                    .FirstOrDefault(opt => opt.Equals(
-                        currentSelection,
-                        StringComparison.OrdinalIgnoreCase))
-                    ?? field.Options.FirstOrDefault()
-                    ?? defaultValStr;
-
-                comboBox.SelectedItem = matchedOption;
-                
-                if (comboBox.SelectedIndex == -1 && 
-                    comboBox.Items.Count > 0)
-                {
-                    comboBox.SelectedIndex = 0;
-                }
                 inputControl = comboBox;
                 break;
 
@@ -960,7 +960,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                 };
                 toggle.Toggled += (s, e) =>
                 {
-                    _settingsManager.SetSetting(settingsGroup, field.Key, toggle.IsOn);
+                    ViewModel.CommitSetting(field.Key, toggle.IsOn);
                     UpdateVisibility(settingsGroup);
                     UpdatePreview();
                 };
@@ -1224,12 +1224,12 @@ public sealed partial class ScriptSettingsControl : UserControl
         foreach (var group in _groups)
         {
             bool hasVisibleElements = group.Elements.Any(e => e.Visibility == Visibility.Visible);
-            
+
             if (group.GroupPanel != null)
             {
                 group.GroupPanel.Visibility = hasVisibleElements ? Visibility.Visible : Visibility.Collapsed;
             }
-            
+
             if (group.CardBorder != null)
             {
                 group.CardBorder.Visibility = hasVisibleElements ? Visibility.Visible : Visibility.Collapsed;
@@ -1305,6 +1305,18 @@ public sealed partial class ScriptSettingsControl : UserControl
         // Локальная функция для сохранения списка в SettingsManager
         void SaveList()
         {
+            ViewModel.CommitSetting(field.Key, CollectList());
+        }
+
+        // Набор правки без записи: используется на каждый keystroke,
+        // фиксация выполняется один раз при потере фокуса или явном действии.
+        void StageList()
+        {
+            ViewModel.StageSetting(field.Key, CollectList());
+        }
+
+        List<Dictionary<string, object>> CollectList()
+        {
             var listToSave = new List<Dictionary<string, object>>();
             foreach (Grid row in itemsStack.Children.OfType<Grid>())
             {
@@ -1325,7 +1337,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                     listToSave.Add(itemDict);
                 }
             }
-            _settingsManager.SetSetting(settingsGroup, field.Key, listToSave);
+            return listToSave;
         }
 
         // Вспомогательная локальная функция добавления строки ключевого слова в UI
@@ -1369,7 +1381,8 @@ public sealed partial class ScriptSettingsControl : UserControl
                 Height = 32,
                 Margin = new Thickness(0, 0, 8, 0)
             };
-            textBox.TextChanged += (s, e) => SaveList();
+            textBox.TextChanged += (s, e) => StageList();
+            textBox.LostFocus += (s, e) => SaveList();
             Grid.SetColumn(textBox, 1);
             rowGrid.Children.Add(textBox);
 
@@ -1575,7 +1588,7 @@ public sealed partial class ScriptSettingsControl : UserControl
         void UpdateLocalPreview()
         {
             string pattern = textBox.Text;
-            
+
             // Тестовые данные для отображения примера
             string originalStem = "Overlord - 01";
             string trackIdStr = "track03";
@@ -1603,8 +1616,13 @@ public sealed partial class ScriptSettingsControl : UserControl
         // Подписываемся на события изменения текста
         textBox.TextChanged += (s, e) =>
         {
-            _settingsManager.SetSetting(settingsGroup, field.Key, textBox.Text);
+            ViewModel.StageSetting(field.Key, textBox.Text);
             UpdateLocalPreview();
+        };
+
+        textBox.LostFocus += (s, e) =>
+        {
+            ViewModel.CommitSetting(field.Key, textBox.Text);
         };
 
         // Первоначальное обновление предпросмотра
@@ -1639,7 +1657,7 @@ public sealed partial class ScriptSettingsControl : UserControl
     private static string CleanSeparatorsLocal(string name)
     {
         if (string.IsNullOrEmpty(name)) return string.Empty;
-        
+
         // 1. Очистка пустых скобок, оставшихся от незаполненных плейсхолдеров
         name = System.Text.RegularExpressions.Regex.Replace(name, @"\[\s*\]", "");
         name = System.Text.RegularExpressions.Regex.Replace(name, @"\(\s*\)", "");
@@ -1651,7 +1669,7 @@ public sealed partial class ScriptSettingsControl : UserControl
         name = System.Text.RegularExpressions.Regex.Replace(name, @"\s+", " ");
         name = System.Text.RegularExpressions.Regex.Replace(name, @"_-", "-");
         name = System.Text.RegularExpressions.Regex.Replace(name, @"-_", "-");
-        
+
         return name.Trim('_', '-', ' ');
     }
 
@@ -1687,12 +1705,12 @@ public sealed partial class ScriptSettingsControl : UserControl
 
     /// <summary>
     /// Вызывается при изменении целочисленного параметра в интерфейсе.
+    /// Значение уже зафиксировано обработчиком NumberBox, поэтому здесь выполняется
+    /// только побочная логика без повторной записи в настройки.
     /// </summary>
     private void HandleIntSettingChanged(string settingsGroup, string key, int newValue)
     {
         if (_isInternalNumberBoxUpdate) return;
-
-        _settingsManager.SetSetting(settingsGroup, key, newValue);
 
         if (key == "v_bitrate")
         {
@@ -1732,12 +1750,10 @@ public sealed partial class ScriptSettingsControl : UserControl
 
     private void ApplyFastestPresetOnLossless(string settingsGroup)
     {
-        _settingsManager.SetSetting(settingsGroup, "nvenc_preset", "p1");
-        _settingsManager.SetSetting(settingsGroup, "x265_preset", "ultrafast");
-
         var presetsToSync = new[] { ("nvenc_preset", "p1"), ("x265_preset", "ultrafast") };
         foreach (var (key, fastest) in presetsToSync)
         {
+            bool uiSynced = false;
             var targetItem = _generatedElements.FirstOrDefault(x => x.Field.Key == key);
             if (targetItem.Element != null)
             {
@@ -1747,18 +1763,27 @@ public sealed partial class ScriptSettingsControl : UserControl
                     string? matchedOption = combo.Items.Cast<object>()
                         .Select(o => o.ToString() ?? "")
                         .FirstOrDefault(o => o.Equals(fastest, StringComparison.OrdinalIgnoreCase));
-                    if (matchedOption != null && !object.Equals(combo.SelectedItem, matchedOption))
+                    if (matchedOption != null)
                     {
-                        combo.SelectedItem = matchedOption;
+                        if (!object.Equals(combo.SelectedItem, matchedOption))
+                        {
+                            combo.SelectedItem = matchedOption;
+                        }
+                        uiSynced = true;
                     }
                 }
+            }
+
+            if (!uiSynced)
+            {
+                ViewModel.CommitSetting(key, fastest);
             }
         }
     }
 
     private void UpdateIntSettingAndUI(string settingsGroup, string key, int value)
     {
-        _settingsManager.SetSetting(settingsGroup, key, value);
+        ViewModel.CommitSetting(key, value);
 
         var targetItem = _generatedElements.FirstOrDefault(x => x.Field.Key == key);
         if (targetItem.Element != null)
@@ -1781,29 +1806,29 @@ public sealed partial class ScriptSettingsControl : UserControl
     private void AttachSearchHelpFlyout(Button button, TextBox textBox)
     {
         var flyout = new Flyout { Placement = Microsoft.UI.Xaml.Controls.Primitives.FlyoutPlacementMode.BottomEdgeAlignedRight };
-        
+
         var mainStack = new StackPanel { Spacing = 6, Width = 280 };
-        
-        var title = new TextBlock 
-        { 
-            Text = "Шаблоны поиска", 
-            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, 
-            FontSize = 14, 
-            Margin = new Thickness(0, 0, 0, 4) 
+
+        var title = new TextBlock
+        {
+            Text = "Шаблоны поиска",
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            FontSize = 14,
+            Margin = new Thickness(0, 0, 0, 4)
         };
-        var desc = new TextBlock 
-        { 
-            Text = "Нажмите на шаблон, чтобы скопировать:", 
-            FontSize = 12, 
-            Style = (Style)Application.Current.Resources["SettingsSecondaryTextBlockStyle"], 
-            Margin = new Thickness(0, 0, 0, 8) 
+        var desc = new TextBlock
+        {
+            Text = "Нажмите на шаблон, чтобы скопировать:",
+            FontSize = 12,
+            Style = (Style)Application.Current.Resources["SettingsSecondaryTextBlockStyle"],
+            Margin = new Thickness(0, 0, 0, 8)
         };
-        
+
         mainStack.Children.Add(title);
         mainStack.Children.Add(desc);
-        
+
         var variables = _settingsManager.SearchTemplates;
-        
+
         foreach (var item in variables)
         {
             if (string.IsNullOrEmpty(item.Pattern)) continue;
@@ -1837,17 +1862,17 @@ public sealed partial class ScriptSettingsControl : UserControl
                 Height = 32,
                 VerticalAlignment = VerticalAlignment.Center
             };
-            
+
             var btnGrid = new Grid { HorizontalAlignment = HorizontalAlignment.Stretch };
             var rowStack = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-            rowStack.Children.Add(new TextBlock 
-            { 
-                Text = item.Pattern, 
-                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, 
-                Style = (Style)Application.Current.Resources["SettingsAccentTextBlockStyle"] 
+            rowStack.Children.Add(new TextBlock
+            {
+                Text = item.Pattern,
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                Style = (Style)Application.Current.Resources["SettingsAccentTextBlockStyle"]
             });
             rowStack.Children.Add(new TextBlock { Text = string.IsNullOrEmpty(item.Description) ? "" : $"— {CleanDescription(item.Description)}", FontSize = 12 });
-            
+
             var copiedText = new TextBlock
             {
                 Text = "Скопировано!",
@@ -1858,20 +1883,20 @@ public sealed partial class ScriptSettingsControl : UserControl
                 VerticalAlignment = VerticalAlignment.Center,
                 Visibility = Visibility.Collapsed
             };
-            
+
             btnGrid.Children.Add(rowStack);
             btnGrid.Children.Add(copiedText);
             btn.Content = btnGrid;
-            
+
             btn.Click += (s, e) =>
             {
                 var dataPackage = new Windows.ApplicationModel.DataTransfer.DataPackage();
                 dataPackage.SetText(item.Pattern);
                 Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(dataPackage);
-                
+
                 rowStack.Opacity = 0;
                 copiedText.Visibility = Visibility.Visible;
-                
+
                 var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
                 timer.Tick += (s2, ev) =>
                 {
@@ -1881,13 +1906,13 @@ public sealed partial class ScriptSettingsControl : UserControl
                 };
                 timer.Start();
             };
-            
+
             Grid.SetColumn(btn, 1);
             rowGrid.Children.Add(btn);
 
             mainStack.Children.Add(rowGrid);
         }
-        
+
         flyout.Content = mainStack;
         button.Flyout = flyout;
     }
@@ -1898,29 +1923,29 @@ public sealed partial class ScriptSettingsControl : UserControl
     private void AttachReplaceHelpFlyout(Button button, TextBox textBox)
     {
         var flyout = new Flyout { Placement = Microsoft.UI.Xaml.Controls.Primitives.FlyoutPlacementMode.BottomEdgeAlignedRight };
-        
+
         var mainStack = new StackPanel { Spacing = 6, Width = 280 };
-        
-        var title = new TextBlock 
-        { 
-            Text = "Переменные замены", 
-            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, 
-            FontSize = 14, 
-            Margin = new Thickness(0, 0, 0, 4) 
+
+        var title = new TextBlock
+        {
+            Text = "Переменные замены",
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            FontSize = 14,
+            Margin = new Thickness(0, 0, 0, 4)
         };
-        var desc = new TextBlock 
-        { 
-            Text = "Нажмите на шаблон, чтобы скопировать:", 
-            FontSize = 12, 
-            Style = (Style)Application.Current.Resources["SettingsSecondaryTextBlockStyle"], 
-            Margin = new Thickness(0, 0, 0, 8) 
+        var desc = new TextBlock
+        {
+            Text = "Нажмите на шаблон, чтобы скопировать:",
+            FontSize = 12,
+            Style = (Style)Application.Current.Resources["SettingsSecondaryTextBlockStyle"],
+            Margin = new Thickness(0, 0, 0, 8)
         };
-        
+
         mainStack.Children.Add(title);
         mainStack.Children.Add(desc);
-        
+
         var variables = _settingsManager.ReplaceTemplates;
-        
+
         foreach (var item in variables)
         {
             if (string.IsNullOrEmpty(item.Pattern)) continue;
@@ -1954,17 +1979,17 @@ public sealed partial class ScriptSettingsControl : UserControl
                 Height = 32,
                 VerticalAlignment = VerticalAlignment.Center
             };
-            
+
             var btnGrid = new Grid { HorizontalAlignment = HorizontalAlignment.Stretch };
             var rowStack = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-            rowStack.Children.Add(new TextBlock 
-            { 
-                Text = item.Pattern, 
-                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, 
-                Style = (Style)Application.Current.Resources["SettingsAccentTextBlockStyle"] 
+            rowStack.Children.Add(new TextBlock
+            {
+                Text = item.Pattern,
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                Style = (Style)Application.Current.Resources["SettingsAccentTextBlockStyle"]
             });
             rowStack.Children.Add(new TextBlock { Text = string.IsNullOrEmpty(item.Description) ? "" : $"— {CleanDescription(item.Description)}", FontSize = 12 });
-            
+
             var copiedText = new TextBlock
             {
                 Text = "Скопировано!",
@@ -1975,20 +2000,20 @@ public sealed partial class ScriptSettingsControl : UserControl
                 VerticalAlignment = VerticalAlignment.Center,
                 Visibility = Visibility.Collapsed
             };
-            
+
             btnGrid.Children.Add(rowStack);
             btnGrid.Children.Add(copiedText);
             btn.Content = btnGrid;
-            
+
             btn.Click += (s, e) =>
             {
                 var dataPackage = new Windows.ApplicationModel.DataTransfer.DataPackage();
                 dataPackage.SetText(item.Pattern);
                 Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(dataPackage);
-                
+
                 rowStack.Opacity = 0;
                 copiedText.Visibility = Visibility.Visible;
-                
+
                 var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
                 timer.Tick += (s2, ev) =>
                 {
@@ -1998,13 +2023,13 @@ public sealed partial class ScriptSettingsControl : UserControl
                 };
                 timer.Start();
             };
-            
+
             Grid.SetColumn(btn, 1);
             rowGrid.Children.Add(btn);
 
             mainStack.Children.Add(rowGrid);
         }
-        
+
         flyout.Content = mainStack;
         button.Flyout = flyout;
     }
@@ -2198,14 +2223,14 @@ public sealed partial class ScriptSettingsControl : UserControl
             return;
         }
 
-        string settingsGroup = _settingsManager.GetSafeGroupName(_activeScript.Name);
-        bool renameEnabled = false;
-        string pattern = "";
-
-        bool localOverride = _settingsManager.GetSetting(settingsGroup, "LocalRenameOverride", false);
+        // Чтение через ViewModel учитывает несохранённые правки текущего поля,
+        // поэтому предпросмотр остаётся живым без записи на каждый keystroke.
+        bool renameEnabled;
+        string pattern;
+        bool localOverride = ViewModel.GetSetting("LocalRenameOverride", false);
         if (localOverride)
         {
-            pattern = _settingsManager.GetSetting(settingsGroup, "LocalRenameSearch", string.Empty);
+            pattern = ViewModel.GetSetting("LocalRenameSearch", string.Empty);
             renameEnabled = !string.IsNullOrEmpty(pattern);
         }
         else
@@ -2236,7 +2261,7 @@ public sealed partial class ScriptSettingsControl : UserControl
         {
             if (field.Type != SettingType.Subtitle)
             {
-                settings[field.Key] = _settingsManager.GetSetting(settingsGroup, field.Key, field.DefaultValue);
+                settings[field.Key] = ViewModel.GetSetting(field.Key, field.DefaultValue!);
             }
 
             if (field.ChildFields != null && field.ChildFields.Count > 0)
@@ -2245,7 +2270,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                 {
                     if (child.Type != SettingType.Subtitle)
                     {
-                        settings[child.Key] = _settingsManager.GetSetting(settingsGroup, child.Key, child.DefaultValue);
+                        settings[child.Key] = ViewModel.GetSetting(child.Key, child.DefaultValue!);
                     }
                 }
             }

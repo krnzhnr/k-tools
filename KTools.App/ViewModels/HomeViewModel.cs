@@ -1,8 +1,10 @@
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
 using System.Collections.Generic;
 using System.Linq;
+
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+
 using KTools_App.Core;
 using KTools_App.Services.Contracts;
 using KTools_App.UI.Pages;

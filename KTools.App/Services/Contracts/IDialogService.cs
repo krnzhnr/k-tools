@@ -23,4 +23,15 @@ public interface IDialogService
         string content,
         string confirmText = "ОК",
         string cancelText = "Отмена");
+
+    /// <summary>
+    /// Отображает диалоговое окно со списком доступных дорожек субтитров для выбора дорожки, вшиваемой в видеоряд.
+    /// Возвращает выбранную дорожку субтитров или null, если выбор отменен пользователем или вшивание пропущено.
+    /// </summary>
+    /// <param name="videoFileName">Имя файла обрабатываемого видео для контекста пользователя.</param>
+    /// <param name="tracks">Список доступных дорожек субтитров.</param>
+    Task<KTools_App.Core.MediaTrack?> ChooseSubtitleTrackAsync(
+        string videoFileName,
+        System.Collections.Generic.IReadOnlyList<KTools_App.Core.MediaTrack> tracks);
 }
+

@@ -1,13 +1,17 @@
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
+using System;
 using System.Collections.Generic;
+
 using KTools_App.Core;
 
 namespace KTools_App.Services.Contracts;
 
 /// <summary>
 /// Интерфейс менеджера настроек приложения K-Tools.
+/// Все операции записи возвращают типизированный <see cref="PersistenceResult"/>,
+/// поэтому вызывающий код может отличить «изменено в памяти» от «записано на диск».
 /// </summary>
-public interface ISettingsManager
+public interface ISettingsManager : IDisposable
 {
     /// <summary>
     /// Перезаписывать ли существующие выходные файлы.
@@ -56,8 +60,18 @@ public interface ISettingsManager
 
     /// <summary>
     /// Пользовательский путь к директории хранения логов.
+    /// Установка значения только меняет настройку и не переинициализирует
+    /// уже запущенную сессию журналирования.
     /// </summary>
     string LogDir { get; set; }
+
+    /// <summary>
+    /// Изменить пользовательский путь к директории хранения логов
+    /// и получить типизированный результат сохранения.
+    /// </summary>
+    /// <param name="logDirectory">Новый путь или пустая строка для пути по умолчанию.</param>
+    /// <returns>Результат операции сохранения настройки.</returns>
+    PersistenceResult SetLogDirectory(string? logDirectory);
 
     /// <summary>
     /// Автоматически проверять обновления при старте.
@@ -116,18 +130,53 @@ public interface ISettingsManager
 
     /// <summary>
     /// Получить значение настройки.
+    /// Возвращается глубокая копия значения: изменение полученной коллекции или объекта
+    /// не влияет на кэш и не обходит систему обнаружения изменений.
     /// </summary>
     T GetSetting<T>(string group, string key, T defaultValue);
 
     /// <summary>
-    /// Записать значение настройки.
+    /// Записать значение настройки в кэш и запустить (или запланировать) сохранение на диск.
+    /// В кэш попадает глубокая копия значения, поэтому последующие изменения исходного
+    /// объекта вызывающей стороны не обходят систему обнаружения изменений.
+    /// Сырое значение никогда не попадает в журнал: используется только безопасный хэш.
     /// </summary>
-    void SetSetting<T>(string group, string key, T value);
+    /// <typeparam name="T">Тип значения настройки.</typeparam>
+    /// <param name="group">Группа настройки.</param>
+    /// <param name="key">Ключ настройки.</param>
+    /// <param name="value">Новое значение.</param>
+    /// <returns>Результат операции: Succeeded, Pending или Failed.</returns>
+    PersistenceResult SetSetting<T>(string group, string key, T value);
+
+    /// <summary>
+    /// Получить все сохраненные настройки определенной группы.
+    /// Значения возвращаются глубокими копиями и не позволяют изменять кэш извне.
+    /// </summary>
+    Dictionary<string, object> GetAllSettingsInGroup(string group);
 
     /// <summary>
     /// Инициализировать настройки по умолчанию на основе схемы скриптов.
+    /// Успех возвращается только после подтверждённой записи на диск.
+    /// Если предыдущая загрузка была деградированной (повреждённый settings.json),
+    /// значения по умолчанию применяются только в памяти и не записываются поверх
+    /// повреждённого файла: для этого существует <see cref="ResetToDefaults"/>.
     /// </summary>
-    void InitializeDefaults(List<AbstractScript> scripts);
+    /// <param name="scripts">Скрипты, для которых создаются значения по умолчанию.</param>
+    /// <returns>Результат операции сохранения.</returns>
+    PersistenceResult InitializeDefaults(List<AbstractScript> scripts);
+
+    /// <summary>
+    /// Явный сброс настроек к значениям по умолчанию, инициированный пользователем.
+    /// Единственный сценарий, который разрешает запись поверх деградированной загрузки.
+    /// </summary>
+    /// <param name="scripts">Скрипты, для которых восстанавливаются значения по умолчанию.</param>
+    /// <param name="applicationDefaults">
+    /// Явные значения в формате «группа/ключ» — «значение». Записи без разделителя игнорируются.
+    /// </param>
+    /// <returns>Результат операции сохранения.</returns>
+    PersistenceResult ResetToDefaults(
+        List<AbstractScript> scripts,
+        IReadOnlyList<KeyValuePair<string, object?>>? applicationDefaults);
 
     /// <summary>
     /// Нормализовать имя скрипта для использования в качестве имени секции (группы) JSON.
@@ -135,12 +184,11 @@ public interface ISettingsManager
     string GetSafeGroupName(string scriptName);
 
     /// <summary>
-    /// Получить все сохраненные настройки определенной группы.
+    /// Сохранить текущее состояние настроек на диск атомарно (только атомарные стратегии
+    /// фиксации: временный файл плюс move/replace, без неатомарного копирования).
+    /// Возвращает типизированный результат; отмена фиксируется только когда
+    /// фактическая запись не выполнялась.
     /// </summary>
-    Dictionary<string, object> GetAllSettingsInGroup(string group);
-
-    /// <summary>
-    /// Сохранить текущее состояние настроек на диск.
-    /// </summary>
-    void SaveSettings();
+    /// <returns>Результат операции сохранения.</returns>
+    PersistenceResult SaveSettings();
 }

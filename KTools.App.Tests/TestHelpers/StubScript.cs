@@ -3,8 +3,9 @@ using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using KTools_App.Core;
+using KTools_App.Models;
 using KTools_App.Services.Contracts;
-
+using ExecutionContext = KTools_App.Models.ExecutionContext;
 namespace KTools_App.Tests.TestHelpers;
 
 /// <summary>
@@ -17,7 +18,7 @@ public sealed class StubScript : AbstractScript
     /// <summary>
     /// Делегат обработки файла. Если не задан, используется <see cref="DefaultExecuteHandler"/>.
     /// </summary>
-    public Func<string, Dictionary<string, object>, Task<List<string>>>? ExecuteHandler
+    public Func<string, Dictionary<string, object>, ExecutionContext, Task<ExecutionResult>>? ExecuteHandler
     {
         get;
         set;
@@ -31,6 +32,24 @@ public sealed class StubScript : AbstractScript
     {
         get;
         set;
+    }
+
+    /// <summary>
+    /// Необязательный фильтр очереди обработки (аналог GetProcessableFiles у реальных
+    /// скриптов, например сборки MKV, исключающей сопутствующие файлы).
+    /// </summary>
+    public Func<List<FileQueueItem>, List<FileQueueItem>>? ProcessableFilesFilter
+    {
+        get;
+        set;
+    }
+
+    /// <inheritdoc/>
+    public override List<FileQueueItem> GetProcessableFiles(List<FileQueueItem> allFiles)
+    {
+        return ProcessableFilesFilter is null
+            ? base.GetProcessableFiles(allFiles)
+            : ProcessableFilesFilter(allFiles);
     }
 
     /// <summary>
@@ -92,24 +111,26 @@ public sealed class StubScript : AbstractScript
     /// <summary>
     /// Выполняет обработку одного файла, delegируя настраиваемому обработчику.
     /// </summary>
-    public override Task<List<string>> ExecuteSingleAsync(
+    public override Task<ExecutionResult> ExecuteSingleAsync(
         string filePath,
         Dictionary<string, object> settings,
         string? outputPath,
         ScriptProgressCallback progressCallback,
         int fileIndex,
-        int totalCount)
+        int totalCount,
+        ExecutionContext context)
     {
         ProgressHandler?.Invoke(progressCallback, fileIndex, totalCount);
 
         var handler = ExecuteHandler ?? DefaultExecuteHandler;
-        return handler(filePath, settings);
+        return handler(filePath, settings, context);
     }
 
-    private static Task<List<string>> DefaultExecuteHandler(
+    private static Task<ExecutionResult> DefaultExecuteHandler(
         string filePath,
-        Dictionary<string, object> settings)
+        Dictionary<string, object> settings,
+        ExecutionContext context)
     {
-        return Task.FromResult(new List<string> { $"✅ Готово: {filePath}" });
+        return Task.FromResult(ExecutionResult.Succeeded(context, $"Готово: {filePath}"));
     }
 }

@@ -1,74 +1,91 @@
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
 using System;
+using System.Collections.Generic;
+
 using KTools_App.Core;
+using KTools_App.Diagnostics;
 
 namespace KTools_App.Services.Contracts;
 
-/// <summary>
-/// Интерфейс для сервиса логирования событий приложения K-Tools.
-/// </summary>
-public interface ILogService
+public interface ILogService : IDisposable
 {
-    /// <summary>
-    /// Инициализировать файл лога и запустить очистку устаревших файлов.
-    /// </summary>
+    event EventHandler<LogEvent>? LogReceived;
+
     void InitializeLogFile();
 
-    /// <summary>
-    /// Инициализировать файл лога в кастомной директории.
-    /// </summary>
     void InitializeLogFile(string? customLogDir);
 
-    /// <summary>
-    /// Записать событие с указанным уровнем детализации.
-    /// </summary>
-    /// <param name="level">Уровень критичности.</param>
-    /// <param name="message">Сообщение.</param>
-    /// <param name="source">Компонент-источник.</param>
     void Log(LogLevel level, string message, string source = "System");
 
-    /// <summary>
-    /// Записать отладочное сообщение.
-    /// </summary>
     void DebugLog(string message, string source = "System");
 
-    /// <summary>
-    /// Записать информационное сообщение.
-    /// </summary>
     void Info(string message, string source = "System");
 
-    /// <summary>
-    /// Записать предупреждение.
-    /// </summary>
     void Warn(string message, string source = "System");
 
-    /// <summary>
-    /// Записать ошибку.
-    /// </summary>
     void Error(string message, string source = "System");
 
-    /// <summary>
-    /// Записать фатальную ошибку.
-    /// </summary>
     void Fatal(string message, string source = "System");
 
-    /// <summary>
-    /// Записать перехваченное исключение с детализацией стека вызовов.
-    /// </summary>
     void Exception(Exception ex, string message, string source = "System");
 
-    /// <summary>
-    /// Прочитать весь текст текущего файла логов.
-    /// </summary>
+    void Write(LogEvent logEvent);
+
+    void Write(
+        string eventId,
+        LogLevel level,
+        string message,
+        string source = "System",
+        LogStatus status = LogStatus.None,
+        LogContext? context = null,
+        IReadOnlyDictionary<string, object?>? properties = null,
+        Exception? exception = null);
+
+    void Write(
+        string eventId,
+        LogLevel level,
+        LogStatus status,
+        string message,
+        Exception? exception = null,
+        string source = "System",
+        LogContext? context = null,
+        IReadOnlyDictionary<string, object?>? properties = null);
+
     string ReadCurrentLog();
 
-    /// <summary>
-    /// Полностью очистить содержимое текущего файла логов.
-    /// </summary>
-    void ClearCurrentLog();
+    IReadOnlyList<LogEvent> ReadRecentEvents(int maxCount);
 
-    /// <summary>
-    /// Принудительно сбросить буфер журнала на диск (вызывается перед завершением приложения).
-    /// </summary>
+    bool ClearCurrentLog();
+
     void Flush();
+
+    bool Flush(TimeSpan timeout);
+
+    LogLevel MinLevel { get; set; }
+
+    LogServiceStatus Status { get; }
+
+    string? EffectiveLogDirectory { get; }
+
+    string? CurrentLogFile { get; }
+
+    long QueuedEventCount { get; }
+
+    long QueuedEventBytes { get; }
+
+    long DroppedEventCount { get; }
+
+    long WriteErrorCount { get; }
+
+    long RotationErrorCount { get; }
+
+    long RejectedEventCount { get; }
+
+    long SubscriberErrorCount { get; }
+
+    long SubscriberDroppedCount { get; }
+
+    long DisposeErrorCount { get; }
+
+    long ReadErrorCount { get; }
 }

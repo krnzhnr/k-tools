@@ -1,0 +1,4 @@
+eac3to v3.52
+command line: "F:\Programing\Utils\k-tools\bin\eac3to\eac3to.exe" dummy.wav dummy2.wav -23.976 -changeTo24 .000
+------------------------------------------------------------------------------
+Command line parameter "changeTo24" is unknown.  <ERROR>

@@ -1,14 +1,18 @@
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using Microsoft.Extensions.DependencyInjection;
+
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using CommunityToolkit.Mvvm.Messaging;
+
 using KTools_App.Core;
+using KTools_App.Diagnostics;
 using KTools_App.Services.Contracts;
 using KTools_App.UI.Pages;
-using CommunityToolkit.Mvvm.Messaging;
+
+using Microsoft.Extensions.DependencyInjection;
 
 namespace KTools_App.ViewModels;
 
@@ -18,6 +22,7 @@ namespace KTools_App.ViewModels;
 /// </summary>
 public partial class MainViewModel : ThreadSafeViewModel
 {
+    private const string SourceName = "MainPage";
     private readonly INavigationService _navigationService;
     private readonly IScriptRegistry _scriptRegistry;
     private readonly IDependencyManager _dependencyManager;
@@ -108,7 +113,8 @@ public partial class MainViewModel : ThreadSafeViewModel
         var messenger = CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default;
         messenger.Register<MainViewModel, ActiveScriptChangedMessage>(
             this,
-            (r, m) => {
+            (r, m) =>
+            {
                 r.HeaderTitle = m.Script.Name;
                 r.HeaderSubtitle = m.Script.Description;
             });
@@ -184,24 +190,31 @@ public partial class MainViewModel : ThreadSafeViewModel
     [RelayCommand]
     private void Initialize()
     {
-        _logService.Info(
-            "Загрузка главного навигационного интерфейса MainPage",
-            "MainPage");
-
         UpdateLogsTabVisibility();
 
         bool hasRequired = _dependencyManager
             .AreRequiredDependenciesInstalled();
-        _logService.Info(
-            $"Результат проверки обязательных зависимостей: {hasRequired}",
-            "MainPage");
+        _logService.Write(
+            "app.dependencies.checked",
+            LogLevel.Info,
+            LogStatus.Succeeded,
+            hasRequired
+                ? "Обязательные компоненты установлены"
+                : "Обнаружены отсутствующие обязательные компоненты",
+            source: SourceName,
+            properties: LogProps
+                .Create("Status", hasRequired ? "Ready" : "Missing")
+                .With("Group", "Required"));
 
         if (!hasRequired)
         {
-            _logService.Warn(
-                "Отсутствуют обязательные бинарные компоненты. "
-                + "Перенаправление на страницу установки",
-                "MainPage");
+            _logService.Write(
+                "app.dependencies.setup_required",
+                LogLevel.Warning,
+                LogStatus.Skipped,
+                "Отсутствуют обязательные бинарные компоненты, выполняется переход на страницу установки",
+                source: SourceName,
+                properties: LogProps.Create("ErrorCode", "REQUIRED_DEPENDENCIES_MISSING"));
             Navigate("dependencies");
         }
         else if (!_isShellActivated)
@@ -224,13 +237,30 @@ public partial class MainViewModel : ThreadSafeViewModel
     /// </summary>
     private async System.Threading.Tasks.Task CheckUpdatesSilentlyAsync()
     {
-        _logService.Info("Запущена автоматическая фоновая проверка обновлений...", "MainViewModel");
+        _logService.Write(
+            "app.update.check_started",
+            LogLevel.Debug,
+            LogStatus.Running,
+            "Запущена фоновая проверка обновлений приложения",
+            source: SourceName,
+            properties: LogProps
+                .Create("Group", "Update")
+                .With("Reason", "AutoCheck"));
+
         try
         {
             var update = await _updateService.CheckForUpdatesAsync(_settingsManager.IncludePreReleases);
             if (update != null)
             {
-                _logService.Info($"[Авто-обновление] Найдена более новая версия: {update.Version}", "MainViewModel");
+                _logService.Write(
+                    "app.update.available",
+                    LogLevel.Info,
+                    LogStatus.Succeeded,
+                    $"Доступна более новая версия: {update.Version}",
+                    source: SourceName,
+                    properties: LogProps
+                        .Create("Version", LogRedactor.CompactSafeToken(update.Version))
+                        .With("Reason", "AutoCheck"));
 
                 // Обновляем статус в SettingsViewModel, чтобы вкладка настроек знала о наличии релиза
                 _settingsViewModel.NewUpdateInfo = update;
@@ -245,7 +275,16 @@ public partial class MainViewModel : ThreadSafeViewModel
         }
         catch (Exception ex)
         {
-            _logService.Exception(ex, "Ошибка при выполнении автоматической проверки обновлений", "MainViewModel");
+            _logService.Write(
+                "app.update.check_failed",
+                LogLevel.Warning,
+                LogStatus.Failed,
+                "Фоновая проверка обновлений не завершена",
+                ex,
+                SourceName,
+                properties: LogProps
+                    .Create("ErrorCode", "UPDATE_CHECK_FAILED")
+                    .With("Reason", "AutoCheck"));
         }
     }
 
@@ -259,9 +298,6 @@ public partial class MainViewModel : ThreadSafeViewModel
 
         if (tag == "settings")
         {
-            _logService.Info(
-                "Пользователь переключился на страницу настроек приложения",
-                "MainPage");
             HeaderTitle = "Настройки";
             HeaderSubtitle =
                 "Общие параметры и конфигурация приложения";
@@ -270,13 +306,10 @@ public partial class MainViewModel : ThreadSafeViewModel
         }
         else if (tag == "home")
         {
-            _logService.Info(
-                "Пользователь переключился на домашнюю страницу",
-                "MainPage");
             HeaderTitle = "K-Tools";
             HeaderSubtitle =
                 "Ваш персональный набор инструментов для обработки медиа";
-            // Показываем баннер обновлений снова, если обновление доступно, но еще не загружается/установлено
+            // Показываем баннер обновлений снова, если обновление доступно, но еще не загружается/устанавливается
             if (_settingsViewModel.IsUpdateAvailable && !_settingsViewModel.IsDownloading)
             {
                 NewUpdateInfo = _settingsViewModel.NewUpdateInfo;
@@ -289,9 +322,6 @@ public partial class MainViewModel : ThreadSafeViewModel
         {
             if (_scriptsByTag.TryGetValue(tag, out var script))
             {
-                _logService.Info(
-                    $"Пользователь переключился на рабочий скрипт: '{script.Name}'",
-                    "MainPage");
                 HeaderTitle = script.Name;
                 HeaderSubtitle = script.Description;
 
@@ -305,27 +335,27 @@ public partial class MainViewModel : ThreadSafeViewModel
                 }
                 else
                 {
-                    _logService.Error(
-                        $"Не удалось найти скрипт с именем '{script.Name}' в реестре",
-                        "MainPage");
+                    _logService.Write(
+                        "ui.navigation.script_not_registered",
+                        LogLevel.Error,
+                        LogStatus.Failed,
+                        $"Выбранный скрипт '{script.Name}' не найден в реестре",
+                        source: SourceName,
+                        properties: LogProps
+                            .Create("ScriptId", LogRedactor.CompactSafeToken(script.Name))
+                            .With("ErrorCode", "SCRIPT_NOT_REGISTERED"));
                 }
             }
         }
         else if (tag == "logs")
         {
-            _logService.Info(
-                "Пользователь переключился на страницу просмотра логов",
-                "MainPage");
-            HeaderTitle = "Логи";
+            HeaderTitle = "Журнал";
             HeaderSubtitle =
-                "Просмотр журналов выполнения и системных сообщений в реальном времени";
+                "Просмотр журнала выполнения и системных сообщений в реальном времени";
             _navigationService.NavigateTo(typeof(LogPage));
         }
         else if (tag == "tool:timing_calculator")
         {
-            _logService.Info(
-                "Пользователь переключился на страницу калькулятора сдвига таймингов",
-                "MainPage");
             HeaderTitle = "Калькулятор сдвига";
             HeaderSubtitle =
                 "Расчет разницы во времени между двумя таймингами для корректировки сдвига аудио и субтитров";
@@ -333,9 +363,6 @@ public partial class MainViewModel : ThreadSafeViewModel
         }
         else if (tag == "dependencies")
         {
-            _logService.Info(
-                "Пользователь переключился на страницу настройки компонентов (зависимостей)",
-                "MainPage");
             HeaderTitle = "Компоненты";
             HeaderSubtitle =
                 "Установка, обновление и удаление внешних бинарных утилит (FFmpeg, MKVToolNix, eac3to, DEE)";
@@ -372,7 +399,6 @@ public partial class MainViewModel : ThreadSafeViewModel
     private void CloseUpdateBanner()
     {
         IsUpdateBannerVisible = false;
-        _logService.Info("Пользователь закрыл баннер обновлений на главной странице.", "MainViewModel");
     }
 
     /// <summary>
@@ -382,7 +408,13 @@ public partial class MainViewModel : ThreadSafeViewModel
     private void GoToUpdate()
     {
         IsUpdateBannerVisible = false;
-        _logService.Info("Пользователь кликнул по кнопке 'Обновиться' в баннере. Перенаправление в настройки.", "MainViewModel");
+        _logService.Write(
+            "app.update.install_requested",
+            LogLevel.Info,
+            LogStatus.Running,
+            "Пользователь запустил загрузку обновления",
+            source: SourceName,
+            properties: LogProps.Create("Group", "Update"));
         _navigationService.NavigateTo(typeof(SettingsPage), "scroll_to_updates");
         _ = _settingsViewModel.DownloadAndInstallUpdateCommand.ExecuteAsync(null);
     }
@@ -393,7 +425,15 @@ public partial class MainViewModel : ThreadSafeViewModel
     private void HandleShellActivation(ShellActivationMessage message)
     {
         _isShellActivated = true;
-        _logService.Info($"Получен запрос активации через командную строку. Скрипт: '{message.ScriptTag ?? "не указан"}', файлов: {message.Files.Count}", "MainViewModel");
+        _logService.Write(
+            "app.shell.activated",
+            LogLevel.Info,
+            LogStatus.Running,
+            "Получена активация приложения из оболочки",
+            source: SourceName,
+            properties: LogProps
+                .Create("ScriptId", LogRedactor.CompactSafeToken(message.ScriptTag))
+                .With("Count", message.Files.Count));
 
         string? targetTag = null;
         if (!string.IsNullOrEmpty(message.ScriptTag))
@@ -431,7 +471,15 @@ public partial class MainViewModel : ThreadSafeViewModel
             var realScript = _scriptRegistry.GetScriptByName(scriptInfo.Name);
             if (realScript != null)
             {
-                _logService.Info($"Перенаправление файлов в скрипт '{realScript.Name}' и навигация на вкладку", "MainViewModel");
+                _logService.Write(
+                    "app.shell.files_routed",
+                    LogLevel.Debug,
+                    LogStatus.Succeeded,
+                    "Файлы из оболочки переданы выбранному скрипту",
+                    source: SourceName,
+                    properties: LogProps
+                        .Create("ScriptId", LogRedactor.CompactSafeToken(realScript.Name))
+                        .With("Count", message.Files.Count));
                 AddFilesToScript(realScript, message.Files);
                 Navigate(targetTag);
             }
@@ -446,7 +494,16 @@ public partial class MainViewModel : ThreadSafeViewModel
                 var realScript = _scriptRegistry.GetScriptByName(defaultPair.Value.Name);
                 if (realScript != null)
                 {
-                    _logService.Warn($"Скрипт '{message.ScriptTag}' не распознан. Файлы добавлены в скрипт по умолчанию: '{realScript.Name}'", "MainViewModel");
+                    _logService.Write(
+                        "app.shell.script_unrecognized",
+                        LogLevel.Warning,
+                        LogStatus.Skipped,
+                        $"Скрипт '{message.ScriptTag}' не распознан, файлы переданы скрипту по умолчанию '{realScript.Name}'",
+                        source: SourceName,
+                        properties: LogProps
+                            .Create("ErrorCode", "SHELL_SCRIPT_UNRECOGNIZED")
+                            .With("ScriptId", LogRedactor.CompactSafeToken(realScript.Name))
+                            .With("Count", message.Files.Count));
                     AddFilesToScript(realScript, message.Files);
                     Navigate(defaultPair.Key);
                 }
@@ -474,7 +531,17 @@ public partial class MainViewModel : ThreadSafeViewModel
                 string ext = System.IO.Path.GetExtension(file).ToLowerInvariant();
                 if (!script.FileExtensions.Contains(ext))
                 {
-                    _logService.Warn($"Файл '{file}' пропущен: расширение '{ext}' не поддерживается скриптом '{script.Name}'", "MainViewModel");
+                    _logService.Write(
+                        "ui.file.unsupported_extension",
+                        LogLevel.Warning,
+                        LogStatus.Skipped,
+                        $"Файл '{LogProps.FileName(file)}' пропущен: расширение '{ext}' не поддерживается скриптом '{script.Name}'",
+                        source: SourceName,
+                        properties: LogProps
+                            .Create("FileName", LogProps.FileName(file))
+                            .With("Extension", LogRedactor.CompactSafeToken(ext))
+                            .With("ScriptId", LogRedactor.CompactSafeToken(script.Name))
+                            .With("ErrorCode", "UNSUPPORTED_EXTENSION"));
                     continue;
                 }
             }
@@ -497,7 +564,16 @@ public partial class MainViewModel : ThreadSafeViewModel
                 }
                 catch (Exception ex)
                 {
-                    _logService.Exception(ex, $"Не удалось выполнить технический анализ файла: {item.FileName}", "MainViewModel");
+                    _logService.Write(
+                        "media.probe.background_failed",
+                        LogLevel.Warning,
+                        LogStatus.Failed,
+                        $"Фоновый технический анализ файла '{LogProps.FileName(item.FilePath)}' не выполнен",
+                        ex,
+                        SourceName,
+                        properties: LogProps
+                            .Create("FileName", LogProps.FileName(item.FilePath))
+                            .With("ErrorCode", "BACKGROUND_PROBE_FAILED"));
                     // Присваиваем пустую структуру, чтобы скрыть бесконечный спиннер в интерфейсе
                     item.MediaInfo = new MediaStructure { FilePath = item.FilePath };
                 }

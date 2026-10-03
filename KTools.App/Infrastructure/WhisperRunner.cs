@@ -1,11 +1,13 @@
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
 using System;
 using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+
 using KTools_App.Core;
+using KTools_App.Diagnostics;
 using KTools_App.Services.Contracts;
 
 namespace KTools_App.Infrastructure;
@@ -16,6 +18,8 @@ namespace KTools_App.Infrastructure;
 /// </summary>
 public sealed class WhisperRunner : AbstractProcessRunner, IWhisperRunner
 {
+    private const string SourceName = nameof(WhisperRunner);
+
     private readonly IDependencyManager _dependencyManager;
 
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> AsciiModelCache =
@@ -71,7 +75,8 @@ public sealed class WhisperRunner : AbstractProcessRunner, IWhisperRunner
         WhisperTranscribeOptions options,
         Action<int>? onProgress = null,
         Action<string>? onSegment = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        ProcessExecutionContext? context = null)
     {
         ArgumentNullException.ThrowIfNull(options);
 
@@ -81,36 +86,54 @@ public sealed class WhisperRunner : AbstractProcessRunner, IWhisperRunner
             : options.Backend;
 
         string binaryPath = GetBinaryPathForBackend(effectiveBackend);
+        ProcessExecutionContext executionContext = (context ?? ProcessExecutionContext.NewOperation("whisper-cli"))
+            .WithExpectedArtifact(options.OutputBasePath);
+
         if (!File.Exists(binaryPath))
         {
             // Попытка фоллбэка на CPU, если запрошенный бэкенд отсутствует
             if (effectiveBackend != WhisperBackend.Cpu)
             {
-                Log.Warn($"Исполняемый файл для бэкенда '{effectiveBackend}' не найден по пути '{binaryPath}'. Попытка переключения на CPU-рантайм...", nameof(WhisperRunner));
+                Log.Write(
+                    "whisper.backend_fallback",
+                    LogLevel.Warning,
+                    LogStatus.RetryScheduled,
+                    $"Рантайм Whisper для бэкенда '{effectiveBackend}' не найден, выполняется переключение на CPU",
+                    null,
+                    nameof(WhisperRunner),
+                    executionContext.ToLogContext(),
+                    new Dictionary<string, object?>(StringComparer.Ordinal)
+                    {
+                        ["Stage"] = "backend_select",
+                        ["ToolVersion"] = effectiveBackend.ToString()
+                    });
                 effectiveBackend = WhisperBackend.Cpu;
                 binaryPath = GetBinaryPathForBackend(WhisperBackend.Cpu);
             }
 
             if (!File.Exists(binaryPath))
             {
-                string errMsg = $"Исполняемый файл whisper-cli.exe не найден на диске. Убедитесь, что установлена зависимость '{WhisperBackendDetector.GetDependencyKey(effectiveBackend)}'.";
-                Log.Error(errMsg, nameof(WhisperRunner));
-                return new ProcessResult(false, -1, errMsg);
+                return ProcessResult.NotStarted(
+                    executionContext,
+                    ProcessResult.ErrorBinaryMissing,
+                    $"Исполняемый файл whisper-cli не найден. Требуется зависимость '{WhisperBackendDetector.GetDependencyKey(effectiveBackend)}'");
             }
         }
 
         if (!File.Exists(options.ModelPath))
         {
-            string errMsg = $"Файл модели Whisper не найден по пути: '{options.ModelPath}'";
-            Log.Error(errMsg, nameof(WhisperRunner));
-            return new ProcessResult(false, -1, errMsg);
+            return ProcessResult.NotStarted(
+                executionContext,
+                "model-missing",
+                $"Файл модели Whisper не найден: '{Path.GetFileName(options.ModelPath)}'");
         }
 
         if (!File.Exists(options.InputWavPath))
         {
-            string errMsg = $"Входной аудиофайл для распознавания не существует: '{options.InputWavPath}'";
-            Log.Error(errMsg, nameof(WhisperRunner));
-            return new ProcessResult(false, -1, errMsg);
+            return ProcessResult.NotStarted(
+                executionContext,
+                "input-missing",
+                "Входной аудиофайл для распознавания не существует");
         }
 
         string? tempModelCopy = null;
@@ -252,12 +275,20 @@ public sealed class WhisperRunner : AbstractProcessRunner, IWhisperRunner
             args.Append("-pp");
 
             string workingDir = Path.GetDirectoryName(binaryPath) ?? AppContext.BaseDirectory;
-            Log.Info($"Запуск Whisper ({effectiveBackend}) с моделью '{Path.GetFileName(options.ModelPath)}'", nameof(WhisperRunner));
-
-            var recentErrorLines = new System.Collections.Concurrent.ConcurrentQueue<string>();
+            Log.Write(
+                ProcessEventIds.Started,
+                LogLevel.Info,
+                LogStatus.Running,
+                $"Запущено распознавание речи Whisper на бэкенде {effectiveBackend}",
+                source: SourceName,
+                context: executionContext.ToLogContext(),
+                properties: LogProps
+                    .Create("Tool", "whisper")
+                    .With("FileName", LogProps.FileName(options.ModelPath))
+                    .With("InputName", LogProps.FileName(options.InputWavPath)));
 
             var result = await RunProcessAsync(
-                binaryPath,
+                "whisper-cli",
                 args.ToString().Trim(),
                 onOutputLine: line =>
                 {
@@ -273,22 +304,24 @@ public sealed class WhisperRunner : AbstractProcessRunner, IWhisperRunner
                     {
                         onProgress?.Invoke(percent);
                     }
-                    else if (!string.IsNullOrWhiteSpace(line))
-                    {
-                        recentErrorLines.Enqueue(line);
-                        if (recentErrorLines.Count > 15)
-                        {
-                            recentErrorLines.TryDequeue(out _);
-                        }
-                    }
                 },
                 cancellationToken: cancellationToken,
-                workingDir: workingDir);
+                workingDir: workingDir,
+                context: executionContext,
+                explicitBinaryPath: binaryPath);
 
-            if (!result.IsSuccess && !recentErrorLines.IsEmpty)
+            if (!result.IsSuccess && !result.IsCancelled)
             {
-                string details = string.Join("\n", recentErrorLines);
-                Log.Error($"Подробности ошибки whisper-cli:\n{details}", nameof(WhisperRunner));
+                Dictionary<string, object?> transcribeProperties = result.ToLogProperties();
+                Log.Write(
+                    "whisper.transcription_failed",
+                    LogLevel.Error,
+                    LogStatus.Failed,
+                    $"Ошибка транскрибации Whisper: {result.ErrorCode ?? ProcessResult.ErrorNonZeroExit}",
+                    result.Exception,
+                    nameof(WhisperRunner),
+                    result.Context.ToLogContext().WithProcess(result.ProcessId),
+                    transcribeProperties.With("ErrorCode", result.ErrorCode ?? ProcessResult.ErrorNonZeroExit));
             }
 
             // Перемещение сгенерированных файлов из временной директории в целевой OutputBasePath
@@ -300,6 +333,7 @@ public sealed class WhisperRunner : AbstractProcessRunner, IWhisperRunner
                     Directory.CreateDirectory(targetDir);
                 }
 
+                int moved = 0;
                 string[] extensions = { ".srt", ".vtt", ".txt", ".lrc", ".json", ".csv" };
                 foreach (string ext in extensions)
                 {
@@ -307,10 +341,23 @@ public sealed class WhisperRunner : AbstractProcessRunner, IWhisperRunner
                     if (File.Exists(sourceFile))
                     {
                         string destFile = options.OutputBasePath + ext;
-                        Log.Info($"Перемещение результата распознавания: '{sourceFile}' -> '{destFile}'", nameof(WhisperRunner));
                         File.Move(sourceFile, destFile, overwrite: true);
+                        moved++;
                     }
                 }
+
+                Log.Write(
+                    ProcessEventIds.Completed,
+                    LogLevel.Info,
+                    LogStatus.Succeeded,
+                    $"Результаты распознавания перемещены в целевую папку, файлов: {moved}",
+                    source: SourceName,
+                    context: executionContext.ToLogContext(),
+                    properties: LogProps
+                        .Create("Tool", "whisper")
+                        .With("FileName", LogProps.FileName(targetDir))
+                        .With("Count", moved)
+                        .With("ArtifactVerified", moved > 0));
             }
 
             return result;
@@ -320,41 +367,17 @@ public sealed class WhisperRunner : AbstractProcessRunner, IWhisperRunner
             // Очистка временных файлов
             if (tempModelCopy != null && File.Exists(tempModelCopy) && !IsCachedAsciiCopy(tempModelCopy))
             {
-                try
-                {
-                    File.Delete(tempModelCopy);
-                    Log.DebugLog($"Удалена временная копия модели: '{tempModelCopy}'", nameof(WhisperRunner));
-                }
-                catch (Exception ex)
-                {
-                    Log.Warn($"Не удалось удалить временную копию модели '{tempModelCopy}': {ex.Message}", nameof(WhisperRunner));
-                }
+                TryDeleteFile(tempModelCopy, "model_copy", executionContext);
             }
 
             if (tempWavCopy != null && File.Exists(tempWavCopy))
             {
-                try
-                {
-                    File.Delete(tempWavCopy);
-                    Log.DebugLog($"Удалена временная копия WAV-файла: '{tempWavCopy}'", nameof(WhisperRunner));
-                }
-                catch (Exception ex)
-                {
-                    Log.Warn($"Не удалось удалить временную копию WAV-файла '{tempWavCopy}': {ex.Message}", nameof(WhisperRunner));
-                }
+                TryDeleteFile(tempWavCopy, "wav_copy", executionContext);
             }
 
             if (tempVadCopy != null && File.Exists(tempVadCopy))
             {
-                try
-                {
-                    File.Delete(tempVadCopy);
-                    Log.DebugLog($"Удалена временная копия VAD-модели: '{tempVadCopy}'", nameof(WhisperRunner));
-                }
-                catch (Exception ex)
-                {
-                    Log.Warn($"Не удалось удалить временную копию VAD-модели '{tempVadCopy}': {ex.Message}", nameof(WhisperRunner));
-                }
+                TryDeleteFile(tempVadCopy, "vad_copy", executionContext);
             }
 
             if (tempOutputDir != null && Directory.Exists(tempOutputDir))
@@ -362,13 +385,48 @@ public sealed class WhisperRunner : AbstractProcessRunner, IWhisperRunner
                 try
                 {
                     Directory.Delete(tempOutputDir, recursive: true);
-                    Log.DebugLog($"Удалена временная папка вывода: '{tempOutputDir}'", nameof(WhisperRunner));
                 }
                 catch (Exception ex)
                 {
-                    Log.Warn($"Не удалось удалить временную папку вывода '{tempOutputDir}': {ex.Message}", nameof(WhisperRunner));
+                    Log.Write(
+                        "whisper.cleanup_failed",
+                        LogLevel.Warning,
+                        LogStatus.PartiallySucceeded,
+                        "Не удалось удалить временную папку вывода распознавания",
+                        ex,
+                        nameof(WhisperRunner),
+                        executionContext.ToLogContext(),
+                        new Dictionary<string, object?>(StringComparer.Ordinal)
+                        {
+                            ["Stage"] = "cleanup",
+                            ["CleanupState"] = "failed"
+                        });
                 }
             }
+        }
+    }
+
+    private void TryDeleteFile(string path, string stage, ProcessExecutionContext executionContext)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception ex)
+        {
+            Log.Write(
+                "whisper.cleanup_failed",
+                LogLevel.Warning,
+                LogStatus.PartiallySucceeded,
+                "Не удалось удалить временный файл распознавания",
+                ex,
+                nameof(WhisperRunner),
+                executionContext.ToLogContext(),
+                new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["Stage"] = stage,
+                    ["CleanupState"] = "failed"
+                });
         }
     }
 
@@ -405,7 +463,19 @@ public sealed class WhisperRunner : AbstractProcessRunner, IWhisperRunner
             return (cachedCopy, true);
         }
 
-        Log.Warn($"Короткий путь 8.3 содержит не-ASCII символы или отключён на томе для '{originalPath}'. Создаётся временная ASCII-копия...", nameof(WhisperRunner));
+        Log.Write(
+            "whisper.ascii_copy_created",
+            LogLevel.Warning,
+            LogStatus.RetryScheduled,
+            "Короткий путь 8.3 недоступен для внешнего файла, создаётся временная ASCII-копия",
+            null,
+            nameof(WhisperRunner),
+            context: ProcessExecutionContext.NewOperation("whisper-cli").ToLogContext(),
+            properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["Stage"] = "ascii_copy",
+                ["FileName"] = Path.GetFileName(originalPath)
+            });
         string extension = Path.GetExtension(originalPath);
         string tempDir = Path.Combine(Path.GetTempPath(), "ktools_temp_models");
         Directory.CreateDirectory(tempDir);
@@ -422,7 +492,16 @@ public sealed class WhisperRunner : AbstractProcessRunner, IWhisperRunner
             // и удалит копию, которая переиспользуется следующими запусками.
             AsciiModelCache[originalPath] = returnedTempPath;
         }
-        Log.Info($"Файл успешно скопирован во временный ASCII-каталог: '{originalPath}' -> '{tempFilePath}'", nameof(WhisperRunner));
+
+        Log.Write(
+            "subtitle.ascii_copy_created",
+            LogLevel.Debug,
+            LogStatus.Succeeded,
+            "Создана временная копия субтитров в ASCII-кодировке",
+            source: SourceName,
+            properties: LogProps
+                .Create("InputName", LogProps.FileName(originalPath))
+                .With("Extension", Path.GetExtension(originalPath)));
 
         return (returnedTempPath, true);
     }

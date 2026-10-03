@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using FluentAssertions;
 using Moq;
 using KTools_App.Core;
+using KTools_App.Diagnostics;
 using KTools_App.Services.Contracts;
 using KTools_App.Tests.TestHelpers;
 using KTools_App.ViewModels;
@@ -133,7 +134,8 @@ public class ScriptSettingsViewModelTests
     }
 
     /// <summary>
-    /// Проверяет, что SaveSetting сохраняет значение через менеджер и пишет Info-лог.
+    /// Проверяет, что SaveSetting сохраняет значение через менеджер и фиксирует
+    /// структурированное событие settings.script_parameter.committed.
     /// </summary>
     [TestMethod]
     public void SaveSetting_InitializedScript_PersistsAndLogs()
@@ -149,7 +151,15 @@ public class ScriptSettingsViewModelTests
             m => m.SetSetting(StubScript.DefaultName, "crf", "23"),
             Times.Once);
         _logServiceMock.Verify(
-            l => l.Info(It.Is<string>(s => s.Contains("crf") && s.Contains("23")), It.IsAny<string>()),
+            l => l.Write(
+                "settings.script_parameter.committed",
+                LogLevel.Info,
+                LogStatus.Changed,
+                It.IsAny<string>(),
+                It.IsAny<Exception>(),
+                "ScriptSettingsViewModel",
+                It.IsAny<LogContext?>(),
+                It.IsAny<IReadOnlyDictionary<string, object?>>()),
             Times.Once);
     }
 
@@ -262,5 +272,75 @@ public class ScriptSettingsViewModelTests
 
         // Assert
         loaded.Should().Be(8, "кастомное значение должно читаться после сохранения");
+    }
+
+    /// <summary>
+    /// Проверяет, что сохранение неизменённого значения (Unchanged) не переводит состояние в Failed
+    /// и не записывает предупреждение commit_failed в журнал.
+    /// </summary>
+    [TestMethod]
+    public void SaveSetting_UnchangedValue_SetsNoneStateAndDoesNotLogWarning()
+    {
+        // Arrange
+        _vm.InitializeScript(CreateScript());
+        _settingsManagerMock
+            .Setup(m => m.SetSetting(It.IsAny<string>(), "encoder", "nvenc"))
+            .Returns(PersistenceResult.Unchanged(StubScript.DefaultName, "encoder"));
+
+        // Act
+        PersistenceResult result = _vm.SaveSetting("encoder", "nvenc");
+
+        // Assert
+        result.IsSuccess.Should().BeTrue();
+        result.Persisted.Should().BeFalse();
+        _vm.LastCommitState.Should().Be(SettingCommitState.None);
+        _vm.LastCommitErrorCode.Should().Be(PersistenceErrorCodes.None);
+        _vm.CommitStatusText.Should().Contain("не изменился");
+
+        _logServiceMock.Verify(
+            l => l.Write(
+                "settings.script_parameter.commit_failed",
+                It.IsAny<LogLevel>(),
+                It.IsAny<LogStatus>(),
+                It.IsAny<string>(),
+                It.IsAny<Exception?>(),
+                It.IsAny<string>(),
+                It.IsAny<LogContext?>(),
+                It.IsAny<IReadOnlyDictionary<string, object?>>()),
+            Times.Never);
+    }
+
+    /// <summary>
+    /// Проверяет, что отложенная запись (Pending) устанавливает статус ChangedInMemory
+    /// и фиксирует информационное событие settings.script_parameter.committed_pending.
+    /// </summary>
+    [TestMethod]
+    public void CommitSetting_PendingResult_SetsChangedInMemoryState()
+    {
+        // Arrange
+        _vm.InitializeScript(CreateScript());
+        _settingsManagerMock
+            .Setup(m => m.SetSetting(It.IsAny<string>(), "preset", "p7"))
+            .Returns(PersistenceResult.Pending(new[] { $"{StubScript.DefaultName}/preset" }));
+
+        // Act
+        PersistenceResult result = _vm.CommitSetting("preset", "p7");
+
+        // Assert
+        result.IsPending.Should().BeTrue();
+        _vm.LastCommitState.Should().Be(SettingCommitState.ChangedInMemory);
+        _vm.LastCommitErrorCode.Should().Be(PersistenceErrorCodes.None);
+
+        _logServiceMock.Verify(
+            l => l.Write(
+                "settings.script_parameter.committed_pending",
+                LogLevel.Info,
+                LogStatus.Changed,
+                It.IsAny<string>(),
+                null,
+                "ScriptSettingsViewModel",
+                It.IsAny<LogContext?>(),
+                It.IsAny<IReadOnlyDictionary<string, object?>>()),
+            Times.Once);
     }
 }

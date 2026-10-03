@@ -8,9 +8,11 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Moq;
 using FluentAssertions;
 using KTools_App.Core;
+using KTools_App.Models;
 using KTools_App.Scripts;
 using KTools_App.Services.Contracts;
 using KTools_App.Infrastructure;
+using KTools_App.Tests.TestHelpers;
 
 namespace KTools_App.Tests;
 
@@ -102,9 +104,9 @@ public class VideoEncodingScriptTests
             It.IsAny<double>(),
             It.IsAny<Action<ProgressInfo>>(),
             It.IsAny<CancellationToken>()
-        )).Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken>(
-            (inP, outP, extArgs, inArgs, ovr, dur, prog, ct) => capturedExtraArgs = extArgs
-        ).ReturnsAsync(true);
+        )).Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken, ProcessExecutionContext>(
+            (inP, outP, extArgs, inArgs, ovr, dur, prog, ct, processContext) =>capturedExtraArgs = extArgs
+        ).ReturnsAsync(MockBuilders.ProcessSucceeded());
 
         var settings = new Dictionary<string, object>
         {
@@ -162,9 +164,9 @@ public class VideoEncodingScriptTests
         _ffmpegRunnerMock.Setup(r => r.RunAsync(
             It.IsAny<string>(), It.IsAny<string>(), It.IsAny<List<string>>(), It.IsAny<List<string>>(),
             It.IsAny<bool>(), It.IsAny<double>(), It.IsAny<Action<ProgressInfo>>(), It.IsAny<CancellationToken>()
-        )).Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken>(
-            (inP, outP, extArgs, inArgs, ovr, dur, prog, ct) => capturedExtraArgs = extArgs
-        ).ReturnsAsync(true);
+        )).Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken, ProcessExecutionContext>(
+            (inP, outP, extArgs, inArgs, ovr, dur, prog, ct, processContext) =>capturedExtraArgs = extArgs
+        ).ReturnsAsync(MockBuilders.ProcessSucceeded());
 
         var settings = new Dictionary<string, object>
         {
@@ -219,9 +221,9 @@ public class VideoEncodingScriptTests
         _ffmpegRunnerMock.Setup(r => r.RunAsync(
             It.IsAny<string>(), It.IsAny<string>(), It.IsAny<List<string>>(), It.IsAny<List<string>>(),
             It.IsAny<bool>(), It.IsAny<double>(), It.IsAny<Action<ProgressInfo>>(), It.IsAny<CancellationToken>()
-        )).Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken>(
-            (inP, outP, extArgs, inArgs, ovr, dur, prog, ct) => capturedExtraArgs = extArgs
-        ).ReturnsAsync(true);
+        )).Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken, ProcessExecutionContext>(
+            (inP, outP, extArgs, inArgs, ovr, dur, prog, ct, processContext) =>capturedExtraArgs = extArgs
+        ).ReturnsAsync(MockBuilders.ProcessSucceeded());
 
         var settings = new Dictionary<string, object>
         {
@@ -274,9 +276,9 @@ public class VideoEncodingScriptTests
         _ffmpegRunnerMock.Setup(r => r.RunAsync(
             It.IsAny<string>(), It.IsAny<string>(), It.IsAny<List<string>>(), It.IsAny<List<string>>(),
             It.IsAny<bool>(), It.IsAny<double>(), It.IsAny<Action<ProgressInfo>>(), It.IsAny<CancellationToken>()
-        )).Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken>(
-            (inP, outP, extArgs, inArgs, ovr, dur, prog, ct) => capturedExtraArgs = extArgs
-        ).ReturnsAsync(true);
+        )).Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken, ProcessExecutionContext>(
+            (inP, outP, extArgs, inArgs, ovr, dur, prog, ct, processContext) =>capturedExtraArgs = extArgs
+        ).ReturnsAsync(MockBuilders.ProcessSucceeded());
 
         var settings = new Dictionary<string, object>
         {
@@ -330,8 +332,8 @@ public class VideoEncodingScriptTests
         var structure = new MediaStructure { FilePath = tempSourceFile, Duration = 60.0 };
         // Добавляем видеодорожку
         structure.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "video", Codec = "h264", Name = "Video" });
-        // Добавляем дорожку субтитров
-        structure.Tracks.Add(new MediaTrack { TrackId = 1, TrackType = "subtitles", Codec = "ass", Name = "English Subs", IsDefault = true });
+        // Добавляем дорожку субтитров надписей
+        structure.Tracks.Add(new MediaTrack { TrackId = 1, TrackType = "subtitles", Codec = "ass", Name = "Надписи", IsDefault = true });
         // Добавляем вложенный шрифт
         structure.Attachments.Add(new MediaAttachment { AttachmentId = 0, FileName = "customfont.ttf", MimeType = "application/x-truetype-font" });
 
@@ -342,20 +344,20 @@ public class VideoEncodingScriptTests
             .ReturnsAsync(new List<string>());
 
         _ffmpegRunnerMock.Setup(r => r.ExtractAttachmentAsync(tempSourceFile, It.IsAny<int>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(true);
+            .ReturnsAsync(MockBuilders.ProcessSucceeded());
 
         // Настраиваем извлечение субтитров (записываем фиктивный файл)
         _ffmpegRunnerMock.Setup(r => r.ExtractSubtitleAsync(tempSourceFile, It.IsAny<int>(), It.IsAny<string>(), true, It.IsAny<CancellationToken>()))
-            .Callback<string, int, string, bool, CancellationToken>((inP, idx, outP, rel, ct) => File.WriteAllText(outP, "[Events]\nDialogue: ..."))
-            .ReturnsAsync(true);
+            .Callback<string, int, string, bool, CancellationToken, ProcessExecutionContext>((inP, idx, outP, rel, ct, processContext) =>File.WriteAllText(outP, "[Events]\nDialogue: ..."))
+            .ReturnsAsync(MockBuilders.ProcessSucceeded());
 
         List<string>? capturedExtraArgs = null;
         _ffmpegRunnerMock.Setup(r => r.RunAsync(
             It.IsAny<string>(), It.IsAny<string>(), It.IsAny<List<string>>(), It.IsAny<List<string>>(),
             It.IsAny<bool>(), It.IsAny<double>(), It.IsAny<Action<ProgressInfo>>(), It.IsAny<CancellationToken>()
-        )).Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken>(
-            (inP, outP, extArgs, inArgs, ovr, dur, prog, ct) => capturedExtraArgs = extArgs
-        ).ReturnsAsync(true);
+        )).Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken, ProcessExecutionContext>(
+            (inP, outP, extArgs, inArgs, ovr, dur, prog, ct, processContext) =>capturedExtraArgs = extArgs
+        ).ReturnsAsync(MockBuilders.ProcessSucceeded());
 
         var settings = new Dictionary<string, object>
         {
@@ -403,9 +405,9 @@ public class VideoEncodingScriptTests
         _ffmpegRunnerMock.Setup(r => r.RunAsync(
             It.IsAny<string>(), It.IsAny<string>(), It.IsAny<List<string>>(), It.IsAny<List<string>>(),
             It.IsAny<bool>(), It.IsAny<double>(), It.IsAny<Action<ProgressInfo>>(), It.IsAny<CancellationToken>()
-        )).Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken>(
-            (inP, outP, extArgs, inArgs, ovr, dur, prog, ct) => capturedExtraArgs = extArgs
-        ).ReturnsAsync(true);
+        )).Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken, ProcessExecutionContext>(
+            (inP, outP, extArgs, inArgs, ovr, dur, prog, ct, processContext) =>capturedExtraArgs = extArgs
+        ).ReturnsAsync(MockBuilders.ProcessSucceeded());
 
         var settings = new Dictionary<string, object>
         {
@@ -471,9 +473,9 @@ public class VideoEncodingScriptTests
         _ffmpegRunnerMock.Setup(r => r.RunAsync(
             It.IsAny<string>(), It.IsAny<string>(), It.IsAny<List<string>>(), It.IsAny<List<string>>(),
             It.IsAny<bool>(), It.IsAny<double>(), It.IsAny<Action<ProgressInfo>>(), It.IsAny<CancellationToken>()
-        )).Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken>(
-            (inP, outP, extArgs, inArgs, ovr, dur, prog, ct) => capturedExtraArgs = extArgs
-        ).ReturnsAsync(true);
+        )).Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken, ProcessExecutionContext>(
+            (inP, outP, extArgs, inArgs, ovr, dur, prog, ct, processContext) =>capturedExtraArgs = extArgs
+        ).ReturnsAsync(MockBuilders.ProcessSucceeded());
 
         var settings = new Dictionary<string, object>
         {
@@ -526,9 +528,9 @@ public class VideoEncodingScriptTests
         _ffmpegRunnerMock.Setup(r => r.RunAsync(
             It.IsAny<string>(), It.IsAny<string>(), It.IsAny<List<string>>(), It.IsAny<List<string>>(),
             It.IsAny<bool>(), It.IsAny<double>(), It.IsAny<Action<ProgressInfo>>(), It.IsAny<CancellationToken>()
-        )).Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken>(
-            (inP, outP, extArgs, inArgs, ovr, dur, prog, ct) => capturedExtraArgs = extArgs
-        ).ReturnsAsync(true);
+        )).Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken, ProcessExecutionContext>(
+            (inP, outP, extArgs, inArgs, ovr, dur, prog, ct, processContext) =>capturedExtraArgs = extArgs
+        ).ReturnsAsync(MockBuilders.ProcessSucceeded());
 
         var settings = new Dictionary<string, object>
         {
@@ -574,9 +576,9 @@ public class VideoEncodingScriptTests
         _ffmpegRunnerMock.Setup(r => r.RunAsync(
             It.IsAny<string>(), It.IsAny<string>(), It.IsAny<List<string>>(), It.IsAny<List<string>>(),
             It.IsAny<bool>(), It.IsAny<double>(), It.IsAny<Action<ProgressInfo>>(), It.IsAny<CancellationToken>()
-        )).Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken>(
-            (inP, outP, extArgs, inArgs, ovr, dur, prog, ct) => capturedExtraArgs = extArgs
-        ).ReturnsAsync(true);
+        )).Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken, ProcessExecutionContext>(
+            (inP, outP, extArgs, inArgs, ovr, dur, prog, ct, processContext) =>capturedExtraArgs = extArgs
+        ).ReturnsAsync(MockBuilders.ProcessSucceeded());
 
         var settings = new Dictionary<string, object>
         {
@@ -617,9 +619,9 @@ public class VideoEncodingScriptTests
         _ffmpegRunnerMock.Setup(r => r.RunAsync(
             It.IsAny<string>(), It.IsAny<string>(), It.IsAny<List<string>>(), It.IsAny<List<string>>(),
             It.IsAny<bool>(), It.IsAny<double>(), It.IsAny<Action<ProgressInfo>>(), It.IsAny<CancellationToken>()
-        )).Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken>(
-            (inP, outP, extArgs, inArgs, ovr, dur, prog, ct) => capturedOutputPath = outP
-        ).ReturnsAsync(true);
+        )).Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken, ProcessExecutionContext>(
+            (inP, outP, extArgs, inArgs, ovr, dur, prog, ct, processContext) =>capturedOutputPath = outP
+        ).ReturnsAsync(MockBuilders.ProcessSucceeded());
 
         var settings = new Dictionary<string, object>
         {
@@ -720,9 +722,9 @@ public class VideoEncodingScriptTests
         _ffmpegRunnerMock.Setup(r => r.RunAsync(
             It.IsAny<string>(), It.IsAny<string>(), It.IsAny<List<string>>(), It.IsAny<List<string>>(),
             It.IsAny<bool>(), It.IsAny<double>(), It.IsAny<Action<ProgressInfo>>(), It.IsAny<CancellationToken>()
-        )).Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken>(
-            (inP, outP, extArgs, inArgs, ovr, dur, prog, ct) => capturedExtraArgs = extArgs
-        ).ReturnsAsync(true);
+        )).Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken, ProcessExecutionContext>(
+            (inP, outP, extArgs, inArgs, ovr, dur, prog, ct, processContext) =>capturedExtraArgs = extArgs
+        ).ReturnsAsync(MockBuilders.ProcessSucceeded());
 
         var settings = new Dictionary<string, object>
         {
@@ -779,7 +781,7 @@ public class VideoEncodingScriptTests
         _ffmpegRunnerMock.Setup(r => r.RunAsync(
             It.IsAny<string>(), It.IsAny<string>(), It.IsAny<List<string>>(), It.IsAny<List<string>>(),
             It.IsAny<bool>(), It.IsAny<double>(), It.IsAny<Action<ProgressInfo>>(), It.IsAny<CancellationToken>()
-        )).ReturnsAsync(true);
+        )).ReturnsAsync(MockBuilders.ProcessSucceeded());
 
         var queueItem = new FileQueueItem(tempSourceFile);
         _script.FilesQueue.Add(queueItem);
@@ -837,9 +839,9 @@ public class VideoEncodingScriptTests
         _ffmpegRunnerMock.Setup(r => r.RunAsync(
             It.IsAny<string>(), It.IsAny<string>(), It.IsAny<List<string>>(), It.IsAny<List<string>>(),
             It.IsAny<bool>(), It.IsAny<double>(), It.IsAny<Action<ProgressInfo>>(), It.IsAny<CancellationToken>()
-        )).Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken>(
-            (inP, outP, extArgs, inArgs, ovr, dur, prog, ct) => capturedExtraArgs = extArgs
-        ).ReturnsAsync(true);
+        )).Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken, ProcessExecutionContext>(
+            (inP, outP, extArgs, inArgs, ovr, dur, prog, ct, processContext) =>capturedExtraArgs = extArgs
+        ).ReturnsAsync(MockBuilders.ProcessSucceeded());
 
         var queueItem = new FileQueueItem(tempSourceFile);
         _script.FilesQueue.Add(queueItem);
@@ -904,9 +906,9 @@ public class VideoEncodingScriptTests
         _ffmpegRunnerMock.Setup(r => r.RunAsync(
             It.IsAny<string>(), It.IsAny<string>(), It.IsAny<List<string>>(), It.IsAny<List<string>>(),
             It.IsAny<bool>(), It.IsAny<double>(), It.IsAny<Action<ProgressInfo>>(), It.IsAny<CancellationToken>()
-        )).Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken>(
-            (inP, outP, extArgs, inArgs, ovr, dur, prog, ct) => capturedExtraArgs = extArgs
-        ).ReturnsAsync(true);
+        )).Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken, ProcessExecutionContext>(
+            (inP, outP, extArgs, inArgs, ovr, dur, prog, ct, processContext) =>capturedExtraArgs = extArgs
+        ).ReturnsAsync(MockBuilders.ProcessSucceeded());
 
         var queueItem = new FileQueueItem(tempSourceFile);
         _script.FilesQueue.Add(queueItem);
@@ -937,4 +939,341 @@ public class VideoEncodingScriptTests
             if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
         }
     }
+
+    /// <summary>
+    /// Проверяет, что неудачная подмена оригинала не сообщается как успех:
+    /// результат частичный с кодом source-replacement-failed, исходник сохраняется.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_SourceReplacementFails_ReportsPartialAndKeepsSource()
+    {
+        // Arrange
+        using var scope = new TempDirectoryScope();
+        string source = scope.CreateFile("encode.mkv", "оригинал");
+        SetupStructure(source);
+        _ffmpegRunnerMock.Setup(r => r.RunAsync(
+            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<List<string>>(), It.IsAny<List<string>>(),
+            It.IsAny<bool>(), It.IsAny<double>(), It.IsAny<Action<ProgressInfo>>(), It.IsAny<CancellationToken>()
+        )).ReturnsAsync(MockBuilders.ProcessSucceeded());
+
+        var settings = new Dictionary<string, object>
+        {
+            { "encoder", "x265" },
+            { "overwrite_source", true }
+        };
+
+        // Act — FFmpeg «успешен», но файл результата не создан
+        ExecutionResult result = await _script.ExecuteSingleAsync(
+            source,
+            settings,
+            outputPath: null,
+            progressCallback: (idx, total, status, pct, fps, bit) => { },
+            fileIndex: 0,
+            totalCount: 1);
+
+        // Assert
+        result.Status.Should().Be(ExecutionStatus.PartiallySucceeded,
+            "неудачная подмена оригинала не является полным успехом");
+        result.ErrorCode.Should().Be("source-replacement-failed");
+        result.OutputExists.Should().BeFalse("выходной файл не создан");
+        result.CleanupState.Should().Be(CleanupState.Failed);
+        File.Exists(source).Should().BeTrue("исходный файл обязан сохраниться");
+        File.ReadAllText(source).Should().Be("оригинал");
+    }
+
+    /// <summary>
+    /// Проверяет, что неудачная подмена не оставляет временных артефактов на диске.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_SourceReplacementFails_LeavesNoArtifacts()
+    {
+        // Arrange
+        using var scope = new TempDirectoryScope();
+        string source = scope.CreateFile("encode-artifacts.mkv", "оригинал");
+        SetupStructure(source);
+        _ffmpegRunnerMock.Setup(r => r.RunAsync(
+            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<List<string>>(), It.IsAny<List<string>>(),
+            It.IsAny<bool>(), It.IsAny<double>(), It.IsAny<Action<ProgressInfo>>(), It.IsAny<CancellationToken>()
+        )).ReturnsAsync(MockBuilders.ProcessSucceeded());
+
+        var settings = new Dictionary<string, object>
+        {
+            { "encoder", "x265" },
+            { "overwrite_source", true }
+        };
+
+        // Act
+        await _script.ExecuteSingleAsync(
+            source,
+            settings,
+            outputPath: null,
+            progressCallback: (idx, total, status, pct, fps, bit) => { },
+            fileIndex: 0,
+            totalCount: 1);
+
+        // Assert
+        Directory.GetFiles(scope.RootPath).Should().ContainSingle("на диске остаётся только исходный файл");
+    }
+
+    /// <summary>
+    /// Проверяет успешную подмену оригинала: результат оказывается по пути исходника.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_SourceReplacementSucceeds_ReturnsSucceeded()
+    {
+        // Arrange
+        using var scope = new TempDirectoryScope();
+        string source = scope.CreateFile("encode-good.mkv", "оригинал");
+        SetupStructure(source);
+        _ffmpegRunnerMock.Setup(r => r.RunAsync(
+            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<List<string>>(), It.IsAny<List<string>>(),
+            It.IsAny<bool>(), It.IsAny<double>(), It.IsAny<Action<ProgressInfo>>(), It.IsAny<CancellationToken>()
+        )).ReturnsAsync((string input, string output, List<string> extra, List<string> inputArgs, bool overwrite, double duration, Action<ProgressInfo> onProgress, CancellationToken token, ProcessExecutionContext? processContext) =>
+        {
+            File.WriteAllText(output, "перекодировано");
+            return MockBuilders.ProcessSucceeded();
+        });
+
+        var settings = new Dictionary<string, object>
+        {
+            { "encoder", "x265" },
+            { "overwrite_source", true }
+        };
+
+        // Act
+        ExecutionResult result = await _script.ExecuteSingleAsync(
+            source,
+            settings,
+            outputPath: null,
+            progressCallback: (idx, total, status, pct, fps, bit) => { },
+            fileIndex: 0,
+            totalCount: 1);
+
+        // Assert
+        result.Status.Should().Be(ExecutionStatus.Succeeded);
+        result.OutputFile.Should().Be(source);
+        result.OutputExists.Should().BeTrue();
+        File.ReadAllText(source).Should().Be("перекодировано");
+    }
+
+    private void SetupStructure(string path)
+    {
+        MediaStructure structure = new() { FilePath = path, Duration = 10.0 };
+        structure.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "video", Codec = "h264", Name = "Video" });
+        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(path)).ReturnsAsync(structure);
+    }
+
+    /// <summary>
+    /// Проверяет присутствие поля настройки sub_not_found_action в блоке и вкладке Субтитры.
+    /// </summary>
+    [TestMethod]
+    public void SettingsSchema_ContainsSubNotFoundActionField()
+    {
+        var schema = _script.SettingsSchema;
+        schema.Should().NotBeNull();
+
+        var field = schema.Find(f => f.Key == "sub_not_found_action");
+        field.Should().NotBeNull();
+        field!.Group.Should().Be("Субтитры");
+        field.Type.Should().Be(SettingType.Combo);
+        field.DefaultValue.Should().Be("Пропускать хардсаб");
+        field.Options.Should().Contain("Пропускать хардсаб");
+        field.Options.Should().Contain("Спрашивать");
+    }
+
+    /// <summary>
+    /// Проверяет, что при отсутствии совпадений по ключевым словам и режиме 'Пропускать хардсаб' сторонние субтитры не вшиваются.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_SubtitlesNotFound_SkipHardsubMode_DoesNotExtractOrBurnSubtitles()
+    {
+        // Arrange
+        string tempSourceFile = Path.Combine(Path.GetTempPath(), "test_nosubs.mkv");
+        File.WriteAllText(tempSourceFile, "dummy media");
+
+        var structure = new MediaStructure { FilePath = tempSourceFile, Duration = 30.0 };
+        structure.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "video", Codec = "h264", Name = "Video" });
+        // Дорожка не содержит ключевого слова "Надписи"
+        structure.Tracks.Add(new MediaTrack { TrackId = 1, TrackType = "subtitles", Codec = "ass", Name = "Full Dialogue", IsDefault = true });
+        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile)).ReturnsAsync(structure);
+
+        List<string>? capturedExtraArgs = null;
+        _ffmpegRunnerMock.Setup(r => r.RunAsync(
+            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<List<string>>(), It.IsAny<List<string>>(),
+            It.IsAny<bool>(), It.IsAny<double>(), It.IsAny<Action<ProgressInfo>>(), It.IsAny<CancellationToken>()
+        )).Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken, ProcessExecutionContext>(
+            (inP, outP, extArgs, inArgs, ovr, dur, prog, ct, ctx) => capturedExtraArgs = extArgs
+        ).ReturnsAsync(MockBuilders.ProcessSucceeded());
+
+        var settings = new Dictionary<string, object>
+        {
+            { "encoder", "NVENC" },
+            { "burn_in_subtitles", true },
+            { "sub_not_found_action", "Пропускать хардсаб" }
+        };
+
+        try
+        {
+            // Act
+            await _script.ExecuteSingleAsync(tempSourceFile, settings, Path.GetTempPath(), (idx, total, status, pct, fps, bit) => { }, 0, 1);
+
+            // Assert: субтитры не извлекались и не передавались в фильтр -vf
+            _ffmpegRunnerMock.Verify(r => r.ExtractSubtitleAsync(tempSourceFile, It.IsAny<int>(), It.IsAny<string>(), true, It.IsAny<CancellationToken>(), It.IsAny<ProcessExecutionContext>()), Times.Never);
+            capturedExtraArgs.Should().NotBeNull();
+            capturedExtraArgs.Should().NotContain(s => s.Contains("subtitles="));
+        }
+        finally
+        {
+            if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
+        }
+    }
+
+    /// <summary>
+    /// Проверяет, что при режиме 'Спрашивать' пользователю предлагается выбор дорожки через диалог, и выбранная дорожка вшивается.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_SubtitlesNotFound_AskMode_UserChoosesTrack_ExtractsAndBurnsChosenTrack()
+    {
+        // Arrange
+        string tempSourceFile = Path.Combine(Path.GetTempPath(), "test_ask_subs.mkv");
+        File.WriteAllText(tempSourceFile, "dummy media");
+
+        var chosenTrack = new MediaTrack { TrackId = 2, TrackType = "subtitles", Codec = "ass", Name = "User Chosen Subs" };
+        var structure = new MediaStructure { FilePath = tempSourceFile, Duration = 30.0 };
+        structure.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "video", Codec = "h264", Name = "Video" });
+        structure.Tracks.Add(new MediaTrack { TrackId = 1, TrackType = "subtitles", Codec = "ass", Name = "Full Dialogue" });
+        structure.Tracks.Add(chosenTrack);
+        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile)).ReturnsAsync(structure);
+
+        var dialogMock = new Mock<IDialogService>();
+        dialogMock.Setup(d => d.ChooseSubtitleTrackAsync(
+                Path.GetFileName(tempSourceFile),
+                It.IsAny<IReadOnlyList<MediaTrack>>()))
+            .ReturnsAsync(chosenTrack);
+
+        var encoders = new List<KTools_App.Encoders.IVideoEncoder>
+        {
+            new KTools_App.Encoders.NvencEncoder(),
+            new KTools_App.Encoders.X265Encoder()
+        };
+        var hardwareCacheMock = new Mock<KTools_App.Encoders.IHardwareCapabilityCache>();
+        hardwareCacheMock.Setup(c => c.IsNvencSupported).Returns(true);
+        var registry = new KTools_App.Encoders.VideoEncoderRegistry(encoders, hardwareCacheMock.Object);
+
+        var scriptWithDialog = new VideoEncodingScript(
+            _logServiceMock.Object,
+            _settingsManagerMock.Object,
+            _pathManagerMock.Object,
+            _ffmpegRunnerMock.Object,
+            _mediaProbeServiceMock.Object,
+            registry,
+            dialogMock.Object);
+
+        _ffmpegRunnerMock.Setup(r => r.ExtractSubtitleAsync(tempSourceFile, It.IsAny<int>(), It.IsAny<string>(), true, It.IsAny<CancellationToken>(), It.IsAny<ProcessExecutionContext>()))
+            .Callback<string, int, string, bool, CancellationToken, ProcessExecutionContext>((inP, idx, outP, rel, ct, ctx) => File.WriteAllText(outP, "[Events]\nDialogue: ..."))
+            .ReturnsAsync(MockBuilders.ProcessSucceeded());
+
+        List<string>? capturedExtraArgs = null;
+        _ffmpegRunnerMock.Setup(r => r.RunAsync(
+            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<List<string>>(), It.IsAny<List<string>>(),
+            It.IsAny<bool>(), It.IsAny<double>(), It.IsAny<Action<ProgressInfo>>(), It.IsAny<CancellationToken>()
+        )).Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken, ProcessExecutionContext>(
+            (inP, outP, extArgs, inArgs, ovr, dur, prog, ct, ctx) => capturedExtraArgs = extArgs
+        ).ReturnsAsync(MockBuilders.ProcessSucceeded());
+
+        var settings = new Dictionary<string, object>
+        {
+            { "encoder", "NVENC" },
+            { "burn_in_subtitles", true },
+            { "sub_not_found_action", "Спрашивать" }
+        };
+
+        try
+        {
+            // Act
+            await scriptWithDialog.ExecuteSingleAsync(tempSourceFile, settings, Path.GetTempPath(), (idx, total, status, pct, fps, bit) => { }, 0, 1);
+
+            // Assert
+            dialogMock.Verify(d => d.ChooseSubtitleTrackAsync(Path.GetFileName(tempSourceFile), It.IsAny<IReadOnlyList<MediaTrack>>()), Times.Once);
+            _ffmpegRunnerMock.Verify(r => r.ExtractSubtitleAsync(tempSourceFile, 1, It.IsAny<string>(), true, It.IsAny<CancellationToken>(), It.IsAny<ProcessExecutionContext>()), Times.Once);
+            capturedExtraArgs.Should().NotBeNull();
+            capturedExtraArgs.Should().Contain(s => s.Contains("subtitles="));
+        }
+        finally
+        {
+            if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
+        }
+    }
+
+    /// <summary>
+    /// Проверяет, что при режиме 'Спрашивать', если пользователь отменил диалог (null), хардсаб пропускается.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_SubtitlesNotFound_AskMode_UserSkips_DoesNotBurnSubtitles()
+    {
+        // Arrange
+        string tempSourceFile = Path.Combine(Path.GetTempPath(), "test_ask_skip.mkv");
+        File.WriteAllText(tempSourceFile, "dummy media");
+
+        var structure = new MediaStructure { FilePath = tempSourceFile, Duration = 30.0 };
+        structure.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "video", Codec = "h264", Name = "Video" });
+        structure.Tracks.Add(new MediaTrack { TrackId = 1, TrackType = "subtitles", Codec = "ass", Name = "Full Dialogue" });
+        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile)).ReturnsAsync(structure);
+
+        var dialogMock = new Mock<IDialogService>();
+        dialogMock.Setup(d => d.ChooseSubtitleTrackAsync(
+                Path.GetFileName(tempSourceFile),
+                It.IsAny<IReadOnlyList<MediaTrack>>()))
+            .ReturnsAsync((MediaTrack?)null); // Пользователь нажал "Пропустить хардсаб"
+
+        var encoders = new List<KTools_App.Encoders.IVideoEncoder>
+        {
+            new KTools_App.Encoders.NvencEncoder(),
+            new KTools_App.Encoders.X265Encoder()
+        };
+        var hardwareCacheMock = new Mock<KTools_App.Encoders.IHardwareCapabilityCache>();
+        hardwareCacheMock.Setup(c => c.IsNvencSupported).Returns(true);
+        var registry = new KTools_App.Encoders.VideoEncoderRegistry(encoders, hardwareCacheMock.Object);
+
+        var scriptWithDialog = new VideoEncodingScript(
+            _logServiceMock.Object,
+            _settingsManagerMock.Object,
+            _pathManagerMock.Object,
+            _ffmpegRunnerMock.Object,
+            _mediaProbeServiceMock.Object,
+            registry,
+            dialogMock.Object);
+
+        List<string>? capturedExtraArgs = null;
+        _ffmpegRunnerMock.Setup(r => r.RunAsync(
+            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<List<string>>(), It.IsAny<List<string>>(),
+            It.IsAny<bool>(), It.IsAny<double>(), It.IsAny<Action<ProgressInfo>>(), It.IsAny<CancellationToken>()
+        )).Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken, ProcessExecutionContext>(
+            (inP, outP, extArgs, inArgs, ovr, dur, prog, ct, ctx) => capturedExtraArgs = extArgs
+        ).ReturnsAsync(MockBuilders.ProcessSucceeded());
+
+        var settings = new Dictionary<string, object>
+        {
+            { "encoder", "NVENC" },
+            { "burn_in_subtitles", true },
+            { "sub_not_found_action", "Спрашивать" }
+        };
+
+        try
+        {
+            // Act
+            await scriptWithDialog.ExecuteSingleAsync(tempSourceFile, settings, Path.GetTempPath(), (idx, total, status, pct, fps, bit) => { }, 0, 1);
+
+            // Assert
+            dialogMock.Verify(d => d.ChooseSubtitleTrackAsync(Path.GetFileName(tempSourceFile), It.IsAny<IReadOnlyList<MediaTrack>>()), Times.Once);
+            _ffmpegRunnerMock.Verify(r => r.ExtractSubtitleAsync(tempSourceFile, It.IsAny<int>(), It.IsAny<string>(), true, It.IsAny<CancellationToken>(), It.IsAny<ProcessExecutionContext>()), Times.Never);
+            capturedExtraArgs.Should().NotBeNull();
+            capturedExtraArgs.Should().NotContain(s => s.Contains("subtitles="));
+        }
+        finally
+        {
+            if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
+        }
+    }
 }
+

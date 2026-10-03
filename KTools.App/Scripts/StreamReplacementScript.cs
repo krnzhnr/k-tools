@@ -1,4 +1,3 @@
-using KTools_App.Services.Contracts;
 // -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
@@ -8,7 +7,11 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using KTools_App.Core;
+using KTools_App.Diagnostics;
 using KTools_App.Infrastructure;
+using KTools_App.Models;
+using KTools_App.Services.Contracts;
+using ExecutionContext = KTools_App.Models.ExecutionContext;
 
 namespace KTools_App.Scripts;
 
@@ -59,10 +62,13 @@ public sealed class StreamReplacementScript : AbstractScript
     {
         new SettingField(
             "overwrite_source",
-            "Подменить оригинал финальным файлом",
+            "Заменить исходный файл готовым результатом после успешной проверки",
             SettingType.Checkbox,
             false,
-            "Вывод"
+            "Вывод",
+            requiresWarning: true,
+            warningTitle: "Замена исходного файла",
+            warningText: "Исходный файл заменяется готовым результатом только после успешной проверки. До подтверждения результата исходный файл сохраняется."
         ),
         new SettingField(
             "delete_source",
@@ -75,24 +81,24 @@ public sealed class StreamReplacementScript : AbstractScript
         )
     };
 
-    public override async Task<List<string>> ExecuteSingleAsync(
+    public override async Task<ExecutionResult> ExecuteSingleAsync(
         string filePath,
         Dictionary<string, object> settings,
         string? outputPath,
         ScriptProgressCallback progressCallback,
         int fileIndex,
-        int totalCount)
+        int totalCount,
+        ExecutionContext context)
     {
-        ResetCancellation();
         var results = new List<string>();
 
-        _logService.Info($"Начало подмены дорожек для файла '{Path.GetFileName(filePath)}'", "StreamReplacementScript");
+        _logService.Write("script.stream_replacement.started", LogLevel.Debug, LogStatus.Running, $"Начата подмена дорожек файла '{LogProps.FileName(filePath)}'", source: Name, properties: LogProps.Create("InputName", LogProps.FileName(filePath)));
 
         // 1. Считываем назначения замен из настроек
         var rawReplacements = GetSettingValue<Dictionary<string, object>?>(settings, "replacements", null);
-        
+
         var replacements = new Dictionary<int, ReplacementInfo>();
-        
+
         if (rawReplacements != null && rawReplacements.TryGetValue(filePath, out var fileRepsObj) && fileRepsObj is IDictionary<string, object> fileReps)
         {
             // Парсим замены в типизированный словарь для текущего файла
@@ -125,10 +131,13 @@ public sealed class StreamReplacementScript : AbstractScript
         if (replacements.Count == 0)
         {
             string err = $"❌ Ошибка: не назначено ни одной замены для подмены дорожек в файле '{Path.GetFileName(filePath)}'.";
-            _logService.Error(err, "StreamReplacementScript");
+            _logService.Write("script.stream_replacement.failed", LogLevel.Error, LogStatus.Failed, err, source: Name, properties: LogProps.Create("ErrorCode", "STREAM_REPLACEMENT_FAILED").With("InputName", LogProps.FileName(filePath)).With("Retryable", true));
             progressCallback(fileIndex, totalCount, "Ошибка: нет замен", 0.0);
             results.Add(err);
-            return results;
+            return ExecutionResult.Failed(
+                context,
+                results,
+                errorCode: "no-replacements");
         }
 
         // 2. Зондируем структуру исходного файла
@@ -140,22 +149,30 @@ public sealed class StreamReplacementScript : AbstractScript
         catch (Exception ex)
         {
             string probeErr = $"❌ Ошибка анализа метаданных файла: {ex.Message}";
-            _logService.Exception(ex, $"Исключение при анализе метаданных для '{filePath}': {ex.Message}", "StreamReplacementScript");
+            _logService.Write("script.stream_replacement.probe_failed", LogLevel.Warning, LogStatus.Skipped, $"Метаданные файла '{LogProps.FileName(filePath)}' не прочитаны, подмена дорожек пропущена", ex, Name, properties: LogProps.Create("ErrorCode", "PROBE_FAILED").With("InputName", LogProps.FileName(filePath)));
             progressCallback(fileIndex, totalCount, "Ошибка ffprobe", 0.0);
             results.Add(probeErr);
-            return results;
+            return ExecutionResult.FromException(
+                context,
+                ex,
+                results,
+                errorCode: "probe-failed",
+                cleanupState: CleanupState.NotStarted);
         }
 
         if (structure == null)
         {
             string err = $"❌ ОШИБКА анализа: {Path.GetFileName(filePath)}";
-            _logService.Error(err, "StreamReplacementScript");
+            _logService.Write("script.stream_replacement.failed", LogLevel.Error, LogStatus.Failed, err, source: Name, properties: LogProps.Create("ErrorCode", "STREAM_REPLACEMENT_FAILED").With("InputName", LogProps.FileName(filePath)).With("Retryable", true));
             progressCallback(fileIndex, totalCount, "Ошибка ffprobe", 0.0);
             results.Add(err);
-            return results;
+            return ExecutionResult.Failed(
+                context,
+                results,
+                errorCode: "probe-empty",
+                retryable: true);
         }
 
-        // 3. Вычисляем безопасный выходной путь
         string ext = Path.GetExtension(filePath).ToLowerInvariant();
         bool isMp4 = ext == ".mp4";
         string targetDir = string.IsNullOrEmpty(outputPath)
@@ -170,10 +187,15 @@ public sealed class StreamReplacementScript : AbstractScript
         if (File.Exists(finalOutputFile) && !overwrite)
         {
             string skipExist = $"⏭ ПРОПУСК (файл существует): {Path.GetFileName(finalOutputFile)}";
-            _logService.Info(skipExist, "StreamReplacementScript");
+            _logService.Write("script.stream_replacement.output_exists", LogLevel.Info, LogStatus.Skipped, skipExist, source: Name, properties: LogProps.Create("OutputName", LogProps.FileName(filePath)).With("ArtifactExists", true));
             progressCallback(fileIndex, totalCount, $"Пропущен (существует): {Path.GetFileName(finalOutputFile)}", 100.0);
             results.Add(skipExist);
-            return results;
+            return ExecutionResult.Skipped(
+                context,
+                results,
+                errorCode: "output-exists",
+                outputFile: finalOutputFile,
+                outputExists: true);
         }
 
         progressCallback(fileIndex, totalCount, $"Сборка {stem}...", 0.0);
@@ -191,22 +213,25 @@ public sealed class StreamReplacementScript : AbstractScript
             }
         });
 
-        bool success = false;
+        ProcessResult? success = null;
         try
         {
             if (isMp4)
             {
-                _logService.Info($"Запуск FFmpeg для подмены дорожек в MP4 '{Path.GetFileName(filePath)}'", "StreamReplacementScript");
-                
+                _logService.Write("script.stream_replacement.ffmpeg_started", LogLevel.Debug, LogStatus.Running, $"Запущен FFmpeg для подмены дорожек в MP4 '{LogProps.FileName(filePath)}'", source: Name, properties: LogProps.Create("Tool", "ffmpeg").With("InputName", LogProps.FileName(filePath)).With("Container", "mp4"));
+
                 var ffmpegArgs = PrepareMp4Args(structure.Tracks, replacements, out int replacedCount);
-                
+
                 if (replacedCount == 0)
                 {
                     string err = $"❌ Ошибка: ни одна из назначенных замен не была передана в финальную команду для '{Path.GetFileName(filePath)}'.";
-                    _logService.Error(err, "StreamReplacementScript");
+                    _logService.Write("script.stream_replacement.failed", LogLevel.Error, LogStatus.Failed, err, source: Name, properties: LogProps.Create("ErrorCode", "STREAM_REPLACEMENT_FAILED").With("InputName", LogProps.FileName(filePath)).With("Retryable", true));
                     progressCallback(fileIndex, totalCount, "Ошибка: 0 замен", 0.0);
                     results.Add(err);
-                    return results;
+                    return ExecutionResult.Failed(
+                        context,
+                        results,
+                        errorCode: "no-effective-replacements");
                 }
 
                 success = await _ffmpegRunner.RunAsync(
@@ -224,17 +249,20 @@ public sealed class StreamReplacementScript : AbstractScript
             }
             else
             {
-                _logService.Info($"Запуск mkvmerge для подмены дорожек в MKV '{Path.GetFileName(filePath)}'", "StreamReplacementScript");
-                
+                _logService.Write("script.stream_replacement.mkvmerge_started", LogLevel.Debug, LogStatus.Running, $"Запущен mkvmerge для подмены дорожек в MKV '{LogProps.FileName(filePath)}'", source: Name, properties: LogProps.Create("Tool", "mkvmerge").With("InputName", LogProps.FileName(filePath)).With("Container", "mkv"));
+
                 var mkvInputs = PrepareMkvInputs(filePath, structure.Tracks, replacements, out var extraArgs, out int replacedCount);
 
                 if (replacedCount == 0)
                 {
                     string err = $"❌ Ошибка: ни одна из назначенных замен не была передана в финальную команду для '{Path.GetFileName(filePath)}'.";
-                    _logService.Error(err, "StreamReplacementScript");
+                    _logService.Write("script.stream_replacement.failed", LogLevel.Error, LogStatus.Failed, err, source: Name, properties: LogProps.Create("ErrorCode", "STREAM_REPLACEMENT_FAILED").With("InputName", LogProps.FileName(filePath)).With("Retryable", true));
                     progressCallback(fileIndex, totalCount, "Ошибка: 0 замен", 0.0);
                     results.Add(err);
-                    return results;
+                    return ExecutionResult.Failed(
+                        context,
+                        results,
+                        errorCode: "no-effective-replacements");
                 }
 
                 success = await _mkvmergeRunner.RunAsync(
@@ -251,8 +279,8 @@ public sealed class StreamReplacementScript : AbstractScript
         }
         catch (Exception ex)
         {
-            string runErr = $"❌ Критическая ошибка при сборке для '{stem}': {ex.Message}";
-            _logService.Exception(ex, $"Исключение в процессе сборки для '{filePath}': {ex.Message}", "StreamReplacementScript");
+            string runErr = $"Критическая ошибка при сборке для '{stem}'";
+            _logService.Write("script.stream_replacement.build_failed", LogLevel.Error, LogStatus.Failed, $"Сборка с подменой дорожек для '{LogProps.FileName(filePath)}' не выполнена", ex, Name, properties: LogProps.Create("ErrorCode", "STREAM_REPLACEMENT_FAILED").With("InputName", LogProps.FileName(filePath)).With("Retryable", true));
             results.Add(runErr);
         }
         finally
@@ -266,26 +294,33 @@ public sealed class StreamReplacementScript : AbstractScript
         {
             CleanupIfCancelled(finalOutputFile);
             string cancelMsg = $"⚠ Обработка отменена пользователем: {Path.GetFileName(finalOutputFile)}";
-            _logService.Info(cancelMsg, "StreamReplacementScript");
+            _logService.Write("script.stream_replacement.cancelled", LogLevel.Info, LogStatus.Cancelled, cancelMsg, source: Name, properties: LogProps.Create("Reason", "UserRequested").With("CleanupState", "NotStarted"));
             results.Add(cancelMsg);
-            return results;
+            return ExecutionResult.Cancelled(
+                context,
+                results,
+                errorCode: "cancelled",
+                outputFile: finalOutputFile,
+                outputExists: File.Exists(finalOutputFile),
+                cleanupState: CleanupState.Completed);
         }
+
+        bool overwriteSource = GetSettingValue(settings, "overwrite_source", false);
+        bool deleteSource = GetSettingValue(settings, "delete_source", false);
+        bool sourceReplaced = false;
 
         try
         {
-            if (success)
+            if (success?.IsSuccess == true)
             {
                 progressCallback(fileIndex, totalCount, "Завершено!", 100.0);
                 string successMsg = $"✅ ОБРАБОТАНО: {Path.GetFileName(finalOutputFile)}";
-                _logService.Info(successMsg, "StreamReplacementScript");
+                _logService.Write("script.stream_replacement.completed", LogLevel.Info, LogStatus.Succeeded, successMsg, source: Name, properties: LogProps.Create("OutputName", LogProps.FileName(filePath)).With("Verified", true));
                 results.Add(successMsg);
-
-                bool overwriteSource = GetSettingValue(settings, "overwrite_source", false);
-                bool deleteSource = GetSettingValue(settings, "delete_source", false);
 
                 if (overwriteSource)
                 {
-                    await ReplaceSourceWithResultAsync(filePath, finalOutputFile, results);
+                    sourceReplaced = await ReplaceSourceWithResultAsync(filePath, finalOutputFile, results);
                 }
                 else if (deleteSource)
                 {
@@ -296,19 +331,95 @@ public sealed class StreamReplacementScript : AbstractScript
             {
                 await CleanupFailedOutputFileAsync(finalOutputFile);
                 string failMsg = $"❌ ОШИБКА сборки файла: {Path.GetFileName(filePath)}";
-                _logService.Error(failMsg, "StreamReplacementScript");
+                _logService.Write("script.stream_replacement.failed", LogLevel.Error, LogStatus.Failed, failMsg, source: Name, properties: LogProps.Create("ErrorCode", "STREAM_REPLACEMENT_FAILED").With("InputName", LogProps.FileName(filePath)).With("Retryable", true));
                 results.Add(failMsg);
             }
         }
         catch (Exception ex)
         {
             await CleanupFailedOutputFileAsync(finalOutputFile);
-            string errorMsg = $"❌ Ошибка выполнения скрипта для {Path.GetFileName(filePath)}: {ex.Message}";
+            string errorMsg = $"❌ Ошибка выполнения скрипта для {Path.GetFileName(filePath)}";
             results.Add(errorMsg);
-            _logService.Exception(ex, $"Ошибка при выполнении подмены дорожек для '{stem}': {ex.Message}", "StreamReplacementScript");
+            _logService.Write("script.stream_replacement.failed", LogLevel.Error, LogStatus.Failed, $"Подмена дорожек для '{stem}' не выполнена", ex, Name, properties: LogProps.Create("ErrorCode", "STREAM_REPLACEMENT_FAILED").With("Retryable", true));
+            return ExecutionResult.FromException(
+                context,
+                ex,
+                results,
+                errorCode: "replacement-exception",
+                outputFile: finalOutputFile,
+                outputExists: File.Exists(finalOutputFile),
+                cleanupState: CleanupState.Completed);
         }
 
-        return results;
+        if (sourceReplaced)
+        {
+            return ExecutionResult.Succeeded(
+                context,
+                results,
+                outputFile: filePath,
+                outputExists: File.Exists(filePath),
+                cleanupState: CleanupState.Completed);
+        }
+
+        if (overwriteSource)
+        {
+            if (success?.IsSuccess != true)
+            {
+                return ExecutionResult.Failed(
+                    context,
+                    results,
+                    errorCode: "output-missing",
+                    outputFile: finalOutputFile,
+                    outputExists: false,
+                    cleanupState: CleanupState.Completed);
+            }
+
+            string replacementFailMsg = $"❌ Исходный файл не заменён готовым результатом замены дорожек: '{Path.GetFileName(filePath)}', исходник сохранён";
+            _logService.Write("script.source.replaced_failed", LogLevel.Error, LogStatus.PartiallySucceeded, replacementFailMsg, source: Name, properties: LogProps.Create("ErrorCode", "SOURCE_REPLACE_FAILED").With("InputName", LogProps.FileName(filePath)).With("CleanupState", "SourcePreserved"));
+            return File.Exists(filePath)
+                ? ExecutionResult.PartiallySucceeded(
+                    context,
+                    results,
+                    errorCode: "source-replacement-failed",
+                    outputFile: finalOutputFile,
+                    outputExists: File.Exists(finalOutputFile),
+                    cleanupState: CleanupState.Failed)
+                : ExecutionResult.Failed(
+                    context,
+                    results,
+                    errorCode: "source-replacement-failed",
+                    outputFile: finalOutputFile,
+                    outputExists: File.Exists(finalOutputFile),
+                    cleanupState: CleanupState.Failed);
+        }
+
+        bool outputReady = File.Exists(finalOutputFile);
+        if (success?.IsSuccess == true && outputReady)
+        {
+            if (deleteSource && File.Exists(filePath))
+            {
+                return ExecutionResult.PartiallySucceeded(
+                    context,
+                    results,
+                    errorCode: "source-cleanup-failed",
+                    outputFile: finalOutputFile,
+                    outputExists: true,
+                    cleanupState: CleanupState.Failed);
+            }
+            return ExecutionResult.Succeeded(
+                context,
+                results,
+                outputFile: finalOutputFile,
+                outputExists: true,
+                cleanupState: deleteSource ? CleanupState.Completed : CleanupState.NotRequired);
+        }
+        return ExecutionResult.Failed(
+            context,
+            results,
+            errorCode: "output-missing",
+            outputFile: finalOutputFile,
+            outputExists: false,
+            cleanupState: CleanupState.Completed);
     }
 
     /// <summary>
@@ -327,11 +438,11 @@ public sealed class StreamReplacementScript : AbstractScript
             int sid = stream.TrackId;
             if (replacements.TryGetValue(sid, out var rep))
             {
-                _logService.Info($"MP4: Замена оригинального потока #{sid} на '{Path.GetFileName(rep.Path)}' (ID {rep.SrcId})", "StreamReplacementScript");
+                _logService.Write("script.stream_replacement.map_applied", LogLevel.Debug, LogStatus.Succeeded, $"Замена медиапотока #{sid} на '{LogProps.FileName(rep.Path)}', идентификатор источника {rep.SrcId}", source: Name, properties: LogProps.Create("Index", sid).With("InputName", LogProps.FileName(rep.Path)).With("Container", "mp4"));
                 extraInputs.Add(rep.Path);
                 extraArgs.Add("-map");
                 extraArgs.Add($"{inputIdx}:{rep.SrcId}");
-                
+
                 // Переносим метаданные языка и заголовка
                 AddFfmpegMetadata(extraArgs, outIdx, stream);
                 inputIdx++;
@@ -414,8 +525,8 @@ public sealed class StreamReplacementScript : AbstractScript
             var originalTrack = allTracks.FirstOrDefault(t => t.TrackId == originalTrackId);
             if (originalTrack != null)
             {
-                _logService.Info($"MKV: Замена оригинального трека #{originalTrackId} на '{Path.GetFileName(rep.Path)}' (ID {rep.SrcId})", "StreamReplacementScript");
-                
+                _logService.Write("script.stream_replacement.map_applied", LogLevel.Debug, LogStatus.Succeeded, $"Замена дорожки #{originalTrackId} на '{LogProps.FileName(rep.Path)}', идентификатор источника {rep.SrcId}", source: Name, properties: LogProps.Create("Index", originalTrackId).With("InputName", LogProps.FileName(rep.Path)).With("Container", "mkv"));
+
                 var replacementArgs = BuildReplacementArgs(originalTrack, rep.SrcId);
                 inputs.Add(new MkvInputSource(rep.Path, replacementArgs));
 

@@ -8,6 +8,7 @@ using FluentAssertions;
 using Moq;
 using KTools_App;
 using KTools_App.Core;
+using KTools_App.Diagnostics;
 using KTools_App.Services.Contracts;
 using KTools_App.Scripts;
 using KTools_App.Tests.TestHelpers;
@@ -481,9 +482,17 @@ public class ShellActivationIntegrationTests : IsolatedMessengerTestBase
         videoScript.FilesQueue[0].FilePath.Should().Be(_tempFile);
 
         logMock.Verify(
-            l => l.Warn(It.Is<string>(s => s.Contains("не поддерживается", StringComparison.Ordinal)), It.IsAny<string>()),
+            l => l.Write(
+                "ui.file.unsupported_extension",
+                LogLevel.Warning,
+                LogStatus.Skipped,
+                It.IsAny<string>(),
+                It.IsAny<Exception>(),
+                "MainPage",
+                It.IsAny<LogContext?>(),
+                It.Is<IReadOnlyDictionary<string, object?>>(p => Equals(p["ErrorCode"], "UNSUPPORTED_EXTENSION"))),
             Times.AtLeastOnce,
-            "фильтрация неподдерживаемого расширения должна логироваться предупреждением");
+            "фильтрация неподдерживаемого расширения должна логироваться структурированным предупреждением с кодом ошибки");
     }
 
     [TestMethod]
@@ -501,8 +510,17 @@ public class ShellActivationIntegrationTests : IsolatedMessengerTestBase
         added.Should().BeTrue("при нераспознанном теге файлы должны направляться в первый скрипт реестра");
 
         logMock.Verify(
-            l => l.Warn(It.Is<string>(s => s.Contains("не распознан", StringComparison.Ordinal)), It.IsAny<string>()),
-            Times.AtLeastOnce);
+            l => l.Write(
+                "app.shell.script_unrecognized",
+                LogLevel.Warning,
+                LogStatus.Skipped,
+                It.IsAny<string>(),
+                It.IsAny<Exception>(),
+                "MainPage",
+                It.IsAny<LogContext?>(),
+                It.Is<IReadOnlyDictionary<string, object?>>(p => Equals(p["ErrorCode"], "SHELL_SCRIPT_UNRECOGNIZED"))),
+            Times.AtLeastOnce,
+            "нераспознанный тег скрипта фиксируется структурированным предупреждением с кодом ошибки");
         navigationMock.Verify(n => n.NavigateTo(typeof(WorkPanel), It.IsAny<AbstractScript>()), Times.Once);
     }
 

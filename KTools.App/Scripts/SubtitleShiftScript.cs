@@ -5,8 +5,13 @@ using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+
 using KTools_App.Core;
+using KTools_App.Diagnostics;
+using KTools_App.Models;
 using KTools_App.Services.Contracts;
+
+using ExecutionContext = KTools_App.Models.ExecutionContext;
 
 namespace KTools_App.Scripts;
 
@@ -17,7 +22,7 @@ namespace KTools_App.Scripts;
 public sealed class SubtitleShiftScript : AbstractScript
 {
     private static readonly Regex SrtVttTimeRegex = new(
-        @"^(\d{1,2}:\d{2}:\d{2}[,\.]\d{3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}[,\.]\d{3})(.*)$",
+        @"^((?:\d{1,2}:)?\d{2}:\d{2}[,\.]\d{1,3})\s*-->\s*((?:\d{1,2}:)?\d{2}:\d{2}[,\.]\d{1,3})(.*)$",
         RegexOptions.Compiled);
 
     public SubtitleShiftScript(ILogService logService, ISettingsManager settingsManager, IPathManager pathManager)
@@ -84,25 +89,26 @@ public sealed class SubtitleShiftScript : AbstractScript
     /// <summary>
     /// Асинхронное выполнение сдвига тайминга для одного файла субтитров.
     /// </summary>
-    public override async Task<List<string>> ExecuteSingleAsync(
+    public override async Task<ExecutionResult> ExecuteSingleAsync(
         string filePath,
         Dictionary<string, object> settings,
         string? outputPath,
         ScriptProgressCallback progressCallback,
         int fileIndex,
-        int totalCount)
+        int totalCount,
+        ExecutionContext context)
     {
         var results = new List<string>();
         string originalName = Path.GetFileName(filePath);
         string originalExt = Path.GetExtension(filePath);
 
-        _logService.Info($"Начало обработки субтитров: '{originalName}'", "SubtitleShiftScript");
+        _logService.Write("script.subtitle_shift.started", LogLevel.Debug, LogStatus.Running, $"Начат сдвиг таймингов субтитров '{originalName}'", source: Name, properties: LogProps.Create("InputName", LogProps.FileName(filePath)));
         progressCallback(fileIndex, totalCount, "Чтение файла...", 0.0);
         object shiftMsRaw = GetSettingValue(settings, "ShiftMs", (object)"1000");
         int shiftMs = ParseShiftValue(shiftMsRaw);
         string direction = GetSettingValue(settings, "ShiftDirection", "Вперед");
 
-        _logService.Info($"Параметры сдвига: {shiftMs} мс (сырое значение: '{shiftMsRaw}'), направление: {direction}", "SubtitleShiftScript");
+        _logService.Write("script.subtitle_shift.parameters", LogLevel.Debug, LogStatus.Running, $"Параметры сдвига: {shiftMs} мс, направление {LogRedactor.CompactSafeToken(direction)}", source: Name, properties: LogProps.Create("DurationMs", (double)shiftMs).With("InputName", LogProps.FileName(filePath)));
 
         // Определение целевой директории
         string targetDir = string.IsNullOrEmpty(outputPath)
@@ -120,9 +126,16 @@ public sealed class SubtitleShiftScript : AbstractScript
             string msg = $"Пропуск (существует): {outputName}";
             progressCallback(fileIndex, totalCount, msg, 100.0);
             results.Add($"⏭ ПРОПУСК (файл существует): {outputName}");
-            _logService.Info($"Файл результата '{outputFilePath}' уже существует, обработка пропущена.", "SubtitleShiftScript");
-            return results;
+            _logService.Write("script.subtitle_shift.output_exists", LogLevel.Info, LogStatus.Skipped, $"Файл результата '{LogProps.FileName(outputFilePath)}' уже существует, обработка пропущена", source: Name, properties: LogProps.Create("OutputName", LogProps.FileName(outputFilePath)).With("ArtifactExists", true));
+            return ExecutionResult.Skipped(
+                context,
+                results,
+                errorCode: "output-exists",
+                outputFile: outputFilePath,
+                outputExists: true);
         }
+
+        Exception? terminalException = null;
 
         try
         {
@@ -165,25 +178,54 @@ public sealed class SubtitleShiftScript : AbstractScript
             if (IsCancelled)
             {
                 results.Add($"⚠ Отменено: {outputName}");
-                _logService.Info($"Обработка файла '{originalName}' отменена пользователем.", "SubtitleShiftScript");
-                return results;
+                _logService.Write("script.subtitle_shift.cancelled", LogLevel.Info, LogStatus.Cancelled, $"Сдвиг таймингов для '{originalName}' отменён", source: Name, properties: LogProps.Create("Reason", "UserRequested").With("CleanupState", "NotStarted"));
+                return ExecutionResult.Cancelled(
+                    context,
+                    results,
+                    errorCode: "cancelled",
+                    outputFile: outputFilePath,
+                    outputExists: File.Exists(outputFilePath),
+                    cleanupState: CleanupState.Completed);
             }
 
             // Запись результата в UTF-8
             await File.WriteAllLinesAsync(outputFilePath, updatedLines, Encoding.UTF8);
 
-            _logService.Info($"Файл субтитров успешно сохранен: '{outputFilePath}'", "SubtitleShiftScript");
+            _logService.Write("script.subtitle_shift.completed", LogLevel.Info, LogStatus.Succeeded, $"Файл субтитров сохранён: '{LogProps.FileName(outputFilePath)}'", source: Name, properties: LogProps.Create("OutputName", LogProps.FileName(outputFilePath)).With("Verified", true));
             progressCallback(fileIndex, totalCount, "Завершено", 100.0);
             results.Add($"✔ Сдвиг выполнен успешно: {outputName}");
+            return ExecutionResult.Succeeded(
+                context,
+                results,
+                outputFile: outputFilePath,
+                outputExists: File.Exists(outputFilePath));
         }
         catch (Exception ex)
         {
-            _logService.Exception(ex, $"Ошибка при сдвиге тайминга субтитров '{originalName}': {ex.Message}", "SubtitleShiftScript");
-            results.Add($"❌ Ошибка: {originalName} ({ex.Message})");
+            _logService.Write("script.subtitle_shift.failed", LogLevel.Error, LogStatus.Failed, $"Сдвиг таймингов субтитров '{originalName}' не выполнен", ex, Name, properties: LogProps.Create("ErrorCode", "SUBTITLE_SHIFT_FAILED").With("InputName", LogProps.FileName(filePath)).With("Retryable", true));
+            results.Add($"❌ Ошибка: {originalName}");
             progressCallback(fileIndex, totalCount, "Ошибка выполнения", 100.0);
+            terminalException = ex;
         }
 
-        return results;
+        if (terminalException is not null)
+        {
+            return ExecutionResult.FromException(
+                context,
+                terminalException,
+                results,
+                errorCode: "subtitle-shift-failed",
+                outputFile: outputFilePath,
+                outputExists: File.Exists(outputFilePath),
+                cleanupState: CleanupState.Completed);
+        }
+
+        return ExecutionResult.Failed(
+            context,
+            results,
+            errorCode: "output-missing",
+            outputFile: outputFilePath,
+            outputExists: File.Exists(outputFilePath));
     }
 
     private string ProcessSrtVttLine(string line, int shiftMs, string direction)
@@ -263,10 +305,14 @@ public sealed class SubtitleShiftScript : AbstractScript
         string clean = timeStr.Replace(',', '.');
         string[] parts = clean.Split('.');
         string[] t = parts[0].Split(':');
-        int h = int.Parse(t[0]);
-        int m = int.Parse(t[1]);
-        int s = int.Parse(t[2]);
-        int ms = int.Parse(parts[1]);
+        int h = t.Length > 2 ? int.Parse(t[0], System.Globalization.CultureInfo.InvariantCulture) : 0;
+        int m = t.Length > 2 ? int.Parse(t[1], System.Globalization.CultureInfo.InvariantCulture) : int.Parse(t[0], System.Globalization.CultureInfo.InvariantCulture);
+        int s = t.Length > 2 ? int.Parse(t[2], System.Globalization.CultureInfo.InvariantCulture) : int.Parse(t[1], System.Globalization.CultureInfo.InvariantCulture);
+        string msStr = parts.Length > 1 ? parts[1] : "0";
+        if (msStr.Length == 1) msStr += "00";
+        else if (msStr.Length == 2) msStr += "0";
+        else if (msStr.Length > 3) msStr = msStr.Substring(0, 3);
+        int ms = int.Parse(msStr, System.Globalization.CultureInfo.InvariantCulture);
         return new TimeSpan(0, h, m, s, ms);
     }
 
@@ -349,7 +395,7 @@ public sealed class SubtitleShiftScript : AbstractScript
             }
             catch (Exception ex)
             {
-                _logService.Warn($"Не удалось разобрать тайминг с миллисекундами '{input}': {ex.Message}", "SubtitleShiftScript");
+                _logService.Write("subtitle.timing.parse_failed", LogLevel.Warning, LogStatus.Skipped, $"Тайминг с миллисекундами не разобран: {input}", ex, Name, properties: LogProps.Create("ErrorCode", "TIMING_PARSE_FAILED").With("InputName", LogProps.FileName(input)));
             }
         }
 
@@ -368,7 +414,7 @@ public sealed class SubtitleShiftScript : AbstractScript
             }
             catch (Exception ex)
             {
-                _logService.Warn($"Не удалось разобрать Aegisub тайминг '{input}': {ex.Message}", "SubtitleShiftScript");
+                _logService.Write("subtitle.timing.aegisub_parse_failed", LogLevel.Warning, LogStatus.Skipped, $"Тайминг Aegisub не разобран: {input}", ex, Name, properties: LogProps.Create("ErrorCode", "AEGISUB_TIMING_PARSE_FAILED").With("InputName", LogProps.FileName(input)));
             }
         }
 
@@ -379,7 +425,7 @@ public sealed class SubtitleShiftScript : AbstractScript
             return (int)parsedTs.TotalMilliseconds;
         }
 
-        _logService.Warn($"Неизвестный формат величины сдвига: '{input}'. Будет использован сдвиг 0 мс.", "SubtitleShiftScript");
+        _logService.Write("subtitle.shift_value.unknown_format", LogLevel.Warning, LogStatus.Skipped, $"Формат величины сдвига не распознан: {input}, применён сдвиг 0 мс", source: Name, properties: LogProps.Create("ErrorCode", "UNKNOWN_SHIFT_FORMAT").With("InputName", LogProps.FileName(input)));
         return 0;
     }
 }

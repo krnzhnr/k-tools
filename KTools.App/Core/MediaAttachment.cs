@@ -1,4 +1,4 @@
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
 using System;
 using System.IO;
 
@@ -44,8 +44,8 @@ public sealed class MediaAttachment
             if (!string.IsNullOrEmpty(MimeType))
             {
                 string mimeLower = MimeType.ToLowerInvariant();
-                if (mimeLower.Contains("font") || 
-                    mimeLower.Contains("truetype") || 
+                if (mimeLower.Contains("font") ||
+                    mimeLower.Contains("truetype") ||
                     mimeLower.Contains("opentype"))
                 {
                     return true;

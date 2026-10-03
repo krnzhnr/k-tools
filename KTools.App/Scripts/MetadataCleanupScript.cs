@@ -5,8 +5,13 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+
 using KTools_App.Core;
+using KTools_App.Diagnostics;
+using KTools_App.Infrastructure;
+using KTools_App.Models;
 using KTools_App.Services.Contracts;
+using ExecutionContext = KTools_App.Models.ExecutionContext;
 
 namespace KTools_App.Scripts;
 
@@ -56,10 +61,13 @@ public sealed class MetadataCleanupScript : AbstractScript
     {
         new SettingField(
             "overwrite_source",
-            "Подменить оригинал финальным файлом",
+            "Заменить исходный файл готовым результатом после успешной проверки",
             SettingType.Checkbox,
             false,
-            "Вывод"
+            "Вывод",
+            requiresWarning: true,
+            warningTitle: "Замена исходного файла",
+            warningText: "Исходный файл заменяется готовым результатом только после успешной проверки. До подтверждения результата исходный файл сохраняется."
         ),
         new SettingField(
             "delete_source",
@@ -87,19 +95,18 @@ public sealed class MetadataCleanupScript : AbstractScript
     /// <summary>
     /// Асинхронное выполнение очистки метаданных для одного файла.
     /// </summary>
-    public override async Task<List<string>> ExecuteSingleAsync(
+    public override async Task<ExecutionResult> ExecuteSingleAsync(
         string filePath,
         Dictionary<string, object> settings,
         string? outputPath,
         ScriptProgressCallback progressCallback,
         int fileIndex,
-        int totalCount)
+        int totalCount,
+        ExecutionContext context)
     {
-        ResetCancellation();
         var results = new List<string>();
 
-        _logService.Info($"Начало очистки метаданных для файла '{Path.GetFileName(filePath)}'", "MetadataCleanupScript");
-
+        _logService.Write("script.metadata_cleanup.started", LogLevel.Debug, LogStatus.Running, $"Начата очистка метаданных файла '{LogProps.FileName(filePath)}'", source: Name, properties: LogProps.Create("InputName", LogProps.FileName(filePath)));
         string originalName = Path.GetFileNameWithoutExtension(filePath);
         string ext = Path.GetExtension(filePath);
 
@@ -116,10 +123,15 @@ public sealed class MetadataCleanupScript : AbstractScript
         if (File.Exists(finalOutputFile) && !overwrite)
         {
             string skipMsg = $"⏭ ПРОПУСК (файл существует): {outputName}";
-            _logService.Info(skipMsg, "MetadataCleanupScript");
+            _logService.Write("script.metadata_cleanup.skipped", LogLevel.Info, LogStatus.Skipped, skipMsg, source: Name, properties: LogProps.Create("InputName", LogProps.FileName(filePath)));
             progressCallback(fileIndex, totalCount, $"Пропущен (существует): {outputName}", 100.0);
             results.Add(skipMsg);
-            return results;
+            return ExecutionResult.Skipped(
+                context,
+                results,
+                errorCode: "output-exists",
+                outputFile: finalOutputFile,
+                outputExists: true);
         }
 
         // Пробуем получить длительность для расчета прогресса
@@ -134,7 +146,7 @@ public sealed class MetadataCleanupScript : AbstractScript
         }
         catch (Exception ex)
         {
-            _logService.Warn($"Не удалось заранее определить длительность медиафайла: {ex.Message}", "MetadataCleanupScript");
+            _logService.Write("media.duration.probe_failed", LogLevel.Warning, LogStatus.Skipped, "Длительность медиафайла заранее не определена, очистка продолжится", ex, Name, properties: LogProps.Create("ErrorCode", "DURATION_PROBE_FAILED").With("Tool", "ffprobe").With("InputName", LogProps.FileName(filePath)));
         }
 
         progressCallback(fileIndex, totalCount, $"Очистка метаданных {originalName}...", 0.0);
@@ -152,7 +164,7 @@ public sealed class MetadataCleanupScript : AbstractScript
             }
         });
 
-        bool success = false;
+        ProcessResult? success = null;
         try
         {
             // Формируем аргументы FFmpeg для очистки всех тегов и копирования всех потоков (-map 0 -map_metadata -1 -c copy)
@@ -179,8 +191,8 @@ public sealed class MetadataCleanupScript : AbstractScript
         }
         catch (Exception ex)
         {
-            string runErr = $"❌ Критическая ошибка при очистке метаданных для '{originalName}': {ex.Message}";
-            _logService.Exception(ex, $"Исключение при очистке метаданных для '{filePath}': {ex.Message}", "MetadataCleanupScript");
+            string runErr = $"Критическая ошибка при очистке метаданных для '{originalName}'";
+            _logService.Write("script.metadata_cleanup.failed", LogLevel.Error, LogStatus.Failed, $"Очистка метаданных файла '{LogProps.FileName(filePath)}' не выполнена", ex, Name, properties: LogProps.Create("ErrorCode", "METADATA_CLEANUP_FAILED").With("InputName", LogProps.FileName(filePath)).With("Retryable", true));
             results.Add(runErr);
         }
         finally
@@ -193,26 +205,33 @@ public sealed class MetadataCleanupScript : AbstractScript
         {
             CleanupIfCancelled(finalOutputFile);
             string cancelMsg = $"⚠ Обработка отменена пользователем: {outputName}";
-            _logService.Info(cancelMsg, "MetadataCleanupScript");
+            _logService.Write("script.metadata_cleanup.cancelled", LogLevel.Info, LogStatus.Cancelled, cancelMsg, source: Name, properties: LogProps.Create("Reason", "UserRequested").With("CleanupState", "NotStarted"));
             results.Add(cancelMsg);
-            return results;
+            return ExecutionResult.Cancelled(
+                context,
+                results,
+                errorCode: "cancelled",
+                outputFile: finalOutputFile,
+                outputExists: File.Exists(finalOutputFile),
+                cleanupState: CleanupState.Completed);
         }
+
+        bool overwriteSource = GetSettingValue(settings, "overwrite_source", false);
+        bool deleteSource = GetSettingValue(settings, "delete_source", false);
+        bool sourceReplaced = false;
 
         try
         {
-            if (success)
+            if (success?.IsSuccess == true)
             {
                 progressCallback(fileIndex, totalCount, "Завершено!", 100.0);
                 string successMsg = $"✅ Очищены метаданные: {outputName}";
-                _logService.Info(successMsg, "MetadataCleanupScript");
+                _logService.Write("script.metadata_cleanup.completed", LogLevel.Info, LogStatus.Succeeded, successMsg, source: Name, properties: LogProps.Create("InputName", LogProps.FileName(filePath)).With("Verified", true));
                 results.Add(successMsg);
-
-                bool overwriteSource = GetSettingValue(settings, "overwrite_source", false);
-                bool deleteSource = GetSettingValue(settings, "delete_source", false);
 
                 if (overwriteSource && string.IsNullOrEmpty(outputPath))
                 {
-                    await ReplaceSourceWithResultAsync(filePath, finalOutputFile, results);
+                    sourceReplaced = await ReplaceSourceWithResultAsync(filePath, finalOutputFile, results);
                 }
                 else if (deleteSource)
                 {
@@ -223,7 +242,7 @@ public sealed class MetadataCleanupScript : AbstractScript
             {
                 await CleanupFailedOutputFileAsync(finalOutputFile);
                 string failMsg = $"❌ ОШИБКА очистки метаданных: {Path.GetFileName(filePath)}";
-                _logService.Error(failMsg, "MetadataCleanupScript");
+                _logService.Write("script.metadata_cleanup.failed", LogLevel.Error, LogStatus.Failed, failMsg, source: Name, properties: LogProps.Create("ErrorCode", "METADATA_CLEANUP_FAILED").With("InputName", LogProps.FileName(filePath)).With("Retryable", true));
                 results.Add(failMsg);
             }
         }
@@ -232,10 +251,79 @@ public sealed class MetadataCleanupScript : AbstractScript
             await CleanupFailedOutputFileAsync(finalOutputFile);
             string errorMsg = $"❌ Ошибка выполнения скрипта для {Path.GetFileName(filePath)}: {ex.Message}";
             results.Add(errorMsg);
-            _logService.Exception(ex, $"Ошибка при очистке метаданных для '{originalName}': {ex.Message}", "MetadataCleanupScript");
+            _logService.Write("script.metadata_cleanup.failed", LogLevel.Error, LogStatus.Failed, $"Очистка метаданных для '{originalName}' не выполнена", ex, Name, properties: LogProps.Create("ErrorCode", "METADATA_CLEANUP_FAILED").With("InputName", LogProps.FileName(filePath)).With("Retryable", true));
         }
 
-        return results;
+        if (sourceReplaced)
+        {
+            return ExecutionResult.Succeeded(
+                context,
+                results,
+                outputFile: filePath,
+                outputExists: File.Exists(filePath),
+                cleanupState: CleanupState.Completed);
+        }
+
+        bool outputReady = File.Exists(finalOutputFile);
+        if (overwriteSource && string.IsNullOrEmpty(outputPath))
+        {
+            if (success?.IsSuccess != true)
+            {
+                return ExecutionResult.Failed(
+                    context,
+                    results,
+                    errorCode: "output-missing",
+                    outputFile: finalOutputFile,
+                    outputExists: false,
+                    cleanupState: CleanupState.Completed);
+            }
+
+            bool sourceIntact = File.Exists(filePath);
+            string replacementFailMsg = $"❌ Исходный файл не заменён готовым результатом очистки метаданных: '{Path.GetFileName(filePath)}', исходник сохранён";
+            _logService.Write("script.source.replaced_failed", LogLevel.Error, LogStatus.PartiallySucceeded, replacementFailMsg, source: Name, properties: LogProps.Create("ErrorCode", "SOURCE_REPLACE_FAILED").With("InputName", LogProps.FileName(filePath)).With("CleanupState", "SourcePreserved"));
+            return sourceIntact
+                ? ExecutionResult.PartiallySucceeded(
+                    context,
+                    results,
+                    errorCode: "source-replacement-failed",
+                    outputFile: finalOutputFile,
+                    outputExists: File.Exists(finalOutputFile),
+                    cleanupState: CleanupState.Failed)
+                : ExecutionResult.Failed(
+                    context,
+                    results,
+                    errorCode: "source-replacement-failed",
+                    outputFile: finalOutputFile,
+                    outputExists: File.Exists(finalOutputFile),
+                    cleanupState: CleanupState.Failed);
+        }
+
+        if (success?.IsSuccess == true && outputReady)
+        {
+            if (deleteSource && File.Exists(filePath))
+            {
+                return ExecutionResult.PartiallySucceeded(
+                    context,
+                    results,
+                    errorCode: "source-cleanup-failed",
+                    outputFile: finalOutputFile,
+                    outputExists: true,
+                    cleanupState: CleanupState.Failed);
+            }
+            return ExecutionResult.Succeeded(
+                context,
+                results,
+                outputFile: finalOutputFile,
+                outputExists: true,
+                cleanupState: deleteSource ? CleanupState.Completed : CleanupState.NotRequired);
+        }
+        return ExecutionResult.Failed(
+            context,
+            results,
+            errorCode: "output-missing",
+            outputFile: finalOutputFile,
+            outputExists: false,
+            cleanupState: CleanupState.Completed);
     }
 }
 

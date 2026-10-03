@@ -1,22 +1,25 @@
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+
 using KTools_App.Infrastructure;
 
 namespace KTools_App.Services.Contracts;
 
 /// <summary>
 /// Интерфейс обертки для запуска процессов утилит FFmpeg и FFprobe.
+/// Каждый метод возвращает типизированный результат выполнения с проверкой
+/// кода возврата, ожидаемого артефакта и результата разбора.
 /// </summary>
 public interface IFFmpegRunner
 {
     /// <summary>
     /// Запустить процесс обработки через FFmpeg асинхронно с отслеживанием прогресса.
     /// </summary>
-    Task<bool> RunAsync(
+    Task<ProcessResult> RunAsync(
         string inputPath,
         string? outputPath = null,
         List<string>? extraArgs = null,
@@ -24,36 +27,52 @@ public interface IFFmpegRunner
         bool overwrite = false,
         double totalDuration = 0.0,
         Action<ProgressInfo>? onProgress = null,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        ProcessExecutionContext? context = null);
 
     /// <summary>
     /// Получить техническую информацию о медиафайле в формате JSON через ffprobe.
     /// </summary>
-    Task<JsonDocument?> GetVideoInfoAsync(string filePath);
+    Task<JsonDocument?> GetVideoInfoAsync(string filePath, ProcessExecutionContext? context = null);
 
     /// <summary>
     /// Быстро определяет длительность медиафайла в секундах путем считывания заголовочного вывода FFmpeg (Duration: HH:MM:SS.ms).
     /// Используется как высоконадежный фоллбэк для сырых потоков (AC3, EAC3, DTS, MP3 VBR), где ffprobe возвращает N/A.
     /// </summary>
     /// <param name="filePath">Абсолютный путь к исследуемому медиафайлу.</param>
-    /// <returns>Длительность в секундах или 0.0 при невозможности определения.</returns>
+    /// <returns>Длительность в секундах или 0.0 при невозможности определить.</returns>
     Task<double> ProbeDurationViaFfmpegAsync(string filePath);
 
     /// <summary>
     /// Извлечь выбранную дорожку субтитров и перекодировать её в формат ASS.
     /// </summary>
-    Task<bool> ExtractSubtitleAsync(string inputFile, int streamIndex, string outputPath, bool relative = false, CancellationToken cancellationToken = default);
+    Task<ProcessResult> ExtractSubtitleAsync(
+        string inputFile,
+        int streamIndex,
+        string outputPath,
+        bool relative = false,
+        CancellationToken cancellationToken = default,
+        ProcessExecutionContext? context = null);
 
     /// <summary>
     /// Извлечь встроенное вложение (файл шрифта) из медиафайла.
     /// </summary>
-    Task<bool> ExtractAttachmentAsync(string inputFile, int streamIndex, string outputPath, CancellationToken cancellationToken = default);
+    Task<ProcessResult> ExtractAttachmentAsync(
+        string inputFile,
+        int streamIndex,
+        string outputPath,
+        CancellationToken cancellationToken = default,
+        ProcessExecutionContext? context = null);
 
     /// <summary>
     /// Извлечь несколько вложений одним запуском FFmpeg (все флаги -dump_attachment за раз).
     /// Возвращает список путей успешно извлеченных вложений.
     /// </summary>
-    Task<List<string>> ExtractAttachmentsBatchAsync(string inputFile, List<(int StreamIndex, string OutputPath)> attachments, CancellationToken cancellationToken = default);
+    Task<List<string>> ExtractAttachmentsBatchAsync(
+        string inputFile,
+        List<(int StreamIndex, string OutputPath)> attachments,
+        CancellationToken cancellationToken = default,
+        ProcessExecutionContext? context = null);
 
     /// <summary>
     /// Проверить поддержку кодирования с аппаратным ускорением NVIDIA NVENC.

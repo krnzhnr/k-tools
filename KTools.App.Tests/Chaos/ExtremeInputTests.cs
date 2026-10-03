@@ -7,7 +7,10 @@ using FluentAssertions;
 using Moq;
 using KTools_App;
 using KTools_App.Core;
+using KTools_App.Diagnostics;
+using KTools_App.Models;
 using KTools_App.Services.Contracts;
+using ExecutionContext = KTools_App.Models.ExecutionContext;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using KTools_App.Tests.TestHelpers;
 
@@ -85,15 +88,16 @@ public sealed class ExposedScript : AbstractScript
     }
 
     /// <summary>Заглушка асинхронного выполнения.</summary>
-    public override Task<List<string>> ExecuteSingleAsync(
+    public override Task<ExecutionResult> ExecuteSingleAsync(
         string filePath,
         Dictionary<string, object> settings,
         string? outputPath,
         ScriptProgressCallback progressCallback,
         int fileIndex,
-        int totalCount)
+        int totalCount,
+        ExecutionContext context)
     {
-        return Task.FromResult(new List<string>());
+        return Task.FromResult(ExecutionResult.Succeeded(context));
     }
 }
 
@@ -132,20 +136,39 @@ public sealed class ExtremeInputTests
     }
 
     /// <summary>
-    /// Хаос: null-путь в конструкторе FileQueueItem. Path.GetFileName(null)
-    /// по контракту BCL возвращает null — конструктор проходит без исключения,
-    /// FileName остаётся null. Фиксируем поведение: отображаемые свойства
-    /// не защищены от null-пути.
+    /// Хаос: null-путь в конструкторе FileQueueItem. Имя файла вычисляется
+    /// политикой «только имя файла», поэтому отсутствие пути даёт явный
+    /// маркер LogRedactor.UnknownIdentifier, а не null: отображаемое свойство
+    /// защищено от null-пути и не может уронить привязку в интерфейсе.
     /// </summary>
     [TestMethod]
-    public void FileQueueItem_NullPath_Characterization()
+    public void FileQueueItem_NullPath_UsesUnknownIdentifierMarker()
     {
         // Arrange / Act
         var item = new FileQueueItem(null!);
 
         // Assert
-        item.FileName.Should().BeNull(
-            "Path.GetFileName(null) возвращает null — конструктор не бросает, имя файла остаётся null");
+        item.FileName.Should().Be(
+            KTools_App.Diagnostics.LogRedactor.UnknownIdentifier,
+            "политика «только имя файла» возвращает явный маркер вместо null");
+    }
+
+    /// <summary>
+    /// Хаос: URL с подписанной query-строкой не должен протащить параметры подписи
+    /// (Expires/Policy/Key-Pair-Id) в отображаемое имя элемента очереди.
+    /// </summary>
+    [TestMethod]
+    public void FileQueueItem_SignedUrl_DoesNotExposeQueryString()
+    {
+        // Arrange / Act
+        var item = new FileQueueItem(
+            "https://cdn.example.com/video.mkv?Expires=1893456000&Policy=SENTINEL-POLICY&Key-Pair-Id=AKIASENTINEL");
+
+        // Assert
+        item.FileName.Should().Be("video.mkv");
+        item.FileName.Should().NotContain("Expires");
+        item.FileName.Should().NotContain("SENTINEL-POLICY");
+        item.FileName.Should().NotContain("Key-Pair-Id");
     }
 
     /// <summary>
@@ -278,11 +301,19 @@ public sealed class ExtremeInputTests
         // Assert — путь возвращён без исключения (битый regex пойман catch)
         result.Should().NotBeNullOrEmpty();
         result.Should().EndWith(".mkv");
-        logMock.Verify(l => l.Exception(
-            It.IsAny<Exception>(),
+        result.Should().NotContain("_processed",
+            "битый regex не должен приводить к переименованию или коллизии имён");
+        logMock.Verify(l => l.Write(
+            "script.rename.failed",
+            LogLevel.Warning,
+            LogStatus.Skipped,
             It.IsAny<string>(),
-            It.IsAny<string>()), Times.AtLeastOnce,
-            "ошибка битого regex должна журналироваться");
+            It.IsAny<System.Text.RegularExpressions.RegexParseException>(),
+            "AbstractScript",
+            It.IsAny<LogContext?>(),
+            It.Is<IReadOnlyDictionary<string, object?>>(p => Equals(p["ErrorCode"], "RENAME_RULE_FAILED"))),
+            Times.AtLeastOnce,
+            "ошибка битого regex фиксируется структурированным предупреждением с кодом ошибки");
     }
 
     /// <summary>

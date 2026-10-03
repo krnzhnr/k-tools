@@ -94,11 +94,6 @@ public sealed class AssParser : IAssParser
         @"\b[A-ZА-ЯЁ]{2,}\b",
         RegexOptions.Compiled);
 
-    // Регэкс для удаления HTML-подобных тегов SRT/VTT (<i>, <b>, <font>, etc.)
-    // Исключает случайное повреждение декоративных << >> и кириллицы.
-    private static readonly Regex HtmlTagPattern = new(
-        @"</?[a-z][a-z0-9]*(?:\s+[^>]*?)?>",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     // Регэкс для разделения текста по \N и \n с захватом разделителей.
     private static readonly Regex NewlineSplitPattern = new(
@@ -132,12 +127,15 @@ public sealed class AssParser : IAssParser
         Effect: -1,
         Text: 9);
 
-    public AssParser() { }
+    private readonly IVttParser _vttParser;
 
-
+    public AssParser(IVttParser? vttParser = null)
+    {
+        _vttParser = vttParser ?? new VttParser();
+    }
 
     /// <summary>
-    /// Распарсить файл субтитров (ASS/SSA или SRT).
+    /// Распарсить файл субтитров (ASS/SSA, SRT или WebVTT).
     /// </summary>
     public AssData Parse(string filePath)
     {
@@ -146,8 +144,40 @@ public sealed class AssParser : IAssParser
         {
             return ParseSrt(filePath);
         }
+        if (ext == ".vtt")
+        {
+            return _vttParser.Parse(filePath);
+        }
+        if (IsWebVtt(filePath))
+        {
+            return _vttParser.Parse(filePath);
+        }
         return ParseAss(filePath);
     }
+
+    private static bool IsWebVtt(string filePath)
+    {
+        try
+        {
+            using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var reader = new StreamReader(stream);
+            string? line = reader.ReadLine();
+            while (line != null && string.IsNullOrWhiteSpace(line))
+            {
+                line = reader.ReadLine();
+            }
+            return line != null && line.TrimStart('\uFEFF').StartsWith("WEBVTT", StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Распарсить WebVTT (.vtt) файл и преобразовать в AssData с помощью обособленного сервиса VttParser.
+    /// </summary>
+    public AssData ParseVtt(string filePath) => _vttParser.Parse(filePath);
 
     /// <summary>
     /// Распарсить ASS-файл и извлечь все строки диалогов.
@@ -342,14 +372,14 @@ public sealed class AssParser : IAssParser
     }
 
     /// <summary>
-    /// Очистить текст субтитров от всех тегов (ASS и HTML).
+    /// Очистить текст субтитров от всех тегов (ASS, HTML и WebVTT) с декодированием HTML-сущностей.
     /// </summary>
     public string StripTags(string text)
     {
         // Удаляем ASS override-блоки
-        string cleaned = TagPattern.Replace(text, "");
-        // Удаляем HTML-теги SRT
-        cleaned = HtmlTagPattern.Replace(cleaned, "");
+        string cleaned = TagPattern.Replace(text, string.Empty);
+        // Удаляем HTML- и WebVTT-теги, караоке-метки и декодируем HTML-сущности через VttParser
+        cleaned = _vttParser.StripVttTags(cleaned);
         // Конвертируем переносы и спецсимволы
         cleaned = cleaned
             .Replace("\\N", "\n")
@@ -409,10 +439,10 @@ public sealed class AssParser : IAssParser
         }
 
         string res = string.Concat(resultParts);
-        
+
         // Убираем повторные \N\N и висящие края (используем скомпилированный паттерн)
         res = DuplicateNewlinePattern.Replace(res, "$1");
-        
+
         // Обрезаем висящие слеши
         res = TrimSlashN(res);
         return res;
@@ -421,12 +451,12 @@ public sealed class AssParser : IAssParser
     private string TrimSlashN(string text)
     {
         string current = text;
-        while (current.StartsWith("\\N", StringComparison.OrdinalIgnoreCase) || 
+        while (current.StartsWith("\\N", StringComparison.OrdinalIgnoreCase) ||
                current.StartsWith("\\n", StringComparison.OrdinalIgnoreCase))
         {
             current = current.Substring(2);
         }
-        while (current.EndsWith("\\N", StringComparison.OrdinalIgnoreCase) || 
+        while (current.EndsWith("\\N", StringComparison.OrdinalIgnoreCase) ||
                current.EndsWith("\\n", StringComparison.OrdinalIgnoreCase))
         {
             current = current.Substring(0, current.Length - 2);
@@ -486,22 +516,57 @@ public sealed class AssParser : IAssParser
     }
 
     /// <summary>
-    /// Конвертировать таймкод SRT (HH:MM:SS,mmm) в ASS (H:MM:SS.CC).
+    /// Конвертировать таймкод WebVTT (HH:MM:SS.mmm или MM:SS.mmm) в ASS (H:MM:SS.CC).
     /// </summary>
-    public static string SrtTimeToAss(string srtTime)
+    public static string VttTimeToAss(string vttTime)
     {
+        if (string.IsNullOrWhiteSpace(vttTime))
+        {
+            return "0:00:00.00";
+        }
+
         try
         {
-            string cleanSrt = srtTime.Replace(',', '.');
-            string[] parts = cleanSrt.Split('.');
+            string clean = vttTime.Trim().Replace(',', '.');
+            string[] parts = clean.Split('.');
             string timePart = parts[0];
-            string msPart = parts[1];
+            string msPart = parts.Length > 1 ? parts[1] : "0";
 
             string[] t = timePart.Split(':');
-            int h = int.Parse(t[0]);
-            int m = int.Parse(t[1]);
-            int s = int.Parse(t[2]);
-            int ms = int.Parse(msPart);
+            int h = 0;
+            int m = 0;
+            int s = 0;
+
+            if (t.Length >= 3)
+            {
+                h = int.Parse(t[0], System.Globalization.CultureInfo.InvariantCulture);
+                m = int.Parse(t[1], System.Globalization.CultureInfo.InvariantCulture);
+                s = int.Parse(t[2], System.Globalization.CultureInfo.InvariantCulture);
+            }
+            else if (t.Length == 2)
+            {
+                m = int.Parse(t[0], System.Globalization.CultureInfo.InvariantCulture);
+                s = int.Parse(t[1], System.Globalization.CultureInfo.InvariantCulture);
+            }
+            else if (t.Length == 1)
+            {
+                s = int.Parse(t[0], System.Globalization.CultureInfo.InvariantCulture);
+            }
+
+            if (msPart.Length == 1)
+            {
+                msPart += "00";
+            }
+            else if (msPart.Length == 2)
+            {
+                msPart += "0";
+            }
+            else if (msPart.Length > 3)
+            {
+                msPart = msPart.Substring(0, 3);
+            }
+
+            int ms = int.Parse(msPart, System.Globalization.CultureInfo.InvariantCulture);
             int cs = ms / 10;
 
             return $"{h}:{m:D2}:{s:D2}.{cs:D2}";
@@ -510,6 +575,14 @@ public sealed class AssParser : IAssParser
         {
             return "0:00:00.00";
         }
+    }
+
+    /// <summary>
+    /// Конвертировать таймкод SRT (HH:MM:SS,mmm) в ASS (H:MM:SS.CC).
+    /// </summary>
+    public static string SrtTimeToAss(string srtTime)
+    {
+        return VttTimeToAss(srtTime);
     }
 
     /// <summary>

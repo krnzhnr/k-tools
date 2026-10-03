@@ -2,13 +2,16 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
-using System.Diagnostics;
+
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+
 using KTools_App.Core;
+using KTools_App.Diagnostics;
 using KTools_App.Models;
 using KTools_App.Services.Contracts;
 using KTools_App.UI.Pages;
@@ -21,6 +24,7 @@ namespace KTools_App.ViewModels;
 /// </summary>
 public partial class DependencySetupViewModel : ThreadSafeViewModel
 {
+    private const string SourceName = nameof(DependencySetupViewModel);
     private readonly IDependencyManager _dependencyManager;
     private readonly INavigationService _navigationService;
     private readonly ILogService _logService;
@@ -193,7 +197,7 @@ public partial class DependencySetupViewModel : ThreadSafeViewModel
     private async Task InstallDependencyAsync(DependencyVM? vm)
     {
         if (vm == null) return;
-        _logService.Info($"Запущена ручная установка зависимости: {vm.Info.Key}", "DependencySetupViewModel");
+        _logService.Write("ui.dependencies.install_requested", LogLevel.Info, LogStatus.Running, $"Пользователь запустил установку компонента '{LogRedactor.CompactSafeToken(vm.Info.Key)}'", source: SourceName, properties: LogProps.Create("Key", LogRedactor.CompactSafeToken(vm.Info.Key)));
         await _dependencyManager.InstallDependencyAsync(vm.Info.Key);
     }
 
@@ -204,7 +208,18 @@ public partial class DependencySetupViewModel : ThreadSafeViewModel
     private void CancelInstallation(DependencyVM? vm)
     {
         if (vm == null) return;
-        _logService.Warn($"Пользователь отменил установку зависимости: {vm.Info.Key}", "DependencySetupViewModel");
+        _logService.Write(
+            "dependency.install_cancelled",
+            LogLevel.Info,
+            LogStatus.Cancelled,
+            $"Пользователь отменил установку зависимости '{vm.Info.Key}'",
+            null,
+            "DependencySetupViewModel",
+            properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["Key"] = vm.Info.Key,
+                ["ErrorCode"] = "cancelled"
+            });
         _dependencyManager.CancelInstallation(vm.Info.Key);
     }
 
@@ -215,7 +230,7 @@ public partial class DependencySetupViewModel : ThreadSafeViewModel
     private async Task RemoveDependencyAsync(DependencyVM? vm)
     {
         if (vm == null) return;
-        _logService.Warn($"Пользователь инициировал удаление зависимости: {vm.Info.Key}", "DependencySetupViewModel");
+        _logService.Write("ui.dependencies.remove_requested", LogLevel.Info, LogStatus.Running, $"Пользователь запустил удаление компонента '{LogRedactor.CompactSafeToken(vm.Info.Key)}'", source: SourceName, properties: LogProps.Create("Key", LogRedactor.CompactSafeToken(vm.Info.Key)));
         await _dependencyManager.RemoveDependencyAsync(vm.Info.Key);
     }
 
@@ -225,7 +240,7 @@ public partial class DependencySetupViewModel : ThreadSafeViewModel
     [RelayCommand]
     private async Task InstallAllAsync()
     {
-        _logService.Info("Запущена пакетная установка всех отсутствующих компонентов", "DependencySetupViewModel");
+        _logService.Write("ui.dependencies.install_all_requested", LogLevel.Info, LogStatus.Running, "Пользователь запустил пакетную установку отсутствующих компонентов", source: SourceName, properties: LogProps.Create("Group", "AllDependencies"));
         IsInstallAllEnabled = false;
 
         var missing = RequiredDependencies.Concat(OptionalDependencies)
@@ -242,7 +257,7 @@ public partial class DependencySetupViewModel : ThreadSafeViewModel
     [RelayCommand]
     private async Task RefreshAll()
     {
-        _logService.Info("Запущена ручная проверка обновлений всех зависимостей", "DependencySetupViewModel");
+        _logService.Write("ui.dependencies.update_check_requested", LogLevel.Info, LogStatus.Running, "Пользователь запустил ручную проверку обновлений компонентов", source: SourceName, properties: LogProps.Create("Group", "AllDependencies"));
         _dependencyManager.RefreshAllStatuses();
         await _dependencyManager.CheckAllDependencyUpdatesAsync(force: true);
         LoadDependencies();
@@ -262,7 +277,13 @@ public partial class DependencySetupViewModel : ThreadSafeViewModel
                 Directory.CreateDirectory(binDir);
             }
 
-            _logService.Info($"Открытие папки бинарных файлов: '{binDir}'", "DependencySetupViewModel");
+            _logService.Write(
+                "ui.dependencies.bin_folder_opened",
+                LogLevel.Debug,
+                LogStatus.Succeeded,
+                "Открыта папка с исполняемыми файлами компонентов",
+                source: SourceName,
+                properties: LogProps.Create("FileName", LogProps.FileName(binDir)));
             Process.Start(new ProcessStartInfo
             {
                 FileName = "explorer.exe",
@@ -272,7 +293,18 @@ public partial class DependencySetupViewModel : ThreadSafeViewModel
         }
         catch (Exception ex)
         {
-            _logService.Error($"Не удалось открыть папку бинарных компонентов: {ex.Message}", "DependencySetupViewModel");
+            _logService.Write(
+                "dependency.open_folder_failed",
+                LogLevel.Warning,
+                LogStatus.PartiallySucceeded,
+                "Не удалось открыть папку бинарных компонентов",
+                ex,
+                "DependencySetupViewModel",
+                properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["Stage"] = "open_folder",
+                    ["ErrorCode"] = "open-folder-failed"
+                });
         }
     }
 }

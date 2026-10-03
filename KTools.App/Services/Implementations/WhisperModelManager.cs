@@ -6,7 +6,9 @@ using System.Linq;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
+
 using KTools_App.Core;
+using KTools_App.Diagnostics;
 using KTools_App.Services.Contracts;
 
 namespace KTools_App.Services.Implementations;
@@ -17,6 +19,7 @@ namespace KTools_App.Services.Implementations;
 /// </summary>
 public sealed class WhisperModelManager : IWhisperModelManager
 {
+    private const string SourceName = nameof(WhisperModelManager);
     private readonly ILogService _logService;
     private readonly IPathManager _pathManager;
     private readonly HttpClient _httpClient;
@@ -235,11 +238,23 @@ public sealed class WhisperModelManager : IWhisperModelManager
             try
             {
                 cts.Cancel();
-                _logService.Info($"Запрошена отмена загрузки модели Whisper '{modelKey}'", nameof(WhisperModelManager));
+                _logService.Write("whisper.model.download_cancelled", LogLevel.Info, LogStatus.Cancelled, $"Запрошена отмена загрузки модели Whisper '{LogRedactor.CompactSafeToken(modelKey)}'", source: SourceName, properties: LogProps.Create("Key", LogRedactor.CompactSafeToken(modelKey)).With("Reason", "UserRequested"));
             }
             catch (Exception ex)
             {
-                _logService.Warn($"Ошибка при отмене загрузки модели Whisper '{modelKey}': {ex.Message}", nameof(WhisperModelManager));
+                _logService.Write(
+                    "whisper_model.cancel_failed",
+                    LogLevel.Warning,
+                    LogStatus.PartiallySucceeded,
+                    $"Не удалось отменить загрузку модели Whisper '{modelKey}'",
+                    ex,
+                    nameof(WhisperModelManager),
+                    properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                    {
+                        ["Key"] = modelKey,
+                        ["ErrorCode"] = "cancel-failed",
+                        ["CleanupState"] = "NotRequired"
+                    });
             }
         }
     }
@@ -254,7 +269,7 @@ public sealed class WhisperModelManager : IWhisperModelManager
         var info = GetModelInfo(modelKey);
         if (info == null)
         {
-            _logService.Error($"Неизвестный ключ модели Whisper: '{modelKey}'", nameof(WhisperModelManager));
+            _logService.Write("whisper.model.unknown_key", LogLevel.Error, LogStatus.Failed, $"Неизвестный ключ модели Whisper: '{LogRedactor.CompactSafeToken(modelKey)}'", source: SourceName, properties: LogProps.Create("ErrorCode", "UNKNOWN_MODEL_KEY").With("Key", LogRedactor.CompactSafeToken(modelKey)));
             return false;
         }
 
@@ -263,7 +278,18 @@ public sealed class WhisperModelManager : IWhisperModelManager
         {
             if (_activeDownloads.ContainsKey(modelKey))
             {
-                _logService.Warn($"Модель Whisper '{modelKey}' уже находится в процессе скачивания", nameof(WhisperModelManager));
+                _logService.Write(
+                    "whisper_model.download_conflict",
+                    LogLevel.Warning,
+                    LogStatus.Skipped,
+                    $"Модель Whisper '{modelKey}' уже находится в процессе скачивания",
+                    null,
+                    nameof(WhisperModelManager),
+                    properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                    {
+                        ["Key"] = modelKey,
+                        ["ErrorCode"] = "download-in-progress"
+                    });
                 return false;
             }
 
@@ -279,13 +305,25 @@ public sealed class WhisperModelManager : IWhisperModelManager
             if (!Directory.Exists(_modelsDir))
             {
                 Directory.CreateDirectory(_modelsDir);
-                _logService.Info($"Создана директория для хранения моделей: '{_modelsDir}'", nameof(WhisperModelManager));
+                _logService.Write("whisper.model.storage_created", LogLevel.Debug, LogStatus.Succeeded, "Создан каталог для хранения моделей Whisper", source: SourceName, properties: LogProps.Create("FileName", LogProps.FileName(_modelsDir)));
             }
 
             string targetPath = GetModelFilePath(modelKey);
             string tempPath = $"{targetPath}.download";
 
-            _logService.Info($"Начало загрузки модели Whisper '{info.DisplayName}' по адресу: {info.DownloadUrl}", nameof(WhisperModelManager));
+            _logService.Write(
+                "whisper_model.download_started",
+                LogLevel.Info,
+                LogStatus.Running,
+                $"Начало загрузки модели Whisper '{info.DisplayName}'",
+                null,
+                nameof(WhisperModelManager),
+                properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["Key"] = modelKey,
+                    ["HostLabel"] = SafeHostLabel(info.DownloadUrl),
+                    ["Stage"] = "download"
+                });
 
             using var request = new HttpRequestMessage(HttpMethod.Get, info.DownloadUrl);
             using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, linkedCts.Token);
@@ -357,20 +395,55 @@ public sealed class WhisperModelManager : IWhisperModelManager
             progress?.Report(100);
             DownloadProgressChanged?.Invoke(modelKey, 100);
 
-            _logService.Info($"Модель Whisper '{info.DisplayName}' успешно скачана и сохранена в '{targetPath}'", nameof(WhisperModelManager));
+            _logService.Write(
+                "whisper_model.download_completed",
+                LogLevel.Info,
+                LogStatus.Succeeded,
+                $"Модель Whisper '{info.DisplayName}' успешно скачана и сохранена",
+                null,
+                nameof(WhisperModelManager),
+                properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["Key"] = modelKey,
+                    ["FileName"] = Path.GetFileName(targetPath),
+                    ["TotalBytes"] = totalRead
+                });
             isSuccess = true;
             return true;
         }
         catch (OperationCanceledException)
         {
-            failureReason = "Отменено пользователем";
-            _logService.Warn($"Загрузка модели Whisper '{modelKey}' была отменена пользователем", nameof(WhisperModelManager));
+            failureReason = "cancelled";
+            _logService.Write(
+                "whisper_model.download_cancelled",
+                LogLevel.Info,
+                LogStatus.Cancelled,
+                $"Загрузка модели Whisper '{modelKey}' отменена по запросу пользователя",
+                null,
+                nameof(WhisperModelManager),
+                properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["Key"] = modelKey,
+                    ["ErrorCode"] = "cancelled"
+                });
             return false;
         }
         catch (Exception ex)
         {
-            failureReason = ex.Message;
-            _logService.Exception(ex, $"Ошибка при загрузке модели Whisper '{modelKey}': {ex.Message}", nameof(WhisperModelManager));
+            failureReason = "download-failed";
+            _logService.Write(
+                "whisper_model.download_failed",
+                LogLevel.Error,
+                LogStatus.Failed,
+                $"Ошибка при загрузке модели Whisper '{modelKey}'",
+                ex,
+                nameof(WhisperModelManager),
+                properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["Key"] = modelKey,
+                    ["ErrorCode"] = "download-failed",
+                    ["Retryable"] = true
+                });
             return false;
         }
         finally
@@ -401,14 +474,14 @@ public sealed class WhisperModelManager : IWhisperModelManager
             if (File.Exists(path))
             {
                 File.Delete(path);
-                _logService.Info($"Файл модели Whisper '{modelKey}' успешно удален с диска: '{path}'", nameof(WhisperModelManager));
+                _logService.Write("whisper.model.deleted", LogLevel.Info, LogStatus.Succeeded, $"Файл модели Whisper '{LogRedactor.CompactSafeToken(modelKey)}' удалён с диска", source: SourceName, properties: LogProps.Create("Key", LogRedactor.CompactSafeToken(modelKey)).With("FileName", LogProps.FileName(path)).With("Verified", true));
                 return true;
             }
             return false;
         }
         catch (Exception ex)
         {
-            _logService.Exception(ex, $"Не удалось удалить файл модели Whisper '{modelKey}': {ex.Message}", nameof(WhisperModelManager));
+            _logService.Write("whisper.model.delete_failed", LogLevel.Warning, LogStatus.Failed, $"Файл модели Whisper '{LogRedactor.CompactSafeToken(modelKey)}' удалить не удалось", ex, SourceName, properties: LogProps.Create("ErrorCode", "MODEL_DELETE_FAILED").With("Key", LogRedactor.CompactSafeToken(modelKey)).With("FileName", LogProps.FileName(GetModelFilePath(modelKey))).With("CleanupState", "Failed"));
             return false;
         }
     }
@@ -452,7 +525,18 @@ public sealed class WhisperModelManager : IWhisperModelManager
 
         try
         {
-            _logService.Info($"Начало автоматической загрузки модели детекции речи Silero VAD из '{VadModelDownloadUrl}'...", nameof(WhisperModelManager));
+            _logService.Write(
+                "whisper_model.vad_download_started",
+                LogLevel.Info,
+                LogStatus.Running,
+                "Начало автоматической загрузки модели детекции речи Silero VAD",
+                null,
+                nameof(WhisperModelManager),
+                properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["Stage"] = "vad_download",
+                    ["HostLabel"] = SafeHostLabel(VadModelDownloadUrl)
+                });
             using var response = await _httpClient.GetAsync(VadModelDownloadUrl, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
             response.EnsureSuccessStatusCode();
 
@@ -468,7 +552,18 @@ public sealed class WhisperModelManager : IWhisperModelManager
             }
             File.Move(tempPath, targetPath);
 
-            _logService.Info($"Модель Silero VAD успешно сохранена в '{targetPath}'", nameof(WhisperModelManager));
+            _logService.Write(
+                "whisper_model.vad_download_completed",
+                LogLevel.Info,
+                LogStatus.Succeeded,
+                "Модель Silero VAD успешно сохранена",
+                null,
+                nameof(WhisperModelManager),
+                properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["FileName"] = Path.GetFileName(targetPath),
+                    ["Stage"] = "vad_download"
+                });
             return true;
         }
         catch (Exception ex)
@@ -479,9 +574,36 @@ public sealed class WhisperModelManager : IWhisperModelManager
             }
             catch { }
 
-            _logService.Exception(ex, $"Ошибка при загрузке модели Silero VAD: {ex.Message}", nameof(WhisperModelManager));
+            _logService.Write(
+                "whisper_model.vad_download_failed",
+                LogLevel.Error,
+                LogStatus.Failed,
+                "Ошибка при загрузке модели Silero VAD",
+                ex,
+                nameof(WhisperModelManager),
+                properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["Stage"] = "vad_download",
+                    ["ErrorCode"] = "download-failed",
+                    ["Retryable"] = true
+                });
             return false;
         }
+    }
+
+    private static string SafeHostLabel(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            return "unknown";
+        }
+
+        if (!Uri.TryCreate(url, UriKind.Absolute, out Uri? uri) || string.IsNullOrEmpty(uri.Host))
+        {
+            return "unknown";
+        }
+
+        return LogRedactor.CompactSafeToken(uri.Host);
     }
 
     private static string FormatSpeed(double bytesPerSec)

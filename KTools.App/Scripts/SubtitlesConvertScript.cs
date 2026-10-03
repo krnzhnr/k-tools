@@ -1,4 +1,3 @@
-using KTools_App.Services.Contracts;
 // -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
@@ -7,7 +6,12 @@ using System.Text;
 using System.Threading.Tasks;
 
 using KTools_App.Core;
+using KTools_App.Diagnostics;
 using KTools_App.Infrastructure;
+using KTools_App.Models;
+using KTools_App.Services.Contracts;
+
+using ExecutionContext = KTools_App.Models.ExecutionContext;
 
 namespace KTools_App.Scripts;
 
@@ -69,7 +73,7 @@ public sealed class SubtitlesConvertScript : AbstractScript
             "WebVTT",
             "Экспорт",
             options: new List<string> { "WebVTT", "SRT", "ASS" }),
-            
+
         new SettingField(
             "strip_formatting",
             "Удалять теги форматирования",
@@ -77,7 +81,7 @@ public sealed class SubtitlesConvertScript : AbstractScript
             true,
             "Очистка",
             comment: "Полная очистка всех тегов форматирования"),
-            
+
         new SettingField(
             "keep_styles",
             "Сохранять оформление стилей",
@@ -85,7 +89,7 @@ public sealed class SubtitlesConvertScript : AbstractScript
             false,
             "Очистка",
             comment: "Сохранять курсив и жирность из стилей ASS"),
-            
+
         new SettingField(
             "strip_caps",
             "Удалять текст в верхнем регистре (КАПС)",
@@ -93,7 +97,7 @@ public sealed class SubtitlesConvertScript : AbstractScript
             false,
             "Очистка",
             comment: "Автоматически вырезать реплики CAPS LOCK"),
-            
+
         new SettingField(
             "text_patterns",
             "Паттерны регулярных выражений",
@@ -101,7 +105,7 @@ public sealed class SubtitlesConvertScript : AbstractScript
             new List<Dictionary<string, object>>(),
             "Очистка",
             comment: "Последовательное удаление текста/строк по регулярным выражениям"),
-            
+
         new SettingField(
             "delete_original",
             "Удалить исходный файл",
@@ -118,20 +122,20 @@ public sealed class SubtitlesConvertScript : AbstractScript
     /// <summary>
     /// Асинхронно запускает процесс конвертации одного файла субтитров.
     /// </summary>
-    public override async Task<List<string>> ExecuteSingleAsync(
+    public override async Task<ExecutionResult> ExecuteSingleAsync(
         string filePath,
         Dictionary<string, object> settings,
         string? outputPath,
         ScriptProgressCallback progressCallback,
         int fileIndex,
-        int totalCount)
+        int totalCount,
+        ExecutionContext context)
     {
-        ResetCancellation();
         var results = new List<string>();
 
         // Извлекаем пользовательские настройки и синхронизируем с FilterState
         string targetFormat = GetSettingValue(settings, "target_format", "WebVTT");
-        
+
         // Синхронизируем FilterState с текущими настройками перед выполнением
         FilterState.StripFormatting = GetSettingValue(settings, "strip_formatting", FilterState.StripFormatting);
         FilterState.StripCaps = GetSettingValue(settings, "strip_caps", FilterState.StripCaps);
@@ -159,10 +163,15 @@ public sealed class SubtitlesConvertScript : AbstractScript
             _ => ".vtt"
         };
 
-        _logService.Info(
-            $"Начало конвертации субтитров для '{originalName}'. " +
-            $"Целевой формат: {targetFormat}",
-            "SubtitlesConvertScript");
+        _logService.Write(
+            "script.subtitles.started",
+            LogLevel.Debug,
+            LogStatus.Running,
+            $"Начата конвертация субтитров '{originalName}' в формат {LogRedactor.CompactSafeToken(targetFormat)}",
+            source: Name,
+            properties: LogProps
+                .Create("InputName", LogProps.FileName(filePath))
+                .With("Extension", LogRedactor.CompactSafeToken(targetFormat)));
 
         // Вычисляем директорию вывода
         string targetDir = string.IsNullOrEmpty(outputPath)
@@ -177,36 +186,46 @@ public sealed class SubtitlesConvertScript : AbstractScript
         // Проверяем перезапись существующего файла
         bool overwrite = _settingsManager.GetSetting(
             "General", "OverwriteExisting", false);
-            
+
         if (File.Exists(outputFilePath) && !overwrite)
         {
             string skipMsg = $"⏭ ПРОПУСК (существует): {outputFileName}";
-            _logService.Info(skipMsg, "SubtitlesConvertScript");
+            _logService.Write("script.subtitles.skipped", LogLevel.Info, LogStatus.Skipped, skipMsg, source: Name, properties: LogProps.Create("InputName", LogProps.FileName(filePath)));
             progressCallback(
                 fileIndex,
                 totalCount,
                 $"Пропуск (существует): {outputFileName}",
                 100.0);
             results.Add(skipMsg);
-            return results;
+            return ExecutionResult.Skipped(
+                context,
+                results,
+                errorCode: "output-exists",
+                outputFile: outputFilePath,
+                outputExists: true);
         }
 
         // Проверяем «быстрый путь» (конвертация без изменения реплик)
         if (keepStyles && !stripFormatting && !stripCaps)
         {
             progressCallback(fileIndex, totalCount, "Запуск FFmpeg напрямую...", 0.0);
-            _logService.Info(
-                $"Запущен прямой ремуксинг субтитров FFmpeg: " +
-                $"'{originalName}' -> '{outputFileName}'",
-                "SubtitlesConvertScript");
+            _logService.Write(
+                "script.subtitles.remux_started",
+                LogLevel.Debug,
+                LogStatus.Running,
+                $"Запущен прямой ремуксинг субтитров через FFmpeg: '{originalName}' -> '{LogProps.FileName(outputFilePath)}'",
+                source: Name,
+                properties: LogProps
+                    .Create("Tool", "ffmpeg")
+                    .With("OutputName", LogProps.FileName(outputFilePath)));
 
-            bool fastSuccess = await _ffmpegRunner.RunAsync(
+            ProcessResult fastResult = await _ffmpegRunner.RunAsync(
                 inputPath: filePath,
                 outputPath: outputFilePath,
                 overwrite: overwrite,
                 cancellationToken: CancellationToken);
 
-            if (fastSuccess)
+            if (fastResult.IsSuccess)
             {
                 progressCallback(fileIndex, totalCount, "Завершено!", 100.0);
                 results.Add($"✅ УСПЕХ: {outputFileName}");
@@ -221,7 +240,32 @@ public sealed class SubtitlesConvertScript : AbstractScript
                 progressCallback(fileIndex, totalCount, "Ошибка!", 0.0);
                 results.Add($"❌ Ошибка FFmpeg: {outputFileName}");
             }
-            return results;
+            if (fastResult.IsSuccess && File.Exists(outputFilePath))
+            {
+                if (deleteOriginal && File.Exists(filePath))
+                {
+                    return ExecutionResult.PartiallySucceeded(
+                        context,
+                        results,
+                        errorCode: "source-cleanup-failed",
+                        outputFile: outputFilePath,
+                        outputExists: true,
+                        cleanupState: CleanupState.Failed);
+                }
+                return ExecutionResult.Succeeded(
+                    context,
+                    results,
+                    outputFile: outputFilePath,
+                    outputExists: true,
+                    cleanupState: deleteOriginal ? CleanupState.Completed : CleanupState.NotRequired);
+            }
+            return ExecutionResult.Failed(
+                context,
+                results,
+                errorCode: "output-missing",
+                outputFile: outputFilePath,
+                outputExists: File.Exists(outputFilePath),
+                cleanupState: CleanupState.Completed);
         }
 
         // Парсинг файла субтитров
@@ -233,52 +277,81 @@ public sealed class SubtitlesConvertScript : AbstractScript
         }
         catch (Exception ex)
         {
-            _logService.Exception(
+            _logService.Write(
+                "script.subtitles.parse_failed",
+                LogLevel.Error,
+                LogStatus.Failed,
+                $"Субтитры '{originalName}' не разобраны",
                 ex,
-                $"Ошибка парсинга субтитров '{originalName}': {ex.Message}",
-                "SubtitlesConvertScript");
+                Name,
+                properties: LogProps
+                    .Create("ErrorCode", "SUBTITLE_PARSE_FAILED")
+                    .With("InputName", LogProps.FileName(filePath))
+                    .With("Retryable", false));
             results.Add($"❌ Ошибка парсинга: {originalName}");
             progressCallback(fileIndex, totalCount, "Ошибка парсинга!", 0.0);
-            return results;
+            return ExecutionResult.FromException(
+                context,
+                ex,
+                results,
+                errorCode: "parse-failed",
+                cleanupState: CleanupState.NotStarted);
         }
 
         if (assData.Dialogues.Count == 0)
         {
             string emptyMsg = $"⏭ ПРОПУСК (нет строк диалогов): {originalName}";
-            _logService.Info(emptyMsg, "SubtitlesConvertScript");
+            _logService.Write("script.subtitles.empty", LogLevel.Info, LogStatus.Skipped, emptyMsg, source: Name, properties: LogProps.Create("InputName", LogProps.FileName(filePath)));
             progressCallback(
                 fileIndex,
                 totalCount,
                 $"Пропуск (нет строк): {originalName}",
                 100.0);
             results.Add(emptyMsg);
-            return results;
+            return ExecutionResult.Skipped(
+                context,
+                results,
+                errorCode: "no-dialogues",
+                outputFile: outputFilePath,
+                outputExists: File.Exists(outputFilePath));
         }
 
         // Подготовка временного файла .ass с отфильтрованными репликами
         string tempDir = Path.Combine(
             _pathManager.GetSettingsDirectory(),
             "temp_subs_" + Guid.NewGuid().ToString("N"));
-            
+
         try
         {
             Directory.CreateDirectory(tempDir);
         }
         catch (Exception ex)
         {
-            _logService.Exception(
+            _logService.Write(
+                "script.subtitles.temp_dir_failed",
+                LogLevel.Error,
+                LogStatus.Failed,
+                "Временный каталог для обработки субтитров не создан",
                 ex,
-                $"Не удалось создать временную директорию: {ex.Message}",
-                "SubtitlesConvertScript");
+                Name,
+                properties: LogProps
+                    .Create("ErrorCode", "TEMP_DIR_FAILED")
+                    .With("CleanupState", "NotStarted"));
             results.Add($"❌ Сбой файловой системы: {originalName}");
             progressCallback(fileIndex, totalCount, "Ошибка создания папки!", 0.0);
-            return results;
+            return ExecutionResult.FromException(
+                context,
+                ex,
+                results,
+                errorCode: "temporary-directory-failed",
+                cleanupState: CleanupState.NotStarted);
         }
 
         string tempAssPath = Path.Combine(tempDir, "temp.ass");
         int deletedLinesCount = 0;
         int modifiedLinesCount = 0;
-        
+        Exception? terminalException = null;
+
         try
         {
             using (var writer = new StreamWriter(
@@ -298,7 +371,7 @@ public sealed class SubtitlesConvertScript : AbstractScript
                 {
                     writer.Write(_assParser.GetMinimalHeader());
                 }
-                
+
                 int dialogueIndex = 0;
                 foreach (var d in assData.Dialogues)
                 {
@@ -316,7 +389,7 @@ public sealed class SubtitlesConvertScript : AbstractScript
                     }
 
                     // Проверяем фильтрацию по актеру, стилю или эффекту
-                    bool isFiltered = 
+                    bool isFiltered =
                         (!string.IsNullOrEmpty(d.Actor) && FilterState.ExcludedActors.Contains(d.Actor)) ||
                         (!string.IsNullOrEmpty(d.Style) && FilterState.ExcludedStyles.Contains(d.Style)) ||
                         (!string.IsNullOrEmpty(d.Effect) && FilterState.ExcludedEffects.Contains(d.Effect));
@@ -359,7 +432,7 @@ public sealed class SubtitlesConvertScript : AbstractScript
                             }
                             catch (Exception ex)
                             {
-                                _logService.Warn($"Некорректное регулярное выражение '{pattern}' в конвертере: {ex.Message}", "SubtitlesConvertScript");
+                                _logService.Write("subtitle.pattern.invalid", LogLevel.Warning, LogStatus.Skipped, $"Регулярное выражение конвертера недопустимо, правило пропущено: {pattern}", ex, Name, properties: LogProps.Create("ErrorCode", "INVALID_REGEX").With("Key", LogRedactor.CompactSafeToken(pattern)));
                             }
                         }
                     }
@@ -368,13 +441,13 @@ public sealed class SubtitlesConvertScript : AbstractScript
                     {
                         modifiedLinesCount++;
                     }
-                    
+
                     // Применяем чистку CAPS LOCK
                     if (stripCaps)
                     {
                         text = _assParser.StripCaps(text);
                     }
-                    
+
                     // Применяем удаление тегов форматирования
                     if (stripFormatting)
                     {
@@ -396,9 +469,9 @@ public sealed class SubtitlesConvertScript : AbstractScript
                     // 2. Она явно исключена пользователем вручную
                     // 3. Она пустая после фильтров и не была вручную включена
                     // 4. Она попала под фильтр и не была вручную включена
-                    bool isDeleted = isManuallyExcluded || 
+                    bool isDeleted = isManuallyExcluded ||
                                      (isDeletedByRegex && !isManuallyIncluded) ||
-                                     (isEmptyAfterFilters && !isManuallyIncluded) || 
+                                     (isEmptyAfterFilters && !isManuallyIncluded) ||
                                      (isFiltered && !isManuallyIncluded);
 
                     if (isDeleted)
@@ -433,54 +506,104 @@ public sealed class SubtitlesConvertScript : AbstractScript
                     "Отменено пользователем",
                     0.0);
                 results.Add($"⚠ Отменено: {outputFileName}");
-                return results;
+                return ExecutionResult.Cancelled(
+                    context,
+                    results,
+                    errorCode: "cancelled",
+                    outputFile: outputFilePath,
+                    outputExists: File.Exists(outputFilePath),
+                    cleanupState: CleanupState.Completed);
             }
+
 
             // Транскодирование отфильтрованного временного ASS в выходной формат
             progressCallback(fileIndex, totalCount, "Финальное сохранение...", 50.0);
-            _logService.Info(
-                $"Запуск FFmpeg для конвертации временного ASS: " +
-                $"'{originalName}' -> '{outputFileName}'",
-                "SubtitlesConvertScript");
+            _logService.Write(
+                "script.subtitles.ass_convert_started",
+                LogLevel.Debug,
+                LogStatus.Running,
+                $"Запущен FFmpeg для конвертации временного ASS: '{originalName}' -> '{LogProps.FileName(outputFilePath)}'",
+                source: Name,
+                properties: LogProps
+                    .Create("Tool", "ffmpeg")
+                    .With("OutputName", LogProps.FileName(outputFilePath)));
 
-            bool success = await _ffmpegRunner.RunAsync(
+            ProcessResult result = await _ffmpegRunner.RunAsync(
                 inputPath: tempAssPath,
                 outputPath: outputFilePath,
                 overwrite: overwrite,
                 cancellationToken: CancellationToken);
 
-            if (success)
+            if (result.IsSuccess)
             {
                 progressCallback(fileIndex, totalCount, "Успешно завершено!", 100.0);
                 results.Add($"✅ Конвертирован: {outputFileName}");
-                
+
                 if (deletedLinesCount > 0 || modifiedLinesCount > 0)
                 {
-                    _logService.Info($"Очистка субтитров по регулярным выражениям для '{originalName}': удалено строк: {deletedLinesCount}, модифицировано строк: {modifiedLinesCount}", "SubtitlesConvertScript");
+                    _logService.Write("subtitle.cleanup.applied", LogLevel.Debug, LogStatus.Succeeded, $"Очистка субтитров по регулярным выражениям для '{originalName}': удалено строк {deletedLinesCount}, изменено строк {modifiedLinesCount}", source: Name, properties: LogProps.Create("InputName", LogProps.FileName(filePath)).With("Count", deletedLinesCount).With("Total", modifiedLinesCount));
                 }
-                
+
                 if (deleteOriginal)
                 {
                     await DeleteSourceAsync(filePath, results);
                 }
+                if (!File.Exists(outputFilePath))
+                {
+                    return ExecutionResult.Failed(
+                        context,
+                        results,
+                        errorCode: "output-missing",
+                        outputFile: outputFilePath,
+                        outputExists: false,
+                        cleanupState: CleanupState.Completed);
+                }
+                return deleteOriginal && File.Exists(filePath)
+                    ? ExecutionResult.PartiallySucceeded(
+                        context,
+                        results,
+                        errorCode: "source-cleanup-failed",
+                        outputFile: outputFilePath,
+                        outputExists: true,
+                        cleanupState: CleanupState.Failed)
+                    : ExecutionResult.Succeeded(
+                        context,
+                        results,
+                        outputFile: outputFilePath,
+                        outputExists: true,
+                        cleanupState: deleteOriginal ? CleanupState.Completed : CleanupState.NotRequired);
             }
             else
             {
                 await CleanupFailedOutputFileAsync(outputFilePath);
                 progressCallback(fileIndex, totalCount, "Ошибка FFmpeg!", 0.0);
                 results.Add($"❌ Ошибка FFmpeg: {outputFileName}");
+                return ExecutionResult.Failed(
+                    context,
+                    results,
+                    errorCode: "output-missing",
+                    outputFile: outputFilePath,
+                    outputExists: File.Exists(outputFilePath),
+                    cleanupState: CleanupState.Completed);
             }
         }
         catch (Exception ex)
         {
             await CleanupFailedOutputFileAsync(outputFilePath);
-            _logService.Exception(
+            _logService.Write(
+                "script.subtitles.failed",
+                LogLevel.Error,
+                LogStatus.Failed,
+                $"Обработка субтитров для '{originalName}' не выполнена",
                 ex,
-                $"Критическая ошибка обработки субтитров для '{originalName}': " +
-                $"{ex.Message}",
-                "SubtitlesConvertScript");
+                Name,
+                properties: LogProps
+                    .Create("ErrorCode", "SUBTITLE_CONVERT_FAILED")
+                    .With("InputName", LogProps.FileName(filePath))
+                    .With("Retryable", true));
             results.Add($"❌ Критическая ошибка: {originalName}");
             progressCallback(fileIndex, totalCount, "Критическая ошибка!", 0.0);
+            terminalException = ex;
         }
         finally
         {
@@ -494,14 +617,38 @@ public sealed class SubtitlesConvertScript : AbstractScript
             }
             catch (Exception ex)
             {
-                _logService.DebugLog(
-                    $"Не удалось удалить временную директорию субтитров: " +
-                    $"{ex.Message}",
-                    "SubtitlesConvertScript");
+                _logService.Write(
+                    "script.subtitles.temp_cleanup_failed",
+                    LogLevel.Warning,
+                    LogStatus.Failed,
+                    "Временный каталог обработки субтитров не удалён",
+                    ex,
+                    Name,
+                    properties: LogProps
+                        .Create("ErrorCode", "TEMP_DIR_CLEANUP_FAILED")
+                        .With("CleanupState", "Failed"));
             }
         }
 
-        return results;
+        if (terminalException is not null)
+        {
+            return ExecutionResult.FromException(
+                context,
+                terminalException,
+                results,
+                errorCode: "subtitle-conversion-exception",
+                outputFile: outputFilePath,
+                outputExists: File.Exists(outputFilePath),
+                cleanupState: CleanupState.Completed);
+        }
+
+        return ExecutionResult.Failed(
+            context,
+            results,
+            errorCode: "conversion-ended",
+            outputFile: outputFilePath,
+            outputExists: File.Exists(outputFilePath),
+            cleanupState: CleanupState.Completed);
     }
 
     public override string GetOutputExtension(string inputPath)

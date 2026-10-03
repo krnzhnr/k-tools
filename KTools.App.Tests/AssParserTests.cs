@@ -139,4 +139,28 @@ Dialogue: 0:01:20.50,0:01:23.00,Default,Actor1,0000,0000,0000,,Привет!";
             }
         }
     }
+
+    /// <summary>
+    /// Проверяет, что AssParser корректно распознает расширение .vtt и парсит файл через IVttParser.
+    /// </summary>
+    [TestMethod]
+    public void Parse_VttFile_DelegatesToVttParser()
+    {
+        // Arrange
+        var vttMock = new Moq.Mock<IVttParser>();
+        var expectedData = new AssData();
+        expectedData.Dialogues.Add(new AssDialogue("0:01:20.50", "0:01:23.00", "Default", "", "", "Привет, мир!\\NВторая строка реплики."));
+        vttMock.Setup(p => p.Parse(Moq.It.Is<string>(s => s.EndsWith(".vtt", StringComparison.OrdinalIgnoreCase))))
+            .Returns(expectedData);
+
+        var parser = new AssParser(vttMock.Object);
+
+        // Act
+        var result = parser.Parse("sample.vtt");
+
+        // Assert
+        result.Should().BeSameAs(expectedData);
+        vttMock.Verify(p => p.Parse("sample.vtt"), Moq.Times.Once);
+    }
 }
+

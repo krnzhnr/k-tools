@@ -1,4 +1,4 @@
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
@@ -25,13 +25,13 @@ public sealed class BitrateAnalysisResult
     public double DurationSeconds { get; set; }
     public double Fps { get; set; }
     public long TotalFrames { get; set; }
-    
+
     /// <summary>Посекундный битрейт в Мбит/с (Mbps).</summary>
     public double[] PerSecondMbps { get; set; } = Array.Empty<double>();
 
     /// <summary>Покадровый битрейт каждого кадра/пакета.</summary>
     public FrameBitrateInfo[] FramePackets { get; set; } = Array.Empty<FrameBitrateInfo>();
-    
+
     /// <summary>Временные метки ключевых I-кадров в секундах.</summary>
     public double[] KeyframeTimes { get; set; } = Array.Empty<double>();
 

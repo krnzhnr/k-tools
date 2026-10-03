@@ -1,14 +1,16 @@
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+
+using KTools_App.ViewModels;
+
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Navigation;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
-using Microsoft.Extensions.DependencyInjection;
-using KTools_App.ViewModels;
+using Microsoft.UI.Xaml.Navigation;
 
 namespace KTools_App.UI.Pages;
 

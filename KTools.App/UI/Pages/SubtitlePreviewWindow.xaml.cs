@@ -1,11 +1,15 @@
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
 using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
-using KTools_App.Services.Contracts;
-using Microsoft.UI.Xaml;
+
 using KTools_App.Core;
+using KTools_App.Diagnostics;
+using KTools_App.Services.Contracts;
 using KTools_App.ViewModels;
+
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.UI.Xaml;
 
 namespace KTools_App.UI.Pages;
 
@@ -55,7 +59,7 @@ public sealed class SubtitlePreviewWindow : Window
     public SubtitlePreviewWindow(SubtitlePreviewViewModel viewModel)
     {
         Title = "Предпросмотр субтитров и настройка фильтров";
-        
+
         // В качестве содержимого устанавливаем страницу,
         // чтобы избежать ошибок приведения типов XAML-компилятора к FrameworkElement.
         var page = new SubtitlePreviewPage(viewModel);
@@ -82,7 +86,18 @@ public sealed class SubtitlePreviewWindow : Window
         }
         catch (Exception ex)
         {
-            App.Services.GetRequiredService<ILogService>().Error($"Не удалось применить тему к окну предпросмотра: {ex.Message}", "SubtitlePreviewWindow");
+            App.Services.GetRequiredService<ILogService>().Write(
+                "subtitle_preview.theme_failed",
+                LogLevel.Warning,
+                LogStatus.PartiallySucceeded,
+                "Не удалось применить тему к окну предпросмотра, применена тема по умолчанию",
+                ex,
+                "SubtitlePreviewWindow",
+                properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["Stage"] = "theme",
+                    ["ErrorCode"] = "theme-apply-failed"
+                });
         }
 
         // Применение эффекта фона (Mica или Acrylic)
@@ -100,7 +115,18 @@ public sealed class SubtitlePreviewWindow : Window
         }
         catch (Exception ex)
         {
-            App.Services.GetRequiredService<ILogService>().Error($"Не удалось применить эффект фона к окну предпросмотра: {ex.Message}", "SubtitlePreviewWindow");
+            App.Services.GetRequiredService<ILogService>().Write(
+                "subtitle_preview.backdrop_failed",
+                LogLevel.Warning,
+                LogStatus.PartiallySucceeded,
+                "Не удалось применить эффект фона к окну предпросмотра",
+                ex,
+                "SubtitlePreviewWindow",
+                properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["Stage"] = "backdrop",
+                    ["ErrorCode"] = "backdrop-apply-failed"
+                });
         }
 
         // Настройка размеров и центрирования окна
@@ -115,11 +141,11 @@ public sealed class SubtitlePreviewWindow : Window
                 appWindow.TitleBar.IconShowOptions = Microsoft.UI.Windowing.IconShowOptions.HideIconAndSystemMenu;
             }
             appWindow.Resize(new Windows.Graphics.SizeInt32(1600, 1000));
-            
+
             var displayArea = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(
-                windowId, 
+                windowId,
                 Microsoft.UI.Windowing.DisplayAreaFallback.Nearest);
-                
+
             if (displayArea != null)
             {
                 var screenWidth = displayArea.WorkArea.Width;
@@ -139,7 +165,18 @@ public sealed class SubtitlePreviewWindow : Window
             }
             catch (Exception ex)
             {
-                App.Services.GetRequiredService<ILogService>().Warn($"Не удалось установить обработчик сообщений окна предпросмотра: {ex.Message}", "SubtitlePreviewWindow");
+                App.Services.GetRequiredService<ILogService>().Write(
+                    "subtitle_preview.handler_failed",
+                    LogLevel.Warning,
+                    LogStatus.PartiallySucceeded,
+                    "Не удалось установить обработчик сообщений окна предпросмотра",
+                    ex,
+                    "SubtitlePreviewWindow",
+                    properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                    {
+                        ["Stage"] = "window_handler",
+                        ["ErrorCode"] = "handler-install-failed"
+                    });
             }
         }
     }

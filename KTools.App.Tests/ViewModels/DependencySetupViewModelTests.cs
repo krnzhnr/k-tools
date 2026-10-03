@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using FluentAssertions;
 using Moq;
 using KTools_App.Core;
+using KTools_App.Diagnostics;
 using KTools_App.Services.Contracts;
 using KTools_App.Tests.TestHelpers;
 using KTools_App.UI.Pages;
@@ -152,8 +153,17 @@ public class DependencySetupViewModelTests
         _dependencyManagerMock.Verify(d => d.CheckAllDependencyUpdatesAsync(true), Times.Once,
             "команда должна вызывать принудительную проверку обновлений (force=true)");
         _logServiceMock.Verify(
-            l => l.Info(It.Is<string>(s => s.Contains("ручная проверка обновлений")), It.IsAny<string>()),
-            Times.Once);
+            l => l.Write(
+                "ui.dependencies.update_check_requested",
+                LogLevel.Info,
+                LogStatus.Running,
+                It.IsAny<string>(),
+                It.IsAny<Exception>(),
+                "DependencySetupViewModel",
+                It.IsAny<LogContext?>(),
+                It.IsAny<IReadOnlyDictionary<string, object?>>()),
+            Times.Once,
+            "ручная проверка обновлений фиксируется структурированным событием");
         vm.RequiredDependencies.Should().BeEmpty("после перезагрузки реестр всё ещё пуст");
     }
 
@@ -288,8 +298,17 @@ public class DependencySetupViewModelTests
         _dependencyManagerMock.Verify(d => d.InstallDependencyAsync(It.IsAny<string>()), Times.Never);
         vm.IsInstallAllEnabled.Should().BeFalse("кнопка блокируется на время пакетной установки даже без задач");
         _logServiceMock.Verify(
-            l => l.Info(It.Is<string>(s => s.Contains("пакетная установка")), It.IsAny<string>()),
-            Times.Once);
+            l => l.Write(
+                "ui.dependencies.install_all_requested",
+                LogLevel.Info,
+                LogStatus.Running,
+                It.IsAny<string>(),
+                It.IsAny<Exception>(),
+                "DependencySetupViewModel",
+                It.IsAny<LogContext?>(),
+                It.IsAny<IReadOnlyDictionary<string, object?>>()),
+            Times.Once,
+            "пакетная установка фиксируется структурированным событием");
     }
 
     /// <summary>

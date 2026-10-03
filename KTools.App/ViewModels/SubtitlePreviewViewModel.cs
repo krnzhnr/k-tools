@@ -1,22 +1,27 @@
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
-using Microsoft.Extensions.DependencyInjection;
-using KTools_App.Services.Contracts;
-using KTools_App.Core;
-using KTools_App.Infrastructure;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+
+using CommunityToolkit.Mvvm.ComponentModel;
+
+using KTools_App.Core;
+using KTools_App.Diagnostics;
+using KTools_App.Infrastructure;
+using KTools_App.Models;
+using KTools_App.Services.Contracts;
+
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Media;
+
 using Windows.UI;
 using Windows.UI.Text;
-using CommunityToolkit.Mvvm.ComponentModel;
-using KTools_App.Models;
 
 namespace KTools_App.ViewModels;
 
@@ -168,7 +173,7 @@ public sealed class PatternItemViewModel : ObservableObject
             string farePattern = EscapeFareSpecialChars(_word);
             var xeger = new Fare.Xeger(farePattern);
             string generated = xeger.Generate();
-            
+
             if (string.IsNullOrEmpty(generated))
             {
                 SampleText = "Пример: (пустая строка)";
@@ -819,6 +824,8 @@ public sealed class SubtitlePreviewLine : ObservableObject
 /// </summary>
 public sealed partial class SubtitlePreviewViewModel : ThreadSafeViewModel
 {
+    private const string SourceName = nameof(SubtitlePreviewViewModel);
+
     private readonly IAssParser _assParser;
     private readonly ISettingsManager _settingsManager;
     private readonly ILogService _logService;
@@ -920,7 +927,7 @@ public sealed partial class SubtitlePreviewViewModel : ThreadSafeViewModel
     /// Инициализирует новый экземпляр SubtitlePreviewViewModel с поддержкой DI.
     /// </summary>
     public SubtitlePreviewViewModel(
-        SubtitleFilterState filterState, 
+        SubtitleFilterState filterState,
         string? settingsGroupName = null,
         IAssParser? assParser = null,
         ISettingsManager? settingsManager = null,
@@ -1121,10 +1128,16 @@ public sealed partial class SubtitlePreviewViewModel : ThreadSafeViewModel
                 }
                 catch (Exception ex)
                 {
-                    _logService.Exception(
+                    _logService.Write(
+                        "ui.subtitle_preview.parse_failed",
+                        LogLevel.Warning,
+                        LogStatus.Failed,
+                        $"Файл не разобран при подготовке предпросмотра: '{LogProps.FileName(path)}'",
                         ex,
-                        $"Ошибка парсинга файла при подготовке предпросмотра: '{path}'",
-                        "SubtitlePreviewViewModel");
+                        SourceName,
+                        properties: LogProps
+                            .Create("FileName", LogProps.FileName(path))
+                            .With("ErrorCode", "SUBTITLE_PARSE_FAILED"));
                 }
             }
         });
@@ -1142,7 +1155,8 @@ public sealed partial class SubtitlePreviewViewModel : ThreadSafeViewModel
         {
             var isExcluded = _filterState.ExcludedActors.Contains(actor);
             var item = new FilterItemViewModel(actor, !isExcluded);
-            item.PropertyChanged += (s, e) => {
+            item.PropertyChanged += (s, e) =>
+            {
                 if (e.PropertyName == nameof(FilterItemViewModel.IsChecked))
                 {
                     if (!_isBulkUpdating)
@@ -1160,7 +1174,8 @@ public sealed partial class SubtitlePreviewViewModel : ThreadSafeViewModel
         {
             var isExcluded = _filterState.ExcludedStyles.Contains(style);
             var item = new FilterItemViewModel(style, !isExcluded);
-            item.PropertyChanged += (s, e) => {
+            item.PropertyChanged += (s, e) =>
+            {
                 if (e.PropertyName == nameof(FilterItemViewModel.IsChecked))
                 {
                     if (!_isBulkUpdating)
@@ -1178,7 +1193,8 @@ public sealed partial class SubtitlePreviewViewModel : ThreadSafeViewModel
         {
             var isExcluded = _filterState.ExcludedEffects.Contains(effect);
             var item = new FilterItemViewModel(effect, !isExcluded);
-            item.PropertyChanged += (s, e) => {
+            item.PropertyChanged += (s, e) =>
+            {
                 if (e.PropertyName == nameof(FilterItemViewModel.IsChecked))
                 {
                     if (!_isBulkUpdating)

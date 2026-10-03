@@ -1,5 +1,9 @@
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
 using System;
+
+using KTools_App.Diagnostics;
+using KTools_App.Services.Contracts;
+
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
@@ -35,8 +39,9 @@ public static class FocusHelper
     /// </summary>
     /// <param name="xamlRoot">Корневой элемент XAML для получения сфокусированного элемента.</param>
     /// <param name="targetRoot">Нейтральный элемент интерфейса (например, корневой Grid), на который будет передан фокус.</param>
+    /// <param name="logService">Журнал приложения для диагностики сбоя снятия фокуса.</param>
     /// <returns>True, если фокус был успешно снят.</returns>
-    public static bool ClearFocus(XamlRoot? xamlRoot, UIElement? targetRoot)
+    public static bool ClearFocus(XamlRoot? xamlRoot, UIElement? targetRoot, ILogService? logService = null)
     {
         if (xamlRoot == null || targetRoot == null) return false;
 
@@ -54,7 +59,14 @@ public static class FocusHelper
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"[FocusHelper] Ошибка при снятии фокуса: {ex.Message}");
+            logService?.Write(
+                "ui.focus.clear_failed",
+                LogLevel.Warning,
+                LogStatus.Failed,
+                "Фокус с поля ввода не снят",
+                ex,
+                nameof(FocusHelper),
+                properties: LogProps.Create("ErrorCode", "FOCUS_CLEAR_FAILED").With("Control", "RootGrid"));
         }
 
         return false;

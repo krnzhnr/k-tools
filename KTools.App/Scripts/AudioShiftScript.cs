@@ -1,4 +1,4 @@
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -7,8 +7,14 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+
 using KTools_App.Core;
+using KTools_App.Diagnostics;
+using KTools_App.Infrastructure;
+using KTools_App.Models;
 using KTools_App.Services.Contracts;
+
+using ExecutionContext = KTools_App.Models.ExecutionContext;
 
 namespace KTools_App.Scripts;
 
@@ -105,25 +111,41 @@ public sealed class AudioShiftScript : AbstractScript
     /// <summary>
     /// Выполнение сдвига аудио для одного файла.
     /// </summary>
-    public override async Task<List<string>> ExecuteSingleAsync(
+    public override async Task<ExecutionResult> ExecuteSingleAsync(
         string filePath,
         Dictionary<string, object> settings,
         string? outputPath,
         ScriptProgressCallback progressCallback,
         int fileIndex,
-        int totalCount)
+        int totalCount,
+        ExecutionContext context)
     {
         var results = new List<string>();
         string originalName = Path.GetFileName(filePath);
 
-        _logService.Info($"Начало сдвига аудиопотока для файла: '{originalName}'", "AudioShiftScript");
+        _logService.Write(
+            "script.audio_shift.started",
+            LogLevel.Debug,
+            LogStatus.Running,
+            $"Начат сдвиг аудиодорожки для файла '{originalName}'",
+            source: Name,
+            properties: LogProps.Create("InputName", LogProps.FileName(filePath)));
         progressCallback(fileIndex, totalCount, "Чтение метаданных длительности...", 0.0);
 
         int shiftMs = GetSettingValue(settings, "ShiftMs", 1000);
         string direction = GetSettingValue(settings, "ShiftDirection", "Вперед");
         string format = GetSettingValue(settings, "OutputFormat", "eac3to Bitstream (Без перекодирования)");
 
-        _logService.Info($"Параметры обработки: сдвиг {shiftMs} мс, направление: {direction}, режим: {format}", "AudioShiftScript");
+        _logService.Write(
+            "script.audio_shift.parameters",
+            LogLevel.Debug,
+            LogStatus.Running,
+            $"Параметры сдвига: {shiftMs} мс, направление {direction}, режим {LogRedactor.CompactSafeToken(format)}",
+            source: Name,
+            properties: LogProps
+                .Create("InputName", LogProps.FileName(filePath))
+                .With("DurationMs", (double)shiftMs)
+                .With("Container", LogRedactor.CompactSafeToken(format)));
 
         // 1. Определение пути к выходному файлу
         string targetDir = string.IsNullOrEmpty(outputPath)
@@ -147,8 +169,22 @@ public sealed class AudioShiftScript : AbstractScript
             string msg = $"Пропуск (существует): {outputName}";
             progressCallback(fileIndex, totalCount, msg, 100.0);
             results.Add($"⏭ ПРОПУСК (файл существует): {outputName}");
-            _logService.Info($"Файл результата '{outputFilePath}' уже существует, обработка пропущена.", "AudioShiftScript");
-            return results;
+            _logService.Write(
+                "script.audio_shift.output_exists",
+                LogLevel.Info,
+                LogStatus.Skipped,
+                $"Файл результата '{LogProps.FileName(outputFilePath)}' уже существует, обработка пропущена",
+                source: Name,
+                properties: LogProps
+                    .Create("InputName", LogProps.FileName(filePath))
+                    .With("OutputName", LogProps.FileName(outputFilePath))
+                    .With("ArtifactExists", true));
+            return ExecutionResult.Skipped(
+                context,
+                results,
+                errorCode: "output-exists",
+                outputFile: outputFilePath,
+                outputExists: true);
         }
 
         int signedShiftMs = direction == "Назад" ? -Math.Abs(shiftMs) : Math.Abs(shiftMs);
@@ -189,37 +225,89 @@ public sealed class AudioShiftScript : AbstractScript
                 await Task.Delay(200);
             }
 
-            bool eac3Success = false;
+            ProcessResult? eac3Success = null;
             try
             {
                 eac3Success = await eac3Task;
             }
             catch (Exception ex)
             {
-                _logService.Exception(ex, $"Ошибка обработки файла '{originalName}' через eac3to: {ex.Message}", "AudioShiftScript");
+                _logService.Write(
+                "script.audio_shift.eac3to_failed",
+                LogLevel.Error,
+                LogStatus.Failed,
+                $"Сдвиг аудио через eac3to для '{originalName}' не выполнен",
+                ex,
+                Name,
+                properties: LogProps
+                    .Create("Tool", "eac3to")
+                    .With("InputName", LogProps.FileName(filePath))
+                    .With("ErrorCode", "EAC3TO_FAILED")
+                    .With("Retryable", true));
             }
 
-            if (IsCancelled || !eac3Success || !File.Exists(outputFilePath))
+            if (IsCancelled || eac3Success?.IsSuccess != true || !File.Exists(outputFilePath))
             {
                 await CleanupFailedOutputFileAsync(outputFilePath);
                 if (IsCancelled)
                 {
                     results.Add($"⚠ Отменено: {outputName}");
-                    _logService.Info($"Обработка файла '{originalName}' отменена пользователем.", "AudioShiftScript");
+                    _logService.Write(
+                "script.audio_shift.cancelled",
+                LogLevel.Info,
+                LogStatus.Cancelled,
+                $"Сдвиг аудио для '{originalName}' отменён",
+                source: Name,
+                properties: LogProps
+                    .Create("InputName", LogProps.FileName(filePath))
+                    .With("Reason", "UserRequested")
+                    .With("CleanupState", "NotStarted"));
                 }
                 else
                 {
                     results.Add($"❌ Ошибка обработки файла для {originalName}");
-                    _logService.Error($"Не удалось выполнить прямоточный сдвиг аудио для '{filePath}'. Проверьте логи eac3to.", "AudioShiftScript");
+                    _logService.Write(
+                "script.audio_shift.eac3to_failed",
+                LogLevel.Error,
+                LogStatus.Failed,
+                $"Прямоточный сдвиг аудио для '{LogProps.FileName(filePath)}' не выполнен, см. ограниченный хвост вывода eac3to",
+                source: Name,
+                properties: LogProps
+                    .Create("Tool", "eac3to")
+                    .With("InputName", LogProps.FileName(filePath))
+                    .With("ErrorCode", "EAC3TO_FAILED")
+                    .With("Retryable", true));
                 }
                 progressCallback(fileIndex, totalCount, "Ошибка или отмена", 100.0);
-                return results;
+                return IsCancelled
+                    ? ExecutionResult.Cancelled(
+                        context,
+                        results,
+                        errorCode: "cancelled",
+                        outputFile: outputFilePath,
+                        outputExists: File.Exists(outputFilePath),
+                        cleanupState: CleanupState.Completed)
+                    : ExecutionResult.Failed(
+                        context,
+                        results,
+                        errorCode: "process-failed",
+                        outputFile: outputFilePath,
+                        outputExists: File.Exists(outputFilePath));
             }
 
-            _logService.Info($"Прямоточный сдвиг аудио через eac3to успешно выполнен: '{outputFilePath}'", "AudioShiftScript");
+            _logService.Write(
+                "script.audio_shift.eac3to_succeeded",
+                LogLevel.Info,
+                LogStatus.Succeeded,
+                $"Прямоточный сдвиг аудио через eac3to выполнен: '{LogProps.FileName(outputFilePath)}'",
+                source: Name,
+                properties: LogProps
+                    .Create("Tool", "eac3to")
+                    .With("OutputName", LogProps.FileName(outputFilePath))
+                    .With("ArtifactVerified", true));
             progressCallback(fileIndex, totalCount, "Завершено", 100.0);
             results.Add($"✔ Сдвиг аудио (Bitstream) выполнен успешно: {outputName}");
-            return results;
+            return ExecutionResult.Succeeded(context, results, outputFile: outputFilePath, outputExists: File.Exists(outputFilePath));
         }
 
         // 3. Получение длительности для FFmpeg Lossless
@@ -234,7 +322,17 @@ public sealed class AudioShiftScript : AbstractScript
         }
         catch (Exception ex)
         {
-            _logService.Exception(ex, $"Не удалось прочесть метаданные длительности для '{originalName}': {ex.Message}", "AudioShiftScript");
+            _logService.Write(
+                "script.audio_shift.duration_read_failed",
+                LogLevel.Warning,
+                LogStatus.PartiallySucceeded,
+                $"Метаданные длительности для '{originalName}' не прочитаны",
+                ex,
+                Name,
+                properties: LogProps
+                    .Create("InputName", LogProps.FileName(filePath))
+                    .With("ErrorCode", "DURATION_READ_FAILED")
+                    .With("Retryable", false));
         }
 
         // 4. Формирование аргументов FFmpeg
@@ -290,37 +388,88 @@ public sealed class AudioShiftScript : AbstractScript
             await Task.Delay(200);
         }
 
-        bool success = false;
+        ProcessResult? success = null;
         try
         {
             success = await runTask;
         }
         catch (Exception ex)
         {
-            _logService.Exception(ex, $"Ошибка обработки файла '{originalName}' через FFmpeg: {ex.Message}", "AudioShiftScript");
+            _logService.Write(
+                "script.audio_shift.ffmpeg_failed",
+                LogLevel.Error,
+                LogStatus.Failed,
+                $"Сдвиг аудио через FFmpeg для '{originalName}' не выполнен",
+                ex,
+                Name,
+                properties: LogProps
+                    .Create("Tool", "ffmpeg")
+                    .With("InputName", LogProps.FileName(filePath))
+                    .With("ErrorCode", "FFMPEG_FAILED")
+                    .With("Retryable", true));
         }
 
-        if (IsCancelled || !success || !File.Exists(outputFilePath))
+        if (IsCancelled || success?.IsSuccess != true || !File.Exists(outputFilePath))
         {
             await CleanupFailedOutputFileAsync(outputFilePath);
             if (IsCancelled)
             {
                 results.Add($"⚠ Отменено: {outputName}");
-                _logService.Info($"Обработка файла '{originalName}' отменена пользователем.", "AudioShiftScript");
+                _logService.Write(
+                "script.audio_shift.cancelled",
+                LogLevel.Info,
+                LogStatus.Cancelled,
+                $"Сдвиг аудио для '{originalName}' отменён",
+                source: Name,
+                properties: LogProps
+                    .Create("InputName", LogProps.FileName(filePath))
+                    .With("Reason", "UserRequested")
+                    .With("CleanupState", "NotStarted"));
             }
             else
             {
                 results.Add($"❌ Ошибка обработки файла для {originalName}");
-                _logService.Error($"Не удалось выполнить сдвиг аудио для '{filePath}'. Проверьте логи FFmpeg.", "AudioShiftScript");
+                _logService.Write(
+                "script.audio_shift.ffmpeg_failed",
+                LogLevel.Error,
+                LogStatus.Failed,
+                $"Сдвиг аудио для '{LogProps.FileName(filePath)}' не выполнен, см. ограниченный хвост вывода FFmpeg",
+                source: Name,
+                properties: LogProps
+                    .Create("Tool", "ffmpeg")
+                    .With("InputName", LogProps.FileName(filePath))
+                    .With("ErrorCode", "FFMPEG_FAILED")
+                    .With("Retryable", true));
             }
             progressCallback(fileIndex, totalCount, "Ошибка или отмена", 100.0);
-            return results;
+            return IsCancelled
+                ? ExecutionResult.Cancelled(
+                    context,
+                    results,
+                    errorCode: "cancelled",
+                    outputFile: outputFilePath,
+                    outputExists: File.Exists(outputFilePath),
+                    cleanupState: CleanupState.Completed)
+                : ExecutionResult.Failed(
+                    context,
+                    results,
+                    errorCode: "process-failed",
+                    outputFile: outputFilePath,
+                    outputExists: File.Exists(outputFilePath));
         }
 
-        _logService.Info($"Сдвиг аудио успешно выполнен, результат: '{outputFilePath}'", "AudioShiftScript");
+        _logService.Write(
+            "script.audio_shift.completed",
+            LogLevel.Info,
+            LogStatus.Succeeded,
+            $"Сдвиг аудио выполнен, результат: '{LogProps.FileName(outputFilePath)}'",
+            source: Name,
+            properties: LogProps
+                .Create("OutputName", LogProps.FileName(outputFilePath))
+                .With("Verified", true));
         progressCallback(fileIndex, totalCount, "Завершено", 100.0);
         results.Add($"✔ Сдвиг аудио выполнен успешно: {outputName}");
 
-        return results;
+        return ExecutionResult.Succeeded(context, results, outputFile: outputFilePath, outputExists: File.Exists(outputFilePath));
     }
 }

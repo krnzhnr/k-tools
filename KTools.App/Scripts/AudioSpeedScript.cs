@@ -1,4 +1,3 @@
-using KTools_App.Services.Contracts;
 // -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
@@ -6,8 +5,14 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+
 using KTools_App.Core;
+using KTools_App.Diagnostics;
 using KTools_App.Infrastructure;
+using KTools_App.Models;
+using KTools_App.Services.Contracts;
+
+using ExecutionContext = KTools_App.Models.ExecutionContext;
 
 namespace KTools_App.Scripts;
 
@@ -82,6 +87,7 @@ public sealed class AudioSpeedScript : AbstractScript
                 "Slowdown (25.000 → 23.976)",
                 "Speedup (23.976 → 25.000)",
                 "Custom (24.000 → 23.976)",
+                "Custom (23.976 → 24.000)",
                 "Custom (25.000 → 24.000)"
             }),
 
@@ -108,15 +114,15 @@ public sealed class AudioSpeedScript : AbstractScript
     /// <summary>
     /// Асинхронное выполнение обработки одного файла.
     /// </summary>
-    public override async Task<List<string>> ExecuteSingleAsync(
+    public override async Task<ExecutionResult> ExecuteSingleAsync(
         string filePath,
         Dictionary<string, object> settings,
         string? outputPath,
         ScriptProgressCallback progressCallback,
         int fileIndex,
-        int totalCount)
+        int totalCount,
+        ExecutionContext context)
     {
-        ResetCancellation();
         var results = new List<string>();
 
         // Извлекаем пользовательские настройки
@@ -141,8 +147,11 @@ public sealed class AudioSpeedScript : AbstractScript
             string errMsg = "❌ Ошибка: Необходимая утилита 'eac3to' " +
                             "не установлена в системе.";
             results.Add(errMsg);
-            _logService.Error(errMsg, "AudioSpeedScript");
-            return results;
+            _logService.Write("script.audio_speed.failed", LogLevel.Error, LogStatus.Failed, errMsg, source: Name, properties: LogProps.Create("ErrorCode", "AUDIO_SPEED_FAILED").With("InputName", LogProps.FileName(filePath)).With("Retryable", true));
+            return ExecutionResult.Failed(
+                context,
+                results,
+                errorCode: "missing-dependency");
         }
 
         // Подготовка опций изменения скорости
@@ -163,6 +172,12 @@ public sealed class AudioSpeedScript : AbstractScript
             options.Add("-24.000");
             options.Add("-slowdown");
             suffix = "_24_to_23";
+        }
+        else if (mode == "Custom (23.976 → 24.000)")
+        {
+            options.Add("-23.976");
+            options.Add("-changeTo24.000");
+            suffix = "_23_to_24";
         }
         else if (mode == "Custom (25.000 → 24.000)")
         {
@@ -193,11 +208,13 @@ public sealed class AudioSpeedScript : AbstractScript
             string msg = $"Пропуск (существует): {outputName}";
             progressCallback(fileIndex, totalCount, msg, 100.0);
             results.Add($"⏭ ПРОПУСК (файл существует): {outputName}");
-            _logService.Info(
-                $"Файл результата '{outputFilePath}' уже существует, " +
-                $"обработка пропущена.",
-                "AudioSpeedScript");
-            return results;
+            _logService.Write("script.audio_speed.output_exists", LogLevel.Info, LogStatus.Skipped, $"Файл результата '{LogProps.FileName(outputFilePath)}' уже существует, обработка пропущена", source: Name, properties: LogProps.Create("OutputName", LogProps.FileName(outputFilePath)).With("ArtifactExists", true));
+            return ExecutionResult.Skipped(
+                context,
+                results,
+                errorCode: "output-exists",
+                outputFile: outputFilePath,
+                outputExists: true);
         }
 
         // Предотвращаем зависание и сбой eac3to из-за кириллического пути.
@@ -214,12 +231,12 @@ public sealed class AudioSpeedScript : AbstractScript
             if (!Directory.Exists(tempDir))
             {
                 Directory.CreateDirectory(tempDir);
-                _logService.DebugLog($"Создана временная папка для eac3to: '{tempDir}'", "AudioSpeedScript");
+                _logService.Write("script.audio_speed.temp_dir_created", LogLevel.Debug, LogStatus.Succeeded, "Создана временная папка для eac3to", source: Name, properties: LogProps.Create("Tool", "eac3to").With("FileName", LogProps.FileName(tempDir)));
             }
         }
         catch (Exception ex)
         {
-            _logService.Exception(ex, $"Не удалось создать временную директорию '{tempDir}', откат на стандартный путь", "AudioSpeedScript");
+            _logService.Write("script.audio_speed.temp_dir_failed", LogLevel.Warning, LogStatus.PartiallySucceeded, "Временная папка для eac3to не создана, используется стандартный рабочий путь", ex, Name, properties: LogProps.Create("ErrorCode", "EAC3TO_TEMP_DIR_FAILED").With("FileName", LogProps.FileName(tempDir)));
             tempDir = Path.GetTempPath();
         }
 
@@ -237,7 +254,7 @@ public sealed class AudioSpeedScript : AbstractScript
 
         if (shouldPreDecode)
         {
-            _logService.Info($"Формат файла '{fileExtension}' не поддерживается eac3to нативно. Выполняется предварительное декодирование в WAV...", "AudioSpeedScript");
+            _logService.Write("script.audio_speed.predecode_started", LogLevel.Debug, LogStatus.Running, $"Контейнер {LogRedactor.CompactSafeToken(fileExtension)} не поддерживается eac3to напрямую, выполняется предварительное декодирование в WAV", source: Name, properties: LogProps.Create("Tool", "eac3to").With("Extension", LogRedactor.CompactSafeToken(fileExtension)));
             progressCallback(
                 fileIndex,
                 totalCount,
@@ -271,30 +288,43 @@ public sealed class AudioSpeedScript : AbstractScript
                 await Task.Delay(200);
             }
 
-            bool decodeSuccess = false;
+            ProcessResult? decodeSuccess = null;
             try
             {
                 decodeSuccess = await decodeTask;
             }
             catch (Exception ex)
             {
-                _logService.Exception(ex, $"Ошибка декодирования файла '{originalName}' через FFmpeg: {ex.Message}", "AudioSpeedScript");
+                _logService.Write("script.audio_speed.predecode_failed", LogLevel.Error, LogStatus.Failed, $"Предварительное декодирование '{originalName}' через FFmpeg не выполнено", ex, Name, properties: LogProps.Create("ErrorCode", "PREDECODE_FAILED").With("Tool", "ffmpeg").With("InputName", LogProps.FileName(filePath)).With("Retryable", true));
             }
 
-            if (IsCancelled || !decodeSuccess || !File.Exists(tempInputWavPath))
+            if (IsCancelled || decodeSuccess?.IsSuccess != true || !File.Exists(tempInputWavPath))
             {
                 await CleanupFailedOutputFileAsync(tempInputWavPath);
                 if (IsCancelled)
                 {
                     results.Add($"⚠ Отменено: {outputName}");
-                    _logService.Info($"Декодирование файла '{originalName}' отменено пользователем.", "AudioSpeedScript");
+                    _logService.Write("script.audio_speed.predecode_cancelled", LogLevel.Info, LogStatus.Cancelled, $"Предварительное декодирование '{originalName}' отменено", source: Name, properties: LogProps.Create("Reason", "UserRequested").With("CleanupState", "NotStarted"));
                 }
                 else
                 {
                     results.Add($"❌ Ошибка декодирования исходного файла для {Path.GetFileName(filePath)}");
-                    _logService.Error($"Не удалось выполнить предварительное декодирование в WAV для '{filePath}'.", "AudioSpeedScript");
+                    _logService.Write("script.audio_speed.predecode_failed", LogLevel.Error, LogStatus.Failed, $"Предварительное декодирование в WAV для '{LogProps.FileName(filePath)}' не выполнено", source: Name, properties: LogProps.Create("ErrorCode", "PREDECODE_FAILED").With("InputName", LogProps.FileName(filePath)).With("Retryable", true));
                 }
-                return results;
+                return IsCancelled
+                    ? ExecutionResult.Cancelled(
+                        context,
+                        results,
+                        errorCode: "cancelled",
+                        outputFile: outputFilePath,
+                        outputExists: File.Exists(outputFilePath),
+                        cleanupState: CleanupState.Completed)
+                    : ExecutionResult.Failed(
+                        context,
+                        results,
+                        errorCode: "predecode-failed",
+                        outputFile: outputFilePath,
+                        outputExists: File.Exists(outputFilePath));
             }
 
             eac3toInputPath = tempInputWavPath;
@@ -342,24 +372,21 @@ public sealed class AudioSpeedScript : AbstractScript
             await Task.Delay(200);
         }
 
-        bool success = false;
+        ProcessResult? success = null;
         try
         {
             success = await eac3toTask;
         }
         catch (Exception ex)
         {
-            _logService.Exception(
-                ex,
-                $"Ошибка работы eac3to для '{originalName}': {ex.Message}",
-                "AudioSpeedScript");
+            _logService.Write("script.audio_speed.eac3to_failed", LogLevel.Error, LogStatus.Failed, $"Изменение скорости через eac3to для '{originalName}' не выполнено", ex, Name, properties: LogProps.Create("ErrorCode", "EAC3TO_FAILED").With("Tool", "eac3to").With("InputName", LogProps.FileName(filePath)).With("Retryable", true));
         }
         finally
         {
             if (!string.IsNullOrEmpty(tempInputWavPath))
             {
                 await CleanupFailedOutputFileAsync(tempInputWavPath);
-                _logService.DebugLog($"Временный входной WAV-файл '{tempInputWavPath}' успешно удален.", "AudioSpeedScript");
+                _logService.Write("script.audio_speed.temp_input_removed", LogLevel.Debug, LogStatus.Succeeded, "Временный входной WAV-файл удалён", source: Name, properties: LogProps.Create("FileName", LogProps.FileName(tempInputWavPath)).With("CleanupState", "Removed"));
             }
         }
 
@@ -368,24 +395,28 @@ public sealed class AudioSpeedScript : AbstractScript
             await CleanupFailedOutputFileAsync(tempOutputFilePath);
             await CleanupFailedOutputFileAsync(outputFilePath);
             results.Add($"⚠ Отменено: {outputName}");
-            _logService.Info(
-                $"Обработка файла '{originalName}' отменена пользователем.",
-                "AudioSpeedScript");
-            return results;
+            _logService.Write("script.audio_speed.cancelled", LogLevel.Info, LogStatus.Cancelled, $"Обработка '{originalName}' отменена", source: Name, properties: LogProps.Create("Reason", "UserRequested").With("CleanupState", "NotStarted"));
+            return ExecutionResult.Cancelled(
+                context,
+                results,
+                errorCode: "cancelled",
+                outputFile: outputFilePath,
+                outputExists: File.Exists(outputFilePath),
+                cleanupState: CleanupState.Completed);
         }
 
-        if (success && File.Exists(tempOutputFilePath))
+        if (success?.IsSuccess == true && File.Exists(tempOutputFilePath))
         {
             try
             {
                 if (File.Exists(outputFilePath))
                 {
                     File.Delete(outputFilePath);
-                    _logService.DebugLog($"Удален существующий файл результата перед заменой: '{outputFilePath}'", "AudioSpeedScript");
+                    _logService.Write("script.audio_speed.output_replaced", LogLevel.Debug, LogStatus.Changed, "Существующий файл результата удалён перед заменой", source: Name, properties: LogProps.Create("OutputName", LogProps.FileName(outputFilePath)));
                 }
 
                 MoveFileSafe(tempOutputFilePath, outputFilePath);
-                _logService.DebugLog($"Временный файл успешно перемещен: '{tempOutputFilePath}' -> '{outputFilePath}'", "AudioSpeedScript");
+                _logService.Write("script.audio_speed.temp_output_moved", LogLevel.Debug, LogStatus.Succeeded, $"Временный файл перемещён: '{LogProps.FileName(tempOutputFilePath)}' -> '{LogProps.FileName(outputFilePath)}'", source: Name, properties: LogProps.Create("OutputName", LogProps.FileName(outputFilePath)));
 
                 progressCallback(
                     fileIndex,
@@ -393,10 +424,7 @@ public sealed class AudioSpeedScript : AbstractScript
                     "Успешно завершено!",
                     100.0);
                 results.Add($"✅ Скорость изменена: {outputName}");
-                _logService.Info(
-                    $"Успешно завершено изменение скорости для '{originalName}'. " +
-                    $"Результат сохранен в '{outputName}'",
-                    "AudioSpeedScript");
+                _logService.Write("script.audio_speed.completed", LogLevel.Info, LogStatus.Succeeded, $"Изменение скорости для '{originalName}' завершено, результат: '{LogProps.FileName(outputFilePath)}'", source: Name, properties: LogProps.Create("OutputName", LogProps.FileName(outputFilePath)).With("Verified", true));
 
                 if (deleteOriginal)
                 {
@@ -407,7 +435,7 @@ public sealed class AudioSpeedScript : AbstractScript
             {
                 string moveErr = $"❌ Ошибка при сохранении итогового файла: {ex.Message}";
                 results.Add(moveErr);
-                _logService.Exception(ex, $"Не удалось переместить временный файл '{tempOutputFilePath}' в '{outputFilePath}'", "AudioSpeedScript");
+                _logService.Write("script.audio_speed.move_failed", LogLevel.Error, LogStatus.Failed, $"Временный файл '{LogProps.FileName(tempOutputFilePath)}' не перемещён в '{LogProps.FileName(outputFilePath)}'", ex, Name, properties: LogProps.Create("ErrorCode", "TEMP_OUTPUT_MOVE_FAILED").With("OutputName", LogProps.FileName(outputFilePath)).With("CleanupState", "Failed"));
                 await CleanupFailedOutputFileAsync(tempOutputFilePath);
                 await CleanupFailedOutputFileAsync(outputFilePath);
             }
@@ -421,13 +449,35 @@ public sealed class AudioSpeedScript : AbstractScript
             string errorMsg = $"❌ Ошибка обработки для " +
                               $"{Path.GetFileName(filePath)}";
             results.Add(errorMsg);
-            _logService.Error(
-                $"Ошибка выполнения eac3to при обработке файла " +
-                $"'{filePath}'. Выходной файл не создан.",
-                "AudioSpeedScript");
+            _logService.Write("script.audio_speed.eac3to_failed", LogLevel.Error, LogStatus.Failed, $"eac3to не выполнил обработку '{LogProps.FileName(filePath)}', выходной файл не создан", source: Name, properties: LogProps.Create("ErrorCode", "EAC3TO_FAILED").With("Tool", "eac3to").With("InputName", LogProps.FileName(filePath)).With("ArtifactVerified", false).With("Retryable", true));
         }
 
-        return results;
+        bool outputReady = File.Exists(outputFilePath);
+        if (outputReady && deleteOriginal && File.Exists(filePath))
+        {
+            return ExecutionResult.PartiallySucceeded(
+                context,
+                results,
+                errorCode: "source-cleanup-failed",
+                outputFile: outputFilePath,
+                outputExists: true,
+                cleanupState: CleanupState.Failed);
+        }
+        if (outputReady)
+        {
+            return ExecutionResult.Succeeded(
+                context,
+                results,
+                outputFile: outputFilePath,
+                outputExists: true,
+                cleanupState: deleteOriginal ? CleanupState.Completed : CleanupState.NotRequired);
+        }
+        return ExecutionResult.Failed(
+            context,
+            results,
+            errorCode: "output-missing",
+            outputFile: outputFilePath,
+            outputExists: false);
     }
 
     /// <summary>

@@ -1,187 +1,219 @@
 // -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
-using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Navigation;
-using Microsoft.Extensions.DependencyInjection;
+
 using KTools_App.Core;
+using KTools_App.Diagnostics;
+using KTools_App.Models;
 using KTools_App.Services.Contracts;
 using KTools_App.ViewModels;
 
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Navigation;
+
 namespace KTools_App.UI.Pages;
 
-/// <summary>
-/// Класс логики (Code-Behind) для страницы логов LogPage.
-/// Осуществляет координацию подписок на события логирования и автопрокрутку списка в интерфейсе.
-/// </summary>
-public sealed partial class LogPage : Page
+public sealed partial class LogPage
 {
-    /// <summary>
-    /// Предоставляет доступ к модели представления страницы логов.
-    /// </summary>
+    private const string SourceName = nameof(LogPage);
+    private const int PendingQueueCapacity = 4096;
+    private const long PendingQueueMaxBytes = 4L * 1024 * 1024;
+    private const int BatchIntervalMilliseconds = 200;
+
+    private readonly LogUiSession _session = new(PendingQueueCapacity, PendingQueueMaxBytes);
+
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _logBatchTimer;
+    private ILogService? _logService;
+    private EventHandler<LogEvent>? _logReceivedHandler;
+    private long _generation;
+    private long _timerGeneration;
+
     public LogViewModel ViewModel { get; }
 
-    private readonly List<KTools_App.Models.LogItem> _pendingLogs = new();
-    private readonly object _pendingLock = new();
-    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _logBatchTimer;
-
-    /// <summary>
-    /// Инициализирует новый экземпляр LogPage, разрешая зависимости через DI.
-    /// </summary>
     public LogPage()
     {
         ViewModel = App.Services.GetRequiredService<LogViewModel>();
         InitializeComponent();
-
-        // Страница кэшируется навигационным фреймом: список логов (до 2000 строк)
-        // не пересоздается при каждом возвращении на вкладку.
         NavigationCacheMode = NavigationCacheMode.Required;
     }
 
-    /// <summary>
-    /// Вызывается при переходе на страницу логов. Загружает историю и подписывается на событие получения логов.
-    /// </summary>
     protected override void OnNavigatedTo(NavigationEventArgs e)
     {
         base.OnNavigatedTo(e);
 
-        // Загружаем сохраненную историю логов во ViewModel
-        ViewModel.LoadLogs();
+        if (_logService is not null && _logReceivedHandler is not null)
+        {
+            _logService.LogReceived -= _logReceivedHandler;
+        }
 
-        // Подписываемся на новые логи
-        LogService.LogReceived += OnLogReceived;
+        if (_logBatchTimer is { IsRunning: true })
+        {
+            _logBatchTimer.Stop();
+        }
 
-        App.Services.GetRequiredService<ILogService>().DebugLog("Открыта высокопроизводительная вкладка логов с поддержкой виртуализации списка", "LogPage");
+        ILogService logService = App.Services.GetRequiredService<ILogService>();
+        _logService = logService;
+        long generation = _session.Activate();
+        _generation = generation;
+        EventHandler<LogEvent> handler = (_, logEvent) => OnLogReceived(generation, logEvent);
+        _logReceivedHandler = handler;
+        logService.LogReceived += handler;
 
-        // Прокручиваем список в самый конец после рендеринга элементов
+        IReadOnlyList<LogEvent> snapshot = ViewModel.LoadLogs();
+        _session.RegisterSnapshot(generation, snapshot);
+        _session.PurgeSnapshotDuplicates(generation, snapshot.Select(static logEvent => logEvent.CorrelationKey));
+
+        logService.Write("ui.log_page.opened", LogLevel.Debug, LogStatus.Succeeded, "Панель журнала событий открыта", source: SourceName);
+
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
         {
-            ScrollToEnd();
+            if (_session.IsCurrent(generation))
+            {
+                ScrollToEnd();
+            }
         });
     }
 
-    /// <summary>
-    /// Вызывается при переходе со страницы логов. Гарантированно отписывается от событий во избежание утечек памяти.
-    /// </summary>
     protected override void OnNavigatedFrom(NavigationEventArgs e)
     {
         base.OnNavigatedFrom(e);
+        long generation = _generation;
+        _session.Deactivate(generation);
 
-        LogService.LogReceived -= OnLogReceived;
-        App.Services.GetRequiredService<ILogService>().DebugLog("Пользователь покинул вкладку мониторинга логов", "LogPage");
+        if (_logService is not null && _logReceivedHandler is not null)
+        {
+            _logService.LogReceived -= _logReceivedHandler;
+            _logService.Write(
+                "ui.log_page.closed",
+                LogLevel.Debug,
+                LogStatus.Succeeded,
+                "Панель журнала событий закрыта",
+                source: SourceName);
+        }
 
-        // Накопленные записи не сбрасываем в список при уходе со страницы:
-        // при следующем открытии вкладки OnNavigatedTo заново загружает журнал
-        // из файла (ViewModel.LoadLogs), поэтому синхронное обновление ListView
-        // на 2000 элементов в момент навигации только задерживало переход.
+        _logService = null;
+        _logReceivedHandler = null;
+
+        if (_logBatchTimer is { IsRunning: true })
+        {
+            _logBatchTimer.Stop();
+        }
+    }
+
+    private void OnLogReceived(long generation, LogEvent logEvent)
+    {
+        if (!_session.TryAdd(generation, logEvent) || !_session.TryBeginBatch(generation))
+        {
+            return;
+        }
+
+        if (!DispatcherQueue.TryEnqueue(() => StartBatchTimer(generation)))
+        {
+            _session.EndBatch(generation);
+        }
+    }
+
+    private void StartBatchTimer(long generation)
+    {
+        if (!_session.IsCurrent(generation))
+        {
+            _session.EndBatch(generation);
+            return;
+        }
+
+        if (_logBatchTimer is null || _timerGeneration != generation)
+        {
+            if (_logBatchTimer is { IsRunning: true })
+            {
+                _logBatchTimer.Stop();
+            }
+
+            _logBatchTimer = DispatcherQueue.CreateTimer();
+            _logBatchTimer.Interval = TimeSpan.FromMilliseconds(BatchIntervalMilliseconds);
+            _timerGeneration = generation;
+            _logBatchTimer.Tick += (_, _) => OnBatchTick(generation);
+        }
+
+        if (!_logBatchTimer.IsRunning)
+        {
+            _logBatchTimer.Start();
+        }
+    }
+
+    private void OnBatchTick(long generation)
+    {
+        if (_session.IsCurrent(generation))
+        {
+            FlushPendingLogs(generation);
+        }
+    }
+
+    private void FlushPendingLogs(long generation)
+    {
         if (_logBatchTimer is { IsRunning: true })
         {
             _logBatchTimer.Stop();
         }
 
-        // Буфер очищаем: его содержимое уже будет прочитано из файла при следующем входе,
-        // иначе после загрузки истории записи продублировались бы в списке.
-        lock (_pendingLock)
+        if (!_session.TryDrain(generation, out IReadOnlyList<LogItem> batch, out long dropped))
         {
-            _pendingLogs.Clear();
-        }
-    }
-
-    /// <summary>
-    /// Обработчик события поступления нового сообщения лога. Перенаправляет добавление записи в поток UI.
-    /// </summary>
-    private void OnLogReceived(object? sender, LogReceivedEventArgs e)
-    {
-        lock (_pendingLock)
-        {
-            _pendingLogs.Add(new KTools_App.Models.LogItem { Message = e.FormattedMessage, Level = e.Level });
+            return;
         }
 
-        bool isEnqueued = DispatcherQueue.TryEnqueue(() =>
+        if (batch.Count == 0 && dropped == 0)
         {
-            if (_logBatchTimer == null)
-            {
-                _logBatchTimer = DispatcherQueue.CreateTimer();
-                _logBatchTimer.Interval = TimeSpan.FromMilliseconds(200);
-                _logBatchTimer.Tick += (s, args) => FlushPendingLogs();
-            }
-
-            if (!_logBatchTimer.IsRunning)
-            {
-                _logBatchTimer.Start();
-            }
-        });
-
-        if (!isEnqueued)
-        {
-            DispatcherQueue.TryEnqueue(() => FlushPendingLogs());
-        }
-    }
-
-    /// <summary>
-    /// Добавляет накопленные логи в ViewModel одной пачкой и прокручивает список к последнему элементу.
-    /// </summary>
-    private void FlushPendingLogs()
-    {
-        if (_logBatchTimer is { IsRunning: true })
-        {
-            _logBatchTimer.Stop();
+            return;
         }
 
-        List<KTools_App.Models.LogItem> batch;
-        lock (_pendingLock)
+        List<LogItem> items = new(batch.Count + 1);
+        if (dropped > 0)
         {
-            if (_pendingLogs.Count == 0)
-            {
-                return;
-            }
-            batch = new List<KTools_App.Models.LogItem>(_pendingLogs);
-            _pendingLogs.Clear();
+            items.Add(LogItem.CreateMarker(
+                $"Пропущено событий журнала из-за переполнения очереди интерфейса: {dropped}",
+                LogLevel.Warning,
+                dropped,
+                Guid.Empty,
+                LogEventMarkerNames.DroppedMarker));
         }
 
-        ViewModel.AddLogs(batch);
+        items.AddRange(batch);
+        ViewModel.AddLogs(items);
         ScrollToEnd();
     }
 
-    /// <summary>
-    /// Прокручивает виртуализированный список логов к самому последнему элементу.
-    /// </summary>
     private void ScrollToEnd()
     {
         try
         {
             if (ViewModel.Logs.Count > 0)
             {
-                var lastItem = ViewModel.Logs[^1];
-                LogListView.ScrollIntoView(lastItem);
+                LogListView.ScrollIntoView(ViewModel.Logs[ViewModel.Logs.Count - 1]);
             }
         }
         catch (Exception ex)
         {
-            // Используем системную отладку для предотвращения бесконечных циклов логирования
-            System.Diagnostics.Debug.WriteLine($"[Error] Ошибка при прокрутке ListView к последней строке: {ex.Message}");
+            App.Services.GetRequiredService<ILogService>().Write(
+                "ui.log_page.scroll_failed",
+                LogLevel.Warning,
+                LogStatus.Failed,
+                "Список журнала не прокручен до последнего события",
+                ex,
+                SourceName,
+                properties: LogProps.Create("ErrorCode", "LOG_SCROLL_FAILED").With("Control", "LogListView"));
         }
     }
 
-    /// <summary>
-    /// Копирует выделенные пользователем строки лога в системный буфер обмена Windows.
-    /// </summary>
     private void CopySelectedLogs_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
     {
         CopySelectedLogs();
     }
 
-    /// <summary>
-    /// Выделяет все записи логов в списке.
-    /// </summary>
     private void SelectAllLogs_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
     {
         LogListView.SelectAll();
     }
 
-    /// <summary>
-    /// Обработчик нажатия горячих клавиш в списке логов (Ctrl+C — копировать выделенное, Ctrl+A — выделить все).
-    /// </summary>
     private void LogListView_KeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
     {
         var ctrlState = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Control);
@@ -202,19 +234,9 @@ public sealed partial class LogPage : Page
         }
     }
 
-    /// <summary>
-    /// Вспомогательный метод для копирования элементов или вызова полного копирования при отсутствии выделения.
-    /// </summary>
     private void CopySelectedLogs()
     {
-        var selected = System.Linq.Enumerable.ToList(System.Linq.Enumerable.OfType<KTools_App.Models.LogItem>(LogListView.SelectedItems));
-        if (selected.Count > 0)
-        {
-            ViewModel.CopySelectedLogs(selected);
-        }
-        else
-        {
-            ViewModel.CopyAllLogsCommand.Execute(null);
-        }
+        var selected = System.Linq.Enumerable.ToList(System.Linq.Enumerable.OfType<LogItem>(LogListView.SelectedItems));
+        ViewModel.CopySelectedLogs(selected);
     }
 }

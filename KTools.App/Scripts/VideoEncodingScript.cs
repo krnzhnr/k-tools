@@ -1,4 +1,3 @@
-using KTools_App.Services.Contracts;
 // -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
@@ -9,8 +8,12 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using KTools_App.Core;
-using KTools_App.Infrastructure;
+using KTools_App.Diagnostics;
 using KTools_App.Encoders;
+using KTools_App.Infrastructure;
+using KTools_App.Models;
+using KTools_App.Services.Contracts;
+using ExecutionContext = KTools_App.Models.ExecutionContext;
 
 namespace KTools_App.Scripts;
 
@@ -25,18 +28,22 @@ public sealed class VideoEncodingScript : AbstractScript
     private readonly IFFmpegRunner _ffmpegRunner;
     private readonly IMediaProbeService _mediaProbeService;
     private readonly VideoEncoderRegistry _encoderRegistry;
+    private readonly IDialogService? _dialogService;
 
     public VideoEncodingScript(
-        ILogService logService, 
-        ISettingsManager settingsManager, IPathManager pathManager,
+        ILogService logService,
+        ISettingsManager settingsManager,
+        IPathManager pathManager,
         IFFmpegRunner ffmpegRunner,
         IMediaProbeService mediaProbeService,
-        VideoEncoderRegistry encoderRegistry)
+        VideoEncoderRegistry encoderRegistry,
+        IDialogService? dialogService = null)
         : base(logService, settingsManager, pathManager)
     {
         _ffmpegRunner = ffmpegRunner ?? throw new ArgumentNullException(nameof(ffmpegRunner));
         _mediaProbeService = mediaProbeService ?? throw new ArgumentNullException(nameof(mediaProbeService));
         _encoderRegistry = encoderRegistry ?? throw new ArgumentNullException(nameof(encoderRegistry));
+        _dialogService = dialogService;
     }
 
     public override string Name => AppConstants.ScriptMetadata.VideoProcessorName;
@@ -120,7 +127,7 @@ public sealed class VideoEncodingScript : AbstractScript
                 {
                     settingField.VisibilityConditions = new List<SettingVisibilityCondition>();
                 }
-                
+
                 settingField.VisibilityConditions.Add(new SettingVisibilityCondition("encoder", new List<string> { encoder.StableId, encoder.DisplayName }));
                 fields.Add(settingField);
             }
@@ -316,6 +323,24 @@ public sealed class VideoEncodingScript : AbstractScript
                 }
             ),
             new SettingField(
+                "sub_not_found_action",
+                "Если надписи не найдены",
+                SettingType.Combo,
+                "Пропускать хардсаб",
+                "Субтитры",
+                options: new List<string>
+                {
+                    "Пропускать хардсаб",
+                    "Спрашивать"
+                },
+                column: 0,
+                colSpan: 2,
+                visibilityConditions: new List<SettingVisibilityCondition>
+                {
+                    new("burn_in_subtitles", "True")
+                }
+            ),
+            new SettingField(
                 "strip_keywords",
                 "Удалять теги оформления субтитров",
                 SettingType.KeywordList,
@@ -337,30 +362,33 @@ public sealed class VideoEncodingScript : AbstractScript
             // --- Вкладка: Общие ---
             new SettingField(
                 "overwrite_source",
-                "Заменить исходный файл после обработки",
+                "Заменить исходный файл готовым результатом после успешной проверки",
                 SettingType.Checkbox,
                 false,
                 "Общие",
                 column: 0,
-                colSpan: 2
+                colSpan: 2,
+                requiresWarning: true,
+                warningTitle: "Замена исходного файла",
+                warningText: "Исходный файл заменяется готовым результатом только после успешной проверки. До подтверждения результата исходный файл сохраняется."
             )
         });
-        
+
         return fields;
     }
 
-    public override async Task<List<string>> ExecuteSingleAsync(
+    public override async Task<ExecutionResult> ExecuteSingleAsync(
         string filePath,
         Dictionary<string, object> settings,
         string? outputPath,
         ScriptProgressCallback progressCallback,
         int fileIndex,
-        int totalCount)
+        int totalCount,
+        ExecutionContext context)
     {
-        ResetCancellation();
         var results = new List<string>();
 
-        _logService.Info($"Начало кодирования видео для файла '{Path.GetFileName(filePath)}'", "VideoEncodingScript");
+        _logService.Write("script.video_encoding.started", LogLevel.Debug, LogStatus.Running, $"Начато кодирование видео файла '{LogProps.FileName(filePath)}'", source: Name, properties: LogProps.Create("InputName", LogProps.FileName(filePath)));
 
         // 1. Анализируем структуру исходного файла
         MediaStructure? structure;
@@ -371,19 +399,28 @@ public sealed class VideoEncodingScript : AbstractScript
         catch (Exception ex)
         {
             string probeErr = $"❌ Ошибка анализа метаданных файла: {ex.Message}";
-            _logService.Exception(ex, $"Исключение при зондировании '{filePath}': {ex.Message}", "VideoEncodingScript");
+            _logService.Write("script.video_encoding.probe_failed", LogLevel.Warning, LogStatus.PartiallySucceeded, $"Зондирование файла '{LogProps.FileName(filePath)}' не завершено, кодирование продолжится с начальными параметрами", ex, Name, properties: LogProps.Create("ErrorCode", "PROBE_FAILED").With("InputName", LogProps.FileName(filePath)));
             progressCallback(fileIndex, totalCount, "Ошибка ffprobe", 0.0);
             results.Add(probeErr);
-            return results;
+            return ExecutionResult.FromException(
+                context,
+                ex,
+                results,
+                errorCode: "probe-failed",
+                cleanupState: CleanupState.NotStarted);
         }
 
         if (structure == null)
         {
             string err = $"❌ ОШИБКА анализа: {Path.GetFileName(filePath)}";
-            _logService.Error(err, "VideoEncodingScript");
+            _logService.Write("script.video_encoding.failed", LogLevel.Error, LogStatus.Failed, err, source: Name, properties: LogProps.Create("ErrorCode", "VIDEO_ENCODING_FAILED").With("InputName", LogProps.FileName(filePath)).With("Retryable", true));
             progressCallback(fileIndex, totalCount, "Ошибка ffprobe", 0.0);
             results.Add(err);
-            return results;
+            return ExecutionResult.Failed(
+                context,
+                results,
+                errorCode: "probe-empty",
+                retryable: true);
         }
 
         // 2. Создаем временную директорию для извлечения ресурсов (шрифты, субтитры)
@@ -394,15 +431,23 @@ public sealed class VideoEncodingScript : AbstractScript
         }
         catch (Exception ex)
         {
-            string dirErr = $"❌ Ошибка создания временной папки: {ex.Message}";
-            _logService.Exception(ex, dirErr, "VideoEncodingScript");
-            results.Add(dirErr);
-            return results;
+            _logService.Write("script.video_encoding.temp_dir_failed", LogLevel.Error, LogStatus.Failed, "Временный каталог для встраивания дорожек не создан", ex, Name, properties: LogProps.Create("ErrorCode", "TEMP_DIR_FAILED").With("CleanupState", "NotStarted"));
+            results.Add("Ошибка создания временной папки");
+            return ExecutionResult.FromException(
+                context,
+                ex,
+                results,
+                errorCode: "temporary-directory-failed",
+                cleanupState: CleanupState.NotStarted);
         }
 
         string? tempSubFile = null;
         string tempFontsDir = Path.Combine(tempDir, "fonts");
         Directory.CreateDirectory(tempFontsDir);
+        bool? resultSucceeded = null;
+        string? resultOutputFile = null;
+        bool sourceReplaced = false;
+        bool replaceSourceRequested = false;
 
         try
         {
@@ -411,6 +456,8 @@ public sealed class VideoEncodingScript : AbstractScript
             int fontCount = 0;
             if (fontAttachments.Count > 0)
             {
+                progressCallback(fileIndex, totalCount, "Извлечение шрифтов...", 0.0);
+
                 string inputExt = Path.GetExtension(filePath).ToLowerInvariant();
                 bool isMkv = inputExt.Equals(".mkv", StringComparison.OrdinalIgnoreCase) || inputExt.Equals(".mka", StringComparison.OrdinalIgnoreCase);
 
@@ -432,26 +479,39 @@ public sealed class VideoEncodingScript : AbstractScript
                 {
                     if (IsCancelled) break;
 
-                    bool fSuccess = extractedSet.Contains(outFontPath)
-                        || await _ffmpegRunner.ExtractAttachmentAsync(filePath, ffmpegAttachmentIndex, outFontPath, CancellationToken);
+                    bool fSuccess = extractedSet.Contains(outFontPath) || (File.Exists(outFontPath) && new FileInfo(outFontPath).Length > 0);
+                    if (!fSuccess)
+                    {
+                        ProcessResult attachResult = await _ffmpegRunner.ExtractAttachmentAsync(
+                            filePath,
+                            ffmpegAttachmentIndex,
+                            outFontPath,
+                            cancellationToken: CancellationToken);
+                        fSuccess = (attachResult.IsSuccess && File.Exists(outFontPath)) || extractedSet.Contains(outFontPath);
+                    }
+
                     if (fSuccess)
                     {
                         fontCount++;
                     }
                 }
-                _logService.Info($"Извлечено встроенных шрифтов во временную папку: {fontCount}", "VideoEncodingScript");
+                _logService.Write("script.video_encoding.fonts_extracted", LogLevel.Debug, LogStatus.Succeeded, $"Встроенные шрифты извлечены во временный каталог, шрифтов: {fontCount}", source: Name, properties: LogProps.Create("Count", fontCount).With("InputName", LogProps.FileName(filePath)));
             }
 
             // 4. Поиск и извлечение субтитров для вшивания (burn-in)
             bool burnInSubtitles = GetSettingValue(settings, "burn_in_subtitles", true);
             if (burnInSubtitles)
             {
-                var subKeywords = GetSettingValue<List<Dictionary<string, object>>?>(settings, "sub_keywords", null);
-                var activeSubKeywords = subKeywords?
+                var defaultSubKeywords = new List<Dictionary<string, object>>
+                {
+                    new() { { "word", "Надписи" }, { "active", true } }
+                };
+                var subKeywords = GetSettingValue<List<Dictionary<string, object>>?>(settings, "sub_keywords", defaultSubKeywords) ?? defaultSubKeywords;
+                var activeSubKeywords = subKeywords
                     .Where(d => d.TryGetValue("active", out var act) && SafeGetBool(act))
                     .Select(d => d.TryGetValue("word", out var w) ? SafeGetString(w)?.ToLowerInvariant() : null)
                     .Where(w => w != null)
-                    .ToList() ?? new List<string?>();
+                    .ToList();
 
                 var subTracks = structure.GetSubtitleTracks();
                 MediaTrack? targetSubTrack = null;
@@ -466,16 +526,56 @@ public sealed class VideoEncodingScript : AbstractScript
                     }
                 }
 
-                // Если не найдено - ищем default/forced
+                // Если по ключевым словам подходящих дорожек не найдено,
+                // действуем строго в соответствии с выбранной настройкой sub_not_found_action
                 if (targetSubTrack == null)
                 {
-                    targetSubTrack = subTracks.FirstOrDefault(t => t.IsDefault || t.IsForced);
-                }
+                    string notFoundAction = GetSettingValue(settings, "sub_not_found_action", "Пропускать хардсаб");
+                    if (notFoundAction == "Спрашивать" && subTracks.Count > 0 && _dialogService != null)
+                    {
+                        _logService.Write(
+                            "script.video_encoding.subtitles_prompt",
+                            LogLevel.Info,
+                            LogStatus.Running,
+                            $"Надписи по ключевым словам не найдены для файла '{LogProps.FileName(filePath)}', запрашивается выбор дорожки у пользователя",
+                            source: Name,
+                            properties: LogProps.Create("InputName", LogProps.FileName(filePath)));
 
-                // Если все еще не найдено - берем первый трек субтитров
-                if (targetSubTrack == null)
-                {
-                    targetSubTrack = subTracks.FirstOrDefault();
+                        progressCallback(fileIndex, totalCount, "Ожидание выбора субтитров...", 0.0);
+
+                        targetSubTrack = await _dialogService.ChooseSubtitleTrackAsync(Path.GetFileName(filePath), subTracks);
+
+                        if (targetSubTrack != null)
+                        {
+                            _logService.Write(
+                                "script.video_encoding.subtitles_chosen",
+                                LogLevel.Info,
+                                LogStatus.Succeeded,
+                                $"Пользователь выбрал дорожку субтитров #{targetSubTrack.TrackId} для вшивания в '{LogProps.FileName(filePath)}'",
+                                source: Name,
+                                properties: LogProps.Create("Index", targetSubTrack.TrackId).With("InputName", LogProps.FileName(filePath)));
+                        }
+                        else
+                        {
+                            _logService.Write(
+                                "script.video_encoding.subtitles_prompt_skipped",
+                                LogLevel.Info,
+                                LogStatus.Skipped,
+                                $"Пользователь пропустил выбор субтитров для '{LogProps.FileName(filePath)}', хардсаб не будет применен",
+                                source: Name,
+                                properties: LogProps.Create("InputName", LogProps.FileName(filePath)));
+                        }
+                    }
+                    else
+                    {
+                        _logService.Write(
+                            "script.video_encoding.subtitles_not_found_skipped",
+                            LogLevel.Info,
+                            LogStatus.Skipped,
+                            $"Надписи по ключевым словам не найдены для файла '{LogProps.FileName(filePath)}', хардсаб пропущен",
+                            source: Name,
+                            properties: LogProps.Create("InputName", LogProps.FileName(filePath)));
+                    }
                 }
 
                 if (targetSubTrack != null)
@@ -483,8 +583,15 @@ public sealed class VideoEncodingScript : AbstractScript
                     int relSubIdx = subTracks.ToList().IndexOf(targetSubTrack);
                     tempSubFile = Path.Combine(tempDir, $"subs_{DateTime.Now.Ticks}.ass");
 
-                    _logService.Info($"Извлечение субтитров #{targetSubTrack.TrackId} (относительный индекс {relSubIdx}) во временный файл", "VideoEncodingScript");
-                    bool extSubSuccess = await _ffmpegRunner.ExtractSubtitleAsync(filePath, relSubIdx, tempSubFile, relative: true, cancellationToken: CancellationToken);
+                    progressCallback(fileIndex, totalCount, "Извлечение субтитров...", 0.0);
+                    _logService.Write("script.video_encoding.subtitles_extracted", LogLevel.Debug, LogStatus.Running, $"Субтитры #{targetSubTrack.TrackId} (относительный индекс {relSubIdx}) извлекаются во временный файл", source: Name, properties: LogProps.Create("Index", targetSubTrack.TrackId).With("Tool", "ffmpeg"));
+                    ProcessResult subtitleResult = await _ffmpegRunner.ExtractSubtitleAsync(
+                        filePath,
+                        relSubIdx,
+                        tempSubFile,
+                        relative: true,
+                        cancellationToken: CancellationToken);
+                    bool extSubSuccess = subtitleResult.IsSuccess;
 
                     if (extSubSuccess && File.Exists(tempSubFile))
                     {
@@ -516,14 +623,14 @@ public sealed class VideoEncodingScript : AbstractScript
                             if (removedCount > 0)
                             {
                                 File.WriteAllLines(tempSubFile, cleanLines, new System.Text.UTF8Encoding(false));
-                                _logService.Info($"Очистка субтитров: удалено {removedCount} строк оформления", "VideoEncodingScript");
+                                _logService.Write("subtitle.cleanup.applied", LogLevel.Debug, LogStatus.Succeeded, $"Очистка субтитров: удалено строк оформления {removedCount}", source: Name, properties: LogProps.Create("Count", removedCount).With("InputName", LogProps.FileName(filePath)));
                             }
                         }
                     }
                     else
                     {
                         tempSubFile = null;
-                        _logService.Warn("Не удалось извлечь субтитры для вшивания, кодирование продолжится без них", "VideoEncodingScript");
+                        _logService.Write("script.video_encoding.subtitles_skipped", LogLevel.Warning, LogStatus.PartiallySucceeded, "Субтитры для вшивания не извлечены, кодирование продолжится без них", source: Name, properties: LogProps.Create("ErrorCode", "SUBTITLES_EXTRACT_FAILED").With("InputName", LogProps.FileName(filePath)));
                     }
                 }
             }
@@ -543,7 +650,7 @@ public sealed class VideoEncodingScript : AbstractScript
             {
                 foreach (var lang in activeLangs)
                 {
-                    bestAudio = audioTracks.FirstOrDefault(t => 
+                    bestAudio = audioTracks.FirstOrDefault(t =>
                     {
                         string normTrack = AppConstants.NormalizeLanguage(t.Language);
                         string normLang = AppConstants.NormalizeLanguage(lang!);
@@ -569,7 +676,7 @@ public sealed class VideoEncodingScript : AbstractScript
             int relAudioIdx = bestAudio != null ? audioTracks.ToList().IndexOf(bestAudio) : 0;
             if (bestAudio != null)
             {
-                _logService.Info($"Выбран аудиопоток #{bestAudio.TrackId} (относительный индекс {relAudioIdx}, язык '{bestAudio.Language}')", "VideoEncodingScript");
+                _logService.Write("script.video_encoding.audio_selected", LogLevel.Debug, LogStatus.Succeeded, $"Выбрана аудиодорожка #{bestAudio.TrackId} (относительный индекс {relAudioIdx}, язык {LogRedactor.CompactSafeToken(bestAudio.Language)})", source: Name, properties: LogProps.Create("Index", bestAudio.TrackId).With("Language", LogRedactor.CompactSafeToken(bestAudio.Language)));
             }
 
             // 6. Вычисляем выходные пути
@@ -591,10 +698,15 @@ public sealed class VideoEncodingScript : AbstractScript
             if (File.Exists(finalOutputFile) && !overwrite)
             {
                 string skipExist = $"⏭ ПРОПУСК (файл существует): {Path.GetFileName(finalOutputFile)}";
-                _logService.Info(skipExist, "VideoEncodingScript");
+                _logService.Write("script.video_encoding.output_exists", LogLevel.Info, LogStatus.Skipped, skipExist, source: Name, properties: LogProps.Create("OutputName", LogProps.FileName(finalOutputFile)).With("ArtifactExists", true));
                 progressCallback(fileIndex, totalCount, $"Пропущен (существует): {Path.GetFileName(finalOutputFile)}", 100.0);
                 results.Add(skipExist);
-                return results;
+                return ExecutionResult.Skipped(
+                    context,
+                    results,
+                    errorCode: "output-exists",
+                    outputFile: finalOutputFile,
+                    outputExists: true);
             }
 
             // 7. Сборка параметров FFmpeg
@@ -605,7 +717,7 @@ public sealed class VideoEncodingScript : AbstractScript
             bool force10Bit = GetSettingValue(settings, "force_10bit", false);
             bool lossless = GetSettingValue(settings, "lossless", false);
 
-            var encoderInstance = _encoderRegistry.GetEncoderById(encoderId) 
+            var encoderInstance = _encoderRegistry.GetEncoderById(encoderId)
                 ?? _encoderRegistry.GetAvailableEncoders().FirstOrDefault(e => e.DisplayName == encoderId);
 
             if (encoderInstance == null)
@@ -613,13 +725,13 @@ public sealed class VideoEncodingScript : AbstractScript
                 throw new InvalidOperationException($"Энкодер '{encoderId}' не найден или не поддерживается оборудованием.");
             }
 
-            var context = new KTools_App.Encoders.EncoderSharedContext(
+            var encoderContext = new KTools_App.Encoders.EncoderSharedContext(
                 IsLossless: lossless,
                 Force10Bit: force10Bit,
                 ContainerExtension: containerExt
             );
 
-            var encoderArgs = encoderInstance.BuildEncoderArguments(settings, context);
+            var encoderArgs = encoderInstance.BuildEncoderArguments(settings, encoderContext);
             ffmpegArgs.AddRange(encoderArgs);
 
             // Б) Аудиопараметры
@@ -692,7 +804,7 @@ public sealed class VideoEncodingScript : AbstractScript
                     }
                 }
 
-                _logService.Info($"Запуск многоточечного детектора черных полос для '{Path.GetFileName(filePath)}' (точек: {probeOffsets.Count}, limit={cropLimit:F4}, round={cropRound}, tolerance={tolerance}px, mode={cropMode})", "VideoEncodingScript");
+                _logService.Write("crop.detector.started", LogLevel.Debug, LogStatus.Running, $"Запущен многоточечный детектор чёрных полос для '{LogProps.FileName(filePath)}'", source: Name, properties: LogProps.Create("InputName", LogProps.FileName(filePath)).With("Count", probeOffsets.Count).With("Mode", LogRedactor.CompactSafeToken(cropMode)));
 
                 int maxCropW = 0;
                 int maxCropH = 0;
@@ -725,7 +837,7 @@ public sealed class VideoEncodingScript : AbstractScript
                             int.TryParse(parts[1], out int pH))
                         {
                             successfulProbes++;
-                            _logService.Info($"Контрольная точка {pIdx + 1}/{probeOffsets.Count} ({seekSec:F1}s): определен кадр {pW}x{pH} (crop={pointCrop})", "VideoEncodingScript");
+                            _logService.Write("crop.detector.point_sampled", LogLevel.Debug, LogStatus.Succeeded, $"Контрольная точка {pIdx + 1} из {probeOffsets.Count} ({seekSec * 1000d:0.###} мс): кадр {pW} px x{pH} px определён", source: Name, properties: LogProps.Create("Index", pIdx + 1).With("Count", probeOffsets.Count).With("Resolution", $"{pW}x{pH} px"));
 
                             if (srcW > 0 && srcH > 0 && pW >= srcW && pH >= srcH)
                             {
@@ -739,7 +851,7 @@ public sealed class VideoEncodingScript : AbstractScript
                     }
                     else
                     {
-                        _logService.Warn($"Контрольная точка {pIdx + 1}/{probeOffsets.Count} ({seekSec:F1}s): детектор не обнаружил область кадрирования (возможно, темная сцена)", "VideoEncodingScript");
+                        _logService.Write("crop.detector.point_empty", LogLevel.Debug, LogStatus.Skipped, $"Контрольная точка {pIdx + 1} из {probeOffsets.Count} ({seekSec * 1000d:0.###} мс): область кадрирования не обнаружена", source: Name, properties: LogProps.Create("Index", pIdx + 1).With("Count", probeOffsets.Count).With("Reason", "DarkScene"));
                     }
                 }
 
@@ -747,7 +859,7 @@ public sealed class VideoEncodingScript : AbstractScript
                 {
                     if (fullScreenDetectedInPoint)
                     {
-                        _logService.Info($"В контрольной точке {fullScreenTimestamp:F1}s обнаружен полнокадровый фрагмент (IMAX/Open Matte). Кадрирование отменено во избежание обрезки полезного видеоряда.", "VideoEncodingScript");
+                        _logService.Write("crop.detector.fullscreen_detected", LogLevel.Warning, LogStatus.Skipped, $"В контрольной точке {fullScreenTimestamp:F1} с обнаружен полнокадровый фрагмент, кадрирование отменено во избежание обрезки полезного видеоряда", source: Name, properties: LogProps.Create("ErrorCode", "FULLSCREEN_CONTENT").With("InputName", LogProps.FileName(filePath)).With("DurationMs", fullScreenTimestamp * 1000d));
                     }
                     else
                     {
@@ -769,14 +881,14 @@ public sealed class VideoEncodingScript : AbstractScript
                         int diffW = srcW - maxCropW;
                         if (srcW > 0 && diffW > 0 && diffW <= tolerance)
                         {
-                            _logService.Info($"Разница по ширине ({diffW}px) меньше или равна порогу допуска ({tolerance}px). Ширина сброшена в исходные {srcW}px.", "VideoEncodingScript");
+                            _logService.Write("crop.diff.dimension_reset", LogLevel.Debug, LogStatus.Changed, $"Разница по ширине {diffW} px не превышает порог допуска {tolerance} px, ширина сброшена в исходные {srcW} px", source: Name, properties: LogProps.Create("Resolution", $"{srcW} px").With("Count", tolerance));
                             maxCropW = srcW;
                         }
 
                         int diffH = srcH - maxCropH;
                         if (srcH > 0 && diffH > 0 && diffH <= tolerance)
                         {
-                            _logService.Info($"Разница по высоте ({diffH}px) меньше или равна порогу допуска ({tolerance}px). Высота сброшена в исходные {srcH}px.", "VideoEncodingScript");
+                            _logService.Write("crop.diff.dimension_reset", LogLevel.Debug, LogStatus.Changed, $"Разница по высоте {diffH} px не превышает порог допуска {tolerance} px, высота сброшена в исходные {srcH} px", source: Name, properties: LogProps.Create("Resolution", $"{srcH} px").With("Count", tolerance));
                             maxCropH = srcH;
                         }
 
@@ -795,7 +907,7 @@ public sealed class VideoEncodingScript : AbstractScript
                             cropY = (cropY / 2) * 2;
 
                             string finalCrop = $"{maxCropW}:{maxCropH}:{cropX}:{cropY}";
-                            _logService.Info($"Итоговые параметры кадрирования: crop={finalCrop}", "VideoEncodingScript");
+                            _logService.Write("crop.detector.completed", LogLevel.Info, LogStatus.Succeeded, $"Кадрирование применено, итоговые параметры: {finalCrop}", source: Name, properties: LogProps.Create("InputName", LogProps.FileName(filePath)).With("Resolution", finalCrop.ToString()).With("Verified", true));
                             videoFilters.Add($"crop={finalCrop}");
 
                             string cropBadgeText = !string.IsNullOrEmpty(sourceRes)
@@ -807,18 +919,18 @@ public sealed class VideoEncodingScript : AbstractScript
                             if (queueItem != null)
                             {
                                 queueItem.CropBadgeText = cropBadgeText;
-                                _logService.Info($"Установлен бейджик кадрирования для '{Path.GetFileName(filePath)}': {cropBadgeText}", "VideoEncodingScript");
+                                _logService.Write("crop.badge.updated", LogLevel.Debug, LogStatus.Changed, $"Бейдж кадрирования обновлён для '{LogProps.FileName(filePath)}': {cropBadgeText}", source: Name, properties: LogProps.Create("InputName", LogProps.FileName(filePath)));
                             }
                         }
                         else
                         {
-                            _logService.Info("Черные полосы не обнаружены или не требуют обрезки (разрешение сохранено)", "VideoEncodingScript");
+                            _logService.Write("crop.detector.not_required", LogLevel.Debug, LogStatus.Skipped, "Чёрные полосы не обнаружены или не требуют обрезки, разрешение сохранено", source: Name, properties: LogProps.Create("InputName", LogProps.FileName(filePath)).With("Reason", "NoCropNeeded"));
                         }
                     }
                 }
                 else
                 {
-                    _logService.Warn("Детектор черных полос не смог определить параметры кадрирования ни в одной контрольной точке", "VideoEncodingScript");
+                    _logService.Write("crop.detector.indeterminate", LogLevel.Warning, LogStatus.PartiallySucceeded, "Детектор чёрных полос не определил параметры кадрирования ни в одной контрольной точке, применены исходные", source: Name, properties: LogProps.Create("ErrorCode", "CROP_INDETERMINATE").With("InputName", LogProps.FileName(filePath)));
                 }
             }
 
@@ -834,7 +946,7 @@ public sealed class VideoEncodingScript : AbstractScript
                 "-map", $"0:a:{relAudioIdx}?"
             });
 
-            var containerTag = encoderInstance.GetContainerTag(settings, context);
+            var containerTag = encoderInstance.GetContainerTag(settings, encoderContext);
             if (!string.IsNullOrEmpty(containerTag))
             {
                 ffmpegArgs.AddRange(new[] { "-tag:v", containerTag });
@@ -853,12 +965,12 @@ public sealed class VideoEncodingScript : AbstractScript
             var inputArgs = await encoderInstance.BuildInputArgumentsAsync(structure, CancellationToken);
 
             // 8. Запуск процесса кодирования
-            _logService.Info($"Запуск FFmpeg для кодирования видео '{Path.GetFileName(filePath)}' в '{Path.GetFileName(finalOutputFile)}'", "VideoEncodingScript");
+            _logService.Write("script.video_encoding.ffmpeg_started", LogLevel.Debug, LogStatus.Running, $"Запущен FFmpeg для кодирования видео '{LogProps.FileName(filePath)}' -> '{LogProps.FileName(finalOutputFile)}'", source: Name, properties: LogProps.Create("Tool", "ffmpeg").With("InputName", LogProps.FileName(filePath)).With("OutputName", LogProps.FileName(finalOutputFile)));
             progressCallback(fileIndex, totalCount, "Кодирование видео...", 0.0);
 
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(CancellationToken);
 
-            bool success = false;
+            ProcessResult? success = null;
             try
             {
                 success = await _ffmpegRunner.RunAsync(
@@ -884,35 +996,44 @@ public sealed class VideoEncodingScript : AbstractScript
             finally
             {
             }
+            resultSucceeded = success?.IsSuccess == true;
+            resultOutputFile = finalOutputFile;
 
             // 9. Обработка результатов
             if (IsCancelled)
             {
                 await CleanupFailedOutputFileAsync(finalOutputFile);
                 string cancelMsg = $"⚠ Обработка отменена пользователем: {Path.GetFileName(finalOutputFile)}";
-                _logService.Info(cancelMsg, "VideoEncodingScript");
+                _logService.Write("script.video_encoding.cancelled", LogLevel.Info, LogStatus.Cancelled, cancelMsg, source: Name, properties: LogProps.Create("Reason", "UserRequested").With("CleanupState", "NotStarted"));
                 results.Add(cancelMsg);
-                return results;
+                return ExecutionResult.Cancelled(
+                    context,
+                    results,
+                    errorCode: "cancelled",
+                    outputFile: finalOutputFile,
+                    outputExists: File.Exists(finalOutputFile),
+                    cleanupState: CleanupState.Completed);
             }
 
-            if (success)
+            if (success?.IsSuccess == true && File.Exists(finalOutputFile))
             {
                 progressCallback(fileIndex, totalCount, "Завершено!", 100.0);
                 string successMsg = $"✅ ОБРАБОТАНО: {Path.GetFileName(finalOutputFile)}";
-                _logService.Info(successMsg, "VideoEncodingScript");
+                _logService.Write("script.video_encoding.completed", LogLevel.Info, LogStatus.Succeeded, successMsg, source: Name, properties: LogProps.Create("OutputName", LogProps.FileName(finalOutputFile)).With("Verified", true));
                 results.Add(successMsg);
 
                 bool overwriteSource = GetSettingValue(settings, "overwrite_source", false);
                 if (overwriteSource && string.IsNullOrEmpty(outputPath))
                 {
-                    await ReplaceSourceWithResultAsync(filePath, finalOutputFile, results);
+                    replaceSourceRequested = true;
+                    sourceReplaced = await ReplaceSourceWithResultAsync(filePath, finalOutputFile, results);
                 }
             }
             else
             {
                 await CleanupFailedOutputFileAsync(finalOutputFile);
                 string failMsg = $"❌ ОШИБКА кодирования файла: {Path.GetFileName(filePath)}";
-                _logService.Error(failMsg, "VideoEncodingScript");
+                _logService.Write("script.video_encoding.failed", LogLevel.Error, LogStatus.Failed, failMsg, source: Name, properties: LogProps.Create("ErrorCode", "VIDEO_ENCODING_FAILED").With("InputName", LogProps.FileName(filePath)).With("Retryable", true));
                 results.Add(failMsg);
             }
         }
@@ -922,9 +1043,17 @@ public sealed class VideoEncodingScript : AbstractScript
             {
                 await CleanupFailedOutputFileAsync(_finalOutputFileForCleanup);
             }
-            string runErr = $"❌ Критическая ошибка при кодировании видео для '{Path.GetFileName(filePath)}': {ex.Message}";
-            _logService.Exception(ex, $"Исключение в процессе кодирования '{filePath}': {ex.Message}", "VideoEncodingScript");
+            string runErr = $"❌ Критическая ошибка при кодировании видео для '{Path.GetFileName(filePath)}'";
+            _logService.Write("script.video_encoding.failed", LogLevel.Error, LogStatus.Failed, $"Кодирование видео '{LogProps.FileName(filePath)}' не выполнено", ex, Name, properties: LogProps.Create("ErrorCode", "VIDEO_ENCODING_FAILED").With("InputName", LogProps.FileName(filePath)).With("Retryable", true));
             results.Add(runErr);
+            return ExecutionResult.FromException(
+                context,
+                ex,
+                results,
+                errorCode: "video-encoding-exception",
+                outputFile: _finalOutputFileForCleanup,
+                outputExists: !string.IsNullOrEmpty(_finalOutputFileForCleanup) && File.Exists(_finalOutputFileForCleanup),
+                cleanupState: CleanupState.Completed);
         }
         finally
         {
@@ -938,20 +1067,93 @@ public sealed class VideoEncodingScript : AbstractScript
             }
             catch (Exception ex)
             {
-                _logService.Warn($"Не удалось удалить временную папку '{tempDir}': {ex.Message}", "VideoEncodingScript");
+                _logService.Write(
+                    "video_encoding.cleanup_failed",
+                    LogLevel.Warning,
+                    LogStatus.PartiallySucceeded,
+                    "Не удалось удалить временную папку кодирования",
+                    ex,
+                    "VideoEncodingScript",
+                    properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                    {
+                        ["Stage"] = "cleanup",
+                        ["CleanupState"] = "failed"
+                    });
             }
         }
 
-        return results;
+        bool finalOverwriteSource = GetSettingValue(settings, "overwrite_source", false) && string.IsNullOrEmpty(outputPath);
+        if (sourceReplaced)
+        {
+            return ExecutionResult.Succeeded(
+                context,
+                results,
+                outputFile: filePath,
+                outputExists: File.Exists(filePath),
+                cleanupState: CleanupState.Completed);
+        }
+
+        if (replaceSourceRequested || (finalOverwriteSource && resultSucceeded == true))
+        {
+            if (resultSucceeded != true)
+            {
+                return ExecutionResult.Failed(
+                    context,
+                    results,
+                    errorCode: "output-missing",
+                    outputFile: resultOutputFile,
+                    outputExists: !string.IsNullOrEmpty(resultOutputFile) && File.Exists(resultOutputFile),
+                    cleanupState: CleanupState.Completed);
+            }
+
+            string replacementFailMsg = $"❌ Исходный файл не заменён готовым результатом кодирования: '{Path.GetFileName(filePath)}', исходник сохранён";
+            _logService.Write("script.source.replaced_failed", LogLevel.Error, LogStatus.PartiallySucceeded, replacementFailMsg, source: Name, properties: LogProps.Create("ErrorCode", "SOURCE_REPLACE_FAILED").With("InputName", LogProps.FileName(filePath)).With("CleanupState", "SourcePreserved"));
+            bool sourceIntact = File.Exists(filePath);
+            bool resultExists = !string.IsNullOrEmpty(resultOutputFile) && File.Exists(resultOutputFile);
+            return sourceIntact
+                ? ExecutionResult.PartiallySucceeded(
+                    context,
+                    results,
+                    errorCode: "source-replacement-failed",
+                    outputFile: resultOutputFile,
+                    outputExists: resultExists,
+                    cleanupState: CleanupState.Failed)
+                : ExecutionResult.Failed(
+                    context,
+                    results,
+                    errorCode: "source-replacement-failed",
+                    outputFile: resultOutputFile,
+                    outputExists: resultExists,
+                    cleanupState: CleanupState.Failed);
+        }
+
+        string outputFile = resultOutputFile ?? filePath;
+        bool outputReady = resultSucceeded == true && File.Exists(outputFile);
+        if (outputReady)
+        {
+            return ExecutionResult.Succeeded(
+                context,
+                results,
+                outputFile: outputFile,
+                outputExists: true,
+                cleanupState: CleanupState.NotRequired);
+        }
+        return ExecutionResult.Failed(
+            context,
+            results,
+            errorCode: "output-missing",
+            outputFile: outputFile,
+            outputExists: File.Exists(outputFile),
+            cleanupState: CleanupState.Completed);
     }
 
     private static string EscapeFilterPath(string path)
     {
         if (string.IsNullOrEmpty(path)) return string.Empty;
-        
+
         // 1. Приводим к POSIX-разделителям
         string clean = path.Replace("\\", "/");
-        
+
         // 2. Экранирование спецсимволов для фильтров FFmpeg (порядок важен)
         clean = clean.Replace(":", "\\:");
         clean = clean.Replace("'", "'\\''");
@@ -960,7 +1162,7 @@ public sealed class VideoEncodingScript : AbstractScript
         clean = clean.Replace(",", "\\,");
         clean = clean.Replace(";", "\\;");
         clean = clean.Replace("`", "\\`");
-        
+
         return clean;
     }
 
@@ -973,7 +1175,7 @@ public sealed class VideoEncodingScript : AbstractScript
         string ffmpegPath = _pathManager.GetBinaryPath("ffmpeg");
         if (string.IsNullOrWhiteSpace(ffmpegPath) || !File.Exists(ffmpegPath))
         {
-            _logService.Warn("kt-ffmpeg не найден, определение CUVID-декодеров пропущено", "VideoEncodingScript");
+            _logService.Write("encoder.cuvid.detection_skipped", LogLevel.Warning, LogStatus.Skipped, "kt-ffmpeg не найден, определение доступных CUVID-декодеров пропущено", source: Name, properties: LogProps.Create("ErrorCode", "FFMPEG_BINARY_MISSING").With("Codec", "h264_cuvid"));
             return decoders;
         }
 
@@ -1021,7 +1223,7 @@ public sealed class VideoEncodingScript : AbstractScript
         }
         catch (Exception ex)
         {
-            _logService.Warn($"Не удалось определить доступные CUVID-декодеры: {ex.Message}", "VideoEncodingScript");
+            _logService.Write("encoder.cuvid.detection_failed", LogLevel.Warning, LogStatus.PartiallySucceeded, "Доступные CUVID-декодеры определить не удалось, будет использован режим по умолчанию", ex, Name, properties: LogProps.Create("ErrorCode", "CUVID_DETECTION_FAILED").With("Codec", "h264_cuvid"));
         }
         return decoders;
     }

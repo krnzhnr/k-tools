@@ -3,24 +3,21 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
-using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+
 using KTools_App.Core;
+using KTools_App.Diagnostics;
 using KTools_App.Services.Contracts;
 
 namespace KTools_App.Infrastructure;
 
 /// <summary>
 /// Синглтон-обертка для запуска кодировщика Apple AAC (qaac64.exe) через конвейер с FFmpeg.
-/// Использует изолированный запуск во временной папке для обхода ограничений AppContainer (MSIX),
-/// гарантируя чистоту папки бинарных зависимостей bin/.
-/// Все комментарии и логирование выполнены строго на русском языке в соответствии с регламентом.
 /// </summary>
 public sealed class QaacRunner
 {
-
-
+    private const string SourceName = nameof(QaacRunner);
     private readonly ILogService _logService;
     private readonly IPathManager _pathManager;
 
@@ -38,12 +35,10 @@ public sealed class QaacRunner
         _pathManager = pathManager ?? throw new ArgumentNullException(nameof(pathManager));
     }
 
-
-
     /// <summary>
     /// Запустить кодирование AAC через потоковый конвейер FFmpeg | QAAC64.
     /// </summary>
-    public async Task<bool> RunAsync(
+    public async Task<ProcessResult> RunAsync(
         string inputPath,
         string outputPath,
         string tvbr = "127",
@@ -55,33 +50,35 @@ public sealed class QaacRunner
         string mode = "True VBR (-V)",
         string qualityOrBitrate = "127",
         bool noDelay = false,
-        bool limiter = false)
+        bool limiter = false,
+        ProcessExecutionContext? context = null)
     {
+        string inputName = Path.GetFileName(inputPath);
+        string outputName = Path.GetFileName(outputPath);
+        ProcessExecutionContext executionContext = (context ?? ProcessExecutionContext.NewOperation("qaac64"))
+            .WithExpectedArtifact(outputPath);
+        string pipelineId = ProcessExecutionContext.CreateProcessId();
+
         string qaacPath = _pathManager.GetBinaryPath("qaac64");
         string ffmpegPath = _pathManager.GetBinaryPath("ffmpeg");
 
         if (!File.Exists(qaacPath))
         {
-            _logService.Error(
-                $"Критическая ошибка: отсутствует кодировщик qaac64.exe по пути: '{qaacPath}'", 
-                "QaacRunner");
-            return false;
+            return ProcessResult.NotStarted(
+                executionContext,
+                ProcessResult.ErrorBinaryMissing,
+                "Отсутствует кодировщик qaac64");
         }
 
         if (!File.Exists(ffmpegPath))
         {
-            _logService.Error(
-                $"Критическая ошибка: отсутствует декодер ffmpeg.exe по пути: '{ffmpegPath}'", 
-                "QaacRunner");
-            return false;
+            return ProcessResult.NotStarted(
+                executionContext,
+                ProcessResult.ErrorBinaryMissing,
+                "Отсутствует декодер ffmpeg");
         }
 
-        _logService.Info(
-            $"Начало кодирования QAAC (Режим: {mode}, Значение: {qualityOrBitrate}, no-delay: {noDelay}, limiter: {limiter}) для файла: '{Path.GetFileName(inputPath)}'", 
-            "QaacRunner");
-
         // 1. Создаем изолированную временную папку для обхода ограничений AppContainer (WinUI 3 MSIX).
-        // Окружение кэшируется между запусками: файлы копируются только при первом вызове или при их отсутствии.
         string tempDir;
         string tempQaacPath;
 
@@ -118,7 +115,22 @@ public sealed class QaacRunner
                     }
                 }
 
-                if (sourceDir != null)
+                if (sourceDir == null)
+                {
+                    _logService.Write(
+                        "qaac.runtime_incomplete",
+                        LogLevel.Warning,
+                        LogStatus.PartiallySucceeded,
+                        "Не найдена папка QTfiles64 с библиотеками Apple Application Support. Возможен сбой запуска",
+                        null,
+                        "QaacRunner",
+                        executionContext.ToLogContext(),
+                        new Dictionary<string, object?>(StringComparer.Ordinal)
+                        {
+                            ["Stage"] = "runtime_prepare"
+                        });
+                }
+                else
                 {
                     var dllFiles = Directory.GetFiles(sourceDir, "*.dll");
                     foreach (var dllFile in dllFiles)
@@ -130,25 +142,24 @@ public sealed class QaacRunner
                         }
                     }
                 }
-                else
-                {
-                    _logService.Warn(
-                        "Не найдена папка QTfiles64 с библиотеками Apple Application Support. Возможен сбой запуска.",
-                        "QaacRunner");
-                }
-
-                _logService.DebugLog(
-                    $"Изолированное окружение QAAC подготовлено во временной папке: '{tempDir}'",
-                    "QaacRunner");
 
                 tempQaacPath = Path.Combine(tempDir, "qaac64.exe");
             }
             catch (Exception ex)
             {
-                _logService.Exception(
+                _logService.Write(
+                    "qaac.runtime_prepare_failed",
+                    LogLevel.Error,
+                    LogStatus.Failed,
+                    "Не удалось подготовить изолированное временное окружение для QAAC",
                     ex,
-                    $"Не удалось создать изолированное временное окружение для QAAC: {ex.Message}",
-                    "QaacRunner");
+                    "QaacRunner",
+                    executionContext.ToLogContext(),
+                    new Dictionary<string, object?>(StringComparer.Ordinal)
+                    {
+                        ["Stage"] = "runtime_prepare",
+                        ["ErrorCode"] = "runtime-prepare-failed"
+                    });
                 // Фоллбэк: пробуем запуск из оригинальной папки
                 tempQaacPath = qaacPath;
                 tempDir = Path.GetDirectoryName(qaacPath) ?? AppContext.BaseDirectory;
@@ -210,7 +221,7 @@ public sealed class QaacRunner
             qaacArgsList.Add(cleanVal);
         }
 
-        qaacArgsList.Add("-"); // Вход из stdin
+        qaacArgsList.Add("-");
         qaacArgsList.Add("-o");
         qaacArgsList.Add($"\"{outputPath}\"");
 
@@ -221,10 +232,6 @@ public sealed class QaacRunner
 
         string qaacArgs = string.Join(" ", qaacArgsList);
 
-        _logService.DebugLog(
-            $"Запуск конвейера: ffmpeg {ffmpegArgs} | qaac64 {qaacArgs}", 
-            "QaacRunner");
-
         // 4. Настройка процессов
         var ffmpegStartInfo = new ProcessStartInfo
         {
@@ -234,6 +241,7 @@ public sealed class QaacRunner
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            StandardErrorEncoding = ProcessOutputPolicy.ResolveEncoding(),
             WorkingDirectory = Path.GetDirectoryName(ffmpegPath) ?? AppContext.BaseDirectory
         };
 
@@ -246,6 +254,7 @@ public sealed class QaacRunner
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            StandardErrorEncoding = ProcessOutputPolicy.ResolveEncoding(),
             WorkingDirectory = tempDir
         };
 
@@ -255,148 +264,94 @@ public sealed class QaacRunner
         using var ffmpegProc = new Process { StartInfo = ffmpegStartInfo };
         using var qaacProc = new Process { StartInfo = qaacStartInfo };
 
+        string ffmpegProcessId = ProcessExecutionContext.CreateProcessId();
+        string qaacProcessId = ProcessExecutionContext.CreateProcessId();
+        var stopwatch = Stopwatch.StartNew();
+
         try
         {
             ffmpegProc.Start();
             qaacProc.Start();
-            
-            _logService.DebugLog(
-                $"Запущены процессы конвейера. FFmpeg PID: {ffmpegProc.Id}, QAAC PID: {qaacProc.Id}", 
-                "QaacRunner");
+            ActiveProcessTracker.Register(ffmpegProc);
+            ActiveProcessTracker.Register(qaacProc);
         }
         catch (Exception ex)
         {
-            _logService.Exception(
-                ex, 
-                $"Не удалось запустить процессы конвейера QAAC: {ex.Message}", 
-                "QaacRunner");
-            try { ffmpegProc.Kill(true); } catch { }
-            try { qaacProc.Kill(true); } catch { }
-            CleanupTempDir(tempDir);
-            return false;
+            stopwatch.Stop();
+            TryTerminate(ffmpegProc);
+            TryTerminate(qaacProc);
+            CleanupTempDir(tempDir, executionContext);
+            _logService.Write(
+                ProcessEventIds.StartFailed,
+                LogLevel.Error,
+                LogStatus.Failed,
+                "Не удалось запустить процессы конвейера QAAC",
+                ex,
+                "QaacRunner",
+                executionContext.ToLogContext(),
+                new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["ProcessId"] = pipelineId,
+                    ["ErrorCode"] = ProcessResult.ErrorStartFailed
+                });
+            return ProcessResult.Failed(
+                executionContext,
+                ProcessResult.ErrorStartFailed,
+                "Не удалось запустить процессы конвейера QAAC",
+                pipelineId,
+                pid: null,
+                durationMs: stopwatch.Elapsed.TotalMilliseconds,
+                exception: ex);
         }
 
-        // Задачи для перенаправления вывода ошибок с поддержкой \r и \n
-        var ffmpegStderrLines = new List<string>();
-        var qaacStderrLines = new List<string>();
+        WritePipelineEvent(
+            ProcessEventIds.Started,
+            LogLevel.Info,
+            LogStatus.Running,
+            $"Запущен декодер конвейера AAC для '{inputName}'",
+            executionContext,
+            ffmpegProcessId,
+            ffmpegProc,
+            "ffmpeg",
+            PipelineLaunchProperties(ffmpegArgs, ffmpegPath));
 
-        var ffmpegErrorTask = Task.Run(async () =>
-        {
-            try
+        WritePipelineEvent(
+            ProcessEventIds.Started,
+            LogLevel.Info,
+            LogStatus.Running,
+            $"Запущен кодировщик AAC для '{inputName}' (режим: {mode}, no-delay: {noDelay}, limiter: {limiter})",
+            executionContext,
+            qaacProcessId,
+            qaacProc,
+            "qaac64",
+            PipelineLaunchProperties(qaacArgs, tempQaacPath));
+
+        ProcessOutputBuffer ffmpegErrors = new() { Stream = "ffmpeg-stderr" };
+        ProcessOutputBuffer qaacErrors = new() { Stream = "qaac-stderr" };
+        ProcessOutputBuffer qaacWarnings = new() { Stream = "qaac-warnings" };
+
+        Task ffmpegErrorTask = ReadBoundedAsync(ffmpegProc.StandardError, ffmpegErrors, null);
+        Task qaacErrorTask = ReadBoundedAsync(
+            qaacProc.StandardError,
+            qaacErrors,
+            line =>
             {
-                var buffer = new char[4096];
-                var sb = new System.Text.StringBuilder();
-                while (true)
+                if (onProgress is not null)
                 {
-                    int read = await ffmpegProc.StandardError.ReadAsync(buffer, 0, buffer.Length);
-                    if (read <= 0) break;
-
-                    for (int i = 0; i < read; i++)
+                    var progress = QaacOutputParser.ParseLine(line, totalDuration);
+                    if (progress != null)
                     {
-                        char c = buffer[i];
-                        if (c == '\r' || c == '\n')
-                        {
-                            if (sb.Length > 0)
-                            {
-                                string line = sb.ToString();
-                                lock (ffmpegStderrLines)
-                                {
-                                    ffmpegStderrLines.Add(line);
-                                }
-                                sb.Clear();
-                            }
-                        }
-                        else
-                        {
-                            sb.Append(c);
-                        }
+                        onProgress(progress);
                     }
                 }
-                if (sb.Length > 0)
-                {
-                    string line = sb.ToString();
-                    lock (ffmpegStderrLines)
-                    {
-                        ffmpegStderrLines.Add(line);
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                _logService.Exception(ex, "Ошибка чтения stderr FFmpeg в QaacRunner", "QaacRunner");
-            }
-        });
-
-        var qaacErrorTask = Task.Run(async () =>
-        {
-            try
-            {
-                var buffer = new char[4096];
-                var sb = new System.Text.StringBuilder();
-                while (true)
-                {
-                    int read = await qaacProc.StandardError.ReadAsync(buffer, 0, buffer.Length);
-                    if (read <= 0) break;
-
-                    for (int i = 0; i < read; i++)
-                    {
-                        char c = buffer[i];
-                        if (c == '\r' || c == '\n')
-                        {
-                            if (sb.Length > 0)
-                            {
-                                string line = sb.ToString();
-                                lock (qaacStderrLines)
-                                {
-                                    qaacStderrLines.Add(line);
-                                }
-
-                                if (onProgress != null)
-                                {
-                                    var progress = QaacOutputParser.ParseLine(line, totalDuration);
-                                    if (progress != null)
-                                    {
-                                        onProgress(progress);
-                                    }
-                                }
-                                sb.Clear();
-                            }
-                        }
-                        else
-                        {
-                            sb.Append(c);
-                        }
-                    }
-                }
-                if (sb.Length > 0)
-                {
-                    string line = sb.ToString();
-                    lock (qaacStderrLines)
-                    {
-                        qaacStderrLines.Add(line);
-                    }
-                    if (onProgress != null)
-                    {
-                        var progress = QaacOutputParser.ParseLine(line, totalDuration);
-                        if (progress != null)
-                        {
-                            onProgress(progress);
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                _logService.Exception(ex, "Ошибка чтения stderr QAAC в QaacRunner", "QaacRunner");
-            }
-        });
+            });
 
         // 5. Конвейеризация данных из stdout FFmpeg в stdin QAAC
         var pipeTask = Task.Run(async () =>
         {
             try
             {
-                byte[] buffer = new byte[65536]; // 64KB буфер
+                byte[] buffer = new byte[65536];
                 using var input = ffmpegProc.StandardOutput.BaseStream;
                 using var output = qaacProc.StandardInput.BaseStream;
 
@@ -408,13 +363,23 @@ public sealed class QaacRunner
             }
             catch (OperationCanceledException)
             {
-                // Игнорируем при штатной отмене
             }
             catch (Exception ex)
             {
-                _logService.Error(
-                    $"Ошибка конвейерной передачи данных FFmpeg -> QAAC: {ex.Message}", 
-                    "QaacRunner");
+                _logService.Write(
+                    "qaac.pipeline_transfer_failed",
+                    LogLevel.Error,
+                    LogStatus.Failed,
+                    "Ошибка конвейерной передачи данных в конвейере AAC",
+                    ex,
+                    "QaacRunner",
+                    executionContext.ToLogContext(),
+                    new Dictionary<string, object?>(StringComparer.Ordinal)
+                    {
+                        ["ErrorCode"] = "QAAC_PIPELINE_TRANSFER_FAILED",
+                        ["ProcessId"] = pipelineId,
+                        ["Stage"] = "pipe"
+                    });
             }
             finally
             {
@@ -422,11 +387,14 @@ public sealed class QaacRunner
                 {
                     qaacProc.StandardInput.BaseStream.Close();
                 }
-                catch { }
+                catch (Exception)
+                {
+                }
             }
         });
 
         // Ожидание завершения процессов или отмены
+        bool cancelled = false;
         try
         {
             var waitFfmpeg = ffmpegProc.WaitForExitAsync(cancellationToken);
@@ -436,65 +404,383 @@ public sealed class QaacRunner
         }
         catch (OperationCanceledException)
         {
-            _logService.Warn(
-                "Конвейер QAAC прерван пользователем. Принудительная остановка процессов...", 
-                "QaacRunner");
-            try { ffmpegProc.Kill(true); } catch { }
-            try { qaacProc.Kill(true); } catch { }
-            
-            // Физически удаляем неполный выходной файл при отмене операции
-            if (File.Exists(outputPath))
-            {
-                try
-                {
-                    File.Delete(outputPath);
-                    _logService.DebugLog($"Удален неполный выходной файл при отмене конвейера QAAC: '{Path.GetFileName(outputPath)}'", "QaacRunner");
-                }
-                catch (Exception deleteEx)
-                {
-                    _logService.Exception(deleteEx, $"Не удалось удалить неполный выходной файл '{outputPath}' при отмене конвейера QAAC: {deleteEx.Message}", "QaacRunner");
-                }
-            }
-
-            CleanupTempDir(tempDir);
-            return false;
+            cancelled = true;
         }
 
-        // Проверка результатов
-        bool success = ffmpegProc.ExitCode == 0 && qaacProc.ExitCode == 0;
+        stopwatch.Stop();
+        ActiveProcessTracker.Unregister(ffmpegProc);
+        ActiveProcessTracker.Unregister(qaacProc);
+
+        int? ffmpegExit = SafeExitCode(ffmpegProc);
+        int? qaacExit = SafeExitCode(qaacProc);
+        double durationMs = Math.Round(stopwatch.Elapsed.TotalMilliseconds, 3);
+
+        WritePipelineEvent(
+            PipelineOutcomeEventId(ffmpegProc, ffmpegExit),
+            cancelled ? LogLevel.Info : ResolvePipelineLevel(ffmpegExit, qaacExit),
+            cancelled ? LogStatus.Cancelled : ResolvePipelineStatus(ffmpegExit, qaacExit),
+            cancelled
+                ? "Конвейер кодирования AAC прерван по запросу отмены"
+                : $"Декодер конвейера AAC завершён: {DescribeExit(ffmpegExit)}",
+            executionContext,
+            ffmpegProcessId,
+            ffmpegProc,
+            "ffmpeg",
+            new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["Stage"] = "pipeline_ffmpeg",
+                ["DurationMs"] = durationMs
+            },
+            ffmpegExit,
+            durationMs);
+
+        WritePipelineEvent(
+            PipelineOutcomeEventId(qaacProc, qaacExit),
+            cancelled ? LogLevel.Info : ResolvePipelineLevel(ffmpegExit, qaacExit),
+            cancelled ? LogStatus.Cancelled : ResolvePipelineStatus(ffmpegExit, qaacExit),
+            cancelled
+                ? "Конвейер кодирования AAC прерван по запросу отмены"
+                : $"Кодировщик AAC завершён: {DescribeExit(qaacExit)}",
+            executionContext,
+            qaacProcessId,
+            qaacProc,
+            "qaac64",
+            new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["Stage"] = "pipeline_qaac",
+                ["DurationMs"] = durationMs,
+                ["WarningCount"] = ProcessOutputPolicy.CountWarnings(qaacErrors.Snapshot()),
+                ["OutputTail"] = qaacErrors.BuildTail(),
+                ["OutputTruncated"] = qaacErrors.Truncated
+            },
+            qaacExit,
+            durationMs);
+
+        if (cancelled)
+        {
+            TryTerminate(ffmpegProc);
+            TryTerminate(qaacProc);
+            DeletePartialOutput(outputPath, outputName, executionContext, pipelineId);
+            CleanupTempDir(tempDir, executionContext);
+            return ProcessResult.Cancelled(
+                executionContext,
+                ProcessResult.MessageCancelled,
+                pipelineId,
+                SafePid(ffmpegProc),
+                qaacExit ?? ffmpegExit,
+                durationMs,
+                false,
+                qaacErrors.BuildTail(),
+                qaacErrors.Truncated,
+                ProcessOutputPolicy.CountWarnings(qaacErrors.Snapshot()),
+                ProcessOutputPolicy.CountErrors(qaacErrors.Snapshot()),
+                terminationVerified: true);
+        }
+
+        bool artifactExists = FileExistsNonEmpty(outputPath);
+        bool success = ffmpegExit == 0 && qaacExit == 0 && artifactExists;
+        int warnings = ProcessOutputPolicy.CountWarnings(qaacErrors.Snapshot());
+        string tail = qaacErrors.BuildTail();
 
         if (!success)
         {
-            string ffErr = string.Join(Environment.NewLine, ffmpegStderrLines);
-            string qaacErr = string.Join(Environment.NewLine, qaacStderrLines);
-            _logService.Error(
-                $"Сбой конвейера QAAC.\nFFmpeg Code: {ffmpegProc.ExitCode}, Err: {ffErr}\nQAAC Code: {qaacProc.ExitCode}, Err: {qaacErr}", 
-                "QaacRunner");
+            string errorCode = ffmpegExit != 0
+                ? "ffmpeg-failed"
+                : qaacExit != 0
+                    ? "qaac-failed"
+                    : ProcessResult.ErrorArtifactMissing;
 
-            // Физически удаляем неудавшийся или поврежденный выходной файл при ошибке
-            if (File.Exists(outputPath))
+            if (artifactExists)
             {
-                try
+                DeletePartialOutput(outputPath, outputName, executionContext, pipelineId);
+            }
+
+            CleanupTempDir(tempDir, executionContext);
+
+            return ProcessResult.Failed(
+                executionContext,
+                errorCode,
+                $"Сбой конвейера кодирования AAC: ffmpeg={DescribeExit(ffmpegExit)}, qaac64={DescribeExit(qaacExit)}, артефакт={(artifactExists ? "создан" : "отсутствует")}",
+                pipelineId,
+                SafePid(ffmpegProc),
+                qaacExit ?? ffmpegExit,
+                durationMs,
+                artifactExists,
+                tail,
+                qaacErrors.Truncated,
+                warnings,
+                ProcessOutputPolicy.CountErrors(qaacErrors.Snapshot()));
+        }
+
+        CleanupTempDir(tempDir, executionContext);
+
+        if (warnings > 0)
+        {
+            return ProcessResult.PartiallySucceeded(
+                executionContext,
+                $"Конвейер кодирования AAC завершён с предупреждениями: '{outputName}'",
+                pipelineId,
+                SafePid(ffmpegProc),
+                qaacExit,
+                durationMs,
+                true,
+                tail,
+                qaacErrors.Truncated,
+                warnings,
+                0);
+        }
+
+        return ProcessResult.Succeeded(
+            executionContext,
+            pipelineId,
+            SafePid(ffmpegProc),
+            qaacExit,
+            durationMs,
+            true,
+            tail,
+            qaacErrors.Truncated,
+            0,
+            0);
+    }
+
+    private static bool FileExistsNonEmpty(string path)
+    {
+        try
+        {
+            return File.Exists(path) && new FileInfo(path).Length > 0;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    private static string PipelineOutcomeEventId(Process process, int? exitCode) =>
+        SafePid(process) > 0 && exitCode.HasValue ? ProcessEventIds.Exit : ProcessEventIds.Completed;
+
+    private static async Task ReadBoundedAsync(StreamReader reader, ProcessOutputBuffer buffer, Action<string>? lineSink)
+    {
+        var accumulator = new System.Text.StringBuilder();
+        char[] chunk = new char[4096];
+
+        try
+        {
+            while (true)
+            {
+                int read = await reader.ReadAsync(chunk, 0, chunk.Length).ConfigureAwait(false);
+                if (read <= 0)
                 {
-                    File.Delete(outputPath);
-                    _logService.DebugLog($"Удален поврежденный выходной файл после ошибки конвейера QAAC: '{Path.GetFileName(outputPath)}'", "QaacRunner");
+                    break;
                 }
-                catch (Exception deleteEx)
+
+                for (int index = 0; index < read; index++)
                 {
-                    _logService.Exception(deleteEx, $"Не удалось удалить поврежденный выходной файл '{outputPath}' после ошибки конвейера QAAC: {deleteEx.Message}", "QaacRunner");
+                    char raw = chunk[index];
+                    if (raw is '\r' or '\n')
+                    {
+                        if (accumulator.Length > 0)
+                        {
+                            Dispatch(accumulator.ToString());
+                        }
+
+                        continue;
+                    }
+
+                    if (accumulator.Length < ProcessOutputPolicy.MaxSingleLineLength)
+                    {
+                        accumulator.Append(raw);
+                    }
                 }
             }
+
+            if (accumulator.Length > 0)
+            {
+                Dispatch(accumulator.ToString());
+            }
         }
-        else
+        catch (Exception)
         {
-            _logService.Info(
-                $"Конвейер QAAC успешно завершил работу: '{Path.GetFileName(outputPath)}'", 
-                "QaacRunner");
         }
 
-        // Удаляем временное окружение
-        CleanupTempDir(tempDir);
-        return success;
+        void Dispatch(string rawLine)
+        {
+            accumulator.Clear();
+            string line = ProcessOutputPolicy.NormalizeLine(rawLine);
+            if (line.Length == 0)
+            {
+                return;
+            }
+
+            buffer.Append(line);
+            if (lineSink is null)
+            {
+                return;
+            }
+
+            try
+            {
+                lineSink(line);
+            }
+            catch (Exception)
+            {
+            }
+        }
+    }
+
+    private static Dictionary<string, object?> PipelineLaunchProperties(string arguments, string binaryPath)
+    {
+        return new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["ArgumentCount"] = ProcessExecutionContext.CountArguments(arguments),
+            ["WorkingDirLabel"] = ProcessExecutionContext.LabelDirectory(Path.GetDirectoryName(binaryPath))
+        };
+    }
+
+    private void WritePipelineEvent(
+        string eventId,
+        LogLevel level,
+        LogStatus status,
+        string message,
+        ProcessExecutionContext executionContext,
+        string processId,
+        Process process,
+        string tool,
+        IReadOnlyDictionary<string, object?> properties,
+        int? exitCode = null,
+        double? durationMs = null)
+    {
+        try
+        {
+            Dictionary<string, object?> merged = executionContext.ToLogProperties();
+            merged["ProcessId"] = processId;
+            merged["Tool"] = tool;
+            foreach (KeyValuePair<string, object?> pair in properties)
+            {
+                merged[pair.Key] = pair.Value;
+            }
+
+            int pid = SafePid(process);
+            _logService.Write(new LogEvent
+            {
+                EventId = eventId,
+                Level = level,
+                Status = status,
+                Source = "QaacRunner",
+                Message = message,
+                OperationId = executionContext.OperationId,
+                ItemId = executionContext.ItemId,
+                ProcessId = processId,
+                Pid = pid > 0 ? pid : null,
+                Attempt = executionContext.Attempt,
+                Tool = tool,
+                ExitCode = exitCode,
+                DurationMs = durationMs,
+                Properties = merged
+            });
+        }
+        catch (Exception)
+        {
+        }
+    }
+
+    private static LogLevel ResolvePipelineLevel(int? ffmpegExit, int? qaacExit)
+    {
+        if (ffmpegExit == 0 && qaacExit == 0)
+        {
+            return LogLevel.Info;
+        }
+
+        return LogLevel.Error;
+    }
+
+    private static LogStatus ResolvePipelineStatus(int? ffmpegExit, int? qaacExit)
+    {
+        return ffmpegExit == 0 && qaacExit == 0 ? LogStatus.Succeeded : LogStatus.Failed;
+    }
+
+    private static string DescribeExit(int? exitCode) =>
+        exitCode.HasValue ? exitCode.Value.ToString(System.Globalization.CultureInfo.InvariantCulture) : "unknown";
+
+    private static int SafePid(Process process)
+    {
+        try
+        {
+            return process.HasExited ? process.Id : process.Id;
+        }
+        catch (Exception)
+        {
+            return 0;
+        }
+    }
+
+    private static int? SafeExitCode(Process process)
+    {
+        try
+        {
+            return process.HasExited ? process.ExitCode : null;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    private static void TryTerminate(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+        }
+        catch (Exception)
+        {
+        }
+    }
+
+    private void DeletePartialOutput(
+        string outputPath,
+        string outputName,
+        ProcessExecutionContext executionContext,
+        string pipelineId)
+    {
+        if (!File.Exists(outputPath))
+        {
+            return;
+        }
+
+        try
+        {
+            File.Delete(outputPath);
+            _logService.Write(
+                ProcessEventIds.ArtifactMissing,
+                LogLevel.Debug,
+                LogStatus.Succeeded,
+                $"Неполный выходной файл конвейера AAC удалён: '{outputName}'",
+                source: SourceName,
+                context: executionContext.ToLogContext(),
+                properties: LogProps
+                    .Create("OutputName", LogProps.FileName(outputName))
+                    .With("CleanupState", "Removed"));
+        }
+        catch (Exception ex)
+        {
+            _logService.Write(
+                ProcessEventIds.ArtifactMissing,
+                LogLevel.Warning,
+                LogStatus.PartiallySucceeded,
+                $"Не удалось удалить неполный выходной файл '{outputName}' конвейера AAC",
+                ex,
+                "QaacRunner",
+                executionContext.ToLogContext(),
+                new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["ProcessId"] = pipelineId,
+                    ["Stage"] = "artifact_cleanup",
+                    ["ErrorCode"] = ProcessResult.ErrorArtifactMissing
+                });
+        }
     }
 
     /// <summary>
@@ -528,7 +814,7 @@ public sealed class QaacRunner
     /// Безопасно удаляет временное изолированное окружение QAAC.
     /// Кэшированное окружение не удаляется, так как переиспользуется между запусками.
     /// </summary>
-    private void CleanupTempDir(string tempDir)
+    private void CleanupTempDir(string tempDir, ProcessExecutionContext executionContext)
     {
         if (string.Equals(tempDir, _cachedTempDir, StringComparison.OrdinalIgnoreCase))
         {
@@ -545,9 +831,16 @@ public sealed class QaacRunner
         if (!normalizedDir.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase) ||
             !Path.GetFileName(normalizedDir).StartsWith("KTools_Qaac_", StringComparison.OrdinalIgnoreCase))
         {
-            _logService.DebugLog(
-                $"Пропущено удаление папки '{tempDir}': это не созданное приложением временное окружение",
-                "QaacRunner");
+            _logService.Write(
+                "qaac.cleanup.skipped",
+                LogLevel.Debug,
+                LogStatus.Skipped,
+                "Удаление временной папки окружения AAC пропущено: это не созданное приложением окружение",
+                source: SourceName,
+                context: executionContext.ToLogContext(),
+                properties: LogProps
+                    .Create("FileName", LogProps.FileName(tempDir))
+                    .With("CleanupState", "Skipped"));
             return;
         }
 
@@ -556,16 +849,23 @@ public sealed class QaacRunner
             if (Directory.Exists(tempDir))
             {
                 Directory.Delete(tempDir, true);
-                _logService.DebugLog(
-                    $"Изолированное временное окружение QAAC удалено: '{tempDir}'", 
-                    "QaacRunner");
             }
         }
         catch (Exception ex)
         {
-            _logService.Warn(
-                $"Не удалось удалить временную папку QAAC '{tempDir}': {ex.Message}", 
-                "QaacRunner");
+            _logService.Write(
+                "qaac.cleanup_failed",
+                LogLevel.Warning,
+                LogStatus.PartiallySucceeded,
+                "Не удалось удалить временную папку изолированного окружения AAC",
+                ex,
+                "QaacRunner",
+                executionContext.ToLogContext(),
+                new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["Stage"] = "cleanup",
+                    ["CleanupState"] = "failed"
+                });
         }
     }
 }

@@ -1,5 +1,4 @@
-using KTools_App.Services.Contracts;
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -7,8 +6,14 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+
 using KTools_App.Core;
+using KTools_App.Diagnostics;
 using KTools_App.Infrastructure;
+using KTools_App.Models;
+using KTools_App.Services.Contracts;
+
+using ExecutionContext = KTools_App.Models.ExecutionContext;
 
 namespace KTools_App.Scripts;
 
@@ -80,15 +85,15 @@ public sealed class ContainerConversionScript : AbstractScript
     /// <summary>
     /// Асинхронно запускает процесс ремуксинга одного медиафайла.
     /// </summary>
-    public override async Task<List<string>> ExecuteSingleAsync(
+    public override async Task<ExecutionResult> ExecuteSingleAsync(
         string filePath,
         Dictionary<string, object> settings,
         string? outputPath,
         ScriptProgressCallback progressCallback,
         int fileIndex,
-        int totalCount)
+        int totalCount,
+        ExecutionContext context)
     {
-        ResetCancellation();
         var results = new List<string>();
 
         // Извлекаем настройки пользователя
@@ -103,21 +108,25 @@ public sealed class ContainerConversionScript : AbstractScript
         string originalName = Path.GetFileName(filePath);
         string inputExt = Path.GetExtension(filePath).ToLowerInvariant();
 
-        _logService.Info($"Запущена конвертация контейнера для файла: '{originalName}'. Целевой формат: {targetKey}", "ContainerConversionScript");
-
+        _logService.Write("script.container_conversion.started", LogLevel.Debug, LogStatus.Running, $"Начата конвертация контейнера '{originalName}' в формат {LogRedactor.CompactSafeToken(targetKey)}", source: Name, properties: LogProps.Create("InputName", LogProps.FileName(filePath)).With("Container", LogRedactor.CompactSafeToken(targetKey)));
         // 1. Проверяем, совпадает ли исходный формат с целевым
         if (inputExt.Equals(targetExt, StringComparison.OrdinalIgnoreCase))
         {
-            _logService.Info($"Файл '{originalName}' уже находится в формате {targetKey}. Конвертация пропущена.", "ContainerConversionScript");
+            _logService.Write("script.container_conversion.already_target", LogLevel.Info, LogStatus.Skipped, $"Файл '{originalName}' уже в формате {LogRedactor.CompactSafeToken(targetKey)}, конвертация не требуется", source: Name, properties: LogProps.Create("Container", LogRedactor.CompactSafeToken(targetKey)));
             progressCallback(fileIndex, totalCount, $"Пропуск (уже {targetKey}): {originalName}", 100.0);
             results.Add($"Ref: {filePath}");
             results.Add($"⏭ ПРОПУСК (уже {targetKey}): {originalName}");
-            return results;
+            return ExecutionResult.Skipped(
+                context,
+                results,
+                errorCode: "already-target-container",
+                outputFile: filePath,
+                outputExists: File.Exists(filePath));
         }
 
         // 2. Получаем метаданные структуры файла через ffprobe
         progressCallback(fileIndex, totalCount, "Анализ структуры медиафайла...", 0.0);
-        _logService.DebugLog($"Запрос метаданных ffprobe для: '{originalName}'", "ContainerConversionScript");
+        _logService.Write("media.probe.requested", LogLevel.Debug, LogStatus.Running, $"Запрошены метаданные файла '{originalName}'", source: Name, properties: LogProps.Create("Tool", "ffprobe").With("InputName", LogProps.FileName(filePath)));
         var info = await _ffmpegRunner.GetVideoInfoAsync(filePath);
 
         // 3. Выполняем детальную проверку совместимости видео/аудио кодеков с новым контейнером
@@ -125,10 +134,15 @@ public sealed class ContainerConversionScript : AbstractScript
         if (!compatible)
         {
             string msg = $"⚠ ПРОПУСК (требуется перекодирование): {originalName}. {reason} Для перекодирования используйте инструмент «{AppConstants.ScriptMetadata.VideoProcessorName}».";
-            _logService.Warn($"Файл '{originalName}' несовместим с контейнером {targetKey}: {reason}", "ContainerConversionScript");
+            _logService.Write("script.container_conversion.incompatible", LogLevel.Warning, LogStatus.Skipped, $"Файл '{originalName}' несовместим с контейнером {LogRedactor.CompactSafeToken(targetKey)}: {reason}", source: Name, properties: LogProps.Create("Container", LogRedactor.CompactSafeToken(targetKey)).With("Reason", LogRedactor.CompactSafeToken(reason)));
             progressCallback(fileIndex, totalCount, "Пропуск: требуется перекодирование", 100.0);
             results.Add(msg);
-            return results;
+            return ExecutionResult.Skipped(
+                context,
+                results,
+                errorCode: "incompatible-container",
+                outputFile: filePath,
+                outputExists: File.Exists(filePath));
         }
 
         // 4. Формируем безопасный путь для вывода
@@ -145,10 +159,15 @@ public sealed class ContainerConversionScript : AbstractScript
         bool overwrite = _settingsManager.GetSetting("General", "OverwriteExisting", false);
         if (File.Exists(outputFilePath) && !overwrite)
         {
-            _logService.Info($"Выходной файл '{outputFileName}' уже существует. Конвертация пропущена.", "ContainerConversionScript");
+            _logService.Write("script.container_conversion.output_exists", LogLevel.Info, LogStatus.Skipped, $"Выходной файл '{LogProps.FileName(outputFilePath)}' уже существует, конвертация пропущена", source: Name, properties: LogProps.Create("OutputName", LogProps.FileName(outputFilePath)).With("ArtifactExists", true));
             progressCallback(fileIndex, totalCount, $"Пропуск (существует): {outputFileName}", 100.0);
             results.Add($"⏭ ПРОПУСК (файл существует): {outputFileName}");
-            return results;
+            return ExecutionResult.Skipped(
+                context,
+                results,
+                errorCode: "output-exists",
+                outputFile: outputFilePath,
+                outputExists: true);
         }
 
         // 6. Считываем длительность медиафайла для расчета прогресса выполнения
@@ -172,12 +191,10 @@ public sealed class ContainerConversionScript : AbstractScript
                 }
             }
         }
-        _logService.DebugLog($"Длительность медиафайла '{originalName}': {duration:F2} сек.", "ContainerConversionScript");
-
+        _logService.Write("media.duration.detected", LogLevel.Debug, LogStatus.Succeeded, $"Длительность медиафайла определена: {duration:F2} с", source: Name, properties: LogProps.Create("InputName", LogProps.FileName(filePath)).With("DurationMs", duration * 1000d));
         // 7. Запускаем FFmpeg с копированием видео и аудио потоков
         progressCallback(fileIndex, totalCount, "Запуск FFmpeg...", 0.0);
-        _logService.DebugLog($"Инициализация процесса FFmpeg для ремуксинга '{originalName}' -> '{outputFileName}'", "ContainerConversionScript");
-
+        _logService.Write("script.container_conversion.ffmpeg_started", LogLevel.Debug, LogStatus.Running, $"Запущен ремуксинг через FFmpeg: '{originalName}' -> '{LogProps.FileName(outputFilePath)}'", source: Name, properties: LogProps.Create("Tool", "ffmpeg").With("InputName", LogProps.FileName(filePath)).With("OutputName", LogProps.FileName(outputFilePath)));
         var extraArgs = new List<string> { "-c", "copy" };
         var cts = new CancellationTokenSource();
 
@@ -201,27 +218,51 @@ public sealed class ContainerConversionScript : AbstractScript
         {
             if (IsCancelled)
             {
-                _logService.Warn($"Пользователь инициировал отмену конвертации для '{originalName}'", "ContainerConversionScript");
+                _logService.Write(
+                    "container_conversion.cancelled",
+                    LogLevel.Info,
+                    LogStatus.Cancelled,
+                    $"Пользователь инициировал отмену конвертации для '{originalName}'",
+                    null,
+                    "ContainerConversionScript",
+                    context: context.ToLogContext(),
+                    properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                    {
+                        ["ErrorCode"] = "cancelled",
+                        ["InputName"] = originalName
+                    });
                 cts.Cancel();
                 break;
             }
             await Task.Delay(200);
         }
 
-        bool success = false;
+        ProcessResult? success = null;
         try
         {
             success = await ffmpegTask;
         }
         catch (Exception ex)
         {
-            _logService.Exception(ex, $"Сбой при запуске/работе FFmpeg для файла '{originalName}': {ex.Message}", "ContainerConversionScript");
+            _logService.Write(
+                "container_conversion.ffmpeg_failed",
+                LogLevel.Error,
+                LogStatus.Failed,
+                $"Сбой при запуске или работе FFmpeg для файла '{originalName}'",
+                ex,
+                "ContainerConversionScript",
+                context: context.ToLogContext(),
+                properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["ErrorCode"] = "ffmpeg-failed",
+                    ["InputName"] = originalName
+                });
         }
 
         // 8. Обрабатываем итог выполнения
-        if (success)
+        if (success?.IsSuccess == true)
         {
-            _logService.Info($"Конвертация контейнера успешно завершена. Выходной файл: '{outputFileName}'", "ContainerConversionScript");
+            _logService.Write("script.container_conversion.completed", LogLevel.Info, LogStatus.Succeeded, $"Конвертация контейнера завершена, выходной файл: '{LogProps.FileName(outputFilePath)}'", source: Name, properties: LogProps.Create("OutputName", LogProps.FileName(outputFilePath)).With("Verified", true));
             progressCallback(fileIndex, totalCount, "Успешно завершено!", 100.0);
             results.Add($"✅ Конвертирован: {outputFileName}");
 
@@ -240,13 +281,47 @@ public sealed class ContainerConversionScript : AbstractScript
             }
             else
             {
-                _logService.Error($"Не удалось выполнить смену контейнера для файла '{originalName}'", "ContainerConversionScript");
+                _logService.Write("script.container_conversion.failed", LogLevel.Error, LogStatus.Failed, $"Смена контейнера для файла '{originalName}' не выполнена", source: Name, properties: LogProps.Create("ErrorCode", "CONTAINER_CONVERSION_FAILED").With("InputName", LogProps.FileName(filePath)).With("Retryable", true));
                 progressCallback(fileIndex, totalCount, "Ошибка обработки!", 0.0);
                 results.Add($"❌ ОШИБКА: {originalName}");
             }
         }
 
-        return results;
+        if (IsCancelled)
+        {
+            return ExecutionResult.Cancelled(
+                context,
+                results,
+                errorCode: "cancelled",
+                outputFile: outputFilePath,
+                outputExists: File.Exists(outputFilePath),
+                cleanupState: CleanupState.Completed);
+        }
+        if (success?.IsSuccess == true && File.Exists(outputFilePath))
+        {
+            if (deleteOriginal && File.Exists(filePath))
+            {
+                return ExecutionResult.PartiallySucceeded(
+                    context,
+                    results,
+                    errorCode: "source-cleanup-failed",
+                    outputFile: outputFilePath,
+                    outputExists: true,
+                    cleanupState: CleanupState.Failed);
+            }
+            return ExecutionResult.Succeeded(
+                context,
+                results,
+                outputFile: outputFilePath,
+                outputExists: true,
+                cleanupState: deleteOriginal ? CleanupState.Completed : CleanupState.NotRequired);
+        }
+        return ExecutionResult.Failed(
+            context,
+            results,
+            errorCode: "output-missing",
+            outputFile: outputFilePath,
+            outputExists: File.Exists(outputFilePath));
     }
 
     /// <summary>
@@ -257,7 +332,7 @@ public sealed class ContainerConversionScript : AbstractScript
     {
         if (info == null)
         {
-            _logService.Warn($"Отсутствуют данные анализа структуры (ffprobe null) для '{Path.GetFileName(filePath)}'. Совместимость принята по умолчанию.", "ContainerConversionScript");
+            _logService.Write("script.container_conversion.probe_missing", LogLevel.Warning, LogStatus.Skipped, $"Данные анализа структуры файла '{LogProps.FileName(filePath)}' отсутствуют, совместимость принята по умолчанию", source: Name, properties: LogProps.Create("ErrorCode", "PROBE_DATA_MISSING").With("InputName", LogProps.FileName(filePath)));
             return (true, "");
         }
 
@@ -303,12 +378,11 @@ public sealed class ContainerConversionScript : AbstractScript
         }
         catch (Exception ex)
         {
-            _logService.Exception(ex, $"Не удалось разобрать потоки медиафайла для детекции совместимости: {ex.Message}", "ContainerConversionScript");
+            _logService.Write("script.container_conversion.parse_failed", LogLevel.Warning, LogStatus.Skipped, "Список дорожек медиафайла для проверки совместимости не разобран, проверка пропущена", ex, Name, properties: LogProps.Create("ErrorCode", "STREAM_PARSE_FAILED").With("Tool", "ffprobe"));
             return (true, ""); // При сбоях парсинга полагаемся на FFmpeg
         }
 
-        _logService.DebugLog($"Анализ совместимости. Видеокодек: '{videoCodec}', Аудиокодек: '{audioCodec}', Целевой контейнер: '{targetExt}'", "ContainerConversionScript");
-
+        _logService.Write("script.container_conversion.compatibility", LogLevel.Debug, LogStatus.Succeeded, $"Проверка совместимости: видеокодек {LogRedactor.CompactSafeToken(videoCodec)}, аудиокодек {LogRedactor.CompactSafeToken(audioCodec)}, целевой контейнер {LogRedactor.CompactSafeToken(targetExt)}", source: Name, properties: LogProps.Create("Codec", LogRedactor.CompactSafeToken(videoCodec)).With("Container", LogRedactor.CompactSafeToken(targetExt)));
         // Формат MKV поддерживает абсолютно любые видео и аудио кодеки
         if (targetExt == ".mkv")
         {

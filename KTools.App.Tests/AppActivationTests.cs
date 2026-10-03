@@ -1,7 +1,6 @@
 // -*- coding: utf-8 -*-
 using System;
 using System.IO;
-using System.Reflection;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using FluentAssertions;
 using KTools_App;
@@ -25,16 +24,14 @@ public class AppActivationTests
     }
 
     /// <summary>
-    /// Тестирует приватный метод WriteArgsToFile из класса Program с помощью рефлексии.
-    /// Проверяет, что аргументы командной строки корректно записываются во временный файл на диске.
+    /// Проверяет, что аргументы командной строки записываются в канал отложенных
+    /// аргументов как данные (без рефлексии и без попадания в журнал).
     /// </summary>
     [TestMethod]
-    public void WriteArgsToFile_ValidArgs_CreatesFileWithArguments()
+    public void PendingArgsChannel_ValidArgs_CreatesFileWithArguments()
     {
         // Arrange
         string[] testArgs = ["--script", "metadata_cleanup", "C:\\test.mp4"];
-        var method = typeof(Program).GetMethod("WriteArgsToFile", BindingFlags.NonPublic | BindingFlags.Static);
-        method.Should().NotBeNull("Метод WriteArgsToFile должен существовать в классе Program");
 
         // Очищаем директорию перед тестом
         if (Directory.Exists(_pendingArgsDir))
@@ -46,9 +43,10 @@ public class AppActivationTests
         }
 
         // Act
-        method!.Invoke(null, new object[] { testArgs });
+        bool written = PendingArgsChannel.TryWrite(_pendingArgsDir, testArgs, out string? errorCode);
 
         // Assert
+        written.Should().BeTrue("канал отложенных аргументов должен принять данные", errorCode);
         Directory.Exists(_pendingArgsDir).Should().BeTrue();
         var files = Directory.GetFiles(_pendingArgsDir, "*.txt");
         files.Should().NotBeEmpty("Файл с отложенными аргументами должен быть создан");

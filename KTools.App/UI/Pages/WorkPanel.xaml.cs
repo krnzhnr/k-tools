@@ -1,23 +1,28 @@
 // -*- coding: utf-8 -*-
 using System;
-using KTools_App.Services.Contracts;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.IO;
 using System.Linq;
-using System.ComponentModel;
-using Microsoft.UI.Xaml;
-using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Media;
-using Microsoft.UI.Xaml.Media.Animation;
-using Microsoft.UI.Xaml.Hosting;
-using Microsoft.UI.Xaml.Navigation;
-using Microsoft.Extensions.DependencyInjection;
-using Windows.Storage.Pickers;
-using WinRT.Interop;
+
 using KTools_App.Core;
+using KTools_App.Diagnostics;
+using KTools_App.Scripts;
+using KTools_App.Services.Contracts;
 using KTools_App.UI.Controls;
 using KTools_App.ViewModels;
-using KTools_App.Scripts;
+
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Hosting;
+using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Animation;
+using Microsoft.UI.Xaml.Navigation;
+
+using Windows.Storage.Pickers;
+
+using WinRT.Interop;
 
 namespace KTools_App.UI.Pages;
 
@@ -28,6 +33,8 @@ namespace KTools_App.UI.Pages;
 /// </summary>
 public sealed partial class WorkPanel : Page
 {
+    private const string SourceName = nameof(WorkPanel);
+
     private ISettingsManager _settingsManager => App.Services.GetRequiredService<ISettingsManager>();
     private ILogService _logService => App.Services.GetRequiredService<ILogService>();
 
@@ -216,7 +223,16 @@ public sealed partial class WorkPanel : Page
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Ошибка буфера обмена: {ex.Message}");
+                _logService.Write(
+                    "ui.url_input.paste_failed",
+                    LogLevel.Warning,
+                    LogStatus.Failed,
+                    "Значение из буфера обмена не вставлено в поле адреса",
+                    ex,
+                    SourceName,
+                    properties: LogProps
+                        .Create("ErrorCode", "CLIPBOARD_READ_FAILED")
+                        .With("Control", "UrlPasteButton"));
             }
         };
         Grid.SetColumn(pasteBtn, 1);
@@ -315,9 +331,16 @@ public sealed partial class WorkPanel : Page
         catch (Exception ex)
         {
             // Переход purely косметический: при любой ошибке показываем содержимое без анимации.
-            _logService.Warn(
-                $"Не удалось проиграть анимацию переключения скрипта: {ex.Message}",
-                "WorkPanel");
+            _logService.Write(
+                "ui.script_switch.animation_failed",
+                LogLevel.Debug,
+                LogStatus.Skipped,
+                "Анимация переключения скрипта не воспроизведена, состояние восстановлено без анимации",
+                ex,
+                SourceName,
+                properties: LogProps
+                    .Create("ErrorCode", "SCRIPT_SWITCH_ANIMATION_FAILED")
+                    .With("Control", "ScriptSwitchStoryboard"));
             ResetScriptSwitchVisualState();
         }
     }
@@ -348,6 +371,9 @@ public sealed partial class WorkPanel : Page
     {
         base.OnNavigatedTo(e);
 
+        ViewModel.PropertyChanged -= OnViewModelPropertyChanged;
+        ViewModel.PropertyChanged += OnViewModelPropertyChanged;
+
         if (e.Parameter is AbstractScript script)
         {
             if (_isScriptInitialized && ReferenceEquals(_script, script))
@@ -355,7 +381,7 @@ public sealed partial class WorkPanel : Page
                 // Повторный вход на тот же скрипт: дерево элементов уже построено,
                 // достаточно переподписать ViewModel и синхронизировать видимое состояние.
                 ViewModel.Initialize(_script!, FileList.Files);
-                nvSample.SelectedItem = SamplePage1Item;
+                SelectTab("files");
 
                 _isLandscape = IsLandscapeOrientation(ActualWidth, ActualHeight);
                 ApplyLayoutOrientation();
@@ -572,11 +598,11 @@ public sealed partial class WorkPanel : Page
             bool isProcessing = ViewModel.IsProcessing;
             FileList.IsProcessing = isProcessing;
             ScriptSettings.SetProcessingMode(isProcessing);
-            
+
             if (isProcessing)
             {
                 // Перекидываем пользователя на вкладку Файлы
-                nvSample.SelectedItem = SamplePage1Item;
+                SelectTab("files");
             }
 
             // Синхронизируем состояние кнопки запуска/отмены при изменении статуса обработки
@@ -593,37 +619,74 @@ public sealed partial class WorkPanel : Page
     }
 
     /// <summary>
+    /// Программно активирует вкладку с указанным тегом и гарантированно переключает содержимое фрейма.
+    /// Решает проблему WinUI 3, когда программное назначение SelectedItem не заполняет SelectedItemContainer.
+    /// </summary>
+    /// <param name="tag">Тег целевой вкладки (files, tracks, settings).</param>
+    public void SelectTab(string tag)
+    {
+        NavigationViewItem? targetItem = tag switch
+        {
+            "files" => SamplePage1Item,
+            "tracks" => _tracksPageItem,
+            "settings" => SamplePage2Item,
+            _ => null
+        };
+
+        if (targetItem != null && !ReferenceEquals(nvSample.SelectedItem, targetItem))
+        {
+            nvSample.SelectedItem = targetItem;
+        }
+
+        SwitchContentToTab(tag);
+    }
+
+    /// <summary>
+    /// Переключает контент рабочей области в соответствии с тегом вкладки.
+    /// </summary>
+    /// <param name="tag">Тег выбранной вкладки.</param>
+    private void SwitchContentToTab(string tag)
+    {
+        if (tag == "files")
+        {
+            contentFrame.Content = _filesContainer;
+            FileList.NotifySubtitlesSettingChanged();
+        }
+        else if (tag == "tracks")
+        {
+            if (_script is StreamReplacementScript)
+            {
+                contentFrame.Content = _streamReplaceControl;
+            }
+            else
+            {
+                contentFrame.Content = _tracksControl;
+            }
+        }
+        else if (tag == "settings")
+        {
+            ScriptSettings.GenerateSettingsUIIfPending();
+            contentFrame.Content = _settingsControl;
+        }
+    }
+
+    /// <summary>
     /// Обработчик переключения горизонтальных вкладок верхнего NavigationView.
     /// Подменяет контент фрейма без пересоздания виджетов.
+    /// Корректно извлекает элемент как из контейнера, так и из SelectedItem при программном переключении.
     /// </summary>
     private void nvSample_SelectionChanged(
         NavigationView sender,
         NavigationViewSelectionChangedEventArgs args)
     {
-        if (args.SelectedItemContainer is NavigationViewItem selectedItem)
+        var selectedItem = (args.SelectedItemContainer as NavigationViewItem)
+            ?? (args.SelectedItem as NavigationViewItem)
+            ?? (sender.SelectedItem as NavigationViewItem);
+
+        if (selectedItem != null)
         {
             string tag = selectedItem.Tag?.ToString() ?? string.Empty;
-            if (tag == "files")
-            {
-                contentFrame.Content = _filesContainer;
-                FileList.NotifySubtitlesSettingChanged();
-            }
-            else if (tag == "tracks")
-            {
-                if (_script is StreamReplacementScript)
-                {
-                    contentFrame.Content = _streamReplaceControl;
-                }
-                else
-                {
-                    contentFrame.Content = _tracksControl;
-                }
-            }
-            else if (tag == "settings")
-            {
-                ScriptSettings.GenerateSettingsUIIfPending();
-                contentFrame.Content = _settingsControl;
-            }
+            SwitchContentToTab(tag);
         }
     }
 
@@ -649,7 +712,6 @@ public sealed partial class WorkPanel : Page
                 (_tracksPageItem == null || !ReferenceEquals(nvSample.SelectedItem, _tracksPageItem)))
             {
                 nvSample.SelectedItem = SamplePage1Item;
-                _logService.DebugLog("Автоматическое переключение на вкладку «Файлы» при наведении мышью с перетаскиваемыми файлами", "WorkPanel");
             }
         }
 
@@ -687,13 +749,28 @@ public sealed partial class WorkPanel : Page
                 if (paths.Count > 0)
                 {
                     FileList.AddFiles(paths);
-                    _logService.Info($"Добавлено элементов через Drag & Drop рабочей панели: {paths.Count}", "WorkPanel");
+                    _logService.Write(
+                        "ui.files.dropped",
+                        LogLevel.Debug,
+                        LogStatus.Succeeded,
+                        $"В очередь добавлено элементов перетаскиванием: {paths.Count}",
+                        source: SourceName,
+                        properties: LogProps
+                            .Create("Count", paths.Count)
+                            .With("Page", nameof(WorkPanel)));
                 }
             }
         }
         catch (Exception ex)
         {
-            _logService.Exception(ex, "Ошибка при обработке перетащенных файлов в WorkPanel", "WorkPanel");
+            _logService.Write(
+                "ui.files.drop_failed",
+                LogLevel.Warning,
+                LogStatus.Failed,
+                "Не удалось обработать перетащенные файлы",
+                ex,
+                SourceName,
+                properties: LogProps.Create("ErrorCode", "FILE_DROP_FAILED"));
         }
     }
 
@@ -714,7 +791,7 @@ public sealed partial class WorkPanel : Page
         try
         {
             var picker = new FolderPicker();
-            
+
             // Настройка сопоставления с главным окном в WinUI 3
             var hwnd = WindowNative.GetWindowHandle(App.CurrentMainWindow);
             InitializeWithWindow.Initialize(picker, hwnd);
@@ -730,7 +807,14 @@ public sealed partial class WorkPanel : Page
         }
         catch (Exception ex)
         {
-            App.Services.GetRequiredService<ILogService>().Error($"Не удалось открыть окно выбора папки: {ex.Message}", "WorkPanel");
+            App.Services.GetRequiredService<ILogService>().Write(
+                "ui.output.folder_picker_failed",
+                LogLevel.Warning,
+                LogStatus.Failed,
+                "Не удалось открыть системный диалог выбора папки",
+                ex,
+                SourceName,
+                properties: LogProps.Create("ErrorCode", "FOLDER_PICKER_FAILED"));
         }
     }
 
@@ -771,6 +855,7 @@ public sealed partial class WorkPanel : Page
 
             if (ViewModel.StartExecutionCommand.CanExecute(settings))
             {
+                SelectTab("files");
                 ViewModel.StartExecutionCommand.Execute(settings);
             }
         }
@@ -784,7 +869,7 @@ public sealed partial class WorkPanel : Page
     {
         if (isProcessing)
         {
-            ActionButton.Content = "Отменить";
+            ActionButton.Content = "Остановить";
             ActionButton.Style = (Style)Application.Current.Resources["DefaultButtonStyle"];
             ActionButton.IsEnabled = true;
         }
@@ -847,7 +932,7 @@ public sealed partial class WorkPanel : Page
         {
             return parent;
         }
-        
+
         return FindParentPage<T>(parentObject);
     }
 
@@ -869,7 +954,6 @@ public sealed partial class WorkPanel : Page
     private void WorkPanel_Unloaded(object sender, RoutedEventArgs e)
     {
         SizeChanged -= WorkPanel_SizeChanged;
-        Loaded -= WorkPanel_Loaded;
         ViewModel.PropertyChanged -= OnViewModelPropertyChanged;
 
         // Журнал не сбрасываем при выгрузке: страница остается в кэше фрейма,
@@ -956,7 +1040,7 @@ public sealed partial class WorkPanel : Page
         var filePaths = FileList.Files.Select(f => f.FilePath).ToList();
         if (filePaths.Count == 0)
         {
-            App.Services.GetRequiredService<ILogService>().Warn("Попытка открыть предпросмотр без добавленных файлов субтитров.", "WorkPanel");
+            App.Services.GetRequiredService<ILogService>().Write("ui.subtitle_preview.no_input", LogLevel.Debug, LogStatus.Skipped, "Предпросмотр субтитров не открыт: файлы субтитров не добавлены", source: SourceName, properties: LogProps.Create("Count", 0));
             return;
         }
 
@@ -997,10 +1081,14 @@ public sealed partial class WorkPanel : Page
         }
         catch (Exception ex)
         {
-            App.Services.GetRequiredService<ILogService>().Exception(
+            App.Services.GetRequiredService<ILogService>().Write(
+                "ui.subtitle_preview.open_failed",
+                LogLevel.Error,
+                LogStatus.Failed,
+                "Окно предпросмотра субтитров не инициализировано или не открыто",
                 ex,
-                $"Критический сбой при инициализации или открытии окна предпросмотра субтитров: {ex.Message}",
-                "WorkPanel");
+                SourceName,
+                properties: LogProps.Create("ErrorCode", "SUBTITLE_PREVIEW_OPEN_FAILED"));
         }
         finally
         {
@@ -1057,7 +1145,7 @@ public sealed partial class WorkPanel : Page
         if (_isLandscape && hasSettings)
         {
             // --- Альбомная ориентация (настройки прикреплены справа) ---
-            
+
             // 1. Убираем вкладку "Настройки" из меню NavigationView
             if (nvSample.MenuItems.Contains(SamplePage2Item))
             {
@@ -1389,14 +1477,27 @@ public sealed partial class WorkPanel : Page
                     if (!string.IsNullOrWhiteSpace(targetFolderPath) && Directory.Exists(targetFolderPath))
                     {
                         ViewModel.OutputPath = targetFolderPath;
-                        _logService.Info($"Выходная директория установлена через Drag & Drop нижней панели: '{targetFolderPath}'", "WorkPanel");
+                        _logService.Write(
+                            "ui.output.folder_dropped",
+                            LogLevel.Debug,
+                            LogStatus.Changed,
+                            "Папка сохранения результата выбрана перетаскиванием",
+                            source: SourceName,
+                            properties: LogProps.Create("FileName", LogProps.FileName(targetFolderPath)));
                     }
                 }
             }
         }
         catch (Exception ex)
         {
-            _logService.Exception(ex, "Ошибка при установке выходной папки через Drag & Drop нижней панели", "WorkPanel");
+            _logService.Write(
+                "ui.output.folder_drop_failed",
+                LogLevel.Warning,
+                LogStatus.Failed,
+                "Не удалось применить перетащенную папку как папку сохранения результата",
+                ex,
+                SourceName,
+                properties: LogProps.Create("ErrorCode", "OUTPUT_FOLDER_DROP_FAILED"));
         }
     }
 
