@@ -1,4 +1,4 @@
-﻿// -*- coding: utf-8 -*-
+// -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -195,13 +195,43 @@ public sealed class ContainerConversionScript : AbstractScript
         // 7. Запускаем FFmpeg с копированием видео и аудио потоков
         progressCallback(fileIndex, totalCount, "Запуск FFmpeg...", 0.0);
         _logService.Write("script.container_conversion.ffmpeg_started", LogLevel.Debug, LogStatus.Running, $"Запущен ремуксинг через FFmpeg: '{originalName}' -> '{LogProps.FileName(outputFilePath)}'", source: Name, properties: LogProps.Create("Tool", "ffmpeg").With("InputName", LogProps.FileName(filePath)).With("OutputName", LogProps.FileName(outputFilePath)));
-        var extraArgs = new List<string> { "-c", "copy" };
+
+        // Входные аргументы: нормализуем генерацию меток времени (PTS), если в исходном контейнере они отсутствуют или рассинхронизированы
+        var inputArgs = new List<string> { "-fflags", "+genpts" };
+
+        // Базовые аргументы ремуксинга: копирование без перекодирования всех подходящих потоков
+        var extraArgs = new List<string> { "-map", "0", "-c", "copy" };
+
+        // Исключаем дорожки субтитров при упаковке в контейнеры, не поддерживающие текстовые потоки без конвертации (MP4/MOV не принимают ASS/SSA/PGS в режиме copy)
+        if (targetExt is ".mp4" or ".mov")
+        {
+            // Для совместимости контейнера MP4 отключаем несовместимые субтитры, если они присутствуют
+            extraArgs.Add("-c:s");
+            extraArgs.Add("mov_text");
+
+            // Нормализуем шкалу времени видеопотока до стандартных 90 кГц (90000 Hz), устраняя погрешности миллисекундных таймштампов MKV (1/1000)
+            // и предотвращая ложное определение частоты кадров как переменной (VFR вместо исходного CFR)
+            extraArgs.Add("-video_track_timescale");
+            extraArgs.Add("90000");
+
+            // Перемещаем заголовочный индекс в начало файла для мгновенного старта воспроизведения и корректного чтения плеерами
+            extraArgs.Add("-movflags");
+            extraArgs.Add("+faststart");
+        }
+        else if (targetExt is ".ts" or ".m2ts")
+        {
+            // Для контейнера MPEG-TS битстрим-фильтры Annex B необходимы при копировании H.264 / HEVC
+            extraArgs.Add("-bsf:v");
+            extraArgs.Add("dump_extra");
+        }
+
         var cts = new CancellationTokenSource();
 
         var ffmpegTask = _ffmpegRunner.RunAsync(
             inputPath: filePath,
             outputPath: outputFilePath,
             extraArgs: extraArgs,
+            inputArgs: inputArgs,
             overwrite: overwrite,
             totalDuration: duration,
             onProgress: progressInfo =>
