@@ -594,7 +594,8 @@ public sealed partial class TimingCalculatorPage
     }
 
     /// <summary>
-    /// Форматирует общее число миллисекунд в абсолютный формат времени Ч:ММ:СС.ммм с 3 знаками миллисекунд.
+    /// Форматирует общее число миллисекунд в абсолютный формат времени Ч:ММ:СС.сс (сотые доли секунды, 2 знака).
+    /// Миллисекунды усекаются до сотых — как в SubtitleShiftScript.FormatAssTime.
     /// </summary>
     public static string FormatMsToAegisub(long totalMs)
     {
@@ -602,9 +603,9 @@ public sealed partial class TimingCalculatorPage
         long hours = absMs / 3600000L;
         long minutes = (absMs % 3600000L) / 60000L;
         long seconds = (absMs % 60000L) / 1000L;
-        long millis = absMs % 1000L;
+        long hundredths = (absMs % 1000L) / 10L;
 
-        return $"{hours}:{minutes:D2}:{seconds:D2}.{millis:D3}";
+        return $"{hours}:{minutes:D2}:{seconds:D2}.{hundredths:D2}";
     }
 
     /// <summary>

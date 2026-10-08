@@ -117,7 +117,7 @@
                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                             <StackPanel Orientation="Horizontal" Spacing="12" HorizontalAlignment="Center">
                                 <TextBlock x:Name="ResultTimeBlock" 
-                                           Text="0:00:00.000" 
+                                           Text="0:00:00.00" 
                                            FontFamily="Consolas, Courier New, monospace" 
                                            FontSize="32" 
                                            FontWeight="Bold" 
