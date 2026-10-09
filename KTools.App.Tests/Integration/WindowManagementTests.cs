@@ -270,4 +270,17 @@ public class WindowManagementTests
     {
         Assert.Inconclusive("Декларация: минимальный размер окна не нарушается при любом DPI");
     }
+
+    /// <summary>
+    /// [Ignore] Сохранение и восстановление экранных координат и состояния развернутости:
+    /// сохранение Window.X, Window.Y, Window.IsMaximized и их корректное применение
+    /// при повторном запуске на целевом мониторе.
+    /// </summary>
+    [TestMethod]
+    [Ignore("Требует STA WinUI-хоста: AppWindow.Position и OverlappedPresenter недоступны headless")]
+    public void MainWindow_PlacementAndState_RestoresSavedPositionAndMaximizedState()
+    {
+        Assert.Inconclusive("Декларация: координаты и состояние развернутости окна сохраняются и восстанавливаются при перезапуске");
+    }
 }
+

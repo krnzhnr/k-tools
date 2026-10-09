@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 
@@ -9,6 +9,7 @@ using KTools_App.Diagnostics;
 using KTools_App.Services.Contracts;
 using KTools_App.ViewModels;
 
+using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 
 using Windows.Graphics;
@@ -105,6 +106,9 @@ public sealed partial class MainWindow : Window
     private readonly IScriptRegistry _scriptRegistry;
     private bool _isForcedClose;
     private SizeInt32 _lastWindowSize;
+    private PointInt32 _lastWindowPosition = new(WindowPlacementHelper.UnspecifiedPosition, WindowPlacementHelper.UnspecifiedPosition);
+    private bool _isMaximized;
+    private float _lastScaleFactor = 1f;
     private bool _hasWindowSize;
 
     public MainWindow(
@@ -206,46 +210,119 @@ public sealed partial class MainWindow : Window
                     });
             }
 
-            // Определение DPI и масштабирование размеров окна (базовый размер 800 x 960 логических пикселей)
+            // Определение DPI и масштабирование размеров окна
             IntPtr windowHandle = WinRT.Interop.WindowNative.GetWindowHandle(this);
             uint dpi = GetDpiForWindow(windowHandle);
             float scaleFactor = dpi / 96.0f;
 
-            double savedWidth = _settingsManager.GetSetting("Window", "Width", 800.0);
-            double savedHeight = _settingsManager.GetSetting("Window", "Height", 740.0);
+            double savedWidth = _settingsManager.GetSetting("Window", "Width", WindowPlacementHelper.DefaultWidth);
+            double savedHeight = _settingsManager.GetSetting("Window", "Height", WindowPlacementHelper.DefaultHeight);
+            int savedX = _settingsManager.GetSetting("Window", "X", WindowPlacementHelper.UnspecifiedPosition);
+            int savedY = _settingsManager.GetSetting("Window", "Y", WindowPlacementHelper.UnspecifiedPosition);
+            bool savedIsMaximized = _settingsManager.GetSetting("Window", "IsMaximized", false);
 
             int scaledWidth = (int)Math.Round(savedWidth * scaleFactor);
             int scaledHeight = (int)Math.Round(savedHeight * scaleFactor);
 
-            // Защита от вылезания окна за пределы рабочей области экрана при любом масштабе DPI
-            try
+            bool positionApplied = false;
+            if (WindowPlacementHelper.HasValidPosition(savedX, savedY))
             {
-                var windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(windowHandle);
-                var displayArea = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(windowId, Microsoft.UI.Windowing.DisplayAreaFallback.Nearest);
-                if (displayArea != null)
+                try
                 {
-                    int maxWorkAreaHeight = displayArea.WorkArea.Height - 40;
-                    if (scaledHeight > maxWorkAreaHeight)
+                    RectInt32 targetRect = new(savedX, savedY, scaledWidth, scaledHeight);
+                    DisplayArea displayArea = DisplayArea.GetFromRect(targetRect, DisplayAreaFallback.Nearest);
+                    if (displayArea != null)
                     {
-                        scaledHeight = Math.Max(500, maxWorkAreaHeight);
+                        var clamped = WindowPlacementHelper.ClampToWorkArea(
+                            savedX,
+                            savedY,
+                            scaledWidth,
+                            scaledHeight,
+                            displayArea.WorkArea.X,
+                            displayArea.WorkArea.Y,
+                            displayArea.WorkArea.Width,
+                            displayArea.WorkArea.Height);
+
+                        AppWindow.MoveAndResize(new RectInt32(clamped.X, clamped.Y, clamped.Width, clamped.Height));
+                        positionApplied = true;
+
+                        _logService.Write(
+                            "window.placement.restored",
+                            LogLevel.Debug,
+                            LogStatus.Succeeded,
+                            $"Геометрия окна восстановлена: {clamped.Width}x{clamped.Height} по координатам ({clamped.X}, {clamped.Y})",
+                            source: SourceName,
+                            properties: LogProps
+                                .Create("Resolution", $"{clamped.Width}x{clamped.Height} px")
+                                .With("Percent", (int)dpi)
+                                .With("Count", clamped.X));
                     }
                 }
+                catch (Exception ex)
+                {
+                    _logService.Write(
+                        "window.placement.restore_failed",
+                        LogLevel.Warning,
+                        LogStatus.PartiallySucceeded,
+                        "Не удалось применить сохранённые координаты окна, применяется базовый размер",
+                        ex,
+                        SourceName,
+                        properties: LogProps
+                            .Create("Stage", "window_placement")
+                            .With("ErrorCode", "PLACEMENT_RESTORE_FAILED"));
+                }
             }
-            catch { }
 
-            _logService.Write(
-                "window.size.dpi_applied",
-                LogLevel.Debug,
-                LogStatus.Succeeded,
-                $"Размеры окна пересчитаны с учётом DPI: коэффициент {scaleFactor:F2}, итог {scaledWidth}x{scaledHeight} px",
-                source: SourceName,
-                properties: LogProps
-                    .Create("Resolution", $"{scaledWidth}x{scaledHeight} px")
-                    .With("Percent", (int)dpi)
-                    .With("Count", savedWidth));
+            if (!positionApplied)
+            {
+                // Защита от вылезания окна за пределы рабочей области экрана при любом масштабе DPI
+                try
+                {
+                    var windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(windowHandle);
+                    var displayArea = DisplayArea.GetFromWindowId(windowId, DisplayAreaFallback.Nearest);
+                    if (displayArea != null)
+                    {
+                        int maxWorkAreaHeight = displayArea.WorkArea.Height - 40;
+                        if (scaledHeight > maxWorkAreaHeight)
+                        {
+                            scaledHeight = Math.Max(500, maxWorkAreaHeight);
+                        }
+                    }
+                }
+                catch { }
 
-            AppWindow.Resize(new SizeInt32(scaledWidth, scaledHeight));
-            CaptureWindowSize();
+                _logService.Write(
+                    "window.size.dpi_applied",
+                    LogLevel.Debug,
+                    LogStatus.Succeeded,
+                    $"Размеры окна пересчитаны с учётом DPI: коэффициент {scaleFactor:F2}, итог {scaledWidth}x{scaledHeight} px",
+                    source: SourceName,
+                    properties: LogProps
+                        .Create("Resolution", $"{scaledWidth}x{scaledHeight} px")
+                        .With("Percent", (int)dpi)
+                        .With("Count", savedWidth));
+
+                AppWindow.Resize(new SizeInt32(scaledWidth, scaledHeight));
+            }
+
+            CaptureWindowPlacement();
+
+            if (savedIsMaximized && AppWindow.Presenter is OverlappedPresenter presenter)
+            {
+                presenter.Maximize();
+                _isMaximized = true;
+                _logService.Write(
+                    "window.state.maximized",
+                    LogLevel.Debug,
+                    LogStatus.Succeeded,
+                    "Окно переведено в развёрнутое состояние согласно сохранённым настройкам",
+                    source: SourceName,
+                    properties: LogProps
+                        .Create("Stage", "window_state")
+                        .With("Mode", "Maximized"));
+            }
+
+            AppWindow.Changed += OnAppWindowChanged;
 
             // Навигация по умолчанию на главную страницу
             RootFrame.Navigate(typeof(MainPage));
@@ -390,7 +467,16 @@ public sealed partial class MainWindow : Window
                 }
             };
 
-            Closed += (_, _) => CloseAndShutdown();
+            Closed += async (_, _) =>
+            {
+                try
+                {
+                    AppWindow.Changed -= OnAppWindowChanged;
+                }
+                catch { }
+
+                await CloseAndShutdownAsync();
+            };
         }
         catch (Exception ex)
         {
@@ -430,7 +516,12 @@ public sealed partial class MainWindow : Window
 
     private void CloseAndShutdown()
     {
-        bool completed = App.TryBeginControlledShutdownAndWait(
+        _ = CloseAndShutdownAsync();
+    }
+
+    private async Task CloseAndShutdownAsync()
+    {
+        bool completed = await App.TryBeginControlledShutdownAsync(
             App.CrashShutdownReasonWindowClosed,
             ShutdownWaitTimeout);
         if (completed)
@@ -444,25 +535,35 @@ public sealed partial class MainWindow : Window
             LogStatus.Failed,
             "Контролируемое завершение не завершилось до закрытия окна",
             null,
-            "MainWindow",
-            context: null,
-            new Dictionary<string, object?>(StringComparer.Ordinal)
-            {
-                ["Stage"] = "controlled_shutdown",
-                ["Succeeded"] = false,
-                ["Failed"] = true,
-                ["ErrorCode"] = "shutdown-not-completed"
-            });
+            SourceName,
+            properties: LogProps
+                .Create("Stage", "controlled_shutdown")
+                .With("Succeeded", false)
+                .With("Failed", true)
+                .With("ErrorCode", "shutdown-not-completed"));
     }
 
     private SettingsPersistenceResult PersistWindowSettings()
     {
         try
         {
+            CaptureWindowPlacement();
+
             SizeInt32 size = ReadWindowSize();
-            float scaleFactor = ReadWindowScaleFactor();
+            PointInt32 position = ReadWindowPosition();
+            float scaleFactor = _hasWindowSize && _lastScaleFactor > 0f ? _lastScaleFactor : ReadWindowScaleFactor();
+
             _settingsManager.SetSetting("Window", "Width", size.Width / scaleFactor);
             _settingsManager.SetSetting("Window", "Height", size.Height / scaleFactor);
+
+            if (WindowPlacementHelper.HasValidPosition(position.X, position.Y))
+            {
+                _settingsManager.SetSetting("Window", "X", position.X);
+                _settingsManager.SetSetting("Window", "Y", position.Y);
+            }
+
+            _settingsManager.SetSetting("Window", "IsMaximized", _isMaximized);
+
             PersistenceResult saveResult = _settingsManager.SaveSettings();
             SettingsPersistenceResult persistence = SettingsPersistenceInvoker.ReadResult(saveResult);
             if (!persistence.Persisted)
@@ -473,14 +574,11 @@ public sealed partial class MainWindow : Window
                     LogStatus.Failed,
                     "Настройки окна не сохранены",
                     null,
-                    "MainWindow",
-                    context: null,
-                    new Dictionary<string, object?>(StringComparer.Ordinal)
-                    {
-                        ["Persisted"] = false,
-                        ["Stage"] = "settings_persistence",
-                        ["ErrorCode"] = persistence.ErrorCode ?? "persistence-failed"
-                    });
+                    SourceName,
+                    properties: LogProps
+                        .Create("Persisted", false)
+                        .With("Stage", "settings_persistence")
+                        .With("ErrorCode", persistence.ErrorCode ?? "persistence-failed"));
             }
 
             return persistence;
@@ -493,16 +591,53 @@ public sealed partial class MainWindow : Window
                 LogStatus.Failed,
                 "Сохранение настроек окна вызвало исключение",
                 ex,
-                "MainWindow",
-                context: null,
-                new Dictionary<string, object?>(StringComparer.Ordinal)
-                {
-                    ["Persisted"] = false,
-                    ["Stage"] = "settings_persistence",
-                    ["ErrorCode"] = "save-exception"
-                });
+                SourceName,
+                properties: LogProps
+                    .Create("Persisted", false)
+                    .With("Stage", "settings_persistence")
+                    .With("ErrorCode", "save-exception"));
             return SettingsPersistenceResult.Failure("save-exception");
         }
+    }
+
+    private void OnAppWindowChanged(AppWindow sender, AppWindowChangedEventArgs args)
+    {
+        CaptureWindowPlacement();
+    }
+
+    private void CaptureWindowPlacement()
+    {
+        try
+        {
+            if (AppWindow.Presenter is OverlappedPresenter presenter)
+            {
+                OverlappedPresenterState state = presenter.State;
+                _isMaximized = WindowPlacementHelper.ResolveIsMaximized(state, _isMaximized);
+
+                if (WindowPlacementHelper.ShouldUpdateNormalBounds(state))
+                {
+                    _lastWindowSize = AppWindow.Size;
+                    _lastWindowPosition = AppWindow.Position;
+                    _lastScaleFactor = ReadWindowScaleFactor();
+                    _hasWindowSize = true;
+                }
+            }
+            else
+            {
+                _lastWindowSize = AppWindow.Size;
+                _lastWindowPosition = AppWindow.Position;
+                _lastScaleFactor = ReadWindowScaleFactor();
+                _hasWindowSize = true;
+            }
+        }
+        catch (Exception)
+        {
+        }
+    }
+
+    private void CaptureWindowSize()
+    {
+        CaptureWindowPlacement();
     }
 
     private SizeInt32 ReadWindowSize()
@@ -512,7 +647,31 @@ public sealed partial class MainWindow : Window
             return _lastWindowSize;
         }
 
-        return AppWindow.Size;
+        try
+        {
+            return AppWindow.Size;
+        }
+        catch
+        {
+            return _lastWindowSize;
+        }
+    }
+
+    private PointInt32 ReadWindowPosition()
+    {
+        if (WindowPlacementHelper.HasValidPosition(_lastWindowPosition.X, _lastWindowPosition.Y))
+        {
+            return _lastWindowPosition;
+        }
+
+        try
+        {
+            return AppWindow.Position;
+        }
+        catch
+        {
+            return _lastWindowPosition;
+        }
     }
 
     private float ReadWindowScaleFactor()
@@ -526,18 +685,6 @@ public sealed partial class MainWindow : Window
         catch (Exception)
         {
             return 1f;
-        }
-    }
-
-    private void CaptureWindowSize()
-    {
-        try
-        {
-            _lastWindowSize = AppWindow.Size;
-            _hasWindowSize = true;
-        }
-        catch (Exception)
-        {
         }
     }
 

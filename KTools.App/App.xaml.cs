@@ -54,8 +54,10 @@ public partial class App : Application
     private static int _servicesDisposed;
     private static readonly object ArgsWatcherGate = new();
     private static readonly object SettingsStageGate = new();
+    private static readonly object ShutdownTaskGate = new();
     private static FileSystemWatcher? _argsWatcher;
     private static Func<SettingsPersistenceResult>? _settingsPersistenceStage;
+    private static Task<CrashShutdownResult>? _activeShutdownTask;
 
     /// <summary>
     /// Признак диагностической сборки, в которой по умолчанию включается уровень Debug.
@@ -199,6 +201,44 @@ public partial class App : Application
         return StartControlledShutdown(reason, out _);
     }
 
+    /// <summary>
+    /// Асинхронно инициирует контролируемое завершение работы приложения с ограничением по времени.
+    /// Не блокирует вызывающий поток (включая UI-поток), позволяя WinUI своевременно обрабатывать
+    /// очередь сообщений и завершать процесс без подвисания интерфейса.
+    /// </summary>
+    /// <param name="reason">Причина завершения работы приложения.</param>
+    /// <param name="timeout">Максимальное время ожидания завершения стадий.</param>
+    /// <returns>True, если контролируемое завершение успешно завершилось в рамках таймаута; иначе false.</returns>
+    public static async Task<bool> TryBeginControlledShutdownAsync(string reason, TimeSpan timeout)
+    {
+        if (!StartControlledShutdown(reason, out Task<CrashShutdownResult>? task))
+        {
+            return false;
+        }
+
+        if (task is null)
+        {
+            return IsControlledShutdownStarted;
+        }
+
+        TimeSpan effectiveTimeout = timeout <= TimeSpan.Zero ? TimeSpan.FromSeconds(10) : timeout;
+        try
+        {
+            Task completedTask = await Task.WhenAny(task, Task.Delay(effectiveTimeout)).ConfigureAwait(false);
+            if (!ReferenceEquals(completedTask, task))
+            {
+                return false;
+            }
+
+            CrashShutdownResult result = await task.ConfigureAwait(false);
+            return result.Succeeded;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
     public static bool TryBeginControlledShutdownAndWait(string reason, TimeSpan timeout)
     {
         if (!StartControlledShutdown(reason, out Task<CrashShutdownResult>? task))
@@ -248,6 +288,11 @@ public partial class App : Application
 
             if (!startResult.Initiated)
             {
+                lock (ShutdownTaskGate)
+                {
+                    task = _activeShutdownTask;
+                }
+
                 return true;
             }
         }
@@ -258,6 +303,11 @@ public partial class App : Application
         }
 
         task = RunControlledShutdownTask(coordinator, reason);
+        lock (ShutdownTaskGate)
+        {
+            _activeShutdownTask = task;
+        }
+
         return true;
     }
 
@@ -621,7 +671,16 @@ public partial class App : Application
         Microsoft.UI.Dispatching.DispatcherQueue? queue = UiDispatcherQueue;
         Func<Action, bool>? enqueue = queue is null
             ? null
-            : action => queue.TryEnqueue(() => action());
+            : action =>
+            {
+                if (queue.HasThreadAccess)
+                {
+                    action();
+                    return true;
+                }
+
+                return queue.TryEnqueue(() => action());
+            };
         return ExitRequestExecutor.RequestAsync(
             enqueue,
             static () => Application.Current?.Exit(),

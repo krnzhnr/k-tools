@@ -1106,8 +1106,15 @@ public sealed class CrashLifecycleTests
     {
         string source = File.ReadAllText(FindAppFile("MainWindow.xaml.cs"));
 
-        source.Should().Contain("bool completed = App.TryBeginControlledShutdownAndWait(");
+        source.Should().Contain("bool completed = await App.TryBeginControlledShutdownAsync(");
         source.Should().Contain("app.shutdown.not_completed");
+    }
+
+    [TestMethod]
+    public async Task TryBeginControlledShutdownAsync_WithoutCoordinator_ReturnsFalseWithoutThrowing()
+    {
+        bool result = await App.TryBeginControlledShutdownAsync("window.closed", TimeSpan.FromMilliseconds(50));
+        result.Should().BeFalse("при неинициализированном координаторе завершение возвращает false");
     }
 
     [TestMethod]
