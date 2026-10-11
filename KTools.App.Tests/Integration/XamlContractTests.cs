@@ -62,6 +62,7 @@ public class XamlContractTests
             Path.Combine(AppRoot, "App.xaml"),
             Path.Combine(AppRoot, "UI", "AudioSyncWindow.xaml"),
             Path.Combine(AppRoot, "UI", "BitrateViewerWindow.xaml"),
+            Path.Combine(AppRoot, "Themes", "Generic.xaml"),
         ];
         foreach (string root in roots)
         {
@@ -74,7 +75,7 @@ public class XamlContractTests
         foreach (string sub in new[] { "Pages", "Controls" })
         {
             string dir = Path.Combine(AppRoot, "UI", sub);
-            foreach (string file in Directory.GetFiles(dir, "*.xaml"))
+            foreach (string file in Directory.GetFiles(dir, "*.xaml", SearchOption.AllDirectories))
             {
                 yield return (file, File.ReadAllText(file));
             }
@@ -133,7 +134,8 @@ public class XamlContractTests
             "FileListControl.xaml", "TrackSelectionControl.xaml",
             "ScriptSettingsControl.xaml", "StreamReplaceControl.xaml",
             "AudioTransplantControl.xaml", "AccentBadge.xaml",
-            "DropZoneOverlay.xaml"
+            "DropZoneOverlay.xaml", "TokenView.xaml", "TokenItem.xaml",
+            "Generic.xaml"
         });
     }
 
@@ -342,7 +344,8 @@ public class XamlContractTests
         {
             "AccentButtonStyle", "DefaultButtonStyle", "CaptionTextBlockStyle",
             "TitleTextBlockStyle", "BaseTextBlockStyle", "BodyTextBlockStyle",
-            "SubtitleTextBlockStyle", "InformationalValueInfoBadgeStyle"
+            "SubtitleTextBlockStyle", "InformationalValueInfoBadgeStyle",
+            "AttentionValueInfoBadgeStyle", "ButtonPadding", "UseSystemFocusVisuals"
         };
 
         var violations = new List<string>();

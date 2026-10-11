@@ -77,17 +77,38 @@ public sealed class MuxTrackItem : INotifyPropertyChanged
     public bool IsAudioTrack => !ShowRoleSelector;
 
     /// <summary>
-    /// Встроенный заголовок дорожки из метаданных файла (поле Title/Name зонда MediaInfo),
-    /// например "AniLibria". Пусто, если метаданных нет или заголовок не задан.
+    /// Отображаемый заголовок дорожки: ручной из диалога дропа, иначе встроенный
+    /// из метаданных файла (поле Title/Name зонда MediaInfo), например "— AniLibria".
+    /// Пусто, если заголовок не задан ни вручную, ни в метаданных.
     /// </summary>
     private string _titleHint = string.Empty;
 
     public string TitleHint => _titleHint;
 
     /// <summary>
-    /// Признак наличия встроенного заголовка (для видимости подписи в UI).
+    /// Сырой встроенный заголовок из метаданных без оформительского тире.
+    /// Используется подсказкой в поле ручного ввода заголовка аудио.
+    /// </summary>
+    private string _probedTitle = string.Empty;
+
+    /// <summary>
+    /// Признак наличия отображаемого заголовка (для видимости подписи в UI).
     /// </summary>
     public bool HasTitleHint => !string.IsNullOrEmpty(_titleHint);
+
+    /// <summary>
+    /// Показ текстовой подписи заголовка: только у субтитров.
+    /// У аудио вместо подписи поле ручного ввода заголовка.
+    /// </summary>
+    public bool ShowTitleHint => !IsAudioTrack && HasTitleHint;
+
+    /// <summary>
+    /// Подсказка поля ручного ввода заголовка аудио: встроенный заголовок
+    /// либо нейтральное приглашение, если метаданных нет.
+    /// </summary>
+    public string AudioTitlePlaceholder => !string.IsNullOrEmpty(_probedTitle)
+        ? _probedTitle
+        : "Заголовок…";
 
     /// <summary>
     /// Индекс выбранной роли в селекторе (0 — Авто, 1 — Полные, 2 — Надписи, 3 — Другие).
@@ -132,11 +153,15 @@ public sealed class MuxTrackItem : INotifyPropertyChanged
         {
             UpdateTitleHint();
         }
+        else if (e.PropertyName == nameof(FileQueueItem.MuxAudioTitle))
+        {
+            UpdateTitleHint();
+        }
     }
 
     private void UpdateTitleHint()
     {
-        string hint = string.Empty;
+        string probed = string.Empty;
         var tracks = File.MediaInfo?.Tracks;
         if (tracks != null && tracks.Count > 0)
         {
@@ -145,17 +170,25 @@ public sealed class MuxTrackItem : INotifyPropertyChanged
                 bool isAudioType = track.TrackType.Equals("audio", StringComparison.OrdinalIgnoreCase);
                 if (isAudioType == IsAudioTrack && !string.IsNullOrWhiteSpace(track.Name))
                 {
-                    hint = $"— {track.Name.Trim()}";
+                    probed = track.Name.Trim();
                     break;
                 }
             }
         }
 
-        if (!string.Equals(_titleHint, hint, StringComparison.Ordinal))
+        string manual = File.MuxAudioTitle?.Trim() ?? string.Empty;
+        string effective = !string.IsNullOrEmpty(manual) ? manual : probed;
+        string hint = !string.IsNullOrEmpty(effective) ? $"— {effective}" : string.Empty;
+
+        if (!string.Equals(_titleHint, hint, StringComparison.Ordinal)
+            || !string.Equals(_probedTitle, probed, StringComparison.Ordinal))
         {
             _titleHint = hint;
+            _probedTitle = probed;
             OnPropertyChanged(nameof(TitleHint));
             OnPropertyChanged(nameof(HasTitleHint));
+            OnPropertyChanged(nameof(ShowTitleHint));
+            OnPropertyChanged(nameof(AudioTitlePlaceholder));
         }
     }
 
@@ -969,6 +1002,61 @@ public sealed partial class FileListControl : UserControl
     }
 
     /// <summary>
+    /// Открывает диалог переименования заголовка дорожки: новый заголовок
+    /// записывается во все аудиофайлы очереди с таким же текущим заголовком
+    /// (все серии), а не только в выбранную дорожку.
+    /// </summary>
+    private async void RenameMuxTrackTitle_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button btn && btn.DataContext is MuxTrackItem track)
+        {
+            if (ActiveScript is not MkvAssemblyScript)
+            {
+                return;
+            }
+
+            string oldTitle = MuxAudioTitlePresets.GetEffectiveTitle(track.File);
+            var matches = Files
+                .Where(f => IsAudioPath(f.FilePath)
+                    && string.Equals(MuxAudioTitlePresets.GetEffectiveTitle(f), oldTitle, StringComparison.Ordinal))
+                .ToList();
+            if (matches.Count == 0)
+            {
+                return;
+            }
+
+            if (!TryGetMuxerTitleSettings(out string group, out _, out var storedPresets, requirePrompt: false))
+            {
+                return;
+            }
+
+            var presets = new ObservableCollection<string>(MuxAudioTitlePresets.ToWords(storedPresets));
+            var dialogService = App.Services.GetRequiredService<IDialogService>();
+            string? newTitle;
+            try
+            {
+                newTitle = await dialogService.RenameAudioTitleAsync(oldTitle, matches.Count, presets);
+            }
+            catch (Exception ex)
+            {
+                _logService.Write("ui.audio_title.prompt_failed", LogLevel.Warning, LogStatus.Failed, "Диалог переименования заголовка не показан, заголовки не изменены", ex, SourceName, properties: LogProps.Create("ErrorCode", "AUDIO_TITLE_PROMPT_FAILED").With("Count", matches.Count));
+                return;
+            }
+
+            SaveTitlePresetsIfChanged(group, storedPresets, presets);
+
+            if (newTitle == null)
+            {
+                _logService.Write("ui.audio_title.prompt_cancelled", LogLevel.Info, LogStatus.Cancelled, $"Переименование заголовка отменено, дорожек: {matches.Count}", source: SourceName, properties: LogProps.Create("Count", matches.Count).With("Reason", "UserRequested"));
+                return;
+            }
+
+            int renamed = MuxAudioTitlePresets.ApplyRename(matches, oldTitle, newTitle);
+            _logService.Write("ui.audio_title.renamed", LogLevel.Info, LogStatus.Succeeded, $"Заголовок «{oldTitle}» переименован в «{newTitle.Trim()}», дорожек: {renamed}", source: SourceName, properties: LogProps.Create("Count", renamed).With("Value", newTitle.Trim()));
+        }
+    }
+
+    /// <summary>
     /// Сбрасывает ручную привязку дорожки к группе (возврат к автосопоставлению по имени).
     /// </summary>
     private void UnpinMuxTrack_Click(object sender, RoutedEventArgs e)
@@ -1097,6 +1185,7 @@ public sealed partial class FileListControl : UserControl
                 AddFiles(paths);
 
                 int attached = 0;
+                var addedAudio = new List<FileQueueItem>();
                 foreach (string path in paths)
                 {
                     var queueItem = Files.FirstOrDefault(f => f.FilePath.Equals(path, StringComparison.OrdinalIgnoreCase));
@@ -1121,11 +1210,19 @@ public sealed partial class FileListControl : UserControl
                     {
                         queueItem.MuxRoleOverride = zoneRole;
                     }
+
+                    if (isAudio)
+                    {
+                        addedAudio.Add(queueItem);
+                    }
+
                     attached++;
                 }
 
                 SyncMuxingRows();
                 _logService.Write("ui.files.dropped", LogLevel.Debug, LogStatus.Succeeded, $"В зону '{LogRedactor.CompactSafeToken(zoneTag)}' добавлено файлов: {attached}", source: SourceName, properties: LogProps.Create("Count", attached).With("Key", LogRedactor.CompactSafeToken(zoneTag)));
+
+                await MaybeAskAudioTitleAsync(addedAudio);
             }
         }
         catch (Exception ex)
@@ -1163,6 +1260,134 @@ public sealed partial class FileListControl : UserControl
                 _logService.Write("ui.track.promoted_to_additional", LogLevel.Debug, LogStatus.Changed, $"Дорожка '{other.FileName}' переведена в дополнительные, основная дорожка '{newMain.FileName}'", source: SourceName, properties: LogProps.Create("InputName", other.FileName).With("OutputName", newMain.FileName));
             }
         }
+    }
+
+    /// <summary>
+    /// Проверяет, является ли путь аудиофайлом, подходящим для сборки MKV.
+    /// </summary>
+    private static bool IsAudioPath(string path)
+    {
+        string ext = Path.GetExtension(path).ToLowerInvariant();
+        return AppConstants.AudioContainers.Contains(ext) || AppConstants.AudioStreams.Contains(ext);
+    }
+
+    /// <summary>
+    /// Читает настройки заголовков аудио скрипта сборки (опрос, дефолт, заготовки).
+    /// С включённым требованием опроса возвращает false при выключенном тумблере.
+    /// </summary>
+    private bool TryGetMuxerTitleSettings(
+        out string group,
+        out string defaultTitle,
+        out List<Dictionary<string, object>> storedPresets,
+        bool requirePrompt)
+    {
+        group = string.Empty;
+        defaultTitle = string.Empty;
+        storedPresets = new List<Dictionary<string, object>>();
+
+        if (ActiveScript is not MkvAssemblyScript)
+        {
+            return false;
+        }
+
+        try
+        {
+            group = _settingsManager.GetSafeGroupName(ActiveScript.Name);
+        }
+        catch
+        {
+            return false;
+        }
+
+        try
+        {
+            if (requirePrompt && !_settingsManager.GetSetting(group, "audio_title_prompt", false))
+            {
+                return false;
+            }
+
+            defaultTitle = _settingsManager.GetSetting(group, "audio_title_default", string.Empty);
+            storedPresets = _settingsManager.GetSetting(group, MuxAudioTitlePresets.PresetsSettingKey, new List<Dictionary<string, object>>());
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logService.Write("ui.audio_title.settings_failed", LogLevel.Warning, LogStatus.Failed, "Настройки заголовков аудио не прочитаны, опрос пропущен", ex, SourceName, properties: LogProps.Create("ErrorCode", "AUDIO_TITLE_SETTINGS_FAILED"));
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Сохраняет заготовки заголовков при их изменении в диалоге.
+    /// </summary>
+    private void SaveTitlePresetsIfChanged(
+        string group,
+        List<Dictionary<string, object>> storedPresets,
+        ObservableCollection<string> presets)
+    {
+        try
+        {
+            var currentWords = presets.ToList();
+            if (!currentWords.SequenceEqual(MuxAudioTitlePresets.ToWords(storedPresets)))
+            {
+                _settingsManager.SetSetting(group, MuxAudioTitlePresets.PresetsSettingKey, MuxAudioTitlePresets.FromWords(currentWords));
+                _logService.Write("ui.audio_title.presets_saved", LogLevel.Debug, LogStatus.Changed, $"Список заготовок заголовков обновлён, заготовок: {currentWords.Count}", source: SourceName, properties: LogProps.Create("Count", currentWords.Count));
+            }
+        }
+        catch (Exception ex)
+        {
+            _logService.Write("ui.audio_title.presets_save_failed", LogLevel.Warning, LogStatus.PartiallySucceeded, "Заготовки заголовков не сохранены, заголовок применён без сохранения списка", ex, SourceName, properties: LogProps.Create("ErrorCode", "AUDIO_TITLE_PRESETS_SAVE_FAILED"));
+        }
+    }
+
+    /// <summary>
+    /// Запрашивает общий заголовок для только что добавленных аудиодорожек,
+    /// если в настройках сборки включён опрос. Заготовки подтягиваются из настроек
+    /// и сохраняются обратно при изменении в диалоге. Отмена оставляет файлы без заголовка.
+    /// </summary>
+    private async Task MaybeAskAudioTitleAsync(List<FileQueueItem> addedAudio)
+    {
+        if (addedAudio.Count == 0)
+        {
+            return;
+        }
+
+        if (!TryGetMuxerTitleSettings(out string group, out string defaultTitle, out var storedPresets, requirePrompt: true))
+        {
+            return;
+        }
+
+        var presets = new ObservableCollection<string>(MuxAudioTitlePresets.ToWords(storedPresets));
+        var dialogService = App.Services.GetRequiredService<IDialogService>();
+        string? title;
+        try
+        {
+            title = await dialogService.AskAudioTitleAsync(
+                addedAudio.Select(a => a.FileName).ToList(),
+                defaultTitle,
+                presets);
+        }
+        catch (Exception ex)
+        {
+            _logService.Write("ui.audio_title.prompt_failed", LogLevel.Warning, LogStatus.Failed, "Диалог заголовка аудиодорожек не показан, файлы добавлены без заголовка", ex, SourceName, properties: LogProps.Create("ErrorCode", "AUDIO_TITLE_PROMPT_FAILED").With("Count", addedAudio.Count));
+            return;
+        }
+
+        SaveTitlePresetsIfChanged(group, storedPresets, presets);
+
+        if (title == null)
+        {
+            _logService.Write("ui.audio_title.prompt_cancelled", LogLevel.Info, LogStatus.Cancelled, $"Ввод заголовка отменён, файлов без заголовка: {addedAudio.Count}", source: SourceName, properties: LogProps.Create("Count", addedAudio.Count).With("Reason", "UserRequested"));
+            return;
+        }
+
+        string? manualTitle = string.IsNullOrWhiteSpace(title) ? null : title.Trim();
+        foreach (var item in addedAudio)
+        {
+            item.MuxAudioTitle = manualTitle;
+        }
+
+        _logService.Write("ui.audio_title.applied", LogLevel.Info, LogStatus.Succeeded, manualTitle != null ? $"Общий заголовок применён к аудиодорожкам: {addedAudio.Count}" : $"Аудиодорожки оставлены без заголовка: {addedAudio.Count}", source: SourceName, properties: LogProps.Create("Count", addedAudio.Count).With("Value", manualTitle ?? string.Empty));
     }
 
     private void ClearListButton_Click(object sender, RoutedEventArgs e)
@@ -1204,7 +1429,12 @@ public sealed partial class FileListControl : UserControl
             if (files != null && files.Count > 0)
             {
                 _logService.Write("ui.file_picker.completed", LogLevel.Debug, LogStatus.Succeeded, $"В диалоге выбора файлов выбрано объектов: {files.Count}", source: SourceName, properties: LogProps.Create("Count", files.Count));
+                var knownBefore = new HashSet<string>(Files.Select(f => f.FilePath), StringComparer.OrdinalIgnoreCase);
                 AddFiles(files.Select(f => f.Path));
+                var addedAudio = Files
+                    .Where(f => !knownBefore.Contains(f.FilePath) && IsAudioPath(f.FilePath))
+                    .ToList();
+                await MaybeAskAudioTitleAsync(addedAudio);
             }
         }
         catch (Exception ex)
@@ -1288,7 +1518,12 @@ public sealed partial class FileListControl : UserControl
                     }
                 }
 
+                var knownBefore = new HashSet<string>(Files.Select(f => f.FilePath), StringComparer.OrdinalIgnoreCase);
                 AddFiles(paths);
+                var addedAudio = Files
+                    .Where(f => !knownBefore.Contains(f.FilePath) && IsAudioPath(f.FilePath))
+                    .ToList();
+                await MaybeAskAudioTitleAsync(addedAudio);
             }
         }
         catch (Exception ex)

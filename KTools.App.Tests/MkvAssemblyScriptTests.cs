@@ -629,6 +629,244 @@ public class MkvAssemblyScriptTests
     }
 
     /// <summary>
+    /// Проверяет наличие экспандера запроса заголовка аудио и дочерних полей в схеме настроек.
+    /// </summary>
+    [TestMethod]
+    public void SettingsSchema_ContainsAudioTitlePrompt()
+    {
+        // Act
+        var schema = _script.SettingsSchema;
+
+        // Assert
+        var prompt = schema.FirstOrDefault(f => f.Key == "audio_title_prompt");
+        prompt.Should().NotBeNull();
+        prompt!.Type.Should().Be(SettingType.Expander);
+        prompt.Group.Should().Be("Аудио");
+        prompt.DefaultValue.Should().Be(false);
+        prompt.ChildFields.Should().NotBeNull();
+
+        var defaultTitle = prompt.ChildFields.FirstOrDefault(f => f.Key == "audio_title_default");
+        defaultTitle.Should().NotBeNull();
+        defaultTitle!.Type.Should().Be(SettingType.Text);
+
+        var presets = prompt.ChildFields.FirstOrDefault(f => f.Key == "audio_title_presets");
+        presets.Should().NotBeNull();
+        presets!.Type.Should().Be(SettingType.KeywordList);
+    }
+
+    /// <summary>
+    /// Проверяет приоритет ручного заголовка из дропа над встроенным из метаданных.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_ManualAudioTitle_WinsOverEmbedded()
+    {
+        // Arrange
+        string tempDir = Path.Combine(Path.GetTempPath(), "MkvAssembly_ManualTitleTest_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            string videoPath = Path.Combine(tempDir, "s01e01.mkv");
+            string audioPath = Path.Combine(tempDir, "s01e01.mka");
+
+            File.WriteAllText(videoPath, "");
+            File.WriteAllText(audioPath, "");
+
+            _script.FilesQueue.Add(new FileQueueItem(videoPath));
+            _script.FilesQueue.Add(new FileQueueItem(audioPath));
+            _script.FilesQueue.First(f => f.FilePath == audioPath).MuxAudioTitle = "Ручной заголовок";
+
+            var withTitle = new MediaStructure { FilePath = audioPath };
+            withTitle.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "audio", Name = "Встроенный" });
+            _mediaProbeServiceMock.Setup(m => m.ProbeAsync(audioPath))
+                .ReturnsAsync(withTitle);
+
+            var settings = new Dictionary<string, object>
+            {
+                { "clean_tracks", true }
+            };
+
+            _settingsManagerMock.Setup(s => s.GetSetting("General", "OverwriteExisting", false))
+                .Returns(true);
+
+            List<MkvInputSource>? capturedInputs = null;
+            _mkvmergeRunnerMock.Setup(m => m.RunAsync(
+                    It.IsAny<string>(),
+                    It.IsAny<List<MkvInputSource>>(),
+                    It.IsAny<string>(),
+                    It.IsAny<List<string>>(),
+                    It.IsAny<Action<double>>(),
+                    It.IsAny<System.Threading.CancellationToken>()
+                ))
+                .Callback<string, List<MkvInputSource>, string, List<string>, Action<double>, System.Threading.CancellationToken, ProcessExecutionContext>(
+                    (outPath, inputs, title, extraArgs, onProgress, ct, processContext) => capturedInputs = inputs)
+                .ReturnsAsync(MockBuilders.ProcessSucceeded());
+
+            // Act
+            await _script.ExecuteSingleAsync(
+                videoPath,
+                settings,
+                null,
+                (fIdx, total, status, progress, fps, bitrate) => { },
+                0,
+                1);
+
+            // Assert
+            capturedInputs.Should().NotBeNull();
+            capturedInputs!.Should().HaveCount(2);
+            capturedInputs[1].Path.Should().Be(audioPath);
+            capturedInputs[1].Args.Should().Contain(a => a.Contains("Ручной заголовок"));
+            capturedInputs[1].Args.Should().NotContain(a => a.Contains("Встроенный"));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, true);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Проверяет применение заголовка по умолчанию при отсутствии ручного и встроенного.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_DefaultAudioTitle_AppliesWithoutManual()
+    {
+        // Arrange
+        string tempDir = Path.Combine(Path.GetTempPath(), "MkvAssembly_DefaultTitleTest_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            string videoPath = Path.Combine(tempDir, "s01e01.mkv");
+            string audioPath = Path.Combine(tempDir, "s01e01.mka");
+
+            File.WriteAllText(videoPath, "");
+            File.WriteAllText(audioPath, "");
+
+            _script.FilesQueue.Add(new FileQueueItem(videoPath));
+            _script.FilesQueue.Add(new FileQueueItem(audioPath));
+
+            var withTitle = new MediaStructure { FilePath = audioPath };
+            withTitle.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "audio", Name = "Встроенный" });
+            _mediaProbeServiceMock.Setup(m => m.ProbeAsync(audioPath))
+                .ReturnsAsync(withTitle);
+
+            var settings = new Dictionary<string, object>
+            {
+                { "clean_tracks", true },
+                { "audio_title_default", "Дефолтный заголовок" }
+            };
+
+            _settingsManagerMock.Setup(s => s.GetSetting("General", "OverwriteExisting", false))
+                .Returns(true);
+
+            List<MkvInputSource>? capturedInputs = null;
+            _mkvmergeRunnerMock.Setup(m => m.RunAsync(
+                    It.IsAny<string>(),
+                    It.IsAny<List<MkvInputSource>>(),
+                    It.IsAny<string>(),
+                    It.IsAny<List<string>>(),
+                    It.IsAny<Action<double>>(),
+                    It.IsAny<System.Threading.CancellationToken>()
+                ))
+                .Callback<string, List<MkvInputSource>, string, List<string>, Action<double>, System.Threading.CancellationToken, ProcessExecutionContext>(
+                    (outPath, inputs, title, extraArgs, onProgress, ct, processContext) => capturedInputs = inputs)
+                .ReturnsAsync(MockBuilders.ProcessSucceeded());
+
+            // Act
+            await _script.ExecuteSingleAsync(
+                videoPath,
+                settings,
+                null,
+                (fIdx, total, status, progress, fps, bitrate) => { },
+                0,
+                1);
+
+            // Assert
+            capturedInputs.Should().NotBeNull();
+            capturedInputs!.Should().HaveCount(2);
+            capturedInputs[1].Path.Should().Be(audioPath);
+            capturedInputs[1].Args.Should().Contain(a => a.Contains("Дефолтный заголовок"));
+            capturedInputs[1].Args.Should().NotContain(a => a.Contains("Встроенный"));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, true);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Проверяет вычищение кавычек из ручного заголовка перед подстановкой в аргументы.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_ManualAudioTitleWithQuotes_Sanitized()
+    {
+        // Arrange
+        string tempDir = Path.Combine(Path.GetTempPath(), "MkvAssembly_QuoteTitleTest_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            string videoPath = Path.Combine(tempDir, "s01e01.mkv");
+            string audioPath = Path.Combine(tempDir, "s01e01.mka");
+
+            File.WriteAllText(videoPath, "");
+            File.WriteAllText(audioPath, "");
+
+            _script.FilesQueue.Add(new FileQueueItem(videoPath));
+            _script.FilesQueue.Add(new FileQueueItem(audioPath));
+            _script.FilesQueue.First(f => f.FilePath == audioPath).MuxAudioTitle = "Студия \"Лучшая\"";
+
+            var settings = new Dictionary<string, object>
+            {
+                { "clean_tracks", true }
+            };
+
+            _settingsManagerMock.Setup(s => s.GetSetting("General", "OverwriteExisting", false))
+                .Returns(true);
+
+            List<MkvInputSource>? capturedInputs = null;
+            _mkvmergeRunnerMock.Setup(m => m.RunAsync(
+                    It.IsAny<string>(),
+                    It.IsAny<List<MkvInputSource>>(),
+                    It.IsAny<string>(),
+                    It.IsAny<List<string>>(),
+                    It.IsAny<Action<double>>(),
+                    It.IsAny<System.Threading.CancellationToken>()
+                ))
+                .Callback<string, List<MkvInputSource>, string, List<string>, Action<double>, System.Threading.CancellationToken, ProcessExecutionContext>(
+                    (outPath, inputs, title, extraArgs, onProgress, ct, processContext) => capturedInputs = inputs)
+                .ReturnsAsync(MockBuilders.ProcessSucceeded());
+
+            // Act
+            await _script.ExecuteSingleAsync(
+                videoPath,
+                settings,
+                null,
+                (fIdx, total, status, progress, fps, bitrate) => { },
+                0,
+                1);
+
+            // Assert
+            capturedInputs.Should().NotBeNull();
+            capturedInputs!.Should().HaveCount(2);
+            capturedInputs[1].Args.Should().Contain(a => a.Contains("Студия 'Лучшая'"));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, true);
+            }
+        }
+    }
+
+    /// <summary>
     /// Проверяет заголовок аудио из метаданных файла: встроенный Title приоритетнее
     /// имени файла, кавычки вычищаются; без метаданных используется имя файла.
     /// </summary>

@@ -565,6 +565,26 @@ public sealed class FileQueueItem : INotifyPropertyChanged
         }
     }
 
+    private string? _muxAudioTitle;
+
+    /// <summary>
+    /// Ручной заголовок аудиодорожки, заданный диалогом при перетаскивании файлов.
+    /// Имеет приоритет над заголовком по умолчанию, метаданными файла и именем файла.
+    /// Null или пустая строка — заголовок не задан вручную.
+    /// </summary>
+    public string? MuxAudioTitle
+    {
+        get => _muxAudioTitle;
+        set
+        {
+            if (!string.Equals(_muxAudioTitle, value, StringComparison.Ordinal))
+            {
+                _muxAudioTitle = value;
+                OnPropertyChanged();
+            }
+        }
+    }
+
     public event PropertyChangedEventHandler? PropertyChanged;
 
     private void OnPropertyChanged([CallerMemberName] string? prop = null)

@@ -106,6 +106,33 @@ public sealed class MkvAssemblyScript(
             "Сборка",
             visibleIfKey: "clean_tracks",
             visibleIfValues: ["False"]
+        ),
+        new SettingField(
+            "audio_title_prompt",
+            "Спрашивать заголовок аудио",
+            SettingType.Expander,
+            false,
+            "Аудио",
+            comment: "При добавлении аудиофайлов спрашивать общий заголовок дорожек, заготовки хранятся ниже",
+            childFields:
+            [
+                new SettingField(
+                    "audio_title_default",
+                    "Заголовок по умолчанию",
+                    SettingType.Text,
+                    string.Empty,
+                    "Аудио",
+                    comment: "Подставляется в диалог и применяется без спроса, если он выключен"
+                ),
+                new SettingField(
+                    "audio_title_presets",
+                    "Заготовленные заголовки",
+                    SettingType.KeywordList,
+                    new List<Dictionary<string, object>>(),
+                    "Аудио",
+                    comment: "Включённые строки показываются в диалоге для мгновенного применения"
+                )
+            ]
         )
     ];
 
@@ -173,7 +200,7 @@ public sealed class MkvAssemblyScript(
         // Ручная привязка через дроп-зону (MuxPinnedStem) имеет приоритет над автосопоставлением.
         // Роль субтитров (полные/надписи/прочие) определяется суффиксом через MuxTrackTyper.
         // Основная аудиодорожка — явно помеченная (зона "RU Аудио (Осн.)") или первая по имени.
-        List<(string Path, bool ExplicitMain)> audioCandidates = [];
+        List<(string Path, bool ExplicitMain, string? ManualTitle)> audioCandidates = [];
         List<(string Path, MuxSubsRole Role)> subsTracks = [];
 
         foreach (var queueItem in FilesQueue)
@@ -195,7 +222,7 @@ public sealed class MkvAssemblyScript(
             {
                 if (!audioCandidates.Any(c => string.Equals(c.Path, queueItem.FilePath, StringComparison.OrdinalIgnoreCase)))
                 {
-                    audioCandidates.Add((queueItem.FilePath, queueItem.MuxAudioMain));
+                    audioCandidates.Add((queueItem.FilePath, queueItem.MuxAudioMain, queueItem.MuxAudioTitle));
                 }
             }
             else if (AppConstants.SubtitleExtensions.Contains(qExt))
@@ -443,16 +470,27 @@ public sealed class MkvAssemblyScript(
         // Настройка внешних аудио-источников (если найдены).
         // Первая дорожка — основная (зона "RU Аудио (Осн.)" или первая по имени):
         // флаги default/forced. Язык всех внешних дорожек — русский.
-        // Дополнительные различаются заголовком: сначала заголовок из метаданных
-        // файла (MediaInfo Title), при его отсутствии — из различающейся части имени файла.
+        // Приоритет заголовка: ручной из диалога дропа, затем заголовок по умолчанию
+        // из настроек, затем заголовок из метаданных файла, затем различающаяся часть имени.
+        string defaultAudioTitle = SanitizeTrackTitle(GetSettingValue(settings, "audio_title_default", string.Empty));
         for (int i = 0; i < audioPaths.Count; i++)
         {
             bool isMain = i == 0;
             string audioStem = Path.GetFileNameWithoutExtension(audioPaths[i]);
+            string manualTitle = SanitizeTrackTitle(audioCandidates[i].ManualTitle);
             string embeddedTitle = await GetEmbeddedAudioTitleAsync(audioPaths[i]);
-            string audioTitle = !string.IsNullOrWhiteSpace(embeddedTitle)
-                ? embeddedTitle
-                : MuxTrackTyper.InferTrackTitle(stem, audioStem);
+            string audioTitle = !string.IsNullOrWhiteSpace(manualTitle)
+                ? manualTitle
+                : !string.IsNullOrWhiteSpace(defaultAudioTitle)
+                    ? defaultAudioTitle
+                    : !string.IsNullOrWhiteSpace(embeddedTitle)
+                        ? embeddedTitle
+                        : MuxTrackTyper.InferTrackTitle(stem, audioStem);
+            if (!string.IsNullOrWhiteSpace(manualTitle) || !string.IsNullOrWhiteSpace(defaultAudioTitle))
+            {
+                _logService.Write("script.mkv_assembly.audio_title_applied", LogLevel.Debug, LogStatus.Succeeded, $"Заголовок аудиодорожки задан вручную: '{LogProps.FileName(audioPaths[i])}'", source: Name, properties: LogProps.Create("InputName", LogProps.FileName(audioPaths[i])).With("Value", audioTitle));
+            }
+
             var audioArgs = new List<string>
             {
                 "--audio-tracks", "0",
@@ -682,6 +720,21 @@ public sealed class MkvAssemblyScript(
         }
 
         return newDefault;
+    }
+
+    /// <summary>
+    /// Чистит ручной заголовок дорожки: обрезка пробелов и замена кавычек,
+    /// так как заголовок подставляется в кавычках в аргументы mkvmerge.
+    /// Пустой вход даёт пустую строку.
+    /// </summary>
+    private static string SanitizeTrackTitle(string? title)
+    {
+        if (string.IsNullOrWhiteSpace(title))
+        {
+            return string.Empty;
+        }
+
+        return title.Trim().Replace("\"", "'", StringComparison.Ordinal);
     }
 
     /// <summary>
