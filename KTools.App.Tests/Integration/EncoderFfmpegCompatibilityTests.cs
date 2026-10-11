@@ -193,6 +193,90 @@ public partial class EncoderFfmpegCompatibilityTests
     }
 
     [TestMethod]
+    public void Encode_CpuLibx264WithCropScaleChain_ProducesExpectedDimensions()
+    {
+        // Arrange: продуктовая цепочка кроп → скейл в строгом порядке приоритетов (10 → 20).
+        var settings = CpuSettings("AVC / H.264", new Dictionary<string, object>
+        {
+            { "x264_preset", "veryfast" },
+            { "x264_rc", "CRF" },
+            { "x264_crf", 23 }
+        });
+
+        // Act: эталон 320x240 → кроп до 320x200 → скейл до 160x100.
+        var (run, output, command) = EncodeWithCpu(
+            settings, Ctx(".mkv"), ".mkv", "x264_cropscale",
+            videoFilter: "crop=320:200:0:20,scale=160:100:flags=lanczos");
+
+        // Assert
+        ShouldProduceDecodableVideo(run, output, command, expectedCodec: "h264", expectedPixFmt: "yuv420p");
+        var probe = FfmpegTestHost.ProbeVideoStream(_ffprobe, _ffmpeg, output);
+        probe["width"].Should().Be("160");
+        probe["height"].Should().Be("100");
+    }
+
+    [TestMethod]
+    public void Encode_CpuLibx265WithScaleFilter_ProducesDownscaledHevc()
+    {
+        // Arrange: связка скейла с HEVC — ортогональная ось, не покрытая базовым scale-тестом на x264.
+        var settings = CpuSettings("HEVC / H.265", new Dictionary<string, object>
+        {
+            { "x265_preset", "veryfast" },
+            { "x265_rc", "CRF" },
+            { "x265_crf", 28 }
+        });
+
+        // Act
+        var (run, output, command) = EncodeWithCpu(
+            settings, Ctx(".mkv"), ".mkv", "x265_scale", videoFilter: "scale=160:120:flags=lanczos");
+
+        // Assert
+        ShouldProduceDecodableVideo(run, output, command, expectedCodec: "hevc", expectedPixFmt: "yuv420p");
+        var probe = FfmpegTestHost.ProbeVideoStream(_ffprobe, _ffmpeg, output);
+        probe["width"].Should().Be("160");
+        probe["height"].Should().Be("120");
+    }
+
+    [TestMethod]
+    public void Encode_CpuLibx264WithSubtitlesFilter_BurnsGeneratedAss()
+    {
+        // Arrange: минимальный ASS и каталог шрифтов, экранирование путей как в VideoEncodingScript.
+        string assPath = Path.Combine(_workDir, "compat_burn.ass");
+        File.WriteAllText(assPath,
+            "[Script Info]\nScriptType: v4.00+\nPlayResX: 320\nPlayResY: 240\n\n" +
+            "[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n" +
+            "Style: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1\n\n" +
+            "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n" +
+            "Dialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,Проверка\n");
+        var settings = CpuSettings("AVC / H.264", new Dictionary<string, object>
+        {
+            { "x264_preset", "veryfast" },
+            { "x264_rc", "CRF" },
+            { "x264_crf", 23 }
+        });
+
+        // Act: двойные кавычки держат значение -vf единым аргументом командной строки.
+        string videoFilter = "\"subtitles=filename='" + EscapeCompatFilterPath(assPath)
+            + "':fontsdir='" + EscapeCompatFilterPath(_workDir) + "'\"";
+        var (run, output, command) = EncodeWithCpu(settings, Ctx(".mkv"), ".mkv", "x264_subs", videoFilter: videoFilter);
+
+        // Assert: фильтр принят энкодером, результат декодируется без изменения разрешения.
+        command.Should().Contain("subtitles=");
+        ShouldProduceDecodableVideo(run, output, command, expectedCodec: "h264", expectedPixFmt: "yuv420p");
+        var probe = FfmpegTestHost.ProbeVideoStream(_ffprobe, _ffmpeg, output);
+        probe["width"].Should().Be("320");
+        probe["height"].Should().Be("240");
+    }
+
+    /// <summary>
+    /// Экранирует путь для фильтра subtitles так же, как продакшен-код: POSIX-разделители и двоеточие.
+    /// </summary>
+    private static string EscapeCompatFilterPath(string path)
+    {
+        return path.Replace("\\", "/").Replace(":", "\\:");
+    }
+
+    [TestMethod]
     public void Encode_CpuLibx265CrfMkv_ProducesDecodableHevc()
     {
         // Arrange

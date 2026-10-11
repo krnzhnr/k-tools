@@ -664,11 +664,19 @@ public sealed partial class ScriptSettingsControl : UserControl
                         //   для VisibleIf / DisableConditions;
                         // — UpdatePreview обновляет предпросмотр переименования файлов, к которому
                         //   тумблер экспандера фильтров не имеет отношения.
+                        // IsHitTestVisible восстанавливаем обязательно: UpdateVisibility сбрасывает
+                        // его в false при выключенном тумблере, без этого включённые карточки
+                        // выглядят активными, но не реагируют на клики.
                         foreach (var card in childCards)
                         {
                             card.IsEnabled = isOn;
+                            card.IsHitTestVisible = isOn;
                             card.Opacity = 1.0;
                         }
+
+                        // Тумблер намеренно не вызывает UpdateVisibility, поэтому сообщаем скрипту
+                        // об изменении отдельно: скрипты с фоновыми превью пересчитают своё состояние.
+                        _activeScript?.NotifySettingsChanged();
                     };
                 }
 
@@ -1292,6 +1300,11 @@ public sealed partial class ScriptSettingsControl : UserControl
                 group.CardBorder.Visibility = hasVisibleElements ? Visibility.Visible : Visibility.Collapsed;
             }
         }
+
+        // 3. Сообщаем активному скрипту об изменении настроек, чтобы скрипты
+        // с фоновыми превью (бейджи разрешений) пересчитали своё состояние.
+        // Метод скрипта отвечает за подавление дребезга; базовая реализация — пустая.
+        _activeScript?.NotifySettingsChanged();
     }
 
     /// <summary>

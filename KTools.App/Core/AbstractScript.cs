@@ -379,6 +379,17 @@ public abstract class AbstractScript
         StateChanged?.Invoke(this, EventArgs.Empty);
     }
 
+    /// <summary>
+    /// Уведомляет скрипт об изменении настроек пользователем.
+    /// Базовая реализация ничего не делает; скрипты с фоновыми превью
+    /// (например, превью разрешений) перекрывают метод и обновляют состояние.
+    /// Вызывается из панели настроек после фиксации изменений.
+    /// Все комментарии выполнены исключительно на русском языке.
+    /// </summary>
+    public virtual void NotifySettingsChanged()
+    {
+    }
+
     private readonly object _batchLock = new();
     private readonly HashSet<string> _batchReservedPaths = new(StringComparer.OrdinalIgnoreCase);
     private int _batchRenameCounter = 0;

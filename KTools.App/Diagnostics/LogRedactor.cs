@@ -51,7 +51,7 @@ public sealed class LogRedactor
         MatchTimeout);
 
     private static readonly Regex DriveRelativePathRegex = new(
-        @"(?<![A-Za-z0-9_\-])(?<path>[A-Za-z]:[^\\/:*?""<>|\r\n\s,;()\[\]{}]+)",
+        @"(?<![A-Za-z0-9_\-:])(?<path>[A-Za-z]:[^\\/:*?""<>|\r\n\s,;()\[\]{}]+)",
         RegexOptions.CultureInvariant,
         MatchTimeout);
 

@@ -75,6 +75,20 @@ public class LogRedactorTests
         result.Should().NotContain("Z:foo");
     }
 
+    /// <summary>
+    /// Проверяет, что селекторы потоков FFmpeg вида 0:v:0 не считаются
+    /// относительными путями диска и сохраняются в командной строке как есть.
+    /// </summary>
+    [TestMethod]
+    public void RedactMessage_FfmpegStreamSpecifier_Preserved()
+    {
+        string result = _redactor.RedactMessage(@"Запуск ffmpeg -i video.mp4 -map 0:v:0 -map 0:a:0? -map 0:s:0 result.mkv");
+
+        result.Should().Contain("0:v:0");
+        result.Should().Contain("0:a:0?");
+        result.Should().Contain("0:s:0");
+    }
+
     [TestMethod]
     public void SanitizeIdentifier_DriveRelativePath_IsUnknown()
     {

@@ -8,9 +8,11 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Moq;
 using FluentAssertions;
 using KTools_App.Core;
+using KTools_App.Diagnostics;
 using KTools_App.Models;
 using KTools_App.Scripts;
 using KTools_App.Services.Contracts;
+using KTools_App.Services.Implementations;
 using KTools_App.Infrastructure;
 using KTools_App.Tests.TestHelpers;
 
@@ -918,6 +920,7 @@ public class VideoEncodingScriptTests
             { "autocrop_enabled", true },
             { "burn_in_subtitles", false }
         };
+        UseLiveSettings(settings);
 
         try
         {
@@ -979,6 +982,7 @@ public class VideoEncodingScriptTests
             { "autocrop_tolerance", 16 }, // Порог 16px: разница 1920 - 1904 = 16px должна сброситься в 1920
             { "burn_in_subtitles", false }
         };
+        UseLiveSettings(settings);
 
         try
         {
@@ -1046,6 +1050,7 @@ public class VideoEncodingScriptTests
             { "autocrop_probe_points", 3 },
             { "burn_in_subtitles", false }
         };
+        UseLiveSettings(settings);
 
         try
         {
@@ -1395,6 +1400,1277 @@ public class VideoEncodingScriptTests
             _ffmpegRunnerMock.Verify(r => r.ExtractSubtitleAsync(tempSourceFile, It.IsAny<int>(), It.IsAny<string>(), true, It.IsAny<CancellationToken>(), It.IsAny<ProcessExecutionContext>()), Times.Never);
             capturedExtraArgs.Should().NotBeNull();
             capturedExtraArgs.Should().NotContain(s => s.Contains("subtitles="));
+        }
+        finally
+        {
+            if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
+        }
+    }
+
+    /// <summary>
+    /// Создаёт структуру с одной видеодорожкой заданного разрешения для тестов масштабирования.
+    /// </summary>
+    private MediaStructure CreateScaleStructure(string file, string resolution)
+    {
+        var structure = new MediaStructure { FilePath = file, Duration = 60.0 };
+        structure.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "video", Codec = "h264", Resolution = resolution, Name = "Video" });
+        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(file)).ReturnsAsync(structure);
+        return structure;
+    }
+
+    /// <summary>
+    /// Подменяет живые настройки скрипта, читаемые фоновым превью, заданным словарём.
+    /// </summary>
+    private void UseLiveSettings(Dictionary<string, object> settings)
+    {
+        _settingsManagerMock.Setup(m => m.GetAllSettingsInGroup(It.IsAny<string>())).Returns(settings);
+    }
+
+    /// <summary>
+    /// Ожидает появления ожидаемого текста бейджа у элемента очереди.
+    /// </summary>
+    private static async Task WaitForBadgeAsync(FileQueueItem item, string expected, int timeoutMs = 8000)
+    {
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (string.Equals(item.CropBadgeText, expected, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            await Task.Delay(100);
+        }
+
+        item.CropBadgeText.Should().Be(expected);
+    }
+
+    /// <summary>
+    /// Перехватывает аргументы запуска FFmpeg для проверки собранной команды кодирования.
+    /// </summary>
+    private void SetupRunCapture(Action<List<string>> onCapture)
+    {
+        _ffmpegRunnerMock.Setup(r => r.RunAsync(
+            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<List<string>>(), It.IsAny<List<string>>(),
+            It.IsAny<bool>(), It.IsAny<double>(), It.IsAny<Action<ProgressInfo>>(), It.IsAny<CancellationToken>()
+        )).Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken, ProcessExecutionContext>(
+            (inP, outP, extArgs, inArgs, ovr, dur, prog, ct, processContext) => onCapture(extArgs)
+        ).ReturnsAsync(MockBuilders.ProcessSucceeded());
+    }
+
+    /// <summary>
+    /// Настраивает детектор чёрных полос на возврат заданной области кадрирования во всех точках.
+    /// </summary>
+    private void SetupCropDetection(string file, string crop)
+    {
+        _ffmpegRunnerMock.Setup(r => r.DetectCropAsync(
+            file,
+            It.IsAny<double>(),
+            It.IsAny<int>(),
+            It.IsAny<double>(),
+            It.IsAny<int>(),
+            It.IsAny<int>(),
+            It.IsAny<int>(),
+            It.IsAny<string>(),
+            It.IsAny<CancellationToken>()
+        )).ReturnsAsync(crop);
+    }
+
+    /// <summary>
+    /// Настраивает извлечение субтитров с записью фиктивного файла для проверки фильтра hardsub.
+    /// </summary>
+    private void SetupSubtitleExtraction(string file)
+    {
+        _ffmpegRunnerMock.Setup(r => r.ExtractSubtitleAsync(
+            file,
+            It.IsAny<int>(),
+            It.IsAny<string>(),
+            It.IsAny<bool>(),
+            It.IsAny<CancellationToken>(),
+            It.IsAny<ProcessExecutionContext>()
+        )).Callback<string, int, string, bool, CancellationToken, ProcessExecutionContext>(
+            (inP, idx, outP, rel, ct, processContext) => File.WriteAllText(outP, "[Events]\nDialogue: ...")
+        ).ReturnsAsync(MockBuilders.ProcessSucceeded());
+    }
+
+    /// <summary>
+    /// Проверяет наличие экспандера изменения разрешения и дочерних полей в схеме настроек.
+    /// </summary>
+    [TestMethod]
+    public void SettingsSchema_ContainsResizeFields()
+    {
+        // Act
+        var schema = _script.SettingsSchema;
+
+        // Assert
+        var resizeEnabled = schema.FirstOrDefault(f => f.Key == "resize_enabled");
+        resizeEnabled.Should().NotBeNull();
+        resizeEnabled!.Type.Should().Be(SettingType.Expander);
+        resizeEnabled.Group.Should().Be("Видео:Фильтры");
+        resizeEnabled.DefaultValue.Should().Be(false);
+        resizeEnabled.ChildFields.Should().NotBeNull();
+        resizeEnabled.ChildFields.Should().HaveCount(3);
+
+        var factor = resizeEnabled.ChildFields.FirstOrDefault(f => f.Key == "resize_factor");
+        factor.Should().NotBeNull();
+        factor!.Type.Should().Be(SettingType.Combo);
+        factor.DefaultValue.Should().Be("0.5");
+        factor.Options.Should().BeEquivalentTo("0.25", "0.5", "0.75", "1.5", "2.0");
+
+        var algorithm = resizeEnabled.ChildFields.FirstOrDefault(f => f.Key == "resize_algorithm");
+        algorithm.Should().NotBeNull();
+        algorithm!.Type.Should().Be(SettingType.Combo);
+        algorithm.DefaultValue.Should().Be("lanczos");
+        algorithm.Options.Should().Contain(new[] { "lanczos", "bicubic", "bilinear", "spline" });
+
+        var allowUpscale = resizeEnabled.ChildFields.FirstOrDefault(f => f.Key == "resize_allow_upscale");
+        allowUpscale.Should().NotBeNull();
+        allowUpscale!.Type.Should().Be(SettingType.Checkbox);
+        allowUpscale.DefaultValue.Should().Be(false);
+
+        schema.Should().NotContain(f => f.Key == "resize_mode");
+        schema.SelectMany(f => f.ChildFields).Should().NotContain(f => f.Key == "resize_target");
+    }
+
+    /// <summary>
+    /// Проверяет, что включённый ресайз добавляет фильтр scale с разрешением от исходника.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_ResizeEnabled_AppliesScaleFilter()
+    {
+        // Arrange
+        string tempSourceFile = Path.GetTempFileName();
+        string tempOutputDir = Path.GetDirectoryName(tempSourceFile) ?? AppContext.BaseDirectory;
+        CreateScaleStructure(tempSourceFile, "3840x2160");
+
+        List<string>? capturedExtraArgs = null;
+        SetupRunCapture(args => capturedExtraArgs = args);
+
+        var settings = new Dictionary<string, object>
+        {
+            { "encoder", "cpu" },
+            { "burn_in_subtitles", false },
+            { "resize_enabled", true },
+            { "resize_factor", "0.5" },
+            { "resize_algorithm", "lanczos" },
+            { "resize_allow_upscale", false }
+        };
+
+        try
+        {
+            // Act
+            await _script.ExecuteSingleAsync(tempSourceFile, settings, tempOutputDir, (idx, total, status, pct, fps, bit) => { }, 0, 1);
+
+            // Assert: 3840x2160 × 0.5 даёт ровно стандартное 1920x1080
+            capturedExtraArgs.Should().NotBeNull();
+            int vfIdx = capturedExtraArgs!.IndexOf("-vf");
+            vfIdx.Should().BeGreaterThanOrEqualTo(0);
+            capturedExtraArgs[vfIdx + 1].Should().Be("scale=1920:1080:flags=lanczos");
+            _logServiceMock.Verify(l => l.Write(
+                "scale.applied",
+                LogLevel.Info,
+                LogStatus.Succeeded,
+                It.IsAny<string>(),
+                It.IsAny<Exception>(),
+                It.IsAny<string>(),
+                It.IsAny<LogContext>(),
+                It.IsAny<IReadOnlyDictionary<string, object?>>()), Times.Once);
+        }
+        finally
+        {
+            if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
+        }
+    }
+
+    /// <summary>
+    /// Проверяет, что выключенный ресайз не добавляет фильтр scale в команду.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_ResizeDisabled_OmitsScaleFilter()
+    {
+        // Arrange
+        string tempSourceFile = Path.GetTempFileName();
+        string tempOutputDir = Path.GetDirectoryName(tempSourceFile) ?? AppContext.BaseDirectory;
+        CreateScaleStructure(tempSourceFile, "3840x2160");
+
+        List<string>? capturedExtraArgs = null;
+        SetupRunCapture(args => capturedExtraArgs = args);
+
+        var settings = new Dictionary<string, object>
+        {
+            { "encoder", "cpu" },
+            { "burn_in_subtitles", false },
+            { "resize_enabled", false }
+        };
+
+        try
+        {
+            // Act
+            await _script.ExecuteSingleAsync(tempSourceFile, settings, tempOutputDir, (idx, total, status, pct, fps, bit) => { }, 0, 1);
+
+            // Assert
+            capturedExtraArgs.Should().NotBeNull();
+            capturedExtraArgs.Should().NotContain("-vf");
+        }
+        finally
+        {
+            if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
+        }
+    }
+
+    /// <summary>
+    /// Проверяет строгий порядок фильтров subtitles, crop, scale при совместном применении.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_ResizeWithCropAndSubtitles_PreservesFilterOrder()
+    {
+        // Arrange
+        string tempSourceFile = Path.GetTempFileName();
+        string tempOutputDir = Path.GetDirectoryName(tempSourceFile) ?? AppContext.BaseDirectory;
+
+        var structure = new MediaStructure { FilePath = tempSourceFile, Duration = 60.0 };
+        structure.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "video", Codec = "h264", Resolution = "3840x2160", Name = "Video" });
+        structure.Tracks.Add(new MediaTrack { TrackId = 1, TrackType = "subtitles", Codec = "ass", Name = "Надписи", IsDefault = true });
+        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile)).ReturnsAsync(structure);
+        SetupSubtitleExtraction(tempSourceFile);
+        SetupCropDetection(tempSourceFile, "3840:1600:0:280");
+
+        List<string>? capturedExtraArgs = null;
+        SetupRunCapture(args => capturedExtraArgs = args);
+
+        var settings = new Dictionary<string, object>
+        {
+            { "encoder", "cpu" },
+            { "burn_in_subtitles", true },
+            { "autocrop_enabled", true },
+            { "resize_enabled", true },
+            { "resize_factor", "0.5" },
+            { "resize_algorithm", "lanczos" },
+            { "resize_allow_upscale", false }
+        };
+
+        try
+        {
+            // Act
+            await _script.ExecuteSingleAsync(tempSourceFile, settings, tempOutputDir, (idx, total, status, pct, fps, bit) => { }, 0, 1);
+
+            // Assert
+            capturedExtraArgs.Should().NotBeNull();
+            int vfIdx = capturedExtraArgs!.IndexOf("-vf");
+            vfIdx.Should().BeGreaterThanOrEqualTo(0);
+            string vf = capturedExtraArgs[vfIdx + 1];
+            int subIdx = vf.IndexOf("subtitles=", StringComparison.Ordinal);
+            int cropIdx = vf.IndexOf("crop=", StringComparison.Ordinal);
+            int scaleIdx = vf.IndexOf("scale=", StringComparison.Ordinal);
+            subIdx.Should().BeGreaterThanOrEqualTo(0);
+            cropIdx.Should().BeGreaterThan(subIdx);
+            scaleIdx.Should().BeGreaterThan(cropIdx);
+            vf.Should().Contain("crop=3840:1600:0:280");
+            vf.Should().Contain("scale=1728:720:flags=lanczos");
+        }
+        finally
+        {
+            if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
+        }
+    }
+
+    /// <summary>
+    /// Проверяет пропуск масштабирования при запрещённом увеличении кадра.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_ResizeUpscaleDenied_SkipsScale()
+    {
+        // Arrange
+        string tempSourceFile = Path.GetTempFileName();
+        string tempOutputDir = Path.GetDirectoryName(tempSourceFile) ?? AppContext.BaseDirectory;
+        CreateScaleStructure(tempSourceFile, "1280x720");
+
+        List<string>? capturedExtraArgs = null;
+        SetupRunCapture(args => capturedExtraArgs = args);
+
+        var settings = new Dictionary<string, object>
+        {
+            { "encoder", "cpu" },
+            { "burn_in_subtitles", false },
+            { "resize_enabled", true },
+            { "resize_factor", "1.5" },
+            { "resize_algorithm", "lanczos" },
+            { "resize_allow_upscale", false }
+        };
+
+        try
+        {
+            // Act: 1280x720 × 1.5 даёт 1920x1080 — больше исходника, увеличение запрещено
+            await _script.ExecuteSingleAsync(tempSourceFile, settings, tempOutputDir, (idx, total, status, pct, fps, bit) => { }, 0, 1);
+
+            // Assert
+            capturedExtraArgs.Should().NotBeNull();
+            capturedExtraArgs.Should().NotContain(s => s.Contains("scale="));
+            _logServiceMock.Verify(l => l.Write(
+                "scale.skipped",
+                LogLevel.Debug,
+                LogStatus.Skipped,
+                It.IsAny<string>(),
+                It.IsAny<Exception>(),
+                It.IsAny<string>(),
+                It.IsAny<LogContext>(),
+                It.IsAny<IReadOnlyDictionary<string, object?>>()), Times.Once);
+        }
+        finally
+        {
+            if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
+        }
+    }
+
+    /// <summary>
+    /// Проверяет чётность сторон результата масштабирования при нечётном исходнике.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_ResizeKeepsEvenDimensions()
+    {
+        // Arrange
+        string tempSourceFile = Path.GetTempFileName();
+        string tempOutputDir = Path.GetDirectoryName(tempSourceFile) ?? AppContext.BaseDirectory;
+        CreateScaleStructure(tempSourceFile, "1281x721");
+
+        List<string>? capturedExtraArgs = null;
+        SetupRunCapture(args => capturedExtraArgs = args);
+
+        var settings = new Dictionary<string, object>
+        {
+            { "encoder", "cpu" },
+            { "burn_in_subtitles", false },
+            { "resize_enabled", true },
+            { "resize_factor", "0.5" },
+            { "resize_algorithm", "lanczos" },
+            { "resize_allow_upscale", false }
+        };
+
+        try
+        {
+            // Act
+            await _script.ExecuteSingleAsync(tempSourceFile, settings, tempOutputDir, (idx, total, status, pct, fps, bit) => { }, 0, 1);
+
+            // Assert
+            capturedExtraArgs.Should().NotBeNull();
+            int vfIdx = capturedExtraArgs!.IndexOf("-vf");
+            vfIdx.Should().BeGreaterThanOrEqualTo(0);
+            capturedExtraArgs[vfIdx + 1].Should().Be("scale=640:360:flags=lanczos");
+        }
+        finally
+        {
+            if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
+        }
+    }
+
+    /// <summary>
+    /// Проверяет приведение результата к стандартному ряду при дробном коэффициенте.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_ResizeFactorSnapsToStandardResolution()
+    {
+        // Arrange
+        string tempSourceFile = Path.GetTempFileName();
+        string tempOutputDir = Path.GetDirectoryName(tempSourceFile) ?? AppContext.BaseDirectory;
+        CreateScaleStructure(tempSourceFile, "1920x1080");
+
+        List<string>? capturedExtraArgs = null;
+        SetupRunCapture(args => capturedExtraArgs = args);
+
+        var settings = new Dictionary<string, object>
+        {
+            { "encoder", "cpu" },
+            { "burn_in_subtitles", false },
+            { "resize_enabled", true },
+            { "resize_factor", "0.75" },
+            { "resize_algorithm", "lanczos" },
+            { "resize_allow_upscale", false }
+        };
+
+        try
+        {
+            // Act: 1080 × 0.75 = 810 — ближайшее стандартное 720, ширина пропорционально
+            await _script.ExecuteSingleAsync(tempSourceFile, settings, tempOutputDir, (idx, total, status, pct, fps, bit) => { }, 0, 1);
+
+            // Assert
+            capturedExtraArgs.Should().NotBeNull();
+            int vfIdx = capturedExtraArgs!.IndexOf("-vf");
+            vfIdx.Should().BeGreaterThanOrEqualTo(0);
+            capturedExtraArgs[vfIdx + 1].Should().Be("scale=1280:720:flags=lanczos");
+        }
+        finally
+        {
+            if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
+        }
+    }
+
+    /// <summary>
+    /// Проверяет применение увеличения кадра при разрешённом апскейле.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_ResizeUpscaleAllowed_AppliesScaleFilter()
+    {
+        // Arrange
+        string tempSourceFile = Path.GetTempFileName();
+        string tempOutputDir = Path.GetDirectoryName(tempSourceFile) ?? AppContext.BaseDirectory;
+        CreateScaleStructure(tempSourceFile, "1280x720");
+
+        List<string>? capturedExtraArgs = null;
+        SetupRunCapture(args => capturedExtraArgs = args);
+
+        var settings = new Dictionary<string, object>
+        {
+            { "encoder", "cpu" },
+            { "burn_in_subtitles", false },
+            { "resize_enabled", true },
+            { "resize_factor", "1.5" },
+            { "resize_algorithm", "lanczos" },
+            { "resize_allow_upscale", true }
+        };
+
+        try
+        {
+            // Act: 1280x720 × 1.5 даёт стандартное 1920x1080
+            await _script.ExecuteSingleAsync(tempSourceFile, settings, tempOutputDir, (idx, total, status, pct, fps, bit) => { }, 0, 1);
+
+            // Assert
+            capturedExtraArgs.Should().NotBeNull();
+            int vfIdx = capturedExtraArgs!.IndexOf("-vf");
+            vfIdx.Should().BeGreaterThanOrEqualTo(0);
+            capturedExtraArgs[vfIdx + 1].Should().Be("scale=1920:1080:flags=lanczos");
+        }
+        finally
+        {
+            if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
+        }
+    }
+
+    /// <summary>
+    /// Проверяет расчёт выходного разрешения от кадра после кропа, а не от исходника.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_ResizeWithCrop_ComputesTargetFromCroppedFrame()
+    {
+        // Arrange
+        string tempSourceFile = Path.GetTempFileName();
+        string tempOutputDir = Path.GetDirectoryName(tempSourceFile) ?? AppContext.BaseDirectory;
+        CreateScaleStructure(tempSourceFile, "1920x1080");
+        SetupCropDetection(tempSourceFile, "1920:800:0:140");
+
+        List<string>? capturedExtraArgs = null;
+        SetupRunCapture(args => capturedExtraArgs = args);
+
+        var settings = new Dictionary<string, object>
+        {
+            { "encoder", "cpu" },
+            { "burn_in_subtitles", false },
+            { "autocrop_enabled", true },
+            { "resize_enabled", true },
+            { "resize_factor", "0.5" },
+            { "resize_algorithm", "lanczos" },
+            { "resize_allow_upscale", false }
+        };
+
+        try
+        {
+            // Act
+            await _script.ExecuteSingleAsync(tempSourceFile, settings, tempOutputDir, (idx, total, status, pct, fps, bit) => { }, 0, 1);
+
+            // Assert: база 1920x800 после кропа, 800 × 0.5 = 400 — ближайшее стандартное 360
+            capturedExtraArgs.Should().NotBeNull();
+            int vfIdx = capturedExtraArgs!.IndexOf("-vf");
+            vfIdx.Should().BeGreaterThanOrEqualTo(0);
+            capturedExtraArgs[vfIdx + 1].Should().Be("crop=1920:800:0:140,scale=864:360:flags=lanczos");
+        }
+        finally
+        {
+            if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
+        }
+    }
+
+    /// <summary>
+    /// Проверяет суффикс масштабирования в бейдже элемента очереди при кодировании.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_ResizeApplied_SetsScaleBadgeSuffix()
+    {
+        // Arrange
+        string tempSourceFile = Path.GetTempFileName();
+        string tempOutputDir = Path.GetDirectoryName(tempSourceFile) ?? AppContext.BaseDirectory;
+        CreateScaleStructure(tempSourceFile, "1920x1080");
+        SetupCropDetection(tempSourceFile, "1920:800:0:140");
+
+        List<string>? capturedExtraArgs = null;
+        SetupRunCapture(args => capturedExtraArgs = args);
+
+        var queueItem = new FileQueueItem(tempSourceFile);
+        _script.FilesQueue.Add(queueItem);
+
+        var settings = new Dictionary<string, object>
+        {
+            { "encoder", "cpu" },
+            { "burn_in_subtitles", false },
+            { "autocrop_enabled", true },
+            { "resize_enabled", true },
+            { "resize_factor", "0.5" },
+            { "resize_algorithm", "lanczos" },
+            { "resize_allow_upscale", false }
+        };
+        UseLiveSettings(settings);
+
+        try
+        {
+            // Act
+            await _script.ExecuteSingleAsync(tempSourceFile, settings, tempOutputDir, (idx, total, status, pct, fps, bit) => { }, 0, 1);
+
+            // Assert
+            queueItem.CropBadgeText.Should().Be("1920x1080 ➔ 1920x800 ➔ 864x360");
+            queueItem.HasCropBadge.Should().BeTrue();
+        }
+        finally
+        {
+            if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
+        }
+    }
+
+    /// <summary>
+    /// Проверяет тихий превью-бейдж без кропа до запуска кодирования.
+    /// </summary>
+    [TestMethod]
+    public async Task PreviewRefresh_ResizeWithoutCrop_SetsBadgeBeforeExecution()
+    {
+        // Arrange
+        string tempSourceFile = Path.GetTempFileName();
+        CreateScaleStructure(tempSourceFile, "3840x2160");
+
+        var queueItem = new FileQueueItem(tempSourceFile);
+        _script.FilesQueue.Add(queueItem);
+
+        var settings = new Dictionary<string, object>
+        {
+            { "encoder", "cpu" },
+            { "burn_in_subtitles", false },
+            { "autocrop_enabled", false },
+            { "resize_enabled", true },
+            { "resize_factor", "0.5" },
+            { "resize_algorithm", "lanczos" },
+            { "resize_allow_upscale", false }
+        };
+        UseLiveSettings(settings);
+
+        try
+        {
+            // Act
+            _script.NotifySettingsChanged();
+            await WaitForBadgeAsync(queueItem, "3840x2160 ➔ 1920x1080");
+
+            // Assert: детект кропа не запускался, кодирование не запускалось
+            _ffmpegRunnerMock.Verify(r => r.DetectCropAsync(
+                It.IsAny<string>(),
+                It.IsAny<double>(),
+                It.IsAny<int>(),
+                It.IsAny<double>(),
+                It.IsAny<int>(),
+                It.IsAny<int>(),
+                It.IsAny<int>(),
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>()), Times.Never);
+            _ffmpegRunnerMock.Verify(r => r.RunAsync(
+                It.IsAny<string>(), It.IsAny<string>(), It.IsAny<List<string>>(), It.IsAny<List<string>>(),
+                It.IsAny<bool>(), It.IsAny<double>(), It.IsAny<Action<ProgressInfo>>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+        finally
+        {
+            if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
+        }
+    }
+
+    /// <summary>
+    /// Проверяет однократную запись пропуска масштабирования с ожидаемой причиной.
+    /// </summary>
+    private void VerifyScaleSkippedWithReason(string reason)
+    {
+        _logServiceMock.Verify(l => l.Write(
+            "scale.skipped",
+            LogLevel.Debug,
+            LogStatus.Skipped,
+            It.IsAny<string>(),
+            It.IsAny<Exception>(),
+            It.IsAny<string>(),
+            It.IsAny<LogContext>(),
+            It.Is<IReadOnlyDictionary<string, object?>>(p => HasScaleSkipReason(p, reason))), Times.Once);
+    }
+
+    /// <summary>
+    /// Проверяет причину пропуска масштабирования в свойствах события журнала.
+    /// </summary>
+    private static bool HasScaleSkipReason(IReadOnlyDictionary<string, object?>? properties, string reason)
+    {
+        if (properties == null)
+        {
+            return false;
+        }
+
+        return properties.TryGetValue("Reason", out object? value) &&
+            string.Equals(value?.ToString(), reason, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Строит структуру с видеодорожкой заданного разрешения и дорожкой надписей для тестов комбинаций фильтров.
+    /// </summary>
+    private MediaStructure SetupSubtitleVideoStructure(string file, string resolution)
+    {
+        var structure = new MediaStructure { FilePath = file, Duration = 60.0 };
+        structure.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "video", Codec = "h264", Resolution = resolution, Name = "Video" });
+        structure.Tracks.Add(new MediaTrack { TrackId = 1, TrackType = "subtitles", Codec = "ass", Name = "Надписи", IsDefault = true });
+        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(file)).ReturnsAsync(structure);
+        SetupSubtitleExtraction(file);
+        return structure;
+    }
+
+    /// <summary>
+    /// Проверяет связку надписей и кропа без ресайза: порядок subtitles, crop без scale.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_SubtitlesAndCropWithoutResize_PreservesFilterOrder()
+    {
+        // Arrange
+        string tempSourceFile = Path.GetTempFileName();
+        string tempOutputDir = Path.GetDirectoryName(tempSourceFile) ?? AppContext.BaseDirectory;
+        SetupSubtitleVideoStructure(tempSourceFile, "3840x2160");
+        SetupCropDetection(tempSourceFile, "3840:1600:0:280");
+
+        List<string>? capturedExtraArgs = null;
+        SetupRunCapture(args => capturedExtraArgs = args);
+
+        var settings = new Dictionary<string, object>
+        {
+            { "encoder", "cpu" },
+            { "burn_in_subtitles", true },
+            { "autocrop_enabled", true },
+            { "resize_enabled", false }
+        };
+
+        try
+        {
+            // Act
+            await _script.ExecuteSingleAsync(tempSourceFile, settings, tempOutputDir, (idx, total, status, pct, fps, bit) => { }, 0, 1);
+
+            // Assert
+            capturedExtraArgs.Should().NotBeNull();
+            int vfIdx = capturedExtraArgs!.IndexOf("-vf");
+            vfIdx.Should().BeGreaterThanOrEqualTo(0);
+            string vf = capturedExtraArgs[vfIdx + 1];
+            int subIdx = vf.IndexOf("subtitles=", StringComparison.Ordinal);
+            int cropIdx = vf.IndexOf("crop=", StringComparison.Ordinal);
+            subIdx.Should().BeGreaterThanOrEqualTo(0);
+            cropIdx.Should().BeGreaterThan(subIdx);
+            vf.Should().Contain("crop=3840:1600:0:280");
+            vf.Should().NotContain("scale=");
+        }
+        finally
+        {
+            if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
+        }
+    }
+
+    /// <summary>
+    /// Проверяет связку надписей и ресайза без кропа: порядок subtitles, scale без crop.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_SubtitlesAndResizeWithoutCrop_PreservesFilterOrder()
+    {
+        // Arrange
+        string tempSourceFile = Path.GetTempFileName();
+        string tempOutputDir = Path.GetDirectoryName(tempSourceFile) ?? AppContext.BaseDirectory;
+        SetupSubtitleVideoStructure(tempSourceFile, "3840x2160");
+
+        List<string>? capturedExtraArgs = null;
+        SetupRunCapture(args => capturedExtraArgs = args);
+
+        var settings = new Dictionary<string, object>
+        {
+            { "encoder", "cpu" },
+            { "burn_in_subtitles", true },
+            { "autocrop_enabled", false },
+            { "resize_enabled", true },
+            { "resize_factor", "0.5" },
+            { "resize_algorithm", "lanczos" },
+            { "resize_allow_upscale", false }
+        };
+
+        try
+        {
+            // Act
+            await _script.ExecuteSingleAsync(tempSourceFile, settings, tempOutputDir, (idx, total, status, pct, fps, bit) => { }, 0, 1);
+
+            // Assert
+            capturedExtraArgs.Should().NotBeNull();
+            int vfIdx = capturedExtraArgs!.IndexOf("-vf");
+            vfIdx.Should().BeGreaterThanOrEqualTo(0);
+            string vf = capturedExtraArgs[vfIdx + 1];
+            int subIdx = vf.IndexOf("subtitles=", StringComparison.Ordinal);
+            int scaleIdx = vf.IndexOf("scale=", StringComparison.Ordinal);
+            subIdx.Should().BeGreaterThanOrEqualTo(0);
+            scaleIdx.Should().BeGreaterThan(subIdx);
+            vf.Should().NotContain("crop=");
+            vf.Should().Contain("scale=1920:1080:flags=lanczos");
+        }
+        finally
+        {
+            if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
+        }
+    }
+
+    /// <summary>
+    /// Проверяет пропуск масштабирования при неизвестном разрешении исходника.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_ResizeUnknownResolution_SkipsScale()
+    {
+        // Arrange
+        string tempSourceFile = Path.GetTempFileName();
+        string tempOutputDir = Path.GetDirectoryName(tempSourceFile) ?? AppContext.BaseDirectory;
+        CreateScaleStructure(tempSourceFile, string.Empty);
+
+        List<string>? capturedExtraArgs = null;
+        SetupRunCapture(args => capturedExtraArgs = args);
+
+        var settings = new Dictionary<string, object>
+        {
+            { "encoder", "cpu" },
+            { "burn_in_subtitles", false },
+            { "resize_enabled", true },
+            { "resize_factor", "0.5" },
+            { "resize_algorithm", "lanczos" },
+            { "resize_allow_upscale", false }
+        };
+
+        try
+        {
+            // Act
+            await _script.ExecuteSingleAsync(tempSourceFile, settings, tempOutputDir, (idx, total, status, pct, fps, bit) => { }, 0, 1);
+
+            // Assert
+            capturedExtraArgs.Should().NotBeNull();
+            capturedExtraArgs.Should().NotContain("-vf");
+            VerifyScaleSkippedWithReason("ResolutionUnknown");
+        }
+        finally
+        {
+            if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
+        }
+    }
+
+    /// <summary>
+    /// Проверяет пропуск масштабирования при некорректном коэффициенте.
+    /// </summary>
+    [TestMethod]
+    [DataRow("abc")]
+    [DataRow("0")]
+    [DataRow("-1")]
+    [DataRow("NaN")]
+    public async Task ExecuteSingleAsync_ResizeInvalidFactor_SkipsScale(string factor)
+    {
+        // Arrange
+        string tempSourceFile = Path.GetTempFileName();
+        string tempOutputDir = Path.GetDirectoryName(tempSourceFile) ?? AppContext.BaseDirectory;
+        CreateScaleStructure(tempSourceFile, "1920x1080");
+
+        List<string>? capturedExtraArgs = null;
+        SetupRunCapture(args => capturedExtraArgs = args);
+
+        var settings = new Dictionary<string, object>
+        {
+            { "encoder", "cpu" },
+            { "burn_in_subtitles", false },
+            { "resize_enabled", true },
+            { "resize_factor", factor },
+            { "resize_algorithm", "lanczos" },
+            { "resize_allow_upscale", false }
+        };
+
+        try
+        {
+            // Act
+            await _script.ExecuteSingleAsync(tempSourceFile, settings, tempOutputDir, (idx, total, status, pct, fps, bit) => { }, 0, 1);
+
+            // Assert
+            capturedExtraArgs.Should().NotBeNull();
+            capturedExtraArgs.Should().NotContain("-vf");
+            VerifyScaleSkippedWithReason("InvalidFactor");
+        }
+        finally
+        {
+            if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
+        }
+    }
+
+    /// <summary>
+    /// Проверяет пропуск масштабирования при совпадении целевого разрешения с исходным.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_ResizeTargetEqualsSource_SkipsScale()
+    {
+        // Arrange
+        string tempSourceFile = Path.GetTempFileName();
+        string tempOutputDir = Path.GetDirectoryName(tempSourceFile) ?? AppContext.BaseDirectory;
+        CreateScaleStructure(tempSourceFile, "1920x1080");
+
+        List<string>? capturedExtraArgs = null;
+        SetupRunCapture(args => capturedExtraArgs = args);
+
+        var settings = new Dictionary<string, object>
+        {
+            { "encoder", "cpu" },
+            { "burn_in_subtitles", false },
+            { "resize_enabled", true },
+            { "resize_factor", "1.0" },
+            { "resize_algorithm", "lanczos" },
+            { "resize_allow_upscale", true }
+        };
+
+        try
+        {
+            // Act: 1080 × 1.0 даёт ровно исходные 1920x1080 — масштабировать нечего
+            await _script.ExecuteSingleAsync(tempSourceFile, settings, tempOutputDir, (idx, total, status, pct, fps, bit) => { }, 0, 1);
+
+            // Assert
+            capturedExtraArgs.Should().NotBeNull();
+            capturedExtraArgs.Should().NotContain(s => s.Contains("scale="));
+            VerifyScaleSkippedWithReason("TargetEqualsSource");
+        }
+        finally
+        {
+            if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
+        }
+    }
+
+    /// <summary>
+    /// Проверяет откат неизвестного алгоритма масштабирования к lanczos.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_ResizeInvalidAlgorithm_FallsBackToLanczos()
+    {
+        // Arrange
+        string tempSourceFile = Path.GetTempFileName();
+        string tempOutputDir = Path.GetDirectoryName(tempSourceFile) ?? AppContext.BaseDirectory;
+        CreateScaleStructure(tempSourceFile, "3840x2160");
+
+        List<string>? capturedExtraArgs = null;
+        SetupRunCapture(args => capturedExtraArgs = args);
+
+        var settings = new Dictionary<string, object>
+        {
+            { "encoder", "cpu" },
+            { "burn_in_subtitles", false },
+            { "resize_enabled", true },
+            { "resize_factor", "0.5" },
+            { "resize_algorithm", "nearest" },
+            { "resize_allow_upscale", false }
+        };
+
+        try
+        {
+            // Act
+            await _script.ExecuteSingleAsync(tempSourceFile, settings, tempOutputDir, (idx, total, status, pct, fps, bit) => { }, 0, 1);
+
+            // Assert
+            capturedExtraArgs.Should().NotBeNull();
+            int vfIdx = capturedExtraArgs!.IndexOf("-vf");
+            vfIdx.Should().BeGreaterThanOrEqualTo(0);
+            capturedExtraArgs[vfIdx + 1].Should().Be("scale=1920:1080:flags=lanczos");
+        }
+        finally
+        {
+            if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
+        }
+    }
+
+    /// <summary>
+    /// Проверяет подстановку выбранного алгоритма масштабирования в фильтр.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_ResizeNonDefaultAlgorithm_AppliesInFilter()
+    {
+        // Arrange
+        string tempSourceFile = Path.GetTempFileName();
+        string tempOutputDir = Path.GetDirectoryName(tempSourceFile) ?? AppContext.BaseDirectory;
+        CreateScaleStructure(tempSourceFile, "3840x2160");
+
+        List<string>? capturedExtraArgs = null;
+        SetupRunCapture(args => capturedExtraArgs = args);
+
+        var settings = new Dictionary<string, object>
+        {
+            { "encoder", "cpu" },
+            { "burn_in_subtitles", false },
+            { "resize_enabled", true },
+            { "resize_factor", "0.5" },
+            { "resize_algorithm", "bicubic" },
+            { "resize_allow_upscale", false }
+        };
+
+        try
+        {
+            // Act
+            await _script.ExecuteSingleAsync(tempSourceFile, settings, tempOutputDir, (idx, total, status, pct, fps, bit) => { }, 0, 1);
+
+            // Assert
+            capturedExtraArgs.Should().NotBeNull();
+            int vfIdx = capturedExtraArgs!.IndexOf("-vf");
+            vfIdx.Should().BeGreaterThanOrEqualTo(0);
+            capturedExtraArgs[vfIdx + 1].Should().Be("scale=1920:1080:flags=bicubic");
+        }
+        finally
+        {
+            if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
+        }
+    }
+
+    /// <summary>
+    /// Проверяет разбор коэффициента с десятичной запятой.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_ResizeFactorWithComma_AppliesScaleFilter()
+    {
+        // Arrange
+        string tempSourceFile = Path.GetTempFileName();
+        string tempOutputDir = Path.GetDirectoryName(tempSourceFile) ?? AppContext.BaseDirectory;
+        CreateScaleStructure(tempSourceFile, "3840x2160");
+
+        List<string>? capturedExtraArgs = null;
+        SetupRunCapture(args => capturedExtraArgs = args);
+
+        var settings = new Dictionary<string, object>
+        {
+            { "encoder", "cpu" },
+            { "burn_in_subtitles", false },
+            { "resize_enabled", true },
+            { "resize_factor", "0,5" },
+            { "resize_algorithm", "lanczos" },
+            { "resize_allow_upscale", false }
+        };
+
+        try
+        {
+            // Act: запятая нормализуется в точку и даёт те же 1920x1080
+            await _script.ExecuteSingleAsync(tempSourceFile, settings, tempOutputDir, (idx, total, status, pct, fps, bit) => { }, 0, 1);
+
+            // Assert
+            capturedExtraArgs.Should().NotBeNull();
+            int vfIdx = capturedExtraArgs!.IndexOf("-vf");
+            vfIdx.Should().BeGreaterThanOrEqualTo(0);
+            capturedExtraArgs[vfIdx + 1].Should().Be("scale=1920:1080:flags=lanczos");
+        }
+        finally
+        {
+            if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
+        }
+    }
+
+    /// <summary>
+    /// Проверяет выбор меньшей высоты при равной удалённости от стандартного ряда.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_ResizeSnapTie_SelectsSmallerHeight()
+    {
+        // Arrange
+        string tempSourceFile = Path.GetTempFileName();
+        string tempOutputDir = Path.GetDirectoryName(tempSourceFile) ?? AppContext.BaseDirectory;
+        CreateScaleStructure(tempSourceFile, "1200x1200");
+
+        List<string>? capturedExtraArgs = null;
+        SetupRunCapture(args => capturedExtraArgs = args);
+
+        var settings = new Dictionary<string, object>
+        {
+            { "encoder", "cpu" },
+            { "burn_in_subtitles", false },
+            { "resize_enabled", true },
+            { "resize_factor", "0.5" },
+            { "resize_algorithm", "lanczos" },
+            { "resize_allow_upscale", false }
+        };
+
+        try
+        {
+            // Act: 1200 × 0.5 = 600 — равноудалено от 480 и 720, выбирается меньшее
+            await _script.ExecuteSingleAsync(tempSourceFile, settings, tempOutputDir, (idx, total, status, pct, fps, bit) => { }, 0, 1);
+
+            // Assert
+            capturedExtraArgs.Should().NotBeNull();
+            int vfIdx = capturedExtraArgs!.IndexOf("-vf");
+            vfIdx.Should().BeGreaterThanOrEqualTo(0);
+            capturedExtraArgs[vfIdx + 1].Should().Be("scale=480:480:flags=lanczos");
+        }
+        finally
+        {
+            if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
+        }
+    }
+
+    /// <summary>
+    /// Проверяет приведение крошечного коэффициента к минимальному стандартному разрешению.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_ResizeTinyFactor_SnapsToMinimumStandard()
+    {
+        // Arrange
+        string tempSourceFile = Path.GetTempFileName();
+        string tempOutputDir = Path.GetDirectoryName(tempSourceFile) ?? AppContext.BaseDirectory;
+        CreateScaleStructure(tempSourceFile, "1920x1080");
+
+        List<string>? capturedExtraArgs = null;
+        SetupRunCapture(args => capturedExtraArgs = args);
+
+        var settings = new Dictionary<string, object>
+        {
+            { "encoder", "cpu" },
+            { "burn_in_subtitles", false },
+            { "resize_enabled", true },
+            { "resize_factor", "0.01" },
+            { "resize_algorithm", "lanczos" },
+            { "resize_allow_upscale", false }
+        };
+
+        try
+        {
+            // Act: 1080 × 0.01 = 11 — ниже всего ряда, итог приводится к 240 с сохранением пропорций
+            await _script.ExecuteSingleAsync(tempSourceFile, settings, tempOutputDir, (idx, total, status, pct, fps, bit) => { }, 0, 1);
+
+            // Assert
+            capturedExtraArgs.Should().NotBeNull();
+            int vfIdx = capturedExtraArgs!.IndexOf("-vf");
+            vfIdx.Should().BeGreaterThanOrEqualTo(0);
+            capturedExtraArgs[vfIdx + 1].Should().Be("scale=426:240:flags=lanczos");
+        }
+        finally
+        {
+            if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
+        }
+    }
+
+    /// <summary>
+    /// Проверяет откат пустого коэффициента к значению по умолчанию.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_ResizeEmptyFactor_FallsBackToDefault()
+    {
+        // Arrange
+        string tempSourceFile = Path.GetTempFileName();
+        string tempOutputDir = Path.GetDirectoryName(tempSourceFile) ?? AppContext.BaseDirectory;
+        CreateScaleStructure(tempSourceFile, "3840x2160");
+
+        List<string>? capturedExtraArgs = null;
+        SetupRunCapture(args => capturedExtraArgs = args);
+
+        var settings = new Dictionary<string, object>
+        {
+            { "encoder", "cpu" },
+            { "burn_in_subtitles", false },
+            { "resize_enabled", true },
+            { "resize_factor", string.Empty },
+            { "resize_algorithm", "lanczos" },
+            { "resize_allow_upscale", false }
+        };
+
+        try
+        {
+            // Act: пустая строка читается как дефолтные 0.5
+            await _script.ExecuteSingleAsync(tempSourceFile, settings, tempOutputDir, (idx, total, status, pct, fps, bit) => { }, 0, 1);
+
+            // Assert
+            capturedExtraArgs.Should().NotBeNull();
+            int vfIdx = capturedExtraArgs!.IndexOf("-vf");
+            vfIdx.Should().BeGreaterThanOrEqualTo(0);
+            capturedExtraArgs[vfIdx + 1].Should().Be("scale=1920:1080:flags=lanczos");
+        }
+        finally
+        {
+            if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
+        }
+    }
+
+    /// <summary>
+    /// Проверяет чтение коэффициента из элемента JSON с числовым значением.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_ResizeNumericJsonFactor_AppliesScaleFilter()
+    {
+        // Arrange
+        string tempSourceFile = Path.GetTempFileName();
+        string tempOutputDir = Path.GetDirectoryName(tempSourceFile) ?? AppContext.BaseDirectory;
+        CreateScaleStructure(tempSourceFile, "3840x2160");
+
+        List<string>? capturedExtraArgs = null;
+        SetupRunCapture(args => capturedExtraArgs = args);
+
+        using var factorDoc = System.Text.Json.JsonDocument.Parse("0.5");
+        var settings = new Dictionary<string, object>
+        {
+            { "encoder", "cpu" },
+            { "burn_in_subtitles", false },
+            { "resize_enabled", true },
+            { "resize_factor", factorDoc.RootElement },
+            { "resize_algorithm", "lanczos" },
+            { "resize_allow_upscale", false }
+        };
+
+        try
+        {
+            // Act
+            await _script.ExecuteSingleAsync(tempSourceFile, settings, tempOutputDir, (idx, total, status, pct, fps, bit) => { }, 0, 1);
+
+            // Assert
+            capturedExtraArgs.Should().NotBeNull();
+            int vfIdx = capturedExtraArgs!.IndexOf("-vf");
+            vfIdx.Should().BeGreaterThanOrEqualTo(0);
+            capturedExtraArgs[vfIdx + 1].Should().Be("scale=1920:1080:flags=lanczos");
+        }
+        finally
+        {
+            if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
+        }
+    }
+
+    /// <summary>
+    /// Проверяет отсутствие суффикса бейджа при пропущенном масштабировании.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_ResizeSkipped_LeavesBadgeEmpty()
+    {
+        // Arrange
+        string tempSourceFile = Path.GetTempFileName();
+        string tempOutputDir = Path.GetDirectoryName(tempSourceFile) ?? AppContext.BaseDirectory;
+        CreateScaleStructure(tempSourceFile, "1280x720");
+
+        List<string>? capturedExtraArgs = null;
+        SetupRunCapture(args => capturedExtraArgs = args);
+
+        var queueItem = new FileQueueItem(tempSourceFile);
+        _script.FilesQueue.Add(queueItem);
+
+        var settings = new Dictionary<string, object>
+        {
+            { "encoder", "cpu" },
+            { "burn_in_subtitles", false },
+            { "resize_enabled", true },
+            { "resize_factor", "1.5" },
+            { "resize_algorithm", "lanczos" },
+            { "resize_allow_upscale", false }
+        };
+        UseLiveSettings(settings);
+
+        try
+        {
+            // Act: 1280x720 × 1.5 даёт 1920x1080 — увеличение запрещено
+            await _script.ExecuteSingleAsync(tempSourceFile, settings, tempOutputDir, (idx, total, status, pct, fps, bit) => { }, 0, 1);
+
+            // Assert
+            capturedExtraArgs.Should().NotBeNull();
+            capturedExtraArgs.Should().NotContain(s => s.Contains("scale="));
+            queueItem.CropBadgeText.Should().BeNull();
+            queueItem.HasCropBadge.Should().BeFalse();
+            VerifyScaleSkippedWithReason("UpscaleDenied");
+        }
+        finally
+        {
+            if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
+        }
+    }
+
+    /// <summary>
+    /// Проверяет совместную работу программного энкодера NVENC и фильтра масштабирования.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_NvencWithResize_CombinesEncoderAndScaleFilter()
+    {
+        // Arrange
+        string tempSourceFile = Path.GetTempFileName();
+        string tempOutputDir = Path.GetDirectoryName(tempSourceFile) ?? AppContext.BaseDirectory;
+        CreateScaleStructure(tempSourceFile, "3840x2160");
+
+        List<string>? capturedExtraArgs = null;
+        SetupRunCapture(args => capturedExtraArgs = args);
+
+        var settings = new Dictionary<string, object>
+        {
+            { "encoder", "NVENC" },
+            { "lossless", true },
+            { "v_qp", 0 },
+            { "nvenc_preset", "p1" },
+            { "force_10bit", false },
+            { "burn_in_subtitles", false },
+            { "resize_enabled", true },
+            { "resize_factor", "0.5" },
+            { "resize_algorithm", "lanczos" },
+            { "resize_allow_upscale", false }
+        };
+
+        try
+        {
+            // Act
+            await _script.ExecuteSingleAsync(tempSourceFile, settings, tempOutputDir, (idx, total, status, pct, fps, bit) => { }, 0, 1);
+
+            // Assert
+            capturedExtraArgs.Should().NotBeNull();
+            capturedExtraArgs.Should().Contain("hevc_nvenc");
+            int vfIdx = capturedExtraArgs!.IndexOf("-vf");
+            vfIdx.Should().BeGreaterThanOrEqualTo(0);
+            capturedExtraArgs[vfIdx + 1].Should().Be("scale=1920:1080:flags=lanczos");
+        }
+        finally
+        {
+            if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
+        }
+    }
+
+    /// <summary>
+    /// Проверяет полный пересчёт превью при изменении любого параметра кропа.
+    /// </summary>
+    [TestMethod]
+    public async Task PreviewRefresh_CropSettingsChanged_RecalculatesEverything()
+    {
+        // Arrange
+        string tempSourceFile = Path.GetTempFileName();
+        string tempOutputDir = Path.GetDirectoryName(tempSourceFile) ?? AppContext.BaseDirectory;
+        CreateScaleStructure(tempSourceFile, "1920x1080");
+        SetupCropDetection(tempSourceFile, "1920:800:0:140");
+
+        List<string>? capturedExtraArgs = null;
+        SetupRunCapture(args => capturedExtraArgs = args);
+
+        var queueItem = new FileQueueItem(tempSourceFile);
+        _script.FilesQueue.Add(queueItem);
+
+        var settings = new Dictionary<string, object>
+        {
+            { "encoder", "cpu" },
+            { "burn_in_subtitles", false },
+            { "autocrop_enabled", true },
+            { "autocrop_tolerance", 16 },
+            { "resize_enabled", true },
+            { "resize_factor", "0.5" },
+            { "resize_algorithm", "lanczos" },
+            { "resize_allow_upscale", false }
+        };
+        UseLiveSettings(settings);
+
+        try
+        {
+            // Act: кодирование кэширует кроп 1920x800
+            await _script.ExecuteSingleAsync(tempSourceFile, settings, tempOutputDir, (idx, total, status, pct, fps, bit) => { }, 0, 1);
+            queueItem.CropBadgeText.Should().Be("1920x1080 ➔ 1920x800 ➔ 864x360");
+
+            // Меняем любой параметр кропа и детект: кэш обязан сброситься и пересчитаться
+            settings["autocrop_tolerance"] = 48;
+            SetupCropDetection(tempSourceFile, "1920:720:0:180");
+            _script.NotifySettingsChanged();
+            await WaitForBadgeAsync(queueItem, "1920x1080 ➔ 1920x720 ➔ 960x360");
+
+            // Assert
+            queueItem.HasCropBadge.Should().BeTrue();
         }
         finally
         {
