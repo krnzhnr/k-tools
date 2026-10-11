@@ -792,7 +792,7 @@ public partial class App : Application
 
         services.AddSingleton<IHardwareCapabilityCache, HardwareCapabilityCache>();
         services.AddSingleton<IVideoEncoder, NvencEncoder>();
-        services.AddSingleton<IVideoEncoder, X265Encoder>();
+        services.AddSingleton<IVideoEncoder, CpuEncoder>();
         services.AddSingleton<VideoEncoderRegistry>();
 
         // Infrastructure-сервисы (Runner'ы)

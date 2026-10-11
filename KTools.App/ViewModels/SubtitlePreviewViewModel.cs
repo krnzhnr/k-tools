@@ -1,4 +1,4 @@
-﻿// -*- coding: utf-8 -*-
+// -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -489,7 +489,7 @@ public sealed class SubtitlePreviewLine : ObservableObject
     /// <summary>
     /// Отформатированный интервал времени реплики.
     /// </summary>
-    public string Timing => $"{Start} --> {End}";
+    public string Timing => $"{Start} ➔ {End}";
 
     /// <summary>
     /// Значение перечисления TextDecorations для привязки к текстовому блоку.

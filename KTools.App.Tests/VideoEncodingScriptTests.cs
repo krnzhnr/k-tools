@@ -46,7 +46,7 @@ public class VideoEncodingScriptTests
         var encoders = new List<KTools_App.Encoders.IVideoEncoder>
         {
             new KTools_App.Encoders.NvencEncoder(),
-            new KTools_App.Encoders.X265Encoder()
+            new KTools_App.Encoders.CpuEncoder()
         };
         var hardwareCacheMock = new Mock<KTools_App.Encoders.IHardwareCapabilityCache>();
         hardwareCacheMock.Setup(c => c.IsNvencSupported).Returns(true);
@@ -72,6 +72,26 @@ public class VideoEncodingScriptTests
         _script.IconName.Should().Be(AppConstants.ScriptIcons.VideoEncoding);
         _script.FileExtensions.Should().Contain(".mkv");
         _script.RequiredDependencies.Should().Contain("ffmpeg");
+    }
+
+    /// <summary>
+    /// Проверяет, что в схеме доступен единый CPU-энкодер с селектором программного кодека.
+    /// </summary>
+    [TestMethod]
+    public void SettingsSchema_ContainsCpuEncoderWithCodecSelector()
+    {
+        // Act
+        var schema = _script.SettingsSchema;
+
+        // Assert
+        var encoderField = schema.FirstOrDefault(f => f.Key == "encoder");
+        encoderField.Should().NotBeNull();
+        encoderField!.Options.Should().Contain("CPU");
+
+        var cpuCodecField = schema.FirstOrDefault(f => f.Key == "cpu_codec");
+        cpuCodecField.Should().NotBeNull();
+        cpuCodecField!.Type.Should().Be(SettingType.Combo);
+        cpuCodecField.Options.Should().BeEquivalentTo("HEVC / H.265", "AVC / H.264");
     }
 
     /// <summary>
@@ -282,11 +302,12 @@ public class VideoEncodingScriptTests
 
         var settings = new Dictionary<string, object>
         {
-            { "encoder", "x265" },
+            { "encoder", "cpu" },
             { "lossless", false },
             { "x265_preset", "slower" },
             { "x265_rc", "CRF" },
             { "x265_crf", 18 },
+            { "x265_advanced_options", true },
             { "x265_tune", "animation" },
             { "x265_aq_mode", "2" },
             { "x265_lookahead", "20" },
@@ -310,6 +331,110 @@ public class VideoEncodingScriptTests
             capturedExtraArgs.Should().Contain("animation");
             capturedExtraArgs.Should().Contain("-x265-params");
             capturedExtraArgs.Should().Contain(s => s.Contains("aq-mode=2"));
+        }
+        finally
+        {
+            if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
+        }
+    }
+
+    /// <summary>
+    /// Проверяет генерацию аргументов для программного кодирования H.264 (libx264 CPU).
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_CpuLibx264_GeneratesCorrectArgs()
+    {
+        // Arrange
+        string tempSourceFile = Path.GetTempFileName();
+        string tempOutputDir = Path.GetDirectoryName(tempSourceFile) ?? AppContext.BaseDirectory;
+
+        var structure = new MediaStructure { FilePath = tempSourceFile, Duration = 60.0 };
+        structure.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "video", Codec = "hevc", Name = "Video" });
+        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile)).ReturnsAsync(structure);
+
+        List<string>? capturedExtraArgs = null;
+        _ffmpegRunnerMock.Setup(r => r.RunAsync(
+            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<List<string>>(), It.IsAny<List<string>>(),
+            It.IsAny<bool>(), It.IsAny<double>(), It.IsAny<Action<ProgressInfo>>(), It.IsAny<CancellationToken>()
+        )).Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken, ProcessExecutionContext>(
+            (inP, outP, extArgs, inArgs, ovr, dur, prog, ct, processContext) =>capturedExtraArgs = extArgs
+        ).ReturnsAsync(MockBuilders.ProcessSucceeded());
+
+        var settings = new Dictionary<string, object>
+        {
+            { "encoder", "cpu" },
+            { "cpu_codec", "AVC / H.264" },
+            { "lossless", false },
+            { "x264_preset", "veryfast" },
+            { "x264_rc", "CRF" },
+            { "x264_crf", 20 },
+            { "force_10bit", false }
+        };
+
+        try
+        {
+            // Act
+            await _script.ExecuteSingleAsync(tempSourceFile, settings, tempOutputDir, (idx, total, status, pct, fps, bit) => { }, 0, 1);
+
+            // Assert
+            capturedExtraArgs.Should().NotBeNull();
+            capturedExtraArgs.Should().Contain("-c:v");
+            capturedExtraArgs.Should().Contain("libx264");
+            capturedExtraArgs.Should().Contain("-preset");
+            capturedExtraArgs.Should().Contain("veryfast");
+            capturedExtraArgs.Should().Contain("-crf");
+            capturedExtraArgs.Should().Contain("20");
+            capturedExtraArgs.Should().NotContain("-tag:v", "H.264 не должен использовать тег hvc1");
+        }
+        finally
+        {
+            if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
+        }
+    }
+
+    /// <summary>
+    /// Проверяет миграцию сохранённого идентификатора encoder=x265 времён отдельного X265Encoder:
+    /// кодирование идёт через CPU с кодеком HEVC по умолчанию, прежние настройки x265_* применяются.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_LegacyX265EncoderId_MigratesToCpuHevc()
+    {
+        // Arrange
+        string tempSourceFile = Path.GetTempFileName();
+        string tempOutputDir = Path.GetDirectoryName(tempSourceFile) ?? AppContext.BaseDirectory;
+
+        var structure = new MediaStructure { FilePath = tempSourceFile, Duration = 60.0 };
+        structure.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "video", Codec = "h264", Name = "Video" });
+        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile)).ReturnsAsync(structure);
+
+        List<string>? capturedExtraArgs = null;
+        _ffmpegRunnerMock.Setup(r => r.RunAsync(
+            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<List<string>>(), It.IsAny<List<string>>(),
+            It.IsAny<bool>(), It.IsAny<double>(), It.IsAny<Action<ProgressInfo>>(), It.IsAny<CancellationToken>()
+        )).Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken, ProcessExecutionContext>(
+            (inP, outP, extArgs, inArgs, ovr, dur, prog, ct, processContext) =>capturedExtraArgs = extArgs
+        ).ReturnsAsync(MockBuilders.ProcessSucceeded());
+
+        var settings = new Dictionary<string, object>
+        {
+            { "encoder", "x265" },
+            { "lossless", false },
+            { "x265_preset", "medium" },
+            { "x265_rc", "CRF" },
+            { "x265_crf", 23 },
+            { "force_10bit", false }
+        };
+
+        try
+        {
+            // Act
+            await _script.ExecuteSingleAsync(tempSourceFile, settings, tempOutputDir, (idx, total, status, pct, fps, bit) => { }, 0, 1);
+
+            // Assert
+            capturedExtraArgs.Should().NotBeNull();
+            capturedExtraArgs.Should().Contain("libx265");
+            capturedExtraArgs.Should().Contain("-crf");
+            capturedExtraArgs.Should().Contain("23");
         }
         finally
         {
@@ -411,11 +536,12 @@ public class VideoEncodingScriptTests
 
         var settings = new Dictionary<string, object>
         {
-            { "encoder", "x265" },
+            { "encoder", "cpu" },
             { "lossless", false },
             { "x265_preset", "medium" },
             { "x265_rc", "Битрейт (ABR)" },
             { "x265_v_bitrate", 5500 },
+            { "x265_advanced_options", true },
             { "x265_tune", "grain" },
             { "x265_aq_mode", "1" },
             { "x265_lookahead", "30" },
@@ -479,7 +605,7 @@ public class VideoEncodingScriptTests
 
         var settings = new Dictionary<string, object>
         {
-            { "encoder", "x265" },
+            { "encoder", "cpu" },
             { "x265_preset", "medium" },
             { "x265_rc", "Битрейт (ABR)" },
             { "x265_v_bitrate", 2000 },
@@ -582,7 +708,7 @@ public class VideoEncodingScriptTests
 
         var settings = new Dictionary<string, object>
         {
-            { "encoder", "x265" },
+            { "encoder", "cpu" },
             { "burn_in_subtitles", false }
         };
 
@@ -625,7 +751,7 @@ public class VideoEncodingScriptTests
 
         var settings = new Dictionary<string, object>
         {
-            { "encoder", "x265" },
+            { "encoder", "cpu" },
             { "output_container", ".mkv" }
         };
 
@@ -728,7 +854,7 @@ public class VideoEncodingScriptTests
 
         var settings = new Dictionary<string, object>
         {
-            { "encoder", "x265" },
+            { "encoder", "cpu" },
             { "autocrop_enabled", true },
             { "autocrop_limit", 0.094 },
             { "autocrop_round", 16 },
@@ -788,7 +914,7 @@ public class VideoEncodingScriptTests
 
         var settings = new Dictionary<string, object>
         {
-            { "encoder", "x265" },
+            { "encoder", "cpu" },
             { "autocrop_enabled", true },
             { "burn_in_subtitles", false }
         };
@@ -848,7 +974,7 @@ public class VideoEncodingScriptTests
 
         var settings = new Dictionary<string, object>
         {
-            { "encoder", "x265" },
+            { "encoder", "cpu" },
             { "autocrop_enabled", true },
             { "autocrop_tolerance", 16 }, // Порог 16px: разница 1920 - 1904 = 16px должна сброситься в 1920
             { "burn_in_subtitles", false }
@@ -915,7 +1041,7 @@ public class VideoEncodingScriptTests
 
         var settings = new Dictionary<string, object>
         {
-            { "encoder", "x265" },
+            { "encoder", "cpu" },
             { "autocrop_enabled", true },
             { "autocrop_probe_points", 3 },
             { "burn_in_subtitles", false }
@@ -958,7 +1084,7 @@ public class VideoEncodingScriptTests
 
         var settings = new Dictionary<string, object>
         {
-            { "encoder", "x265" },
+            { "encoder", "cpu" },
             { "overwrite_source", true }
         };
 
@@ -998,7 +1124,7 @@ public class VideoEncodingScriptTests
 
         var settings = new Dictionary<string, object>
         {
-            { "encoder", "x265" },
+            { "encoder", "cpu" },
             { "overwrite_source", true }
         };
 
@@ -1036,7 +1162,7 @@ public class VideoEncodingScriptTests
 
         var settings = new Dictionary<string, object>
         {
-            { "encoder", "x265" },
+            { "encoder", "cpu" },
             { "overwrite_source", true }
         };
 
@@ -1154,7 +1280,7 @@ public class VideoEncodingScriptTests
         var encoders = new List<KTools_App.Encoders.IVideoEncoder>
         {
             new KTools_App.Encoders.NvencEncoder(),
-            new KTools_App.Encoders.X265Encoder()
+            new KTools_App.Encoders.CpuEncoder()
         };
         var hardwareCacheMock = new Mock<KTools_App.Encoders.IHardwareCapabilityCache>();
         hardwareCacheMock.Setup(c => c.IsNvencSupported).Returns(true);
@@ -1229,7 +1355,7 @@ public class VideoEncodingScriptTests
         var encoders = new List<KTools_App.Encoders.IVideoEncoder>
         {
             new KTools_App.Encoders.NvencEncoder(),
-            new KTools_App.Encoders.X265Encoder()
+            new KTools_App.Encoders.CpuEncoder()
         };
         var hardwareCacheMock = new Mock<KTools_App.Encoders.IHardwareCapabilityCache>();
         hardwareCacheMock.Setup(c => c.IsNvencSupported).Returns(true);

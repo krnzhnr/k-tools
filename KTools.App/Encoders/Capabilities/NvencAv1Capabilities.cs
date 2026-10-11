@@ -18,6 +18,12 @@ public class NvencAv1Capabilities : BaseNvencCapabilities
     public override string FfmpegCodecName => "av1_nvenc";
     public override bool Supports10Bit => true;
 
+    /// <summary>
+    /// AV1 NVENC не поддерживает tune lossless: реальный FFmpeg отклоняет такую команду
+    /// (ошибка инициализации -542398533). Проверено совместимостными тестами RequiresFfmpeg.
+    /// </summary>
+    public override bool SupportsLossless => false;
+
     protected override List<SettingField> GetCodecSpecificSettings(Dictionary<string, object>? currentSettings)
     {
         return new List<SettingField>

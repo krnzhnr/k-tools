@@ -91,7 +91,7 @@ public sealed class StressTests
         // Реестр видеокодировщиков: Nvenc/X265 + кэш возможностей
         services.AddSingleton(new Mock<IHardwareCapabilityCache>().Object);
         services.AddSingleton<KTools_App.Encoders.IVideoEncoder, KTools_App.Encoders.NvencEncoder>();
-        services.AddSingleton<KTools_App.Encoders.IVideoEncoder, KTools_App.Encoders.X265Encoder>();
+        services.AddSingleton<KTools_App.Encoders.IVideoEncoder, KTools_App.Encoders.CpuEncoder>();
         services.AddSingleton<KTools_App.Encoders.VideoEncoderRegistry>();
 
         // Каждому конкретному типу скрипта нужна и регистрация по базовому

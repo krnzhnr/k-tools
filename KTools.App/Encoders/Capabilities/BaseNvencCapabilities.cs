@@ -25,6 +25,12 @@ public abstract class BaseNvencCapabilities : INvencCodecCapabilities
     public abstract string FfmpegCodecName { get; }
     public abstract bool Supports10Bit { get; }
 
+    /// <summary>
+    /// Флаг поддержки математического Lossless (tune lossless). AV1 NVENC его не поддерживает
+    /// (инициализация энкодера падает с ошибкой -542398533), поэтому для него — false.
+    /// </summary>
+    public virtual bool SupportsLossless => true;
+
     public virtual string GetPixelFormat(bool force10Bit)
     {
         return (Supports10Bit && force10Bit) ? "p010le" : "yuv420p";
@@ -70,6 +76,11 @@ public abstract class BaseNvencCapabilities : INvencCodecCapabilities
 
         if (context.IsLossless)
         {
+            if (!SupportsLossless)
+            {
+                throw new InvalidOperationException(
+                    $"Режим Lossless не поддерживается кодеком {CodecName} (NVENC): выключите Lossless или выберите HEVC / H.264.");
+            }
             args.AddRange(new[] { "-rc", "constqp", "-tune", "lossless", "-qp", "0" });
         }
         else
@@ -182,7 +193,7 @@ public abstract class BaseNvencCapabilities : INvencCodecCapabilities
         bool isLossless = false;
         if (currentSettings != null && currentSettings.TryGetValue("lossless", out var losslessObj))
         {
-            isLossless = losslessObj is true || (losslessObj is string s && s.Equals("True", StringComparison.OrdinalIgnoreCase));
+            isLossless = KTools_App.Core.SettingValue.AsBool(losslessObj, false);
         }
 
         return new List<SettingField>
@@ -393,29 +404,36 @@ public abstract class BaseNvencCapabilities : INvencCodecCapabilities
 
     protected T GetSettingValue<T>(Dictionary<string, object> settings, string key, T defaultValue)
     {
-        if (settings.TryGetValue(key, out object? val) && val != null)
+        if (!settings.TryGetValue(key, out object? val) || val == null)
         {
-            try
-            {
-                if (typeof(T) == typeof(int))
-                {
-                    return (T)(object)Convert.ToInt32(val);
-                }
-                if (typeof(T) == typeof(bool))
-                {
-                    return (T)(object)Convert.ToBoolean(val);
-                }
-                if (typeof(T) == typeof(string))
-                {
-                    return (T)(object)val.ToString()!;
-                }
-                return (T)Convert.ChangeType(val, typeof(T));
-            }
-            catch
-            {
-                return defaultValue;
-            }
+            return defaultValue;
         }
-        return defaultValue;
+        try
+        {
+            // Единая нормализация через SettingValue: значения с диска (JsonElement)
+            // обязаны читаться так же, как их показывает интерфейс.
+            if (typeof(T) == typeof(int))
+            {
+                return (T)(object)KTools_App.Core.SettingValue.AsInt(val, (int)(object)defaultValue!);
+            }
+            if (typeof(T) == typeof(float))
+            {
+                return (T)(object)KTools_App.Core.SettingValue.AsFloat(val, (float)(object)defaultValue!);
+            }
+            if (typeof(T) == typeof(bool))
+            {
+                return (T)(object)KTools_App.Core.SettingValue.AsBool(val, (bool)(object)defaultValue!);
+            }
+            if (typeof(T) == typeof(string))
+            {
+                object? boxedDefault = defaultValue;
+                return (T)(object)KTools_App.Core.SettingValue.AsString(val, boxedDefault as string);
+            }
+            return (T)Convert.ChangeType(val, typeof(T), System.Globalization.CultureInfo.InvariantCulture);
+        }
+        catch
+        {
+            return defaultValue;
+        }
     }
 }

@@ -63,7 +63,7 @@ public sealed class VideoEncodingScript : AbstractScript
     private List<SettingField> GetSettingsSchemaInternal(Dictionary<string, object>? currentSettings)
     {
         var availableEncoders = _encoderRegistry.GetAvailableEncoders();
-        string defaultEncoder = availableEncoders.FirstOrDefault()?.StableId ?? "x265";
+        string defaultEncoder = availableEncoders.FirstOrDefault()?.StableId ?? "cpu";
         var encoderOptions = availableEncoders.Select(e => e.DisplayName).ToList();
         var encoderValues = availableEncoders.Select(e => e.StableId).ToList();
 
@@ -100,7 +100,8 @@ public sealed class VideoEncodingScript : AbstractScript
                 colSpan: 2,
                 disableConditions: new List<SettingDisableCondition>
                 {
-                    new("nvenc_codec", "AVC / H.264")
+                    new("nvenc_codec", "AVC / H.264"),
+                    new("cpu_codec", "AVC / H.264")
                 }
             ),
 
@@ -713,7 +714,14 @@ public sealed class VideoEncodingScript : AbstractScript
             var ffmpegArgs = new List<string>();
 
             // А) Видеопараметры
-            string encoderId = GetSettingValue(settings, "encoder", "x265");
+            string encoderId = GetSettingValue(settings, "encoder", "cpu");
+            // Миграция сохранённых конфигураций времён отдельного X265Encoder:
+            // старый идентификатор молча трактуется как CPU с кодеком HEVC по умолчанию,
+            // все прежние настройки x265_* продолжают применяться без изменений.
+            if (encoderId.Equals("x265", StringComparison.OrdinalIgnoreCase))
+            {
+                encoderId = "cpu";
+            }
             bool force10Bit = GetSettingValue(settings, "force_10bit", false);
             bool lossless = GetSettingValue(settings, "lossless", false);
 

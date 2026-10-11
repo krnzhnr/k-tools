@@ -77,7 +77,7 @@ public class NvencEncoder : IVideoEncoder
     {
         if (settings != null && settings.TryGetValue("nvenc_codec", out object? codecObj) && codecObj != null)
         {
-            string codecStr = codecObj.ToString() ?? "";
+            string codecStr = KTools_App.Core.SettingValue.AsString(codecObj, "");
             if (_capabilitiesMap.TryGetValue(codecStr, out var cap))
             {
                 return cap;

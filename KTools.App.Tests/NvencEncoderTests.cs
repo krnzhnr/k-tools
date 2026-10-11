@@ -333,4 +333,15 @@ public class NvencEncoderTests
             autoCond!.Values.Should().Contain("True");
         }
     }
+
+    [TestMethod]
+    public void GetFfmpegCodecName_JsonElementFromDisk_ResolvesCodec()
+    {
+        // Регрессия: значение с диска (JsonElement) обязано резолвиться так же,
+        // как его показывает интерфейс, а не падать в кодек по умолчанию.
+        using var doc = System.Text.Json.JsonDocument.Parse("\"AVC / H.264\"");
+        var settings = new Dictionary<string, object> { { "nvenc_codec", doc.RootElement.Clone() } };
+
+        _encoder.GetFfmpegCodecName(settings).Should().Be("h264_nvenc");
+    }
 }

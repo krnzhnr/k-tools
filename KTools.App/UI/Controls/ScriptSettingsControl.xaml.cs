@@ -49,6 +49,11 @@ public sealed partial class ScriptSettingsControl : UserControl
     private AbstractScript? _pendingBuildScript;
     private AbstractScript? _builtScript;
 
+    /// <summary>
+    /// Страховка от повторной перестройки схемы внутри одного прохода обновления видимости.
+    /// </summary>
+    private bool _isSchemaRebuilding;
+
     public ScriptSettingsControl()
     {
         ViewModel = App.Services.GetRequiredService<ScriptSettingsViewModel>();
@@ -239,6 +244,38 @@ public sealed partial class ScriptSettingsControl : UserControl
     }
 
     /// <summary>
+    /// Считывает живые значения настроек строковой нормализацией: именно в таком виде
+    /// их ожидают диспетчеры кодеков (сравнение селекторов, флаг lossless), а типизированное
+    /// чтение JsonElement со старых конфигураций здесь не требуется.
+    /// </summary>
+    private Dictionary<string, object> ReadLiveSettingsSnapshot(AbstractScript script, string settingsGroup)
+    {
+        var probeSchema = script.GetFullSettingsSchema(null);
+        var snapshot = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+        if (probeSchema == null)
+        {
+            return snapshot;
+        }
+
+        foreach (var field in probeSchema)
+        {
+            snapshot[field.Key] = _settingsManager.GetSetting(
+                settingsGroup,
+                field.Key,
+                field.DefaultValue?.ToString() ?? string.Empty);
+            foreach (var child in field.ChildFields)
+            {
+                snapshot[child.Key] = _settingsManager.GetSetting(
+                    settingsGroup,
+                    child.Key,
+                    child.DefaultValue?.ToString() ?? string.Empty);
+            }
+        }
+
+        return snapshot;
+    }
+
+    /// <summary>
     /// Строит визуальное дерево параметров скрипта (карточки, группы, вкладки).
     /// </summary>
     private void BuildSettingsUi(AbstractScript script)
@@ -251,7 +288,13 @@ public sealed partial class ScriptSettingsControl : UserControl
         _groupContainers.Clear();
         SettingsNavigationView.MenuItems.Clear();
 
-        var fullSchema = script.GetFullSettingsSchema();
+        string earlySettingsGroup = _settingsManager.GetSafeGroupName(script.Name);
+
+        // Схему строим от живых настроек, а не от дефолтов: иначе после смены кодека
+        // (cpu_codec / nvenc_codec) покажутся поля прежнего кодека, а новый будет
+        // кодироваться дефолтами. Ключи-селекторы присутствуют в схеме всегда,
+        // поэтому одного прохода достаточно для верного разрешения.
+        var fullSchema = script.GetFullSettingsSchema(ReadLiveSettingsSnapshot(script, earlySettingsGroup));
 
         if (fullSchema == null ||
             fullSchema.Count == 0)
@@ -528,9 +571,9 @@ public sealed partial class ScriptSettingsControl : UserControl
                     if (_isInternalCheckBoxUpdate) return;
                     ViewModel.CommitSetting(field.Key, true);
                     UpdateVisibility(settingsGroup);
-                    if (field.Key == "auto_bitrate")
+                    if (BitrateAutoMode.IsAutoBitrateController(field.Key))
                     {
-                        RecalculateAutoBitrate(settingsGroup);
+                        RecalculateAutoBitrate(settingsGroup, field.Key);
                     }
                     else if (field.Key == "lossless")
                     {
@@ -906,6 +949,10 @@ public sealed partial class ScriptSettingsControl : UserControl
                 {
                     defaultValStr = "ultrafast";
                 }
+                else if (field.Key == "x264_preset" && _settingsManager.GetSetting(settingsGroup, "lossless", false))
+                {
+                    defaultValStr = "ultrafast";
+                }
 
                 string currentSelection = _settingsManager
                     .GetSetting(
@@ -989,6 +1036,27 @@ public sealed partial class ScriptSettingsControl : UserControl
                 currentSettings[item.Field.Key] = _settingsManager.GetSetting(settingsGroup, item.Field.Key, item.Field.DefaultValue ?? string.Empty);
             }
             var dynamicSchema = _activeScript.GetFullSettingsSchema(currentSettings);
+
+            // Состав схемы изменился (смена кодека cpu_codec / nvenc_codec): чинить варианты
+            // существующих контролов бессмысленно — нужны другие поля. Перестраиваем дерево
+            // целиком; сохранённые значения подтянутся из SettingsManager, вкладка — из истории.
+            if (!_isSchemaRebuilding
+                && dynamicSchema != null
+                && !SettingsSchemaComparer.HasSameKeys(
+                    dynamicSchema,
+                    _generatedElements.Select(item => item.Field.Key)))
+            {
+                _isSchemaRebuilding = true;
+                try
+                {
+                    BuildSettingsUi(_activeScript);
+                }
+                finally
+                {
+                    _isSchemaRebuilding = false;
+                }
+                return;
+            }
             if (dynamicSchema != null)
             {
                 foreach (var item in _generatedElements)
@@ -1149,36 +1217,25 @@ public sealed partial class ScriptSettingsControl : UserControl
 
             if (item.Field.DisableConditions != null && item.Field.DisableConditions.Count > 0)
             {
-                bool isDisabled = false;
-                foreach (var cond in item.Field.DisableConditions)
+                // Универсальная оценка через SettingConditionEvaluator: условия, ссылающиеся
+                // на скрытый управляющий параметр (настройка невыбранного энкодера), игнорируются.
+                string GetCondValue(string key)
                 {
-                    object? targetDefVal = _generatedElements.FirstOrDefault(x => x.Field.Key == cond.Key).Field?.DefaultValue;
-                    string condValue = _settingsManager.GetSetting(
+                    object? targetDefVal = _generatedElements.FirstOrDefault(x => x.Field.Key == key).Field?.DefaultValue;
+                    return _settingsManager.GetSetting(
                         settingsGroup,
-                        cond.Key,
+                        key,
                         targetDefVal?.ToString() ?? string.Empty);
-
-                    bool matches = false;
-                    foreach (var val in cond.Values)
-                    {
-                        if (val.Equals(condValue, StringComparison.OrdinalIgnoreCase))
-                        {
-                            matches = true;
-                            break;
-                        }
-                    }
-
-                    if (cond.Negate)
-                    {
-                        matches = !matches;
-                    }
-
-                    if (matches)
-                    {
-                        isDisabled = true;
-                        break;
-                    }
                 }
+
+                bool IsControllerVisible(string key)
+                {
+                    var controller = _generatedElements.FirstOrDefault(x => x.Field.Key == key);
+                    // Неизвестный ключ трактуем как видимый, сохраняя прежнее поведение оценки по значению.
+                    return controller.Element == null || controller.Element.Visibility == Visibility.Visible;
+                }
+
+                bool isDisabled = SettingConditionEvaluator.IsDisabled(item.Field, GetCondValue, IsControllerVisible);
 
                 bool effectiveEnabled = !isDisabled && isParentExpanderOn;
                 if (item.Element is Control ctrl)
@@ -1712,21 +1769,22 @@ public sealed partial class ScriptSettingsControl : UserControl
     {
         if (_isInternalNumberBoxUpdate) return;
 
-        if (key == "v_bitrate")
+        // Универсальный пересчёт границ битрейта для любого кодека: префикс выводится из ключа поля.
+        string? prefix = BitrateAutoMode.TryGetPrefix(key);
+        if (prefix != null)
         {
-            bool autoBitrate = _settingsManager.GetSetting(settingsGroup, "auto_bitrate", true);
-            if (autoBitrate)
+            bool controllerOn = _settingsManager.GetSetting(settingsGroup, BitrateAutoMode.WithPrefix(prefix, "auto_bitrate"), true);
+            if (controllerOn)
             {
-                RecalculateAutoBitrate(settingsGroup, newValue);
-            }
-        }
-        else if (key == "max_bitrate")
-        {
-            bool autoBitrate = _settingsManager.GetSetting(settingsGroup, "auto_bitrate", true);
-            if (autoBitrate)
-            {
-                int bufSize = newValue * 2;
-                UpdateIntSettingAndUI(settingsGroup, "bufsize", bufSize);
+                if (key.Equals(BitrateAutoMode.TargetBitrateKey(prefix), StringComparison.OrdinalIgnoreCase))
+                {
+                    RecalculateAutoBitrate(settingsGroup, BitrateAutoMode.WithPrefix(prefix, "auto_bitrate"), newValue);
+                }
+                else if (key.Equals(BitrateAutoMode.MaxBitrateKey(prefix), StringComparison.OrdinalIgnoreCase))
+                {
+                    int bufSize = newValue * 2;
+                    UpdateIntSettingAndUI(settingsGroup, BitrateAutoMode.BufsizeKey(prefix), bufSize);
+                }
             }
         }
 
@@ -1734,23 +1792,24 @@ public sealed partial class ScriptSettingsControl : UserControl
     }
 
     /// <summary>
-    /// Выполняет авторасчет параметров битрейта (min_bitrate, max_bitrate, bufsize) на основе целевого битрейта.
+    /// Выполняет авторасчет параметров битрейта (мин/макс битрейт, размер буфера) на основе целевого битрейта.
+    /// Контроллер задаётся ключом (<c>auto_bitrate</c> или <c>&lt;префикс&gt;_auto_bitrate</c>), зависимые
+    /// ключи выводятся из его префикса, поэтому механизм един для всех кодеков.
     /// </summary>
-    public void RecalculateAutoBitrate(string settingsGroup, int? targetBitrate = null)
+    public void RecalculateAutoBitrate(string settingsGroup, string controllerKey = "auto_bitrate", int? targetBitrate = null)
     {
-        int vBr = targetBitrate ?? _settingsManager.GetSetting(settingsGroup, "v_bitrate", 4000);
-        int minBr = vBr;
-        int maxBr = vBr * 2;
-        int bufSize = maxBr * 2;
+        string? prefix = BitrateAutoMode.TryGetPrefix(controllerKey) ?? string.Empty;
+        int vBr = targetBitrate ?? _settingsManager.GetSetting(settingsGroup, BitrateAutoMode.TargetBitrateKey(prefix), 4000);
+        var (minBr, maxBr, bufSize) = BitrateAutoMode.ComputeBounds(vBr);
 
-        UpdateIntSettingAndUI(settingsGroup, "min_bitrate", minBr);
-        UpdateIntSettingAndUI(settingsGroup, "max_bitrate", maxBr);
-        UpdateIntSettingAndUI(settingsGroup, "bufsize", bufSize);
+        UpdateIntSettingAndUI(settingsGroup, BitrateAutoMode.MinBitrateKey(prefix), minBr);
+        UpdateIntSettingAndUI(settingsGroup, BitrateAutoMode.MaxBitrateKey(prefix), maxBr);
+        UpdateIntSettingAndUI(settingsGroup, BitrateAutoMode.BufsizeKey(prefix), bufSize);
     }
 
     private void ApplyFastestPresetOnLossless(string settingsGroup)
     {
-        var presetsToSync = new[] { ("nvenc_preset", "p1"), ("x265_preset", "ultrafast") };
+        var presetsToSync = new[] { ("nvenc_preset", "p1"), ("x265_preset", "ultrafast"), ("x264_preset", "ultrafast") };
         foreach (var (key, fastest) in presetsToSync)
         {
             bool uiSynced = false;
