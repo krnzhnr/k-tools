@@ -32,6 +32,12 @@ public sealed class StructuredLoggingDefectTests
 {
     private static string AppSourceDirectory { get; } = ResolveAppSourceDirectory();
 
+    /// <summary>Верхняя граница числа событий при ожидании первого переполнения очереди.</summary>
+    private const int OverflowProbeLimit = 10_000;
+
+    /// <summary>Граница чтения: с запасом покрывает все события файла сессии, а не только его хвост.</summary>
+    private const int WholeSessionEventsLimit = 20_000;
+
     // ---------- Пункт 1: тихая потеря событий в ProcessBatch ----------
 
     /// <summary>
@@ -80,8 +86,10 @@ public sealed class StructuredLoggingDefectTests
         };
         using LogService service = new(options);
 
-        // Act — переполняем очередь, чтобы сработал счётчик потерь
-        for (int index = 0; index < 300; index++)
+        // Act — пишем, пока очередь не переполнится и не сработает счётчик потерь.
+        // На быстрой машине поток записи успевает освобождать очередь, поэтому
+        // ждём первую потерю, а не рассчитываем на фиксированное число событий.
+        for (int index = 0; index < OverflowProbeLimit && service.DroppedEventCount == 0; index++)
         {
             service.Info("переполнение " + index, "Defect");
         }
@@ -90,7 +98,12 @@ public sealed class StructuredLoggingDefectTests
 
         // Assert
         service.DroppedEventCount.Should().BeGreaterThan(0, "очередь должна переполниться");
-        IReadOnlyList<LogEvent> events = service.ReadRecentEvents(50);
+
+        // Маркер пишется в момент переполнения, то есть в начале файла: остальные
+        // события дописываются в файл после него. Читать только хвост файла
+        // нельзя — ищем маркер среди всех событий сессии, иначе проверка зависит
+        // от скорости потока записи и падает под параллельной нагрузкой.
+        IReadOnlyList<LogEvent> events = service.ReadRecentEvents(WholeSessionEventsLimit);
         events.Should().Contain(
             e => e.EventId == LogEventMarkerNames.DroppedMarker,
             "дыра в Sequence не бывает молчаливой: потеря объясняется маркером в самом файле");
