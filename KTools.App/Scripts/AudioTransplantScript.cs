@@ -271,7 +271,7 @@ public sealed class AudioTransplantScript : AbstractScript
 
             // 4. Формирование итогового файла MKV
             string targetDir = string.IsNullOrWhiteSpace(outputPath) ? Path.GetDirectoryName(filePath)! : outputPath;
-            string targetFileName = $"[DubSwap] {Path.GetFileNameWithoutExtension(filePath)}.mkv";
+            string targetFileName = $"{Path.GetFileNameWithoutExtension(filePath)}.mkv";
             finalOutputPath = Path.Combine(targetDir, targetFileName);
 
             var mkvInputs = new List<MkvInputSource>
