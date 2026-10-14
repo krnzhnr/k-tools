@@ -51,6 +51,13 @@ public interface IDialogService
         System.Collections.Generic.IList<string> presets);
 
     /// <summary>
+    /// Отображает окно «Что нового» со списком изменений версии:
+    /// сверху анимированная шапка, под ней выжимка и секции изменений.
+    /// </summary>
+    /// <param name="notes">Структурированные данные релиза.</param>
+    Task ShowWhatsNewAsync(KTools_App.Core.ReleaseNotes notes);
+
+    /// <summary>
     /// Отображает диалог переименования заголовка аудиодорожек со списком заготовок.
     /// Возвращает новый заголовок (пустая строка — очистить) или null при отмене.
     /// </summary>

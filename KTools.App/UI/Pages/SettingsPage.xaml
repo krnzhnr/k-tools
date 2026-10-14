@@ -420,6 +420,18 @@
                         IsOn="{x:Bind ViewModel.IncludePreReleases, Mode=TwoWay}" />
                 </community:SettingsCard>
 
+                <!-- Окно «Что нового» после обновления -->
+                <community:SettingsCard
+                    Padding="16,12,16,12"
+                    Description="Один раз показывать окно списка изменений после обновления версии"
+                    Header="Окно «Что нового» после обновления">
+                    <ToggleSwitch
+                        x:Name="ShowWhatsNewToggle"
+                        OffContent="Выкл"
+                        OnContent="Вкл"
+                        IsOn="{x:Bind ViewModel.ShowWhatsNewAfterUpdate, Mode=TwoWay}" />
+                </community:SettingsCard>
+
                 <!-- Ручная проверка обновлений (скрывается, если найдено обновление) -->
                 <community:SettingsCard
                     Padding="16,12,16,12"
@@ -524,6 +536,12 @@
                     Padding="4,2,4,2" />
 
                 <community:SettingsExpander.Items>
+                    <community:SettingsCard Header="Что нового в этой версии" Description="Открыть окно списка изменений установленной версии">
+                        <Button
+                            x:Name="ShowWhatsNewButton"
+                            Command="{x:Bind ViewModel.ShowWhatsNewCommand}"
+                            Content="Что нового" />
+                    </community:SettingsCard>
                     <community:SettingsCard>
                         <community:SettingsCard.Header>
                             <HyperlinkButton
@@ -582,6 +600,13 @@
                             OffContent="Выкл"
                             OnContent="Вкл"
                             IsOn="{x:Bind ViewModel.DebugDisableUpdateAction, Mode=TwoWay}" />
+                    </community:SettingsCard>
+
+                    <community:SettingsCard Header="Окно «Что нового»" Description="Открыть окно списка изменений с демонстрационными данными и случайной анимацией шапки">
+                        <Button
+                            x:Name="PreviewWhatsNewButton"
+                            Command="{x:Bind ViewModel.ShowWhatsNewDebugCommand}"
+                            Content="Показать «Что нового»" />
                     </community:SettingsCard>
                 </community:SettingsExpander.Items>
             </community:SettingsExpander>

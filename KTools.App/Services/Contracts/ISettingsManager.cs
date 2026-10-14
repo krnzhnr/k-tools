@@ -79,6 +79,18 @@ public interface ISettingsManager : IDisposable
     bool AutoCheckUpdates { get; set; }
 
     /// <summary>
+    /// Версия, для которой уже показывалось окно «Что нового».
+    /// Пустая строка означает, что окно ещё не показывалось.
+    /// </summary>
+    string LastSeenWhatsNewVersion { get; set; }
+
+    /// <summary>
+    /// Показывать ли окно «Что нового» после обновления (снимается
+    /// флажком «Больше не показывать» в самом окне).
+    /// </summary>
+    bool ShowWhatsNewAfterUpdate { get; set; }
+
+    /// <summary>
     /// Включать ли бета-версии при поиске обновлений.
     /// </summary>
     bool IncludePreReleases { get; set; }

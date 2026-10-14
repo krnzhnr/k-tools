@@ -228,6 +228,10 @@ public partial class MainViewModel : ThreadSafeViewModel
             _ = CheckUpdatesSilentlyAsync();
         }
 
+        // Один раз на версию показываем окно «Что нового» строго после простоя,
+        // вне стартового пути: тяжёлой работы там нет, только чтение файла.
+        _ = ShowWhatsNewOnceAsync();
+
         // Асинхронно запускаем фоновую проверку обновлений всех зависимостей (yt-dlp, FFmpeg, MKVToolNix и др.)
         _ = _dependencyManager.CheckAllDependencyUpdatesAsync();
     }
@@ -285,6 +289,66 @@ public partial class MainViewModel : ThreadSafeViewModel
                 properties: LogProps
                     .Create("ErrorCode", "UPDATE_CHECK_FAILED")
                     .With("Reason", "AutoCheck"));
+        }
+    }
+
+    /// <summary>
+    /// Показывает окно «Что нового» один раз для запечённой версии.
+    /// Ждёт простоя после старта, чтобы не тормозить инициализацию.
+    /// </summary>
+    private async System.Threading.Tasks.Task ShowWhatsNewOnceAsync()
+    {
+        try
+        {
+            await System.Threading.Tasks.Task.Delay(2500);
+
+            if (!ReleaseNotesLoader.TryLoadBakedNotes(out ReleaseNotes? notes) || notes == null)
+            {
+                return;
+            }
+
+            if (!WhatsNewGate.ShouldShow(
+                _settingsManager.LastSeenWhatsNewVersion,
+                notes.Version,
+                _settingsManager.ShowWhatsNewAfterUpdate))
+            {
+                return;
+            }
+
+            _logService.Write(
+                "app.whatsnew.autoshow",
+                LogLevel.Info,
+                LogStatus.Running,
+                $"Показывается окно изменений версии {LogRedactor.CompactSafeToken(notes.Version)}",
+                source: SourceName,
+                properties: LogProps
+                    .Create("Version", LogRedactor.CompactSafeToken(notes.Version))
+                    .With("Reason", "FirstRunOfVersion"));
+
+            await _dialogService.ShowWhatsNewAsync(notes);
+            _settingsManager.LastSeenWhatsNewVersion = notes.Version;
+
+            _logService.Write(
+                "app.whatsnew.shown",
+                LogLevel.Info,
+                LogStatus.Succeeded,
+                $"Окно изменений версии {LogRedactor.CompactSafeToken(notes.Version)} показано",
+                source: SourceName,
+                properties: LogProps
+                    .Create("Version", LogRedactor.CompactSafeToken(notes.Version)));
+        }
+        catch (Exception ex)
+        {
+            _logService.Write(
+                "app.whatsnew.autoshow_failed",
+                LogLevel.Warning,
+                LogStatus.Failed,
+                "Автопоказ окна изменений не завершён",
+                ex,
+                SourceName,
+                properties: LogProps
+                    .Create("ErrorCode", "WHATSNEW_AUTOSHOW_FAILED")
+                    .With("Retryable", true));
         }
     }
 

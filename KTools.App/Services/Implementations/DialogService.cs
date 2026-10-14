@@ -392,6 +392,64 @@ public sealed class DialogService : IDialogService
             "Отмена");
     }
 
+    /// <inheritdoc />
+    public async Task ShowWhatsNewAsync(Core.ReleaseNotes notes)
+    {
+        ArgumentNullException.ThrowIfNull(notes);
+
+        var queue = App.UiDispatcherQueue;
+        if (queue != null && !queue.HasThreadAccess)
+        {
+            var tcs = new TaskCompletionSource<bool>();
+            bool enqueued = queue.TryEnqueue(async () =>
+            {
+                try
+                {
+                    await ShowWhatsNewInternalAsync(notes);
+                    tcs.SetResult(true);
+                }
+                catch (Exception ex)
+                {
+                    tcs.SetException(ex);
+                }
+            });
+
+            if (enqueued)
+            {
+                await tcs.Task;
+                return;
+            }
+        }
+
+        await ShowWhatsNewInternalAsync(notes);
+    }
+
+    private async Task ShowWhatsNewInternalAsync(Core.ReleaseNotes notes)
+    {
+        await DialogSemaphore.WaitAsync();
+        try
+        {
+            var xamlRoot = XamlRoot;
+            if (xamlRoot == null)
+            {
+                throw new InvalidOperationException(
+                    "XamlRoot не инициализирован. "
+                    + "Убедитесь, что главное окно создано или установите свойство XamlRoot перед вызовом ShowWhatsNewAsync.");
+            }
+
+            var dialog = new UI.Dialogs.WhatsNewDialog(notes)
+            {
+                XamlRoot = xamlRoot
+            };
+
+            await dialog.ShowAsync();
+        }
+        finally
+        {
+            DialogSemaphore.Release();
+        }
+    }
+
     private async Task<string?> ShowAudioTitleDialogInternalAsync(
         string dialogTitle,
         string description,

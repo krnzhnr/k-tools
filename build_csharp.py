@@ -30,6 +30,7 @@ SRC_DIR = BASE_DIR
 PROJECT_FILE = SRC_DIR / "KTools.App" / "KTools.App.csproj"
 VERSION_FILE = BASE_DIR / "version.txt"
 CHANGELOG_FILE = BASE_DIR / "CHANGELOG.md"
+RELEASE_NOTES_FILE = SRC_DIR / "KTools.App" / "Assets" / "WhatsNew" / "release-notes.md"
 ICON_SRC = SRC_DIR / "KTools.App" / "Assets" / "AppIcon.ico"
 EXE_BASE_NAME = "KTools.App"  # Имя оригинального exe-файла после dotnet publish
 
@@ -59,6 +60,36 @@ def extract_version_from_changelog() -> str:
 
     version = match.group(1).strip()
     return version
+
+
+def extract_release_notes_section() -> str:
+    """Извлечь верхнюю секцию CHANGELOG.md (заголовок версии + тело до следующего '# ')."""
+    content = CHANGELOG_FILE.read_text(encoding="utf-8")
+    match = re.search(r"^#\s*([\d\.\-\w]+)", content, re.MULTILINE)
+    if not match:
+        raise ValueError("Не удалось найти версию в CHANGELOG.md")
+
+    header = match.group(0)
+    start = content.find(header) + len(header)
+    rest = content[start:]
+    next_match = re.search(r"^#\s+[^#]", rest, re.MULTILINE)
+    section = rest[:next_match.start()] if next_match else rest
+    return (header + "\n" + section).strip() + "\n"
+
+
+def bake_release_notes() -> None:
+    """Запечь снапшот изменений текущей версии для окна «Что нового».
+
+    Файл кладётся рядом с GIF-сценами и пакуется в установщик как Content.
+    Ошибка не роняет сборку: без файла окно просто не показывается.
+    """
+    try:
+        notes = extract_release_notes_section()
+        RELEASE_NOTES_FILE.parent.mkdir(parents=True, exist_ok=True)
+        RELEASE_NOTES_FILE.write_text(notes, encoding="utf-8")
+        print(f"[✓] Снапшот изменений версии записан: {RELEASE_NOTES_FILE.name}")
+    except Exception as e:
+        print(f"[!] Не удалось запечь изменения версии: {e}")
 
 
 def prompt_version_update() -> str:
@@ -407,6 +438,8 @@ def main():
 
     version = prompt_version_update()
     print(f"[*] Сборка версии: {version}")
+
+    bake_release_notes()
 
     publish_dir = build_csharp_app(version)
 

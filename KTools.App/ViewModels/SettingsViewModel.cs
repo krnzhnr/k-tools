@@ -228,6 +228,12 @@ public partial class SettingsViewModel : ThreadSafeViewModel
     public partial bool AutoCheckUpdates { get; set; }
 
     /// <summary>
+    /// Показывать ли окно «Что нового» после обновления.
+    /// </summary>
+    [ObservableProperty]
+    public partial bool ShowWhatsNewAfterUpdate { get; set; }
+
+    /// <summary>
     /// Флаг включения предварительных версий (Pre-Releases) в проверку обновлений.
     /// </summary>
     [ObservableProperty]
@@ -356,6 +362,7 @@ public partial class SettingsViewModel : ThreadSafeViewModel
             LogDir = _settingsManager.LogDir;
 
             AutoCheckUpdates = _settingsManager.AutoCheckUpdates;
+            ShowWhatsNewAfterUpdate = _settingsManager.ShowWhatsNewAfterUpdate;
             IncludePreReleases = _settingsManager.IncludePreReleases;
             RenameEnableRegex = _settingsManager.RenameEnableRegex;
             RenameRegexSearch = _settingsManager.RenameRegexSearch;
@@ -461,6 +468,29 @@ public partial class SettingsViewModel : ThreadSafeViewModel
     partial void OnAutoCheckUpdatesChanged(bool value)
     {
         CommitSetting("Updates", "AutoCheckUpdates", value, "Проверка обновлений при запуске");
+    }
+
+    partial void OnShowWhatsNewAfterUpdateChanged(bool value)
+    {
+        CommitSetting("Updates", "ShowWhatsNewAfterUpdate", value, "Окно изменений после обновления");
+    }
+
+    /// <summary>
+    /// Меняет флаг автопоказа без строки статуса: вызывается из окна
+    /// «Что нового», где подтверждение сохранения неуместно.
+    /// </summary>
+    internal void SetShowWhatsNewAfterUpdateSilent(bool value)
+    {
+        _settingsManager.ShowWhatsNewAfterUpdate = value;
+        _isApplyingManagerState = true;
+        try
+        {
+            ShowWhatsNewAfterUpdate = value;
+        }
+        finally
+        {
+            _isApplyingManagerState = false;
+        }
     }
 
     partial void OnIncludePreReleasesChanged(bool value)
@@ -692,6 +722,7 @@ public partial class SettingsViewModel : ThreadSafeViewModel
             new("Logging/ShowLogsTab", false),
             new("Logging/LogDir", string.Empty),
             new("Updates/AutoCheckUpdates", true),
+            new("Updates/ShowWhatsNewAfterUpdate", true),
             new("Updates/IncludePreReleases", true),
             new("Debug/DebugSimulateOldVersion", false),
             new("Debug/DebugDisableUpdateAction", false),
@@ -720,6 +751,7 @@ public partial class SettingsViewModel : ThreadSafeViewModel
             ShowLogsTab = false;
             LogDir = string.Empty;
             AutoCheckUpdates = true;
+            ShowWhatsNewAfterUpdate = true;
             IncludePreReleases = true;
             RenameEnableRegex = false;
             RenameRegexSearch = string.Empty;
@@ -841,6 +873,60 @@ public partial class SettingsViewModel : ThreadSafeViewModel
         {
             return "2.0.0";
         }
+    }
+
+    /// <summary>
+    /// Открывает окно «Что нового» с запечёнными данными установленной версии.
+    /// </summary>
+    [RelayCommand]
+    private async System.Threading.Tasks.Task ShowWhatsNewAsync()
+    {
+        if (!ReleaseNotesLoader.TryLoadBakedNotes(out ReleaseNotes? notes) || notes == null)
+        {
+            await _dialogService.ShowMessageAsync(
+                "Что нового",
+                "Запечённые данные версии не найдены. Пересоберите приложение скриптом сборки.");
+            return;
+        }
+
+        _logService.Write("settings.whatsnew.manual_open", LogLevel.Debug, LogStatus.Running, $"Открыто окно изменений версии {LogRedactor.CompactSafeToken(notes.Version)} из блока «О программе»", source: SourceName, properties: LogProps.Create("Version", LogRedactor.CompactSafeToken(notes.Version)).With("Group", "Update"));
+        await _dialogService.ShowWhatsNewAsync(notes);
+    }
+
+    /// <summary>
+    /// Открывает окно «Что нового» с демонстрационными данными для проверки вёрстки.
+    /// Стартовая сцена случайная, дальше листание идёт по кругу всего списка.
+    /// </summary>
+    [RelayCommand]
+    private async System.Threading.Tasks.Task ShowWhatsNewDebugAsync()
+    {
+        const string fakeBody =
+            "### Главное\n"
+            + "1. Демонстрационный рассвет в шапке: анимация меняется при каждом открытии.\n"
+            + "2. Краткая выжимка версии вместо длинной простыни изменений.\n"
+            + "3. Раскрывающиеся секции по категориям изменений.\n"
+            + "### Добавлено\n"
+            + "1. Окно «Что нового» с анимированной шапкой.\n"
+            + "2. Случайный выбор сцены из коллекции ascii.rest.\n"
+            + "3. Кнопка «Другая анимация» прямо в шапке окна.\n"
+            + "4. Заглушка-градиент при отсутствии сети.\n"
+            + "### Изменено\n"
+            + "1. Демонстрационный порядок секций для проверки прокрутки.\n"
+            + "2. Подпись версии поверх анимации для наглядности.\n"
+            + "### Исправлено\n"
+            + "1. Демонстрационный пункт первой категории исправлений.\n"
+            + "2. Демонстрационный пункт второй категории исправлений.\n"
+            + "3. Демонстрационный пункт третьей категории исправлений.";
+
+        var notes = ReleaseNotesParser.Parse(
+            GetAppVersion(),
+            "Демонстрационный просмотр окна изменений",
+            fakeBody,
+            WhatsNewArtCatalog.PickRandomAvailable());
+
+        _logService.Write("settings.debug.whatsnew_preview", LogLevel.Debug, LogStatus.Running, $"Открыт демонстрационный просмотр окна изменений с анимацией {LogRedactor.CompactSafeToken(notes.ArtPieceName)}", source: SourceName, properties: LogProps.Create("Group", "Debug").With("Key", LogRedactor.CompactSafeToken(notes.ArtPieceName)));
+
+        await _dialogService.ShowWhatsNewAsync(notes);
     }
 
     private int _versionClickCount = 0;

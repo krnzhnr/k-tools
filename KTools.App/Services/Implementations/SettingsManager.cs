@@ -199,6 +199,24 @@ public sealed class SettingsManager : ISettingsManager
     }
 
     /// <summary>
+    /// Версия, для которой уже показывалось окно «Что нового».
+    /// </summary>
+    public string LastSeenWhatsNewVersion
+    {
+        get => GetSetting("Updates", "LastSeenWhatsNewVersion", string.Empty);
+        set => SetSetting("Updates", "LastSeenWhatsNewVersion", value);
+    }
+
+    /// <summary>
+    /// Показывать ли окно «Что нового» после обновления.
+    /// </summary>
+    public bool ShowWhatsNewAfterUpdate
+    {
+        get => GetSetting("Updates", "ShowWhatsNewAfterUpdate", true);
+        set => SetSetting("Updates", "ShowWhatsNewAfterUpdate", value);
+    }
+
+    /// <summary>
     /// Определяет, является ли текущая сборка пре-релизом (Preview/Alpha/Beta/RC).
     /// </summary>
     public static bool IsPreviewBuild
@@ -1930,6 +1948,14 @@ public sealed class SettingsManager : ISettingsManager
 
             // Настройки обновлений
             if (SetDefaultIfMissing("Updates", "AutoCheckUpdates", true))
+            {
+                applied++;
+            }
+            if (SetDefaultIfMissing("Updates", "LastSeenWhatsNewVersion", string.Empty))
+            {
+                applied++;
+            }
+            if (SetDefaultIfMissing("Updates", "ShowWhatsNewAfterUpdate", true))
             {
                 applied++;
             }
