@@ -154,7 +154,15 @@ def build_csharp_app(version: str) -> Path:
         "-r", "win-x64",
         "--self-contained", "true",
         "-p:PublishSingleFile=false",
-        "-p:PublishReadyToRun=false",
+        # PERF-07: явное true — релизный шип ставится пользователю с ReadyToRun,
+        # как декларирует csproj для Release (PublishReadyToRun=True); молчаливое
+        # расхождение устранено. Замер A/B на этом SSD-стенде (Measure-Startup,
+        # Runs 3): тёплый старт в шуме, регресса нет; цена — publish +~54 МБ
+        # (+24%), установщик +~11 МБ (+18%), что приемлемо. Холод на HDD-стенде
+        # здесь неизмерим (дисков HDD нет, перезагрузка недоступна): добрать на
+        # целевом железе; если там регресс — вернуть false, решение держать тут.
+        # Триминг/single-file осознанно выключены (MSIX/COM), не трогать.
+        "-p:PublishReadyToRun=true",
         "-p:Platform=x64",
         f"-p:Version={version}",
         f"-p:InformationalVersion={version}",
@@ -387,6 +395,26 @@ end;
     return iss_file
 
 
+def verify_publish_content(publish_dir: Path) -> None:
+    """Проверить, что контент окна «Что нового» доехал до публикации.
+
+    Ловит рассинхрон CopyToOutputDirectory/CopyToPublishDirectory:
+    без этого окно молча показывает заглушки в установленном приложении.
+    """
+    missing = []
+    notes = publish_dir / "Assets" / "WhatsNew" / "release-notes.md"
+    if not notes.exists():
+        missing.append("release-notes.md")
+    art_dir = publish_dir / "Assets" / "WhatsNew" / "art"
+    gifs = list(art_dir.glob("*.gif")) if art_dir.exists() else []
+    if not gifs:
+        missing.append("art/*.gif")
+    if missing:
+        print(f"[!] Ошибка: в публикации отсутствует контент «Что нового»: {', '.join(missing)}")
+        sys.exit(1)
+    print(f"[✓] Контент «Что нового» на месте: заметки + {len(gifs)} GIF.")
+
+
 def build_inno_installer(version: str, publish_dir: Path):
     """Компиляция инсталлятора через Inno Setup (iscc)."""
     print("=" * 60)
@@ -442,6 +470,8 @@ def main():
     bake_release_notes()
 
     publish_dir = build_csharp_app(version)
+
+    verify_publish_content(publish_dir)
 
     build_inno_installer(version, publish_dir)
 
