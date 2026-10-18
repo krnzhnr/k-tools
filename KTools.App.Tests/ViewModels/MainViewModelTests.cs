@@ -86,7 +86,8 @@ public class MainViewModelTests : IsolatedMessengerTestBase
             _logServiceMock.Object,
             MockBuilders.CreatePathManagerMock().Object,
             _scriptRegistryMock.Object,
-            _dependencyManagerMock.Object);
+            _dependencyManagerMock.Object,
+            Mock.Of<IInstallLocationService>());
 
         _script = new StubScript(
             _logServiceMock.Object,

@@ -385,7 +385,8 @@ public class ShellActivationIntegrationTests : IsolatedMessengerTestBase
             logServiceMock.Object,
             pathMock.Object,
             registryMock.Object,
-            MockBuilders.CreateDependencyManagerMock().Object);
+            MockBuilders.CreateDependencyManagerMock().Object,
+            Mock.Of<IInstallLocationService>());
 
         var vm = new MainViewModel(
             navigationMock.Object,

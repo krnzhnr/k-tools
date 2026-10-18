@@ -841,6 +841,7 @@ public partial class App : Application
         services.AddSingleton<IDialogService, DialogService>();
         services.AddSingleton<IWindowHandleProvider, WindowHandleProvider>();
         services.AddSingleton<IUpdateService, UpdateService>();
+        services.AddSingleton<IInstallLocationService, InstallLocationService>();
         services.AddSingleton<MainWindow>();
 
         // 3. Регистрация ViewModels
@@ -990,6 +991,7 @@ public partial class App : Application
             CancellationToken startupBackgroundToken = EnsureStartupBackgroundCancellation(window);
             QueueSystemInfoSnapshotInBackground(startupBackgroundToken);
             QueueShellIntegrationRefreshInBackground(startupBackgroundToken);
+            QueueStaleCopyCheckInBackground(startupBackgroundToken);
 
             // Обрабатываем собственные параметры запуска
             var ownArgs = Environment.GetCommandLineArgs();
@@ -1432,8 +1434,192 @@ public partial class App : Application
     }
 
     /// <summary>
+    /// Проверяет в фоне, не запущена ли неосновная копия приложения, и предлагает перейти к основной установке.
+    /// Тихие обновления ставятся в зарегистрированную папку, поэтому старая копия из другой папки
+    /// при повторном запуске снова предлагает то же обновление. Проверка пропускается в диагностических сборках.
+    /// </summary>
+    /// <param name="cancellationToken">Токен отмены при закрытии приложения.</param>
+    private static void QueueStaleCopyCheckInBackground(CancellationToken cancellationToken)
+    {
+        if (IsDiagnosticBuild)
+        {
+            return;
+        }
+
+        try
+        {
+            _ = Task.Run(() => CheckStaleCopyInBackgroundAsync(cancellationToken), cancellationToken);
+        }
+        catch (Exception)
+        {
+        }
+    }
+
+    /// <summary>
+    /// Ждёт settling главного окна и показывает диалог перехода, если текущий запуск выполнен из неосновной копии.
+    /// </summary>
+    /// <param name="cancellationToken">Токен отмены при закрытии приложения.</param>
+    private static async Task CheckStaleCopyInBackgroundAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(3), cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            IInstallLocationService installLocationService = Services.GetRequiredService<IInstallLocationService>();
+            StaleCopyInfo? staleCopy = installLocationService.DetectStaleCopy();
+            if (staleCopy is null || !staleCopy.ShouldWarn)
+            {
+                return;
+            }
+
+            WriteAppEvent(
+                AppEventIds.StaleCopyDetected,
+                LogLevel.Warning,
+                LogStatus.Changed,
+                "Обнаружен запуск из неосновной копии приложения",
+                null,
+                new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["Stage"] = "stale_copy",
+                    ["Version"] = staleCopy.RegisteredVersion,
+                    ["Reason"] = "UpdateTargetMismatch"
+                });
+
+            IDialogService dialogService = Services.GetRequiredService<IDialogService>();
+            bool openMain = await dialogService.ShowConfirmationAsync(
+                "Запущена не основная копия",
+                $"Вы запустили копию версии {staleCopy.CurrentVersion} из папки:{Environment.NewLine}{staleCopy.CurrentDirectory}"
+                    + $"{Environment.NewLine}{Environment.NewLine}Основная установка — версия {staleCopy.RegisteredVersion} в папке:{Environment.NewLine}{staleCopy.RegisteredDirectory}"
+                    + $"{Environment.NewLine}{Environment.NewLine}Обновления устанавливаются в основную папку, поэтому эта копия обновляться не будет. Открыть основную копию и закрыть эту?",
+                "Открыть основную",
+                "Продолжить здесь").ConfigureAwait(false);
+
+            if (!openMain)
+            {
+                WriteAppEvent(
+                    AppEventIds.StaleCopySkipped,
+                    LogLevel.Info,
+                    LogStatus.Skipped,
+                    "Пользователь продолжил работу в неосновной копии",
+                    null,
+                    new Dictionary<string, object?>(StringComparer.Ordinal)
+                    {
+                        ["Stage"] = "stale_copy",
+                        ["Reason"] = "UserDeclined"
+                    });
+                return;
+            }
+
+            if (installLocationService.TryLaunchRegisteredCopy(staleCopy))
+            {
+                WriteAppEvent(
+                    AppEventIds.StaleCopyRedirected,
+                    LogLevel.Info,
+                    LogStatus.Succeeded,
+                    "Выполнено перенаправление в основную копию приложения",
+                    null,
+                    new Dictionary<string, object?>(StringComparer.Ordinal)
+                    {
+                        ["Stage"] = "stale_copy",
+                        ["Version"] = staleCopy.RegisteredVersion
+                    });
+                RequestExitOnUiThread();
+                return;
+            }
+
+            WriteAppEvent(
+                AppEventIds.StaleCopyRedirectFailed,
+                LogLevel.Error,
+                LogStatus.Failed,
+                "Не удалось запустить основную копию приложения",
+                null,
+                new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["Stage"] = "stale_copy",
+                    ["ErrorCode"] = AppErrorCodes.StaleCopyRedirectFailed
+                });
+            await dialogService.ShowMessageAsync(
+                "Не удалось открыть основную копию",
+                $"Запустите вручную файл:{Environment.NewLine}{staleCopy.RegisteredExecutablePath}").ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Отмена при закрытии приложения — штатный путь для фоновой проверки.
+        }
+        catch (Exception ex)
+        {
+            WriteAppEvent(
+                AppEventIds.StaleCopyCheckFailed,
+                LogLevel.Error,
+                LogStatus.Failed,
+                "Проверка неосновной копии не выполнена",
+                ex,
+                new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["Stage"] = "stale_copy",
+                    ["ErrorCode"] = AppErrorCodes.StaleCopyCheckFailed
+                });
+        }
+    }
+
+    /// <summary>
+    /// Завершает текущую копию на UI-потоке после запуска основной:
+    /// место первичного экземпляра освобождается, и основная копия с флагом захвата занимает его.
+    /// </summary>
+    private static void RequestExitOnUiThread()
+    {
+        try
+        {
+            var queue = CurrentMainWindow?.DispatcherQueue ?? UiDispatcherQueue;
+            if (queue != null && !queue.HasThreadAccess)
+            {
+                queue.TryEnqueue(() =>
+                {
+                    try
+                    {
+                        Application.Current.Exit();
+                    }
+                    catch (Exception enqueueEx)
+                    {
+                        WriteAppEvent(
+                            AppEventIds.StaleCopyRedirectFailed,
+                            LogLevel.Warning,
+                            LogStatus.PartiallySucceeded,
+                            "Основная копия запущена, но завершить текущую копию автоматически не удалось, закройте её вручную",
+                            enqueueEx,
+                            new Dictionary<string, object?>(StringComparer.Ordinal)
+                            {
+                                ["Stage"] = "stale_copy",
+                                ["ErrorCode"] = AppErrorCodes.StaleCopyCheckFailed
+                            });
+                    }
+                });
+                return;
+            }
+
+            Application.Current.Exit();
+        }
+        catch (Exception ex)
+        {
+            WriteAppEvent(
+                AppEventIds.StaleCopyRedirectFailed,
+                LogLevel.Warning,
+                LogStatus.PartiallySucceeded,
+                "Основная копия запущена, но завершить текущую копию автоматически не удалось, закройте её вручную",
+                ex,
+                new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["Stage"] = "stale_copy",
+                    ["ErrorCode"] = AppErrorCodes.StaleCopyCheckFailed
+                });
+        }
+    }
+
+    /// <summary>
     /// Обновляет ключи контекстного меню в реестре, если интеграция включена.
     /// Выполняется в фоне; ошибки на старт приложения не влияют.
+    /// Неосновная копия контекстное меню на себя не перерегистрирует.
     /// </summary>
     /// <param name="cancellationToken">Токен отмены при закрытии приложения.</param>
     private static void RefreshShellIntegrationInBackground(CancellationToken cancellationToken)
@@ -1441,6 +1627,23 @@ public partial class App : Application
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
+
+            if (Services.GetRequiredService<IInstallLocationService>().DetectStaleCopy() is not null)
+            {
+                WriteAppEvent(
+                    AppEventIds.ShellIntegrationSkippedStaleCopy,
+                    LogLevel.Info,
+                    LogStatus.Skipped,
+                    "Перерегистрация контекстного меню пропущена: запуск выполнен из неосновной копии",
+                    null,
+                    new Dictionary<string, object?>(StringComparer.Ordinal)
+                    {
+                        ["Stage"] = "shell_integration",
+                        ["Reason"] = "StaleCopy"
+                    });
+                return;
+            }
+
             ISettingsManager settingsManager = _settingsManager ?? Services.GetRequiredService<ISettingsManager>();
             if (settingsManager.GetSetting("Shell", "IsContextMenuEnabled", false))
             {

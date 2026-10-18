@@ -458,6 +458,53 @@ public class EncoderArgumentMatrixTests
         args.Should().ContainInOrder("-b_ref_mode", expected);
     }
 
+    // ---------- NVENC: параметры, отключаемые в lossless ----------
+
+    [TestMethod]
+    [DataRow("HEVC / H.265")]
+    [DataRow("AVC / H.264")]
+    public void Nvenc_Lossless_OmitsLookaheadMultipassAndBRefMode(string codec)
+    {
+        // Arrange: в lossless работает constqp с фиксированным qp, а значит нет rate control,
+        // которому служат lookahead и multipass. B-пирамида там тоже не нужна.
+        // Все три параметра лишь замедляют кодирование, поэтому в lossless не передаются.
+        var encoder = new NvencEncoder();
+        var settings = NvencSettings(codec, new Dictionary<string, object>());
+        var context = new EncoderSharedContext(IsLossless: true, Force10Bit: false, ContainerExtension: ".mkv");
+
+        // Act
+        var args = encoder.BuildEncoderArguments(settings, context);
+
+        // Assert
+        args.Should().ContainInOrder("-rc", "constqp");
+        args.Should().NotContain("-rc-lookahead", $"lossless не должен нести lookahead ({codec})");
+        args.Should().NotContain("-multipass", $"lossless не должен нести multipass ({codec})");
+        args.Should().NotContain("-b_ref_mode", $"lossless не должен нести B-пирамиду ({codec})");
+    }
+
+    [TestMethod]
+    [DataRow("HEVC / H.265")]
+    [DataRow("AVC / H.264")]
+    [DataRow("AV1")]
+    public void Nvenc_NonLossless_KeepsLookaheadMultipassAndBRefMode(string codec)
+    {
+        // Arrange & Act: значения заданы явно, чтобы тест проверял передачу настроек,
+        // а не захардкоженные значения по умолчанию
+        var encoder = new NvencEncoder();
+        var settings = NvencSettings(codec, new Dictionary<string, object>
+        {
+            { "nv_lookahead", 8 },
+            { "nv_multipass", "qres" },
+            { "nv_b_ref_mode", "disabled" }
+        });
+        var args = encoder.BuildEncoderArguments(settings, Mkv);
+
+        // Assert: вне lossless поведение не меняется
+        args.Should().ContainInOrder("-rc-lookahead", "8");
+        args.Should().ContainInOrder("-multipass", "qres");
+        args.Should().ContainInOrder("-b_ref_mode", "disabled");
+    }
+
     // ---------- NVENC: AQ-переключатели и сила ----------
 
     [TestMethod]

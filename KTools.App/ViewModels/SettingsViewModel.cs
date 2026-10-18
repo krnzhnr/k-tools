@@ -76,6 +76,7 @@ public partial class SettingsViewModel : ThreadSafeViewModel
     private readonly ILogService _logService;
     private readonly IPathManager _pathManager;
     private readonly IScriptRegistry _scriptRegistry;
+    private readonly IInstallLocationService _installLocationService;
 
     /// <summary>
     /// Строка версии приложения для отображения в блоке "О программе".
@@ -300,7 +301,8 @@ public partial class SettingsViewModel : ThreadSafeViewModel
         ILogService logService,
         IPathManager pathManager,
         IScriptRegistry scriptRegistry,
-        IDependencyManager dependencyManager)
+        IDependencyManager dependencyManager,
+        IInstallLocationService installLocationService)
     {
         _settingsManager = settingsManager ?? throw new ArgumentNullException(nameof(settingsManager));
         _dialogService = dialogService ?? throw new ArgumentNullException(nameof(dialogService));
@@ -309,6 +311,7 @@ public partial class SettingsViewModel : ThreadSafeViewModel
         _pathManager = pathManager ?? throw new ArgumentNullException(nameof(pathManager));
         _scriptRegistry = scriptRegistry ?? throw new ArgumentNullException(nameof(scriptRegistry));
         _dependencyManager = dependencyManager ?? throw new ArgumentNullException(nameof(dependencyManager));
+        _installLocationService = installLocationService ?? throw new ArgumentNullException(nameof(installLocationService));
 
         UpdateStatusText = "Обновления не проверялись";
         DefaultOutputSubfolder = "KTools_Result";
@@ -813,6 +816,73 @@ public partial class SettingsViewModel : ThreadSafeViewModel
     }
 
     /// <summary>
+    /// Проверяет запуск из неосновной копии перед обновлением: тихая установка
+    /// обновляет зарегистрированную папку, а не текущую, поэтому эта копия останется старой.
+    /// Возвращает true, если обновление нужно прервать (выполнен или запрошен переход к основной копии).
+    /// </summary>
+    private async System.Threading.Tasks.Task<bool> TryRedirectStaleCopyBeforeUpdateAsync()
+    {
+        StaleCopyInfo? staleCopy;
+        try
+        {
+            staleCopy = _installLocationService.DetectStaleCopy();
+        }
+        catch (Exception ex)
+        {
+            _logService.Write("settings.update.stale_copy_check_failed", LogLevel.Warning, LogStatus.Failed, "Проверка неосновной копии перед обновлением не выполнена, обновление продолжается", ex, SourceName, properties: LogProps.Create("ErrorCode", "UPDATE_STALE_COPY_CHECK_FAILED").With("Group", "Update").With("Retryable", true));
+            return false;
+        }
+
+        if (staleCopy is null || !staleCopy.ShouldWarn)
+        {
+            return false;
+        }
+
+        _logService.Write("settings.update.stale_copy_warned", LogLevel.Warning, LogStatus.Changed, "Обновление запрошено из неосновной копии: установщик обновит зарегистрированную папку, а не текущую", source: SourceName, properties: LogProps.Create("Version", staleCopy.RegisteredVersion).With("Reason", "StaleCopy").With("Group", "Update"));
+
+        bool openMain = await _dialogService.ShowConfirmationAsync(
+            "Обновление установится в другую папку",
+            $"Эта копия версии {staleCopy.CurrentVersion} запущена из папки:{Environment.NewLine}{staleCopy.CurrentDirectory}"
+                + $"{Environment.NewLine}{Environment.NewLine}Обновление будет установлено в основную папку:{Environment.NewLine}{staleCopy.RegisteredDirectory}"
+                + $"{Environment.NewLine}{Environment.NewLine}Открыть основную копию вместо обновления этой?",
+            "Открыть основную",
+            "Обновить всё равно");
+
+        if (!openMain)
+        {
+            return false;
+        }
+
+        if (_installLocationService.TryLaunchRegisteredCopy(staleCopy))
+        {
+            ExitToTakeover();
+            return true;
+        }
+
+        await _dialogService.ShowMessageAsync(
+            "Не удалось открыть основную копию",
+            $"Запустите вручную файл:{Environment.NewLine}{staleCopy.RegisteredExecutablePath}");
+        return true;
+    }
+
+    /// <summary>
+    /// Завершает текущую копию после запуска основной: место первичного экземпляра
+    /// освобождается, и основная копия с флагом захвата занимает его.
+    /// Вызывается из UI-потока команды обновления.
+    /// </summary>
+    private void ExitToTakeover()
+    {
+        try
+        {
+            Microsoft.UI.Xaml.Application.Current?.Exit();
+        }
+        catch (Exception ex)
+        {
+            _logService.Write("settings.update.takeover_exit_failed", LogLevel.Warning, LogStatus.PartiallySucceeded, "Основная копия запущена, но завершить текущую копию автоматически не удалось, закройте её вручную", ex, SourceName, properties: LogProps.Create("ErrorCode", "UPDATE_TAKEOVER_EXIT_FAILED").With("Group", "Update"));
+        }
+    }
+
+    /// <summary>
     /// Запускает скачивание и установку найденного обновления.
     /// </summary>
     [RelayCommand]
@@ -823,6 +893,11 @@ public partial class SettingsViewModel : ThreadSafeViewModel
         if (DebugDisableUpdateAction)
         {
             _logService.Write("settings.debug.update_install_blocked", LogLevel.Debug, LogStatus.Skipped, "Загрузка и установка обновлений заблокирована отладочным переключателем", source: SourceName, properties: LogProps.Create("Reason", "DebugToggle").With("Group", "Update"));
+            return;
+        }
+
+        if (await TryRedirectStaleCopyBeforeUpdateAsync())
+        {
             return;
         }
 

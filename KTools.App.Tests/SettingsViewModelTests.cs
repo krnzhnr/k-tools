@@ -8,6 +8,7 @@ using KTools_App.ViewModels;
 using KTools_App.Core;
 using KTools_App.Diagnostics;
 using KTools_App.Services.Contracts;
+using KTools_App.Tests.TestHelpers;
 
 namespace KTools_App.Tests;
 
@@ -64,7 +65,8 @@ public class SettingsViewModelTests
             _logServiceMock.Object,
             _pathManagerMock.Object,
             _scriptRegistryMock.Object,
-            _dependencyManagerMock.Object
+            _dependencyManagerMock.Object,
+            Mock.Of<IInstallLocationService>()
         );
 
         // Assert
@@ -96,7 +98,8 @@ public class SettingsViewModelTests
             _logServiceMock.Object,
             _pathManagerMock.Object,
             _scriptRegistryMock.Object,
-            _dependencyManagerMock.Object
+            _dependencyManagerMock.Object,
+            Mock.Of<IInstallLocationService>()
         );
 
         // Act
@@ -141,7 +144,8 @@ public class SettingsViewModelTests
             _logServiceMock.Object,
             _pathManagerMock.Object,
             _scriptRegistryMock.Object,
-            _dependencyManagerMock.Object
+            _dependencyManagerMock.Object,
+            Mock.Of<IInstallLocationService>()
         );
         _logServiceMock.Invocations.Clear();
 
@@ -183,7 +187,8 @@ public class SettingsViewModelTests
             _logServiceMock.Object,
             _pathManagerMock.Object,
             _scriptRegistryMock.Object,
-            _dependencyManagerMock.Object
+            _dependencyManagerMock.Object,
+            Mock.Of<IInstallLocationService>()
         );
 
         // Act
@@ -234,7 +239,8 @@ public class SettingsViewModelTests
             _logServiceMock.Object,
             _pathManagerMock.Object,
             _scriptRegistryMock.Object,
-            _dependencyManagerMock.Object
+            _dependencyManagerMock.Object,
+            Mock.Of<IInstallLocationService>()
         );
 
         // Assert
@@ -264,7 +270,8 @@ public class SettingsViewModelTests
             _logServiceMock.Object,
             _pathManagerMock.Object,
             _scriptRegistryMock.Object,
-            _dependencyManagerMock.Object
+            _dependencyManagerMock.Object,
+            Mock.Of<IInstallLocationService>()
         );
         viewModel.SelectedBackdropIndex = index == 2 ? 1 : 2;
         _settingsManagerMock.Invocations.Clear();
@@ -278,5 +285,127 @@ public class SettingsViewModelTests
             Times.Once,
             "выбор фона сохраняется типизированным вызовом SetSetting каноническим значением");
         viewModel.LastCommitState.Should().Be(SettingCommitState.Persisted);
+    }
+
+    /// <summary>
+    /// Строит ViewModel с управляемым сервисом папки установки для тестов обновления.
+    /// </summary>
+    private SettingsViewModel CreateViewModelForUpdate(
+        Mock<IInstallLocationService> installLocationMock,
+        Mock<IDialogService> dialogMock,
+        Mock<IUpdateService> updateMock)
+    {
+        return new SettingsViewModel(
+            _settingsManagerMock.Object,
+            dialogMock.Object,
+            updateMock.Object,
+            _logServiceMock.Object,
+            _pathManagerMock.Object,
+            _scriptRegistryMock.Object,
+            _dependencyManagerMock.Object,
+            installLocationMock.Object);
+    }
+
+    private static StaleCopyInfo CreateStaleCopy() => new(
+        @"D:\Old\KTools",
+        "2.1.0",
+        @"C:\Program Files\KTools",
+        @"C:\Program Files\KTools\KTools.App.exe",
+        "2.2.0",
+        true);
+
+    private static UpdateInfo CreateUpdate() => new(
+        "2.3.0",
+        "K-Tools 2.3.0",
+        "Изменения",
+        "https://github.com/krnzhnr/k-tools/releases/download/v2.3.0/setup.exe",
+        "setup.exe",
+        1024,
+        false);
+
+    /// <summary>
+    /// Проверяет, что обновление из неосновной копии при согласии пользователя
+    /// перенаправляет в основную копию и не запускает скачивание.
+    /// </summary>
+    [TestMethod]
+    public async Task DownloadAndInstallUpdateAsync_StaleCopyConfirmed_RedirectsAndSkipsDownload()
+    {
+        // Arrange
+        var staleCopy = CreateStaleCopy();
+        var installLocationMock = new Mock<IInstallLocationService>();
+        installLocationMock.Setup(m => m.DetectStaleCopy()).Returns(staleCopy);
+        installLocationMock.Setup(m => m.TryLaunchRegisteredCopy(staleCopy)).Returns(true);
+        var dialogMock = new Mock<IDialogService>();
+        dialogMock.Setup(m => m.ShowConfirmationAsync(
+                It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
+            .ReturnsAsync(true);
+        var updateMock = MockBuilders.CreateUpdateMock(CreateUpdate());
+        var viewModel = CreateViewModelForUpdate(installLocationMock, dialogMock, updateMock);
+        viewModel.NewUpdateInfo = CreateUpdate();
+
+        // Act
+        await viewModel.DownloadAndInstallUpdateAsync();
+
+        // Assert
+        installLocationMock.Verify(m => m.TryLaunchRegisteredCopy(staleCopy), Times.Once,
+            "согласие обязано запустить основную копию");
+        updateMock.Verify(m => m.DownloadAndInstallUpdateAsync(
+            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<Action<double>>(), It.IsAny<System.Threading.CancellationToken>()),
+            Times.Never, "скачивание из неосновной копии запускаться не должно");
+    }
+
+    /// <summary>
+    /// Проверяет, что отказ от перехода продолжает обновление текущей копии.
+    /// </summary>
+    [TestMethod]
+    public async Task DownloadAndInstallUpdateAsync_StaleCopyDeclined_ProceedsWithDownload()
+    {
+        // Arrange
+        var staleCopy = CreateStaleCopy();
+        var installLocationMock = new Mock<IInstallLocationService>();
+        installLocationMock.Setup(m => m.DetectStaleCopy()).Returns(staleCopy);
+        var dialogMock = new Mock<IDialogService>();
+        dialogMock.Setup(m => m.ShowConfirmationAsync(
+                It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
+            .ReturnsAsync(false);
+        var updateMock = MockBuilders.CreateUpdateMock(CreateUpdate());
+        var viewModel = CreateViewModelForUpdate(installLocationMock, dialogMock, updateMock);
+        viewModel.NewUpdateInfo = CreateUpdate();
+
+        // Act
+        await viewModel.DownloadAndInstallUpdateAsync();
+
+        // Assert
+        installLocationMock.Verify(m => m.TryLaunchRegisteredCopy(It.IsAny<StaleCopyInfo>()), Times.Never,
+            "отказ от перехода не запускает основную копию");
+        updateMock.Verify(m => m.DownloadAndInstallUpdateAsync(
+            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<Action<double>>(), It.IsAny<System.Threading.CancellationToken>()),
+            Times.Once, "явный выбор пользователя продолжает обновление");
+    }
+
+    /// <summary>
+    /// Проверяет, что из основной копии обновление идёт сразу без лишних диалогов.
+    /// </summary>
+    [TestMethod]
+    public async Task DownloadAndInstallUpdateAsync_MainCopy_ProceedsWithoutDialog()
+    {
+        // Arrange
+        var installLocationMock = new Mock<IInstallLocationService>();
+        installLocationMock.Setup(m => m.DetectStaleCopy()).Returns((StaleCopyInfo?)null);
+        var dialogMock = new Mock<IDialogService>();
+        var updateMock = MockBuilders.CreateUpdateMock(CreateUpdate());
+        var viewModel = CreateViewModelForUpdate(installLocationMock, dialogMock, updateMock);
+        viewModel.NewUpdateInfo = CreateUpdate();
+
+        // Act
+        await viewModel.DownloadAndInstallUpdateAsync();
+
+        // Assert
+        dialogMock.Verify(m => m.ShowConfirmationAsync(
+            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()),
+            Times.Never, "основной копии диалог не нужен");
+        updateMock.Verify(m => m.DownloadAndInstallUpdateAsync(
+            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<Action<double>>(), It.IsAny<System.Threading.CancellationToken>()),
+            Times.Once, "обновление основной копии идёт как обычно");
     }
 }

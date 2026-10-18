@@ -31,13 +31,24 @@ public class NvencH264Capabilities : BaseNvencCapabilities
                 options: BRefOptions,
                 comment: BRefComment,
                 column: 1,
-                colSpan: 1
+                colSpan: 1,
+                disableConditions: new List<SettingDisableCondition>
+                {
+                    new("lossless", "True")
+                }
             )
         };
     }
 
     protected override void AppendCodecSpecificArguments(Dictionary<string, object> settings, EncoderSharedContext context, List<string> args)
     {
+        // В lossless rate control отключён (constqp, qp 0), поэтому B-пирамида
+        // не влияет на результат и лишь замедляет кодирование.
+        if (context.IsLossless)
+        {
+            return;
+        }
+
         string bRefMode = GetSettingValue(settings, "nv_b_ref_mode", "middle");
         if (!string.IsNullOrEmpty(bRefMode))
         {

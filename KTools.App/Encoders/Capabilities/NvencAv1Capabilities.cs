@@ -37,13 +37,19 @@ public class NvencAv1Capabilities : BaseNvencCapabilities
                 options: BRefOptions,
                 comment: BRefComment,
                 column: 1,
-                colSpan: 1
+                colSpan: 1,
+                disableConditions: new List<SettingDisableCondition>
+                {
+                    new("lossless", "True")
+                }
             )
         };
     }
 
     protected override void AppendCodecSpecificArguments(Dictionary<string, object> settings, EncoderSharedContext context, List<string> args)
     {
+        // Ветка lossless недостижима: у AV1 SupportsLossless = false, поэтому
+        // BuildCodecArguments выбрасывает исключение раньше вызова этого метода.
         string bRefMode = GetSettingValue(settings, "nv_b_ref_mode", "middle");
         if (bRefMode.Equals("each", System.StringComparison.OrdinalIgnoreCase))
         {

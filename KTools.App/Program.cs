@@ -21,10 +21,22 @@ public static class Program
     public const string PendingArgsWriteStage = "pending_args_write";
     public const string ActivationDispatchStage = "activation_dispatch";
     public const string SingleInstanceStage = "single_instance";
+    public const string TakeoverStage = "takeover";
     public const string PendingArgsWriteFailedCode = "pending-args-write-failed";
     public const string PendingArgsWriteExceptionCode = "pending-args-write-exception";
     public const string ActivationDispatchFailedCode = "activation-dispatch-failed";
     public const string SingleInstanceFailedCode = "single-instance-failed";
+    public const string TakeoverTimeoutCode = "takeover-timeout";
+
+    /// <summary>
+    /// Аргумент командной строки, с которым неосновная копия запускает основную установку:
+    /// новая копия ждёт освобождения single-instance ключа и занимает место первичного экземпляра.
+    /// Парсером аргументов игнорируется (не является существующим путём).
+    /// </summary>
+    public const string TakeoverArgument = "--takeover";
+
+    private static readonly TimeSpan TakeoverWaitTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan TakeoverPollInterval = TimeSpan.FromMilliseconds(250);
 
     [STAThread]
     public static int Main(string[] args)
@@ -32,6 +44,13 @@ public static class Program
         try
         {
             WinRT.ComWrappersSupport.InitializeComWrappers();
+            if (IsTakeoverRequested(args)
+                && !WaitForPrimaryRelease(GetOtherInstanceCount, TakeoverWaitTimeout, TakeoverPollInterval))
+            {
+                ProgramDiagnostics.WriteFailure(TakeoverStage, null, TakeoverTimeoutCode);
+                return HandoffFailedExitCode;
+            }
+
             AppInstance instance = AppInstance.FindOrRegisterForKey(InstanceKey);
             if (instance.IsCurrent)
             {
@@ -60,6 +79,69 @@ public static class Program
         {
             ProgramDiagnostics.WriteFailure(SingleInstanceStage, ex, SingleInstanceFailedCode);
             return HandoffFailedExitCode;
+        }
+    }
+
+    /// <summary>
+    /// Проверяет, запрошен ли захват места первичного экземпляра (переход из неосновной копии).
+    /// </summary>
+    public static bool IsTakeoverRequested(IReadOnlyList<string> args)
+    {
+        ArgumentNullException.ThrowIfNull(args);
+        return args.Any(a => string.Equals(a, TakeoverArgument, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// Возвращает число других зарегистрированных экземпляров приложения.
+    /// </summary>
+    private static int GetOtherInstanceCount()
+    {
+        return AppInstance.GetInstances().Count;
+    }
+
+    /// <summary>
+    /// Ждёт освобождения single-instance ключа завершающейся неосновной копией,
+    /// чтобы занять место первичного экземпляра. Возвращает false по истечении таймаута.
+    /// </summary>
+    /// <param name="getOtherInstanceCount">Функция подсчёта чужих зарегистрированных экземпляров.</param>
+    /// <param name="timeout">Максимальное время ожидания.</param>
+    /// <param name="pollInterval">Интервал опроса.</param>
+    public static bool WaitForPrimaryRelease(
+        Func<int> getOtherInstanceCount,
+        TimeSpan timeout,
+        TimeSpan pollInterval)
+    {
+        ArgumentNullException.ThrowIfNull(getOtherInstanceCount);
+        if (pollInterval <= TimeSpan.Zero)
+        {
+            pollInterval = TimeSpan.FromMilliseconds(1);
+        }
+
+        DateTime deadline = DateTime.UtcNow + timeout;
+        while (true)
+        {
+            int others;
+            try
+            {
+                others = getOtherInstanceCount();
+            }
+            catch (Exception ex)
+            {
+                ProgramDiagnostics.WriteFailure(TakeoverStage, ex, TakeoverTimeoutCode);
+                return false;
+            }
+
+            if (others <= 0)
+            {
+                return true;
+            }
+
+            if (DateTime.UtcNow >= deadline)
+            {
+                return false;
+            }
+
+            Thread.Sleep(pollInterval);
         }
     }
 

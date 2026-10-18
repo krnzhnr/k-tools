@@ -122,14 +122,16 @@ public abstract class BaseNvencCapabilities : INvencCodecCapabilities
             }
         }
 
-        int lookahead = GetSettingValue(settings, "nv_lookahead", 32);
-        if (lookahead > 0)
-        {
-            args.AddRange(new[] { "-rc-lookahead", Math.Clamp(lookahead, 0, 32).ToString() });
-        }
-
+        // Lookahead и multipass обслуживают rate control, которого в lossless нет
+        // (фиксированный constqp с qp 0), поэтому в нём они только замедляют кодирование.
         if (!context.IsLossless)
         {
+            int lookahead = GetSettingValue(settings, "nv_lookahead", 32);
+            if (lookahead > 0)
+            {
+                args.AddRange(new[] { "-rc-lookahead", Math.Clamp(lookahead, 0, 32).ToString() });
+            }
+
             bool spatialAq = GetSettingValue(settings, "nv_spatial_aq", true);
             if (spatialAq)
             {
@@ -151,12 +153,12 @@ public abstract class BaseNvencCapabilities : INvencCodecCapabilities
             {
                 args.AddRange(new[] { "-temporal-aq", "0" });
             }
-        }
 
-        string multipass = GetSettingValue(settings, "nv_multipass", "fullres");
-        if (!string.IsNullOrEmpty(multipass))
-        {
-            args.AddRange(new[] { "-multipass", multipass });
+            string multipass = GetSettingValue(settings, "nv_multipass", "fullres");
+            if (!string.IsNullOrEmpty(multipass))
+            {
+                args.AddRange(new[] { "-multipass", multipass });
+            }
         }
 
         AppendCodecSpecificArguments(settings, context, args);

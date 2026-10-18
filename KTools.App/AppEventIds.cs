@@ -40,6 +40,12 @@ public static class AppEventIds
     public const string PendingArgsParseFailed = "app.pending_args.parse_failed";
     public const string PendingArgsDirectoryFailed = "app.pending_args.directory_failed";
     public const string PendingArgsWatcherFailed = "app.pending_args.watcher_failed";
+    public const string StaleCopyCheckFailed = "app.stale_copy.check_failed";
+    public const string StaleCopyDetected = "app.stale_copy.detected";
+    public const string StaleCopyRedirected = "app.stale_copy.redirected";
+    public const string StaleCopyRedirectFailed = "app.stale_copy.redirect_failed";
+    public const string StaleCopySkipped = "app.stale_copy.skipped";
+    public const string ShellIntegrationSkippedStaleCopy = "app.shell_integration.skipped_stale_copy";
 }
 
 /// <summary>
@@ -65,6 +71,8 @@ public static class AppErrorCodes
     public const string ShutdownFlushIncomplete = "app-shutdown-log-flush-incomplete";
     public const string ShutdownFlushException = "app-shutdown-log-flush-exception";
     public const string ShutdownStageFailed = "app-shutdown-stage-failed";
+    public const string StaleCopyRedirectFailed = "app-stale-copy-redirect-failed";
+    public const string StaleCopyCheckFailed = "app-stale-copy-check-failed";
 }
 
 /// <summary>

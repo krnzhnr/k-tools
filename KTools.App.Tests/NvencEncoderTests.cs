@@ -313,6 +313,21 @@ public class NvencEncoderTests
     }
 
     [TestMethod]
+    public void GetEncoderSettings_BRefModeField_HasLosslessDisableCondition()
+    {
+        // Act
+        var settings = _encoder.GetEncoderSettings();
+
+        // Assert: в lossless B-пирамида не передаётся, значит переключатель должен быть заблокирован
+        var field = settings.Find(f => f.Key == "nv_b_ref_mode");
+        field.Should().NotBeNull();
+
+        var losslessCond = field!.DisableConditions!.Find(c => c.Key == "lossless");
+        losslessCond.Should().NotBeNull("Field 'nv_b_ref_mode' should have DisableCondition for 'lossless'");
+        losslessCond!.Values.Should().Contain("True");
+    }
+
+    [TestMethod]
     public void GetEncoderSettings_AutoBitrateField_HasDefaultValueTrue()
     {
         // Act

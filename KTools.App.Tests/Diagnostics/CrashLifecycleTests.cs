@@ -1202,6 +1202,66 @@ public sealed class CrashLifecycleTests
         ProgramDiagnostics.FailureCount.Should().BeGreaterThanOrEqualTo(failuresBefore + 3);
     }
 
+    /// <summary>
+    /// Проверяет распознавание флага захвата места первичного экземпляра.
+    /// </summary>
+    [TestMethod]
+    public void IsTakeoverRequested_FlagVariants_DetectedCaseInsensitively()
+    {
+        Program.IsTakeoverRequested(new[] { "KTools.App.exe", "--takeover" }).Should().BeTrue();
+        Program.IsTakeoverRequested(new[] { "KTools.App.exe", "--TakeOver" }).Should().BeTrue("флаг нечувствителен к регистру");
+        Program.IsTakeoverRequested(new[] { "KTools.App.exe", "--script", "video" }).Should().BeFalse("обычный запуск захватом не является");
+        Program.IsTakeoverRequested(Array.Empty<string>()).Should().BeFalse();
+    }
+
+    /// <summary>
+    /// Проверяет, что при отсутствии чужих экземпляров ожидание завершается сразу.
+    /// </summary>
+    [TestMethod]
+    public void WaitForPrimaryRelease_NoOtherInstances_ReturnsTrueImmediately()
+    {
+        int calls = 0;
+
+        bool released = Program.WaitForPrimaryRelease(
+            () => { calls++; return 0; },
+            TimeSpan.FromSeconds(5),
+            TimeSpan.FromMilliseconds(10));
+
+        released.Should().BeTrue();
+        calls.Should().Be(1, "повторный опрос при свободном ключе не нужен");
+    }
+
+    /// <summary>
+    /// Проверяет, что ожидание завершается успехом, когда неосновная копия успевает закрыться.
+    /// </summary>
+    [TestMethod]
+    public void WaitForPrimaryRelease_InstanceReleases_ReturnsTrue()
+    {
+        int calls = 0;
+
+        bool released = Program.WaitForPrimaryRelease(
+            () => ++calls < 3 ? 1 : 0,
+            TimeSpan.FromSeconds(5),
+            TimeSpan.FromMilliseconds(10));
+
+        released.Should().BeTrue("ключ освободился до истечения таймаута");
+        calls.Should().BeGreaterThanOrEqualTo(3);
+    }
+
+    /// <summary>
+    /// Проверяет, что зависшая копия не блокирует запуск навсегда: по таймауту возвращается false.
+    /// </summary>
+    [TestMethod]
+    public void WaitForPrimaryRelease_PersistentInstance_ReturnsFalseAfterTimeout()
+    {
+        bool released = Program.WaitForPrimaryRelease(
+            () => 1,
+            TimeSpan.FromMilliseconds(100),
+            TimeSpan.FromMilliseconds(10));
+
+        released.Should().BeFalse("истёкший таймаут обязан прервать ожидание");
+    }
+
     [TestMethod]
     public void PendingArgsChannel_WritesBoundedDataFileAndRemovesExpiredOnes()
     {
