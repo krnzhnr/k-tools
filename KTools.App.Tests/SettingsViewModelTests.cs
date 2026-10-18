@@ -152,7 +152,6 @@ public class SettingsViewModelTests
         viewModel.LastCommitState.Should().Be(SettingCommitState.Failed,
             "отсутствие подтверждения сохранения не должно выдаваться за успех");
         viewModel.LastCommitErrorCode.Should().Be(PersistenceErrorCodes.NoResult);
-        viewModel.LastCommitStatusText.Should().NotContain("сохранено");
         _logServiceMock.Verify(
             l => l.Write(
                 "settings.persistence.deferred",

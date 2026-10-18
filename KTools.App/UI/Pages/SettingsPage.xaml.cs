@@ -32,7 +32,6 @@ public partial class SettingsPage : Page
     private List<TemplateItem> _searchTemplates = new();
     private List<TemplateItem> _replaceTemplates = new();
     private DispatcherTimer? _helpFlyoutRebuildTimer;
-    private TextBlock? _commitStatusBlock;
 
     /// <summary>
     /// Предоставляет доступ к модели представления страницы настроек.
@@ -48,87 +47,17 @@ public partial class SettingsPage : Page
         InitializeComponent();
         this.Loaded += SettingsPage_Loaded;
 
-        AttachCommitStatusHost();
-        SubscribeToCommitStatus();
-        UpdateCommitStatus(ViewModel.LastCommitStatusText);
-
         // Сброс фокуса при клике на свободную область страницы
         this.PointerPressed += (s, e) =>
         {
             this.IsTabStop = true;
             this.Focus(FocusState.Programmatic);
         };
-
-        this.Unloaded += (s, e) => UnsubscribeFromCommitStatus();
     }
 
-    private void SubscribeToCommitStatus()
+    private void SettingsPage_Loaded(object sender, RoutedEventArgs e)
     {
-        ViewModel.PropertyChanged -= OnViewModelPropertyChanged;
-        ViewModel.PropertyChanged += OnViewModelPropertyChanged;
-    }
-
-    private void UnsubscribeFromCommitStatus()
-    {
-        ViewModel.PropertyChanged -= OnViewModelPropertyChanged;
-    }
-
-    /// <summary>
-    /// Размещает строку статуса фиксации настроек над первым разделом страницы.
-    /// Разметка XAML не меняется: строка добавляется в код-behind.
-    /// </summary>
-    private void AttachCommitStatusHost()
-    {
-        if (RootScrollViewer.Content is not StackPanel root)
-        {
-            return;
-        }
-
-        _commitStatusBlock = new TextBlock
-        {
-            FontSize = 12,
-            Margin = new Thickness(0, 0, 0, 4),
-            TextWrapping = TextWrapping.Wrap
-        };
-
-        root.Children.Insert(0, _commitStatusBlock);
-    }
-
-    private void OnViewModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
-    {
-        if (e.PropertyName == nameof(SettingsViewModel.LastCommitStatusText))
-        {
-            UpdateCommitStatus(ViewModel.LastCommitStatusText);
-        }
-    }
-
-    private void UpdateCommitStatus(string text)
-    {
-        if (_commitStatusBlock == null)
-        {
-            return;
-        }
-
-        _commitStatusBlock.Text = string.IsNullOrWhiteSpace(text)
-            ? string.Empty
-            : text;
-
-        if (ViewModel.LastCommitState == SettingCommitState.Failed &&
-            Application.Current.Resources.TryGetValue("SystemFillColorCriticalBrush", out object? failedBrush) &&
-            failedBrush is Microsoft.UI.Xaml.Media.Brush failure)
-        {
-            _commitStatusBlock.Foreground = failure;
-            return;
-        }
-
-        if (Application.Current.Resources.TryGetValue("TextFillColorSecondaryBrush", out object? secondaryBrush) &&
-            secondaryBrush is Microsoft.UI.Xaml.Media.Brush normal)
-        {
-            _commitStatusBlock.Foreground = normal;
-            return;
-        }
-
-        _commitStatusBlock.ClearValue(TextBlock.ForegroundProperty);
+        LoadTemplatesUI();
     }
 
     /// <summary>
@@ -268,13 +197,6 @@ public partial class SettingsPage : Page
         }
     }
 
-    private void SettingsPage_Loaded(object sender, RoutedEventArgs e)
-    {
-        SubscribeToCommitStatus();
-        UpdateCommitStatus(ViewModel.LastCommitStatusText);
-        LoadTemplatesUI();
-    }
-
     private static string CleanDescription(string desc)
     {
         if (string.IsNullOrEmpty(desc)) return string.Empty;
@@ -329,16 +251,15 @@ public partial class SettingsPage : Page
         PersistenceResult result = PersistenceResult.Normalize(
             _settingsManager.SetSetting("General", key, working));
 
+        // Пользовательской обратной связи на странице нет: успешная и отложенная
+        // запись молчат, о несохранении сообщает только журнал.
         if (result.IsSuccess && result.Persisted)
         {
-            UpdateCommitStatus($"Шаблоны {(isSearch ? "поиска" : "замены")}: сохранено.");
             return;
         }
 
         if (result.IsPending)
         {
-            UpdateCommitStatus(
-                $"Шаблоны {(isSearch ? "поиска" : "замены")}: применено в текущем сеансе, запись на диск отложена.");
             return;
         }
 
@@ -347,7 +268,6 @@ public partial class SettingsPage : Page
 
     private void ReportTemplateCommitFailure(string key, PersistenceResult result)
     {
-        UpdateCommitStatus($"Шаблоны не сохранены ({result.ErrorCode}). {result.UserSummary}");
         _logService.Write(SettingsEventIds.DefaultsDeferred, LogLevel.Warning, LogStatus.Changed, $"Шаблон применён только в текущем сеансе: настройка {LogRedactor.CompactSafeToken(key)} не сохранена", source: SourceName, properties: LogProps.Create("Key", LogRedactor.CompactSafeToken(key)).With("Persisted", false).With("ErrorCode", result.ErrorCode));
     }
 

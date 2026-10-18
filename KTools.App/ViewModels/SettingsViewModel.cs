@@ -282,12 +282,6 @@ public partial class SettingsViewModel : ThreadSafeViewModel
     public partial SettingCommitState LastCommitState { get; set; } = SettingCommitState.None;
 
     /// <summary>
-    /// Пользовательский статус последней фиксации: без значения параметра, путей и текста исключения.
-    /// </summary>
-    [ObservableProperty]
-    public partial string LastCommitStatusText { get; set; } = "Изменений настроек ещё не было";
-
-    /// <summary>
     /// Типизированный код ошибки последней фиксации (PersistenceErrorCodes.None при успехе).
     /// </summary>
     [ObservableProperty]
@@ -607,27 +601,24 @@ public partial class SettingsViewModel : ThreadSafeViewModel
         if (result.IsFailure)
         {
             LastCommitState = SettingCommitState.Failed;
-            LastCommitStatusText = $"{displayName}: изменено только в текущем сеансе, сохранить не удалось ({result.ErrorCode}). {result.UserSummary}";
-            _logService.Write("settings.persistence.deferred", LogLevel.Warning, LogStatus.Changed, LastCommitStatusText, source: SourceName, properties: LogProps.Create("Persisted", false).With("Group", "Persistence"));
+            string failureSummary = $"{displayName}: изменено только в текущем сеансе, сохранить не удалось ({result.ErrorCode}). {result.UserSummary}";
+            _logService.Write("settings.persistence.deferred", LogLevel.Warning, LogStatus.Changed, failureSummary, source: SourceName, properties: LogProps.Create("Persisted", false).With("Group", "Persistence"));
             return;
         }
 
         if (result.IsPending)
         {
             LastCommitState = SettingCommitState.ChangedInMemory;
-            LastCommitStatusText = $"{displayName}: применено в текущем сеансе, запись на диск отложена.";
             return;
         }
 
         if (result.ChangedCount == 0)
         {
             LastCommitState = SettingCommitState.None;
-            LastCommitStatusText = $"{displayName}: без изменений.";
             return;
         }
 
         LastCommitState = SettingCommitState.Persisted;
-        LastCommitStatusText = $"{displayName}: сохранено.";
     }
 
     /// <summary>
@@ -647,14 +638,13 @@ public partial class SettingsViewModel : ThreadSafeViewModel
             LogDir = path;
             LastCommitState = SettingCommitState.Persisted;
             LastCommitErrorCode = result.ErrorCode;
-            LastCommitStatusText = $"Каталог журналирования сохранён. {PersistenceSummaries.NextLaunchOnly}";
             return result;
         }
 
         LastCommitState = SettingCommitState.Failed;
         LastCommitErrorCode = result.ErrorCode;
-        LastCommitStatusText = $"Каталог журналирования не сохранён ({result.ErrorCode}). {PersistenceSummaries.NextLaunchLost}";
-        _logService.Write("settings.persistence.deferred", LogLevel.Warning, LogStatus.Changed, LastCommitStatusText, source: SourceName, properties: LogProps.Create("Persisted", false).With("Group", "Persistence"));
+        string failureSummary = $"Каталог журналирования не сохранён ({result.ErrorCode}). {PersistenceSummaries.NextLaunchLost}";
+        _logService.Write("settings.persistence.deferred", LogLevel.Warning, LogStatus.Changed, failureSummary, source: SourceName, properties: LogProps.Create("Persisted", false).With("Group", "Persistence"));
         return result;
     }
 
@@ -685,7 +675,6 @@ public partial class SettingsViewModel : ThreadSafeViewModel
         {
             LastCommitState = SettingCommitState.Persisted;
             LastCommitErrorCode = PersistenceErrorCodes.None;
-            LastCommitStatusText = "Настройки сброшены к значениям по умолчанию и сохранены на диск.";
             await _dialogService.ShowMessageAsync(
                 "Настройки сброшены",
                 "Все настройки сброшены к значениям по умолчанию и сохранены на диск.");
@@ -694,8 +683,8 @@ public partial class SettingsViewModel : ThreadSafeViewModel
 
         LastCommitState = SettingCommitState.Failed;
         LastCommitErrorCode = resetResult.ErrorCode;
-        LastCommitStatusText = $"Сброс настроек не сохранён на диск ({resetResult.ErrorCode}). {resetResult.UserSummary}";
-        _logService.Write("settings.persistence.deferred", LogLevel.Warning, LogStatus.Changed, LastCommitStatusText, source: SourceName, properties: LogProps.Create("Persisted", false).With("Group", "Persistence"));
+        string resetSummary = $"Сброс настроек не сохранён на диск ({resetResult.ErrorCode}). {resetResult.UserSummary}";
+        _logService.Write("settings.persistence.deferred", LogLevel.Warning, LogStatus.Changed, resetSummary, source: SourceName, properties: LogProps.Create("Persisted", false).With("Group", "Persistence"));
 
         await _dialogService.ShowMessageAsync(
             "Сброс не сохранён",
