@@ -65,6 +65,12 @@ public sealed class MkvAssemblyScript(
     public override string[] RequiredDependencies => ["mkvtoolnix", "ffmpeg"];
 
     /// <summary>
+    /// Очередь накапливается: видео и сопутствующие дорожки добавляются последовательно,
+    /// поэтому сброс очереди при добавлении новых файлов здесь недопустим.
+    /// </summary>
+    public override bool KeepQueueOnAdd => true;
+
+    /// <summary>
     /// Декларативная схема настроек скрипта.
     /// </summary>
     public override List<SettingField> SettingsSchema =>

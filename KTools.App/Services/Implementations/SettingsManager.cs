@@ -134,12 +134,34 @@ public sealed class SettingsManager : ISettingsManager
     }
 
     /// <summary>
-    /// Тип фона окон приложения (Mica или Acrylic).
+    /// Тип фона окон приложения (Mica, Acrylic или Обычный без эффектов).
+    /// Неизвестные значения из старых конфигураций нормализуются к Mica.
     /// </summary>
     public string BackdropType
     {
-        get => GetSetting("General", "BackdropType", "Mica");
-        set => SetSetting("General", "BackdropType", value);
+        get => NormalizeBackdropType(GetSetting("General", "BackdropType", "Mica"));
+        set => SetSetting("General", "BackdropType", NormalizeBackdropType(value));
+    }
+
+    /// <summary>
+    /// Нормализует строковое значение типа фона к допустимому набору.
+    /// Каноническое имя обычного фона без эффектов — None, также принимается
+    /// псевдоним Solid. Неизвестные и пустые значения отображаются на Mica.
+    /// </summary>
+    private static string NormalizeBackdropType(string? value)
+    {
+        if (string.Equals(value, "Acrylic", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Acrylic";
+        }
+
+        if (string.Equals(value, "None", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(value, "Solid", StringComparison.OrdinalIgnoreCase))
+        {
+            return "None";
+        }
+
+        return "Mica";
     }
 
     /// <summary>

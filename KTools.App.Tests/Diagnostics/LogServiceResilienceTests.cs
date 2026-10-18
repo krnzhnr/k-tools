@@ -55,7 +55,12 @@ public class LogServiceResilienceTests
 
         act.Should().NotThrow("ошибка подписчика не должна ломать бизнес-код");
         service.Flush(TimeSpan.FromSeconds(10)).Should().BeTrue();
-        SpinWaitUntil(() => goodCalls == 5 && secondGoodCalls == 5);
+        // Счётчик ошибок накапливается в насосах подписчиков независимо от очереди
+        // «хороших» подписчиков, поэтому ждём и его: иначе под нагрузкой проверка
+        // успевает прочитать счётчик до обработки последней пачки.
+        SpinWaitUntil(() => goodCalls == 5
+            && secondGoodCalls == 5
+            && service.SubscriberErrorCount == 10);
         goodCalls.Should().Be(5, "ошибка одного подписчика не отменяет доставку остальным");
         secondGoodCalls.Should().Be(5);
         service.SubscriberErrorCount.Should().Be(10, "каждая ошибка подписчика учитывается отдельно");

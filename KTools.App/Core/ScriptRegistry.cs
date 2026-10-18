@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 
 using KTools_App.Diagnostics;
 using KTools_App.Services.Contracts;
@@ -21,33 +22,39 @@ public sealed class ScriptRegistry : IScriptRegistry
     private readonly IServiceProvider _serviceProvider;
     private readonly ISettingsManager _settingsManager;
     private readonly ILogService _logService;
-    private readonly List<AbstractScript> _scripts;
+
+    // Ленивое хранилище скриптов: построение выполняется один раз при первом
+    // доступе к Scripts / GetScriptByName, потокобезопасно. Создание реестра
+    // в DI не создаёт ни одного скрипта и не обращается к диску.
+    private readonly Lazy<List<AbstractScript>> _scripts;
 
     /// <summary>
     /// Инициализирует новый экземпляр класса ScriptRegistry с внедрением зависимостей.
+    /// Скрипты не создаются в конструкторе: построение отложено до первого доступа.
     /// </summary>
     public ScriptRegistry(IServiceProvider serviceProvider, ISettingsManager settingsManager, ILogService logService)
     {
         _serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
         _settingsManager = settingsManager ?? throw new ArgumentNullException(nameof(settingsManager));
         _logService = logService ?? throw new ArgumentNullException(nameof(logService));
-        _scripts = new List<AbstractScript>();
-        RegisterScripts();
+        _scripts = new Lazy<List<AbstractScript>>(BuildScripts, LazyThreadSafetyMode.ExecutionAndPublication);
     }
 
 
 
     /// <summary>
     /// Возвращает полный список зарегистрированных скриптов.
+    /// При первом доступе список строится один раз, повторные доступы возвращают построенное.
     /// </summary>
-    public List<AbstractScript> Scripts => _scripts;
+    public List<AbstractScript> Scripts => _scripts.Value;
 
     /// <summary>
     /// Получить скрипт по его уникальному названию.
+    /// При первом доступе инициирует построение всего списка скриптов.
     /// </summary>
     public AbstractScript? GetScriptByName(string name)
     {
-        return _scripts.FirstOrDefault(s => s.Name.Equals(
+        return _scripts.Value.FirstOrDefault(s => s.Name.Equals(
             name, StringComparison.OrdinalIgnoreCase));
     }
 
@@ -133,40 +140,64 @@ public sealed class ScriptRegistry : IScriptRegistry
     }
 
     /// <summary>
-    /// Регистрация всех 12 оригинальных скриптов обработки медиа.
+    /// Лениво строит полный список скриптов при первом доступе.
+    /// Точка регистрации новых скриптов: каждый новый скрипт добавляется здесь
+    /// через _serviceProvider.GetRequiredService. Вызывается один раз фабрикой
+    /// ленивого хранилища, поэтому повторные доступы работу не повторяют.
+    /// Инициализация настроек по умолчанию отложена до этого же прохода и не
+    /// требует Persisted=true: отложенный исход принимается через
+    /// RecordDefaultsOutcome. Защита деградированной загрузки сохраняется:
+    /// запись поверх повреждённого файла выполняет только явный ResetToDefaults
+    /// внутри SettingsManager, этот метод напрямую на диск не пишет.
     /// </summary>
-    private void RegisterScripts()
+    private List<AbstractScript> BuildScripts()
     {
+        // Создаём локальный список: поле публикуется только после полной сборки,
+        // поэтому наблюдатели никогда не видят частично построенный реестр.
+        List<AbstractScript> scripts = new(18);
+
         // Получаем зарегистрированные скрипты через IServiceProvider
-        _scripts.Add(_serviceProvider.GetRequiredService<Scripts.MetadataCleanupScript>());
-        _scripts.Add(_serviceProvider.GetRequiredService<Scripts.VideoEncodingScript>());
-        _scripts.Add(_serviceProvider.GetRequiredService<Scripts.ContainerConversionScript>());
+        scripts.Add(_serviceProvider.GetRequiredService<Scripts.MetadataCleanupScript>());
+        scripts.Add(_serviceProvider.GetRequiredService<Scripts.VideoEncodingScript>());
+        scripts.Add(_serviceProvider.GetRequiredService<Scripts.ContainerConversionScript>());
 
-        _scripts.Add(_serviceProvider.GetRequiredService<Scripts.AudioEncodingScript>());
-        _scripts.Add(_serviceProvider.GetRequiredService<Scripts.AudioDownmixScript>());
-        _scripts.Add(_serviceProvider.GetRequiredService<Scripts.AudioSpeedScript>());
-        _scripts.Add(_serviceProvider.GetRequiredService<Scripts.AudioChannelsScript>());
-        _scripts.Add(_serviceProvider.GetRequiredService<Scripts.AudioShiftScript>());
-        _scripts.Add(_serviceProvider.GetRequiredService<Scripts.AudioTransplantScript>());
+        scripts.Add(_serviceProvider.GetRequiredService<Scripts.AudioEncodingScript>());
+        scripts.Add(_serviceProvider.GetRequiredService<Scripts.AudioDownmixScript>());
+        scripts.Add(_serviceProvider.GetRequiredService<Scripts.AudioSpeedScript>());
+        scripts.Add(_serviceProvider.GetRequiredService<Scripts.AudioChannelsScript>());
+        scripts.Add(_serviceProvider.GetRequiredService<Scripts.AudioShiftScript>());
+        scripts.Add(_serviceProvider.GetRequiredService<Scripts.AudioTransplantScript>());
 
-        _scripts.Add(_serviceProvider.GetRequiredService<Scripts.MkvAssemblyScript>());
-        _scripts.Add(_serviceProvider.GetRequiredService<Scripts.StreamManagementScript>());
-        _scripts.Add(_serviceProvider.GetRequiredService<Scripts.StreamReplacementScript>());
-        _scripts.Add(_serviceProvider.GetRequiredService<Scripts.TrackExtractorScript>());
+        scripts.Add(_serviceProvider.GetRequiredService<Scripts.MkvAssemblyScript>());
+        scripts.Add(_serviceProvider.GetRequiredService<Scripts.StreamManagementScript>());
+        scripts.Add(_serviceProvider.GetRequiredService<Scripts.StreamReplacementScript>());
+        scripts.Add(_serviceProvider.GetRequiredService<Scripts.TrackExtractorScript>());
 
-        _scripts.Add(_serviceProvider.GetRequiredService<Scripts.SubtitlesConvertScript>());
-        _scripts.Add(_serviceProvider.GetRequiredService<Scripts.SubtitleShiftScript>());
-        _scripts.Add(_serviceProvider.GetRequiredService<Scripts.SpeechRecognitionScript>());
-        _scripts.Add(_serviceProvider.GetRequiredService<Scripts.MediaDownloaderScript>());
-        _scripts.Add(_serviceProvider.GetRequiredService<Scripts.BitrateViewerScript>());
+        scripts.Add(_serviceProvider.GetRequiredService<Scripts.SubtitlesConvertScript>());
+        scripts.Add(_serviceProvider.GetRequiredService<Scripts.SubtitleShiftScript>());
+        scripts.Add(_serviceProvider.GetRequiredService<Scripts.SpeechRecognitionScript>());
+        scripts.Add(_serviceProvider.GetRequiredService<Scripts.MediaDownloaderScript>());
+        scripts.Add(_serviceProvider.GetRequiredService<Scripts.BitrateViewerScript>());
 
-        // Инициализируем настройки скриптов по умолчанию при регистрации.
+        // Инициализируем настройки скриптов по умолчанию в памяти при первом доступе.
         // Результат обязательно потребляется: ошибка не остаётся молчаливой.
-        RecordDefaultsOutcome(_settingsManager.InitializeDefaults(_scripts), _logService);
+        // Отложенный исход не считается сбоем: Persisted=true не требуется.
+        RecordDefaultsOutcome(_settingsManager.InitializeDefaults(scripts), _logService);
 
+        ResetScriptStates(scripts);
+
+        return scripts;
+    }
+
+    /// <summary>
+    /// Сбрасывает состояние фактически созданных скриптов в том же ленивом проходе,
+    /// для обеспечения запуска с абсолютно чистого листа.
+    /// </summary>
+    private void ResetScriptStates(List<AbstractScript> scripts)
+    {
         // Явно гарантируем сброс всех очередей файлов и выбранных дорожек
-        // для обеспечения запуска приложения с абсолютно чистого листа
-        foreach (var script in _scripts)
+        // только для фактически созданных скриптов
+        foreach (var script in scripts)
         {
             try
             {

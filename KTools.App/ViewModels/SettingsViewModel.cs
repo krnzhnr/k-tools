@@ -47,11 +47,11 @@ public sealed class ThemeChangedMessage
 }
 
 /// <summary>
-/// Сообщение для уведомления об изменении типа фона (Mica/Acrylic) приложения.
+/// Сообщение для уведомления об изменении типа фона (Mica/Acrylic/None) приложения.
 /// </summary>
 public sealed class BackdropChangedMessage
 {
-    /// <summary>Новый выбранный тип фона ("Mica" или "Acrylic").</summary>
+    /// <summary>Новый выбранный тип фона ("Mica", "Acrylic" или "None").</summary>
     public string NewBackdrop { get; }
 
     /// <summary>
@@ -204,7 +204,7 @@ public partial class SettingsViewModel : ThreadSafeViewModel
     public partial int SelectedThemeIndex { get; set; }
 
     /// <summary>
-    /// Индекс выбранного типа фона окон (0 - Mica, 1 - Acrylic).
+    /// Индекс выбранного типа фона окон (0 - Mica, 1 - Acrylic, 2 - Обычный без эффектов).
     /// </summary>
     [ObservableProperty]
     public partial int SelectedBackdropIndex { get; set; }
@@ -353,10 +353,12 @@ public partial class SettingsViewModel : ThreadSafeViewModel
                 _ => 0
             };
 
-            SelectedBackdropIndex = _settingsManager.BackdropType
-                .Equals("Acrylic", StringComparison.OrdinalIgnoreCase)
-                ? 1
-                : 0;
+            SelectedBackdropIndex = _settingsManager.BackdropType.ToLowerInvariant() switch
+            {
+                "acrylic" => 1,
+                "none" or "solid" => 2,
+                _ => 0
+            };
 
             ShowLogsTab = _settingsManager.ShowLogsTab;
             LogDir = _settingsManager.LogDir;
@@ -444,7 +446,12 @@ public partial class SettingsViewModel : ThreadSafeViewModel
 
     partial void OnSelectedBackdropIndexChanged(int value)
     {
-        string newBackdrop = value == 1 ? "Acrylic" : "Mica";
+        string newBackdrop = value switch
+        {
+            1 => "Acrylic",
+            2 => "None",
+            _ => "Mica"
+        };
 
         if (!_isApplyingManagerState)
         {
@@ -885,7 +892,7 @@ public partial class SettingsViewModel : ThreadSafeViewModel
         {
             await _dialogService.ShowMessageAsync(
                 "Что нового",
-                "Запечённые данные версии не найдены. Пересоберите приложение скриптом сборки.");
+                $"Запечённые данные версии не найдены:{Environment.NewLine}{ReleaseNotesLoader.BakedFilePath}{Environment.NewLine}Пересоберите приложение скриптом сборки.");
             return;
         }
 

@@ -52,6 +52,23 @@ public class DependencyManager : IDependencyManager
     private const string DepsReleaseTag = "deps-v1";
     private const string DepsBaseUrl = $"https://github.com/krnzhnr/k-tools/releases/download/{DepsReleaseTag}";
 
+    /// <summary>
+    /// Короткий таймаут фоновых сетевых проверок обновлений. Общий _httpClient
+    /// не перенастраивается, чтобы не ломать длинные скачивания архивов.
+    /// </summary>
+    private const int UpdateCheckHttpTimeoutSeconds = 10;
+
+    /// <summary>
+    /// Общий бюджет времени на версионные пробы (запуски процессов) внутри одной
+    /// проверки обновлений. Закэшированные ответы почти бесплатны и в бюджет не упираются.
+    /// </summary>
+    private static readonly TimeSpan VersionProbeBudget = TimeSpan.FromSeconds(12);
+
+    /// <summary>
+    /// Группа настроек для персистентного кэша версий зависимостей.
+    /// </summary>
+    private const string VersionCacheGroup = "DependencyVersions";
+
     private readonly string _binDir;
     private readonly Dictionary<string, DependencyStatus> _statuses = new();
     private readonly List<DependencyInfo> _registry = new();
@@ -279,6 +296,8 @@ public class DependencyManager : IDependencyManager
 
     /// <summary>
     /// Проверяет физическое наличие исполняемого файла-маркера для указанной зависимости.
+    /// Только дешёвые проверки File.Exists: версионные пробы здесь запрещены,
+    /// чтобы конструктор и RefreshAllStatuses оставались лёгкими.
     /// </summary>
     private bool IsBinaryPresent(DependencyInfo dep)
     {
@@ -308,35 +327,12 @@ public class DependencyManager : IDependencyManager
             }
         }
 
+        // Проверяем только наличие файлов (дёшево): проверка версии Node.js через
+        // FileVersionInfo выполняется лениво при первом запросе версии, а не здесь.
         // 1. Проверяем локальный путь релиза
         string localPath = Path.Combine(_binDir, dep.Subfolder, dep.VerifyBinary);
         if (File.Exists(localPath))
         {
-            if (dep.Key == "node")
-            {
-                try
-                {
-                    var versionInfo = System.Diagnostics.FileVersionInfo.GetVersionInfo(localPath);
-                    if (versionInfo.FileMajorPart < 22)
-                    {
-                        _logService.Write(
-                            "dependency.node.outdated",
-                            LogLevel.Warning,
-                            LogStatus.Skipped,
-                            $"Обнаружена устаревшая версия Node.js ({LogRedactor.CompactSafeToken(versionInfo.FileVersion)}), требуется обновление до v22",
-                            source: SourceName,
-                            properties: LogProps
-                                .Create("Tool", "node")
-                                .With("Version", LogRedactor.CompactSafeToken(versionInfo.FileVersion))
-                                .With("ErrorCode", "DEPENDENCY_OUTDATED"));
-                        return false;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logService.Write("dependency.node_version_failed", LogLevel.Warning, LogStatus.Skipped, "Не удалось проверить версию Node.js", ex, "DependencyManager");
-                }
-            }
             return true;
         }
 
@@ -344,31 +340,6 @@ public class DependencyManager : IDependencyManager
         string resolvedPath = _pathManager.GetBinaryPath(dep.VerifyBinary);
         if (File.Exists(resolvedPath) && !resolvedPath.Equals(dep.VerifyBinary, StringComparison.OrdinalIgnoreCase))
         {
-            if (dep.Key == "node")
-            {
-                try
-                {
-                    var versionInfo = System.Diagnostics.FileVersionInfo.GetVersionInfo(resolvedPath);
-                    if (versionInfo.FileMajorPart < 22)
-                    {
-                        _logService.Write(
-                            "dependency.node.outdated_dev",
-                            LogLevel.Warning,
-                            LogStatus.Skipped,
-                            $"Обнаружена устаревшая версия Node.js в режиме разработки ({LogRedactor.CompactSafeToken(versionInfo.FileVersion)}), требуется обновление до v22",
-                            source: SourceName,
-                            properties: LogProps
-                                .Create("Tool", "node")
-                                .With("Version", LogRedactor.CompactSafeToken(versionInfo.FileVersion))
-                                .With("ErrorCode", "DEPENDENCY_OUTDATED"));
-                        return false;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logService.Write("dependency.node_dev_version_failed", LogLevel.Warning, LogStatus.Skipped, "Не удалось проверить версию Node.js в режиме разработки", ex, "DependencyManager");
-                }
-            }
             return true;
         }
 
@@ -525,11 +496,19 @@ public class DependencyManager : IDependencyManager
         string binaryPath = dep != null ? _pathManager.GetBinaryPath(dep.VerifyBinary) : string.Empty;
         if (!isQaac && !File.Exists(binaryPath)) return string.Empty;
 
+        // Персистентный кэш версий: без запуска процессов, с инвалидацией при смене бинарника.
+        // Закэшированное в памяти (_cachedVersions) проверено выше и не перезапрашивается.
+        if (!isQaac && TryGetPersistentCachedVersion(key, binaryPath, out string persistedVersion))
+        {
+            lock (_cachedVersions) { _cachedVersions[key] = persistedVersion; }
+            return persistedVersion;
+        }
+
         try
         {
             if (key.Equals("yt-dlp", StringComparison.OrdinalIgnoreCase))
             {
-                string ver = _settingsManager.GetSetting("Updates", "YtDlpInstalledVersion", "Nightly");
+                string ver = _settingsManager.GetSetting("Updates", "YtDlpInstalledVersion", "Nightly") ?? "Nightly";
                 lock (_cachedVersions) { _cachedVersions[key] = ver; }
                 return ver;
             }
@@ -539,6 +518,23 @@ public class DependencyManager : IDependencyManager
                 var vi = FileVersionInfo.GetVersionInfo(binaryPath);
                 string ver = string.IsNullOrEmpty(vi.FileVersion) ? "v22.11.0" : $"v{vi.FileVersion}";
                 lock (_cachedVersions) { _cachedVersions[key] = ver; }
+                SavePersistentCachedVersion(key, binaryPath, ver);
+                // Ленивая проверка актуальности (раньше была в IsBinaryPresent и утяжеляла конструктор):
+                // устаревшая версия помечается как неустановленная, чтобы страница «Компоненты» предложила обновление.
+                if (vi.FileMajorPart < 22)
+                {
+                    _logService.Write(
+                        "dependency.node.outdated",
+                        LogLevel.Warning,
+                        LogStatus.Skipped,
+                        $"Обнаружена устаревшая версия Node.js ({LogRedactor.CompactSafeToken(vi.FileVersion)}), требуется обновление до v22",
+                        source: SourceName,
+                        properties: LogProps
+                            .Create("Tool", "node")
+                            .With("Version", LogRedactor.CompactSafeToken(vi.FileVersion))
+                            .With("ErrorCode", "DEPENDENCY_OUTDATED"));
+                    SetStatus(key, DependencyStatus.NotInstalled);
+                }
                 return ver;
             }
 
@@ -548,6 +544,12 @@ public class DependencyManager : IDependencyManager
                 string qaacPath = _pathManager.GetBinaryPath("qaac64.exe");
                 if (!File.Exists(qaacPath)) return string.Empty;
 
+                if (TryGetPersistentCachedVersion(key, qaacPath, out string persistedQaac))
+                {
+                    lock (_cachedVersions) { _cachedVersions[key] = persistedQaac; }
+                    return persistedQaac;
+                }
+
                 string qLine = await ReadFirstOutputLineAsync(qaacPath, "--check");
 
                 var qMatch = System.Text.RegularExpressions.Regex.Match(qLine, @"qaac\s+(\d+\.\d+(\.\d+)?)");
@@ -555,6 +557,7 @@ public class DependencyManager : IDependencyManager
                 if (!string.IsNullOrEmpty(qResult))
                 {
                     lock (_cachedVersions) { _cachedVersions[key] = qResult; }
+                    SavePersistentCachedVersion(key, qaacPath, qResult);
                 }
                 return qResult;
             }
@@ -577,6 +580,7 @@ public class DependencyManager : IDependencyManager
             if (!string.IsNullOrEmpty(result))
             {
                 lock (_cachedVersions) { _cachedVersions[key] = result; }
+                SavePersistentCachedVersion(key, binaryPath, result);
             }
             return result;
         }
@@ -584,6 +588,152 @@ public class DependencyManager : IDependencyManager
         {
             _logService.Write("dependency.version_extract_failed", LogLevel.Warning, LogStatus.Skipped, $"Не удалось извлечь версию зависимости '{key}'", ex, "DependencyManager");
             return "Установлено";
+        }
+    }
+
+    /// <summary>
+    /// Возвращает версию зависимости, если общий бюджет версионных проб не исчерпан.
+    /// При исчерпании бюджета тихо возвращает пустую строку без запуска процессов.
+    /// Вызывающий код уже трактует пустую версию как «сравнение невозможно»,
+    /// поэтому ложных флагов обновления не возникает.
+    /// </summary>
+    private async Task<string> GetInstalledVersionWithinBudgetAsync(string key, Stopwatch versionProbeWatch)
+    {
+        if (versionProbeWatch.Elapsed >= VersionProbeBudget)
+        {
+            _logService.Write(
+                "dependency.update_check.skipped",
+                LogLevel.Debug,
+                LogStatus.Skipped,
+                "Версионная проба пропущена: исчерпан общий бюджет времени на проверки",
+                source: SourceName,
+                properties: LogProps
+                    .Create("Key", LogRedactor.CompactSafeToken(key))
+                    .With("Reason", "VersionBudgetExceeded"));
+            return string.Empty;
+        }
+
+        return await GetInstalledVersionAsync(key);
+    }
+
+    /// <summary>
+    /// Нормализует ключ зависимости для персистентного кэша версий.
+    /// </summary>
+    private static string NormalizeVersionCacheKey(string key) =>
+        key.Trim().ToLowerInvariant();
+
+    /// <summary>
+    /// Пытается взять версию из персистентного кэша без запуска процессов.
+    /// Запись считается действительной, только если бинарник на месте, а его размер
+    /// и время изменения совпадают с сохранёнными (инвалидация при смене бинарника).
+    /// </summary>
+    private bool TryGetPersistentCachedVersion(string key, string binaryPath, out string version)
+    {
+        version = string.Empty;
+        try
+        {
+            if (string.IsNullOrEmpty(binaryPath) || !File.Exists(binaryPath))
+            {
+                return false;
+            }
+
+            string raw = _settingsManager.GetSetting(VersionCacheGroup, NormalizeVersionCacheKey(key), string.Empty) ?? string.Empty;
+            if (string.IsNullOrEmpty(raw))
+            {
+                return false;
+            }
+
+            string[] parts = raw.Split('|');
+            if (parts.Length != 3 || string.IsNullOrEmpty(parts[0]))
+            {
+                return false;
+            }
+
+            var info = new FileInfo(binaryPath);
+            if (!parts[1].Equals(info.Length.ToString(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            if (!parts[2].Equals(info.LastWriteTimeUtc.Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            version = parts[0];
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logService.Write(
+                "dependency.version_cache.read_failed",
+                LogLevel.Debug,
+                LogStatus.Skipped,
+                "Не удалось прочитать версию зависимости из персистентного кэша",
+                ex,
+                SourceName,
+                properties: LogProps
+                    .Create("Key", LogRedactor.CompactSafeToken(key))
+                    .With("ErrorCode", "VERSION_CACHE_READ_FAILED"));
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Сохраняет версию в персистентный кэш вместе со слепком бинарника
+    /// (размер и время изменения) для последующей инвалидации при его смене.
+    /// Запись на диск не дёргается, если значение не изменилось.
+    /// </summary>
+    private void SavePersistentCachedVersion(string key, string binaryPath, string version)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(binaryPath) || !File.Exists(binaryPath) || string.IsNullOrEmpty(version))
+            {
+                return;
+            }
+
+            string cacheKey = NormalizeVersionCacheKey(key);
+            var info = new FileInfo(binaryPath);
+            string raw = version + "|" +
+                info.Length.ToString(System.Globalization.CultureInfo.InvariantCulture) + "|" +
+                info.LastWriteTimeUtc.Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+            string current = _settingsManager.GetSetting(VersionCacheGroup, cacheKey, string.Empty) ?? string.Empty;
+            if (current.Equals(raw, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _settingsManager.SetSetting(VersionCacheGroup, cacheKey, raw);
+        }
+        catch (Exception ex)
+        {
+            _logService.Write(
+                "dependency.version_cache.store_failed",
+                LogLevel.Debug,
+                LogStatus.Skipped,
+                "Не удалось сохранить версию зависимости в персистентный кэш",
+                ex,
+                SourceName,
+                properties: LogProps
+                    .Create("Key", LogRedactor.CompactSafeToken(key))
+                    .With("ErrorCode", "VERSION_CACHE_STORE_FAILED"));
+        }
+    }
+
+    /// <summary>
+    /// Сбрасывает персистентную запись версии (после установки или удаления зависимости).
+    /// </summary>
+    private void InvalidatePersistentCachedVersion(string key)
+    {
+        try
+        {
+            _settingsManager.SetSetting(VersionCacheGroup, NormalizeVersionCacheKey(key), string.Empty);
+        }
+        catch
+        {
+            // Игнорируем: слепок бинарника всё равно инвалидирует устаревшую запись.
         }
     }
 
@@ -1062,6 +1212,11 @@ public class DependencyManager : IDependencyManager
                         _cachedVersions.Remove("qaac");
                     }
                 }
+                InvalidatePersistentCachedVersion(key);
+                if (key.Equals("ffmpeg", StringComparison.OrdinalIgnoreCase))
+                {
+                    InvalidatePersistentCachedVersion("qaac");
+                }
                 lock (_updatesAvailable)
                 {
                     _updatesAvailable[key] = false;
@@ -1515,6 +1670,11 @@ public class DependencyManager : IDependencyManager
                 _cachedVersions.Remove("qaac");
             }
         }
+        InvalidatePersistentCachedVersion(key);
+        if (key.Equals("ffmpeg", StringComparison.OrdinalIgnoreCase))
+        {
+            InvalidatePersistentCachedVersion("qaac");
+        }
         lock (_updatesAvailable)
         {
             _updatesAvailable[key] = false;
@@ -1644,7 +1804,7 @@ public class DependencyManager : IDependencyManager
     {
         try
         {
-            string lastCheckStr = _settingsManager.GetSetting("Updates", "LastDepsCheckTime", string.Empty);
+            string lastCheckStr = _settingsManager.GetSetting("Updates", "LastDepsCheckTime", string.Empty) ?? string.Empty;
             if (!force && DateTime.TryParse(lastCheckStr, out DateTime lastCheckTime))
             {
                 if (DateTime.UtcNow - lastCheckTime < TimeSpan.FromDays(1))
@@ -1670,18 +1830,29 @@ public class DependencyManager : IDependencyManager
                 source: SourceName,
                 properties: LogProps.Create("Group", "AllDependencies"));
 
+            // Проверки yt-dlp и Whisper уважают собственный 24-часовой троттлинг:
+            // force:true сюда приходит только при ручной проверке со страницы «Компоненты».
             // 1. Проверяем обновления yt-dlp
-            await CheckAndUpdateYtDlpAsync(force: true);
+            await CheckAndUpdateYtDlpAsync(force: force);
 
             // 1.1. Проверяем обновления Whisper
-            await CheckAndUpdateWhisperAsync(force: true);
+            await CheckAndUpdateWhisperAsync(force: force);
 
-            // 2. Проверяем остальной набор зависимостей из релиза deps-v1 на GitHub
+            // 2. Проверяем остальной набор зависимостей из релиза deps-v1 на GitHub.
+            // Короткий таймаут на запрос: общий _httpClient не трогаем, чтобы не ломать скачивания.
+            using var updateCheckTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(UpdateCheckHttpTimeoutSeconds));
             using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/repos/krnzhnr/k-tools/releases/tags/deps-v1");
             request.Headers.UserAgent.Clear();
             request.Headers.UserAgent.ParseAdd("K-Tools-DependencyManager-WinUI3");
 
-            using var response = await _httpClient.SendAsync(request);
+            using var response = await TrySendUpdateCheckAsync(request, updateCheckTimeout.Token, "deps");
+            if (response == null)
+            {
+                // Тихий пропуск при офлайне, таймауте или ограничении частоты:
+                // метка времени не обновляется, повторная попытка будет при следующем запуске.
+                return;
+            }
+
             if (response.IsSuccessStatusCode)
             {
                 string json = await response.Content.ReadAsStringAsync();
@@ -1722,11 +1893,15 @@ public class DependencyManager : IDependencyManager
                             }
                         }
 
+                        // Версионные пробы идут строго последовательно (без веера процессов),
+                        // с общим бюджетом времени; закэшированное не перезапрашивается.
+                        var versionProbeWatch = Stopwatch.StartNew();
+
                         // Проверяем FFmpeg (+ QAAC): обновление доступно, если отличается версия FFmpeg или версия QAAC
                         if (IsInstalled("ffmpeg"))
                         {
                             bool ffmpegUpdate = false;
-                            string localFfmpegVer = (await GetInstalledVersionAsync("ffmpeg")).TrimStart('v', 'V').Trim();
+                            string localFfmpegVer = (await GetInstalledVersionWithinBudgetAsync("ffmpeg", versionProbeWatch)).TrimStart('v', 'V').Trim();
                             if (remoteVersions.TryGetValue("ffmpeg", out var remoteFfmpeg) &&
                                 !string.IsNullOrEmpty(localFfmpegVer))
                             {
@@ -1746,7 +1921,7 @@ public class DependencyManager : IDependencyManager
                                 }
                             }
 
-                            string localQaacVer = (await GetInstalledVersionAsync("qaac")).TrimStart('v', 'V').Trim();
+                            string localQaacVer = (await GetInstalledVersionWithinBudgetAsync("qaac", versionProbeWatch)).TrimStart('v', 'V').Trim();
                             if (remoteVersions.TryGetValue("qaac", out var remoteQaac) &&
                                 !string.IsNullOrEmpty(localQaacVer))
                             {
@@ -1788,7 +1963,7 @@ public class DependencyManager : IDependencyManager
                                 continue;
                             }
 
-                            string localVer = (await GetInstalledVersionAsync(depKey)).TrimStart('v', 'V').Trim();
+                            string localVer = (await GetInstalledVersionWithinBudgetAsync(depKey, versionProbeWatch)).TrimStart('v', 'V').Trim();
                             string remoteVer = kvp.Value.TrimStart('v', 'V').Trim();
                             bool hasUpdate = !string.IsNullOrEmpty(localVer) &&
                                 !remoteVer.Equals(localVer, StringComparison.OrdinalIgnoreCase);
@@ -1835,6 +2010,105 @@ public class DependencyManager : IDependencyManager
     }
 
     /// <summary>
+    /// Отправляет фоновый запрос проверки обновлений с коротким таймаутом.
+    /// При офлайне, таймауте или ограничении частоты тихо возвращает null без ретраев
+    /// (повторные попытки остаются на политике Polly у HttpClient и следующем запуске).
+    /// Неуспешные ответы, не связанные с доступностью сети, возвращаются вызывающему
+    /// коду для штатной обработки.
+    /// </summary>
+    /// <returns>Ответ сервиса либо null, если запрос тихо пропущен.</returns>
+    private async Task<HttpResponseMessage?> TrySendUpdateCheckAsync(
+        HttpRequestMessage request,
+        CancellationToken timeoutToken,
+        string key)
+    {
+        HttpResponseMessage response;
+        try
+        {
+            response = await _httpClient.SendAsync(request, timeoutToken);
+        }
+        catch (OperationCanceledException ex) when (timeoutToken.IsCancellationRequested)
+        {
+            _logService.Write(
+                "dependency.update_check.skipped",
+                LogLevel.Debug,
+                LogStatus.Skipped,
+                "Проверка обновлений пропущена: превышен короткий таймаут сетевого запроса",
+                ex,
+                SourceName,
+                properties: LogProps
+                    .Create("Key", LogRedactor.CompactSafeToken(key))
+                    .With("Reason", "Timeout"));
+            return null;
+        }
+        catch (HttpRequestException ex)
+        {
+            _logService.Write(
+                "dependency.update_check.skipped",
+                LogLevel.Debug,
+                LogStatus.Skipped,
+                "Проверка обновлений пропущена: сеть недоступна",
+                ex,
+                SourceName,
+                properties: LogProps
+                    .Create("Key", LogRedactor.CompactSafeToken(key))
+                    .With("Reason", "Offline"));
+            return null;
+        }
+        catch (Exception ex)
+        {
+            _logService.Write(
+                "dependency.update_check_failed",
+                LogLevel.Error,
+                LogStatus.Failed,
+                "Ошибка при фоновой проверке обновлений зависимостей",
+                ex,
+                "DependencyManager",
+                properties: LogProps
+                    .Create("Stage", "dependency_update_check")
+                    .With("ErrorCode", "DEPENDENCY_UPDATE_CHECK_FAILED")
+                    .With("Retryable", true));
+            return null;
+        }
+
+        if (response.StatusCode == (System.Net.HttpStatusCode)429 || IsUpdateCheckRateLimited(response))
+        {
+            _logService.Write(
+                "dependency.update_check.skipped",
+                LogLevel.Debug,
+                LogStatus.Skipped,
+                "Проверка обновлений пропущена: сервис ограничил частоту запросов",
+                source: SourceName,
+                properties: LogProps
+                    .Create("Key", LogRedactor.CompactSafeToken(key))
+                    .With("StatusCode", ((int)response.StatusCode).ToString(System.Globalization.CultureInfo.InvariantCulture))
+                    .With("Reason", "RateLimited"));
+            response.Dispose();
+            return null;
+        }
+
+        return response;
+    }
+
+    /// <summary>
+    /// Проверяет, ответил ли сервис признаком исчерпания лимита частоты запросов GitHub API.
+    /// </summary>
+    private static bool IsUpdateCheckRateLimited(HttpResponseMessage response)
+    {
+        if (response.StatusCode != System.Net.HttpStatusCode.Forbidden)
+        {
+            return false;
+        }
+
+        if (!response.Headers.TryGetValues("X-RateLimit-Remaining", out var values))
+        {
+            return false;
+        }
+
+        return values.Any(v => v.Trim() == "0");
+    }
+
+    /// <summary>
     /// Выполняет проверку обновлений для утилиты yt-dlp раз в сутки и обновляет её при необходимости.
     /// </summary>
     public async Task CheckAndUpdateYtDlpAsync(bool force = false)
@@ -1857,7 +2131,7 @@ public class DependencyManager : IDependencyManager
         try
         {
             // Проверяем время последней успешной проверки
-            string lastCheckStr = _settingsManager.GetSetting("Updates", "LastYtDlpCheckTime", string.Empty);
+            string lastCheckStr = _settingsManager.GetSetting("Updates", "LastYtDlpCheckTime", string.Empty) ?? string.Empty;
             if (!force && DateTime.TryParse(lastCheckStr, out DateTime lastCheckTime))
             {
                 if (DateTime.UtcNow - lastCheckTime < TimeSpan.FromDays(1))
@@ -1885,13 +2159,21 @@ public class DependencyManager : IDependencyManager
                     .Create("Key", "yt-dlp")
                     .With("HostLabel", "api.github.com"));
 
-            // Выполняем GET-запрос к GitHub API для получения последнего релиза
+            // Выполняем GET-запрос к GitHub API для получения последнего релиза.
+            // Короткий таймаут: при офлайне, таймауте или ограничении частоты запрос тихо пропускается.
+            using var ytdlpTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(UpdateCheckHttpTimeoutSeconds));
             using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/repos/yt-dlp/yt-dlp-nightly-builds/releases/latest");
             // GitHub API требует User-Agent
             request.Headers.UserAgent.Clear();
             request.Headers.UserAgent.ParseAdd("K-Tools-DependencyManager-WinUI3");
 
-            using var response = await _httpClient.SendAsync(request);
+            using var response = await TrySendUpdateCheckAsync(request, ytdlpTimeout.Token, "yt-dlp");
+            if (response == null)
+            {
+                // Тихий пропуск: метка времени не обновляется, повтор будет при следующем запуске.
+                return;
+            }
+
             if (!response.IsSuccessStatusCode)
             {
                 _logService.Write(
@@ -1942,7 +2224,7 @@ public class DependencyManager : IDependencyManager
             // Запоминаем время текущей проверки
             _settingsManager.SetSetting("Updates", "LastYtDlpCheckTime", DateTime.UtcNow.ToString("o"));
 
-            string localVersion = _settingsManager.GetSetting("Updates", "YtDlpInstalledVersion", string.Empty);
+            string localVersion = _settingsManager.GetSetting("Updates", "YtDlpInstalledVersion", string.Empty) ?? string.Empty;
             _logService.Write(
                 "dependency.update_check.completed",
                 LogLevel.Debug,
@@ -2038,7 +2320,7 @@ public class DependencyManager : IDependencyManager
 
         try
         {
-            string lastCheckStr = _settingsManager.GetSetting("Updates", "LastWhisperCheckTime", string.Empty);
+            string lastCheckStr = _settingsManager.GetSetting("Updates", "LastWhisperCheckTime", string.Empty) ?? string.Empty;
             if (!force && DateTime.TryParse(lastCheckStr, out DateTime lastCheckTime))
             {
                 if (DateTime.UtcNow - lastCheckTime < TimeSpan.FromDays(1))
@@ -2083,7 +2365,7 @@ public class DependencyManager : IDependencyManager
             }
 
             _settingsManager.SetSetting("Updates", "LastWhisperCheckTime", DateTime.UtcNow.ToString("o"));
-            string localVersion = _settingsManager.GetSetting("Updates", "WhisperInstalledVersion", string.Empty);
+            string localVersion = _settingsManager.GetSetting("Updates", "WhisperInstalledVersion", string.Empty) ?? string.Empty;
             _logService.Write(
                 "dependency.update_check.completed",
                 LogLevel.Debug,
@@ -2167,11 +2449,18 @@ public class DependencyManager : IDependencyManager
     {
         try
         {
+            using var whisperTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(UpdateCheckHttpTimeoutSeconds));
             using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/repos/ggml-org/whisper.cpp/releases?per_page=10");
             request.Headers.UserAgent.Clear();
             request.Headers.UserAgent.ParseAdd("K-Tools-DependencyManager-WinUI3");
 
-            using var response = await _httpClient.SendAsync(request);
+            using var response = await TrySendUpdateCheckAsync(request, whisperTimeout.Token, "whisper");
+            if (response == null)
+            {
+                // Тихий пропуск при офлайне, таймауте или ограничении частоты.
+                return (string.Empty, null);
+            }
+
             if (!response.IsSuccessStatusCode)
             {
                 _logService.Write(

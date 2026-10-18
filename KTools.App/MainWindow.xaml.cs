@@ -732,9 +732,10 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private void ApplySavedBackdrop()
     {
+        string backdrop = "Mica";
         try
         {
-            string backdrop = _settingsManager.BackdropType;
+            backdrop = _settingsManager.BackdropType;
             ApplyBackdrop(backdrop);
         }
         catch (Exception ex)
@@ -749,21 +750,28 @@ public sealed partial class MainWindow : Window
                 properties: new Dictionary<string, object?>(StringComparer.Ordinal)
                 {
                     ["Stage"] = "backdrop",
-                    ["ErrorCode"] = "backdrop-apply-failed"
+                    ["ErrorCode"] = "backdrop-apply-failed",
+                    ["Value"] = LogRedactor.CompactSafeToken(backdrop)
                 });
         }
     }
 
     /// <summary>
-    /// Применяет выбранный тип фона (Mica или Acrylic) к окну приложения.
+    /// Применяет выбранный тип фона (Mica, Acrylic или Обычный без эффектов) к окну приложения.
+    /// Неизвестные значения отображаются на Mica, поэтому битое значение из конфигурации не роняет окно.
     /// </summary>
     private void ApplyBackdrop(string backdropType)
     {
+        string normalized = NormalizeBackdropType(backdropType);
         try
         {
-            if (backdropType.Equals("Acrylic", StringComparison.OrdinalIgnoreCase))
+            if (normalized.Equals("Acrylic", StringComparison.OrdinalIgnoreCase))
             {
                 SystemBackdrop = new Microsoft.UI.Xaml.Media.DesktopAcrylicBackdrop();
+            }
+            else if (normalized.Equals("None", StringComparison.OrdinalIgnoreCase))
+            {
+                SystemBackdrop = null;
             }
             else
             {
@@ -773,9 +781,9 @@ public sealed partial class MainWindow : Window
                 "window.backdrop_applied",
                 LogLevel.Debug,
                 LogStatus.Succeeded,
-                $"Тип фона окна применён: '{LogRedactor.CompactSafeToken(backdropType)}'",
+                $"Тип фона окна применён: '{LogRedactor.CompactSafeToken(normalized)}'",
                 source: SourceName,
-                properties: LogProps.Create("Theme", LogRedactor.CompactSafeToken(backdropType)));
+                properties: LogProps.Create("Value", LogRedactor.CompactSafeToken(normalized)));
         }
         catch (Exception ex)
         {
@@ -783,15 +791,35 @@ public sealed partial class MainWindow : Window
                 "window.backdrop_failed",
                 LogLevel.Warning,
                 LogStatus.PartiallySucceeded,
-                $"Не удалось применить тип фона окна '{backdropType}'",
+                $"Не удалось применить тип фона окна '{LogRedactor.CompactSafeToken(normalized)}'",
                 ex,
                 "MainWindow",
                 properties: new Dictionary<string, object?>(StringComparer.Ordinal)
                 {
                     ["Stage"] = "backdrop",
-                    ["ErrorCode"] = "backdrop-apply-failed"
+                    ["ErrorCode"] = "backdrop-apply-failed",
+                    ["Value"] = LogRedactor.CompactSafeToken(normalized)
                 });
         }
+    }
+
+    /// <summary>
+    /// Нормализует строковое значение типа фона к допустимому набору (Mica, Acrylic, None).
+    /// </summary>
+    private static string NormalizeBackdropType(string? backdropType)
+    {
+        if (string.Equals(backdropType, "Acrylic", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Acrylic";
+        }
+
+        if (string.Equals(backdropType, "None", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(backdropType, "Solid", StringComparison.OrdinalIgnoreCase))
+        {
+            return "None";
+        }
+
+        return "Mica";
     }
 
     /// <summary>

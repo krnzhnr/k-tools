@@ -58,6 +58,10 @@ public partial class App : Application
     private static FileSystemWatcher? _argsWatcher;
     private static Func<SettingsPersistenceResult>? _settingsPersistenceStage;
     private static Task<CrashShutdownResult>? _activeShutdownTask;
+    private static CancellationTokenSource? _startupBackgroundCts;
+    private static readonly object StartupBackgroundGate = new();
+    private static long _argsWatcherSequence;
+    private static readonly TimeSpan ArgsWatcherDebounceDelay = TimeSpan.FromMilliseconds(200);
 
     /// <summary>
     /// Признак диагностической сборки, в которой по умолчанию включается уровень Debug.
@@ -693,6 +697,8 @@ public partial class App : Application
 
     internal static bool StopArgsWatcher()
     {
+        CancelStartupBackgroundWork();
+        Interlocked.Increment(ref _argsWatcherSequence);
         FileSystemWatcher? watcher;
         lock (ArgsWatcherGate)
         {
@@ -913,26 +919,8 @@ public partial class App : Application
                     ["Platform"] = Environment.Is64BitProcess ? "x64" : "x86"
                 });
 
-            // Логирование основных аппаратных и системных характеристик
-            try
-            {
-                Services.GetRequiredService<ISystemInfoService>().LogSystemCharacteristics();
-            }
-            catch (Exception ex)
-            {
-                WriteAppEvent(
-                    AppEventIds.SystemInfoFailed,
-                    LogLevel.Error,
-                    LogStatus.Failed,
-                    "Не удалось получить характеристики системы",
-                    ex,
-                    new Dictionary<string, object?>(StringComparer.Ordinal)
-                    {
-                        ["Stage"] = "system_info",
-                        ["ErrorCode"] = AppErrorCodes.SystemInfoFailed
-                    });
-            }
-
+            // Характеристики системы собираются в фоне после window.Activate()
+            // (см. QueueSystemInfoSnapshotInBackground): опрос дисков до первого кадра запрещён.
             WriteAppEvent(
                 AppEventIds.SettingsResolved,
                 LogLevel.Info,
@@ -957,50 +945,28 @@ public partial class App : Application
                     ["Stage"] = "default_settings"
                 });
             _ = Services.GetRequiredService<IScriptRegistry>().Scripts;
-            _ = Task.Run(() => Services.GetRequiredService<KTools_App.Encoders.IHardwareCapabilityCache>().InitializeAsync());
-
-            // Автоматически обновляем ключи контекстного меню в реестре, если интеграция включена
-            try
+            // PERF-05: проба NVENC отложена на 10 с после старта, результат кэшируется на диске.
+            // При раннем закрытии опрос не запускается: проверяем останов перед запуском.
+            _ = Task.Run(async () =>
             {
-                ISettingsManager settingsManager = _settingsManager ?? Services.GetRequiredService<ISettingsManager>();
-                if (settingsManager.GetSetting("Shell", "IsContextMenuEnabled", false))
+                try
                 {
-                    var exePath = Environment.ProcessPath;
-                    if (!string.IsNullOrEmpty(exePath))
+                    await Task.Delay(TimeSpan.FromSeconds(10)).ConfigureAwait(false);
+                    if (IsControlledShutdownStarted || Volatile.Read(ref _servicesDisposed) != 0)
                     {
-                        var scriptRegistry = Services.GetRequiredService<IScriptRegistry>();
-                        var scripts = scriptRegistry.Scripts.Select(s => s.Name).ToList();
-                        if (ShellIntegration.NeedsUpdate(exePath, scripts))
-                        {
-                            ShellIntegration.Register(exePath, scripts);
-                            WriteAppEvent(
-                                AppEventIds.ShellIntegrationUpdated,
-                                LogLevel.Info,
-                                LogStatus.Succeeded,
-                                "Интеграция с оболочкой обновлена",
-                                null,
-                                new Dictionary<string, object?>(StringComparer.Ordinal)
-                                {
-                                    ["Stage"] = "shell_integration"
-                                });
-                        }
+                        return;
                     }
+
+                    await Services.GetRequiredService<KTools_App.Encoders.IHardwareCapabilityCache>().InitializeAsync().ConfigureAwait(false);
                 }
-            }
-            catch (Exception ex)
-            {
-                WriteAppEvent(
-                    AppEventIds.ShellIntegrationFailed,
-                    LogLevel.Error,
-                    LogStatus.Failed,
-                    "Не удалось обновить интеграцию с оболочкой",
-                    ex,
-                    new Dictionary<string, object?>(StringComparer.Ordinal)
-                    {
-                        ["Stage"] = "shell_integration",
-                        ["ErrorCode"] = AppErrorCodes.ShellIntegrationFailed
-                    });
-            }
+                catch (Exception)
+                {
+                    // Отложенная проба не должна ронять фоновую задачу: сбои уже залогированы внутри кэша.
+                }
+            });
+
+            // Интеграция контекстного меню обновляется в фоне после window.Activate()
+            // (см. QueueShellIntegrationRefreshInBackground): реестр shell до первого кадра не читается.
 
             // Создаём и активируем главное окно
             var window = Services.GetRequiredService<MainWindow>();
@@ -1016,6 +982,14 @@ public partial class App : Application
             UiDispatcherQueue = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
 
             window.Activate();
+
+            // Зафиксированный порядок старта (PERF-01): логгер → настройки → окно → Activate() →
+            // фон (система, shell, pending-args, watcher). До первого кадра на UI-потоке выполняются
+            // только дешёвые шаги; опрос дисков, реестр shell и чтение PendingArgs уходят в фон,
+            // поэтому холодный старт не зависит от спящих дисков и мусора в папке PendingArgs.
+            CancellationToken startupBackgroundToken = EnsureStartupBackgroundCancellation(window);
+            QueueSystemInfoSnapshotInBackground(startupBackgroundToken);
+            QueueShellIntegrationRefreshInBackground(startupBackgroundToken);
 
             // Обрабатываем собственные параметры запуска
             var ownArgs = Environment.GetCommandLineArgs();
@@ -1036,10 +1010,11 @@ public partial class App : Application
                 WeakReferenceMessenger.Default.Send(new ShellActivationMessage(script, filesList));
             }
 
-            // Обрабатываем накопленные аргументы от других экземпляров из папки PendingArgs
+            // Обрабатываем накопленные аргументы от других экземпляров из папки PendingArgs.
+            // Метод только ставит задачу в фон и возвращается сразу; доставка через диспетчер сохраняется.
             ProcessPendingArgsFiles();
 
-            // Запускаем отслеживание новых аргументов через FileSystemWatcher
+            // Запускаем отслеживание новых файлов аргументов (события с дебаунсом уходят в фон).
             StartArgsWatcher();
 
             WriteDiagnosticsStatus(logService);
@@ -1093,8 +1068,27 @@ public partial class App : Application
 
     /// <summary>
     /// Сканирует директорию PendingArgs и обрабатывает все перенаправленные аргументы.
+    /// Сигнатура сохранена: метод только ставит обработку в очередь фона и сразу возвращается,
+    /// поэтому безопасен для вызова из UI-потока и из обработчика активации второго экземпляра.
     /// </summary>
     public static void ProcessPendingArgsFiles()
+    {
+        CancellationToken token = GetStartupBackgroundToken();
+        try
+        {
+            _ = Task.Run(() => ProcessPendingArgsFilesAsync(token));
+        }
+        catch (Exception)
+        {
+        }
+    }
+
+    /// <summary>
+    /// Асинхронно сканирует директорию PendingArgs и обрабатывает перенаправленные аргументы.
+    /// Ожидание занятых файлов выполняется через Task.Delay с отменой, без блокировки потока.
+    /// </summary>
+    /// <param name="cancellationToken">Токен отмены фоновой обработки при закрытии приложения.</param>
+    internal static async Task ProcessPendingArgsFilesAsync(CancellationToken cancellationToken)
     {
         if (UiDispatcherQueue == null)
         {
@@ -1113,6 +1107,7 @@ public partial class App : Application
 
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
             string directory = PendingArgsChannel.ResolveDirectory();
             if (!Directory.Exists(directory))
             {
@@ -1137,55 +1132,8 @@ public partial class App : Application
 
             foreach (string file in PendingArgsChannel.EnumeratePendingFiles(directory, PendingArgsChannel.MaxRetainedFiles))
             {
-                string[]? args = null;
-                for (int attempt = 0; attempt < 3; attempt++)
-                {
-                    try
-                    {
-                        if (!File.Exists(file))
-                        {
-                            break;
-                        }
-
-                        args = File.ReadAllLines(file);
-                        PendingArgsChannel.TryDelete(file);
-                        break;
-                    }
-                    catch (IOException ex)
-                    {
-                        WriteAppEvent(
-                            AppEventIds.PendingArgsRetry,
-                            LogLevel.Warning,
-                            LogStatus.RetryScheduled,
-                            "Файл отложенных аргументов занят",
-                            ex,
-                            new Dictionary<string, object?>(StringComparer.Ordinal)
-                            {
-                                ["Attempt"] = attempt + 1,
-                                ["Stage"] = "pending_args"
-                            });
-                        if (attempt < 2)
-                        {
-                            Thread.Sleep((attempt + 1) * 150);
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        WriteAppEvent(
-                            AppEventIds.PendingArgsReadFailed,
-                            LogLevel.Error,
-                            LogStatus.Failed,
-                            "Не удалось прочитать файл отложенных аргументов",
-                            ex,
-                            new Dictionary<string, object?>(StringComparer.Ordinal)
-                            {
-                                ["Stage"] = "pending_args",
-                                ["ErrorCode"] = AppErrorCodes.PendingArgsReadFailed
-                            });
-                        break;
-                    }
-                }
-
+                cancellationToken.ThrowIfCancellationRequested();
+                string[]? args = await TryReadPendingArgsFileAsync(file, cancellationToken).ConfigureAwait(false);
                 if (args == null || args.Length == 0)
                 {
                     continue;
@@ -1247,6 +1195,10 @@ public partial class App : Application
                 }
             }
         }
+        catch (OperationCanceledException)
+        {
+            // Отмена при закрытии приложения — штатный путь, отдельно не журналируется.
+        }
         catch (Exception ex)
         {
             WriteAppEvent(
@@ -1264,7 +1216,360 @@ public partial class App : Application
     }
 
     /// <summary>
+    /// Читает файл отложенных аргументов с ограниченными повторными попытками.
+    /// Паузы между попытками поток не блокируют: используется Task.Delay с отменой.
+    /// </summary>
+    /// <param name="file">Путь к файлу отложенных аргументов.</param>
+    /// <param name="cancellationToken">Токен отмены при закрытии приложения.</param>
+    /// <returns>Строки аргументов либо null, если файл недоступен или обработка отменена.</returns>
+    private static async Task<string[]?> TryReadPendingArgsFileAsync(string file, CancellationToken cancellationToken)
+    {
+        for (int attempt = 0; attempt < 3; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                if (!File.Exists(file))
+                {
+                    return null;
+                }
+
+                string[] args = await File.ReadAllLinesAsync(file, cancellationToken).ConfigureAwait(false);
+                PendingArgsChannel.TryDelete(file);
+                return args;
+            }
+            catch (OperationCanceledException)
+            {
+                return null;
+            }
+            catch (IOException ex)
+            {
+                WriteAppEvent(
+                    AppEventIds.PendingArgsRetry,
+                    LogLevel.Warning,
+                    LogStatus.RetryScheduled,
+                    "Файл отложенных аргументов занят",
+                    ex,
+                    new Dictionary<string, object?>(StringComparer.Ordinal)
+                    {
+                        ["Attempt"] = attempt + 1,
+                        ["Stage"] = "pending_args"
+                    });
+                if (attempt < 2)
+                {
+                    try
+                    {
+                        await Task.Delay((attempt + 1) * 150, cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        return null;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                WriteAppEvent(
+                    AppEventIds.PendingArgsReadFailed,
+                    LogLevel.Error,
+                    LogStatus.Failed,
+                    "Не удалось прочитать файл отложенных аргументов",
+                    ex,
+                    new Dictionary<string, object?>(StringComparer.Ordinal)
+                    {
+                        ["Stage"] = "pending_args",
+                        ["ErrorCode"] = AppErrorCodes.PendingArgsReadFailed
+                    });
+                return null;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Ставит сбор характеристик системы в очередь фона после первого кадра.
+    /// Тяжёлый опрос дисков UI-поток не блокирует.
+    /// </summary>
+    /// <param name="cancellationToken">Токен отмены при закрытии приложения.</param>
+    private static void QueueSystemInfoSnapshotInBackground(CancellationToken cancellationToken)
+    {
+        ISystemInfoService service;
+        try
+        {
+            service = Services.GetRequiredService<ISystemInfoService>();
+        }
+        catch (Exception ex)
+        {
+            WriteSystemInfoFailed(ex);
+            return;
+        }
+
+        try
+        {
+            _ = Task.Run(() => WriteSystemSnapshotInBackgroundAsync(service, cancellationToken));
+        }
+        catch (Exception)
+        {
+        }
+    }
+
+    /// <summary>
+    /// Собирает характеристики системы в фоне.
+    /// Совместимость с блоком 02: при наличии раздельных методов быстрой и расширенной частей
+    /// используются они, иначе вызывается существующий общий метод. Набор событий журнала
+    /// в обоих вариантах одинаковый, меняется только поток выполнения.
+    /// </summary>
+    /// <param name="service">Сервис характеристик системы.</param>
+    /// <param name="cancellationToken">Токен отмены при закрытии приложения.</param>
+    private static async Task WriteSystemSnapshotInBackgroundAsync(ISystemInfoService service, CancellationToken cancellationToken)
+    {
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (await TryWriteSplitSystemSnapshotAsync(service, cancellationToken).ConfigureAwait(false))
+            {
+                return;
+            }
+
+            await Task.Run(() => service.LogSystemCharacteristics(), cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Отмена при закрытии приложения — штатный путь, отдельно не журналируется.
+        }
+        catch (Exception ex)
+        {
+            WriteSystemInfoFailed(ex);
+        }
+    }
+
+    /// <summary>
+    /// Пытается собрать снимок раздельными методами блока 02 через позднее связывание,
+    /// чтобы порядок слияния блоков 01 и 02 не влиял на компиляцию.
+    /// </summary>
+    /// <param name="service">Сервис характеристик системы.</param>
+    /// <param name="cancellationToken">Токен отмены фоновой операции.</param>
+    /// <returns>True, если раздельные методы найдены и выполнены; иначе false.</returns>
+    private static async Task<bool> TryWriteSplitSystemSnapshotAsync(ISystemInfoService service, CancellationToken cancellationToken)
+    {
+        System.Reflection.MethodInfo? essential = service.GetType().GetMethod(
+            "LogEssentialCharacteristics",
+            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance,
+            null,
+            Type.EmptyTypes,
+            null);
+        System.Reflection.MethodInfo? extended = service.GetType().GetMethod(
+            "LogExtendedCharacteristicsAsync",
+            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance,
+            null,
+            new[] { typeof(CancellationToken) },
+            null);
+        if (essential is null || extended is null || !typeof(Task).IsAssignableFrom(extended.ReturnType))
+        {
+            return false;
+        }
+
+        try
+        {
+            essential.Invoke(service, null);
+        }
+        catch (System.Reflection.TargetInvocationException ex)
+        {
+            WriteSystemInfoFailed(ex.InnerException ?? ex);
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        try
+        {
+            object? result = extended.Invoke(service, new object[] { cancellationToken });
+            if (result is Task task)
+            {
+                await task.ConfigureAwait(false);
+            }
+        }
+        catch (System.Reflection.TargetInvocationException ex)
+        {
+            WriteSystemInfoFailed(ex.InnerException ?? ex);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Журналирует сбой сбора характеристик системы единым событием.
+    /// </summary>
+    /// <param name="exception">Перехваченное исключение.</param>
+    private static void WriteSystemInfoFailed(Exception exception)
+    {
+        WriteAppEvent(
+            AppEventIds.SystemInfoFailed,
+            LogLevel.Error,
+            LogStatus.Failed,
+            "Не удалось получить характеристики системы",
+            exception,
+            new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["Stage"] = "system_info",
+                ["ErrorCode"] = AppErrorCodes.SystemInfoFailed
+            });
+    }
+
+    /// <summary>
+    /// Ставит обновление интеграции контекстного меню в очередь фона после первого кадра.
+    /// Реестр shell опрашивается вне UI-потока, сбои обрабатываются best-effort.
+    /// </summary>
+    /// <param name="cancellationToken">Токен отмены при закрытии приложения.</param>
+    private static void QueueShellIntegrationRefreshInBackground(CancellationToken cancellationToken)
+    {
+        try
+        {
+            _ = Task.Run(() => RefreshShellIntegrationInBackground(cancellationToken));
+        }
+        catch (Exception)
+        {
+        }
+    }
+
+    /// <summary>
+    /// Обновляет ключи контекстного меню в реестре, если интеграция включена.
+    /// Выполняется в фоне; ошибки на старт приложения не влияют.
+    /// </summary>
+    /// <param name="cancellationToken">Токен отмены при закрытии приложения.</param>
+    private static void RefreshShellIntegrationInBackground(CancellationToken cancellationToken)
+    {
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ISettingsManager settingsManager = _settingsManager ?? Services.GetRequiredService<ISettingsManager>();
+            if (settingsManager.GetSetting("Shell", "IsContextMenuEnabled", false))
+            {
+                var exePath = Environment.ProcessPath;
+                if (!string.IsNullOrEmpty(exePath))
+                {
+                    var scriptRegistry = Services.GetRequiredService<IScriptRegistry>();
+                    var scripts = scriptRegistry.Scripts.Select(s => s.Name).ToList();
+                    if (ShellIntegration.NeedsUpdate(exePath, scripts))
+                    {
+                        ShellIntegration.Register(exePath, scripts);
+                        WriteAppEvent(
+                            AppEventIds.ShellIntegrationUpdated,
+                            LogLevel.Info,
+                            LogStatus.Succeeded,
+                            "Интеграция с оболочкой обновлена",
+                            null,
+                            new Dictionary<string, object?>(StringComparer.Ordinal)
+                            {
+                                ["Stage"] = "shell_integration"
+                            });
+                    }
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Отмена при закрытии приложения — штатный путь для фонового обновления.
+        }
+        catch (Exception ex)
+        {
+            WriteAppEvent(
+                AppEventIds.ShellIntegrationFailed,
+                LogLevel.Error,
+                LogStatus.Failed,
+                "Не удалось обновить интеграцию с оболочкой",
+                ex,
+                new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["Stage"] = "shell_integration",
+                    ["ErrorCode"] = AppErrorCodes.ShellIntegrationFailed
+                });
+        }
+    }
+
+    /// <summary>
+    /// Создаёт токен отмены фоновых стартовых работ и связывает его с закрытием главного окна.
+    /// </summary>
+    /// <param name="window">Главное окно приложения.</param>
+    /// <returns>Токен отмены фоновых работ.</returns>
+    private static CancellationToken EnsureStartupBackgroundCancellation(Window window)
+    {
+        CancellationTokenSource fresh = new();
+        CancellationTokenSource? previous;
+        lock (StartupBackgroundGate)
+        {
+            previous = _startupBackgroundCts;
+            _startupBackgroundCts = fresh;
+        }
+
+        DisposeCancellationSource(previous);
+        window.Closed += (_, _) => CancelStartupBackgroundWork();
+        return fresh.Token;
+    }
+
+    /// <summary>
+    /// Возвращает токен отмены фоновых стартовых работ либо пустой токен, если старт ещё не настроен.
+    /// </summary>
+    private static CancellationToken GetStartupBackgroundToken()
+    {
+        lock (StartupBackgroundGate)
+        {
+            return _startupBackgroundCts?.Token ?? CancellationToken.None;
+        }
+    }
+
+    /// <summary>
+    /// Отменяет фоновые стартовые работы при закрытии приложения.
+    /// </summary>
+    private static void CancelStartupBackgroundWork()
+    {
+        CancellationTokenSource? current;
+        lock (StartupBackgroundGate)
+        {
+            current = _startupBackgroundCts;
+            _startupBackgroundCts = null;
+        }
+
+        if (current is null)
+        {
+            return;
+        }
+
+        try
+        {
+            current.Cancel();
+        }
+        catch (Exception)
+        {
+        }
+        finally
+        {
+            DisposeCancellationSource(current);
+        }
+    }
+
+    /// <summary>
+    /// Освобождает источник токенов отмены без распространения исключений.
+    /// </summary>
+    /// <param name="source">Источник токенов отмены.</param>
+    private static void DisposeCancellationSource(CancellationTokenSource? source)
+    {
+        if (source is null)
+        {
+            return;
+        }
+
+        try
+        {
+            source.Dispose();
+        }
+        catch (Exception)
+        {
+        }
+    }
+
+    /// <summary>
     /// Запускает FileSystemWatcher для отслеживания новых файлов аргументов в директории PendingArgs.
+    /// Обработчики только планируют задачу с дебаунсом и сразу возвращаются: поток наблюдателя не блокируется.
     /// </summary>
     private static void StartArgsWatcher()
     {
@@ -1276,12 +1581,8 @@ public partial class App : Application
             {
                 EnableRaisingEvents = true
             };
-            watcher.Created += (_, _) =>
-            {
-                Thread.Sleep(50);
-                ProcessPendingArgsFiles();
-            };
-            watcher.Changed += (_, _) => ProcessPendingArgsFiles();
+            watcher.Created += (_, _) => SchedulePendingArgsProcessing();
+            watcher.Changed += (_, _) => SchedulePendingArgsProcessing();
             lock (ArgsWatcherGate)
             {
                 _argsWatcher = watcher;
@@ -1300,6 +1601,41 @@ public partial class App : Application
                     ["Stage"] = "pending_args",
                     ["ErrorCode"] = AppErrorCodes.PendingArgsWatcherFailed
                 });
+        }
+    }
+
+    /// <summary>
+    /// Планирует обработку отложенных аргументов с дебаунсом: быстрая серия событий
+    /// наблюдателя сливается в один фоновый проход, поток наблюдателя не блокируется.
+    /// </summary>
+    private static void SchedulePendingArgsProcessing()
+    {
+        long sequence = Interlocked.Increment(ref _argsWatcherSequence);
+        CancellationToken startupToken = GetStartupBackgroundToken();
+        try
+        {
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await Task.Delay(ArgsWatcherDebounceDelay, startupToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+
+                if (Interlocked.Read(ref _argsWatcherSequence) != sequence)
+                {
+                    // Вытеснено более новым событием — этот проход пропускается.
+                    return;
+                }
+
+                await ProcessPendingArgsFilesAsync(startupToken).ConfigureAwait(false);
+            });
+        }
+        catch (Exception)
+        {
         }
     }
 

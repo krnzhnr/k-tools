@@ -210,4 +210,74 @@ public class SettingsViewModelTests
             Times.Never,
             "значение темы не должно попадать в текст журнала");
     }
+
+    /// <summary>
+    /// Проверяет отображение сохранённого значения фона на индекс выбора,
+    /// включая обычное значение и неизвестные значения из старых конфигураций.
+    /// </summary>
+    [TestMethod]
+    [DataRow("Mica", 0)]
+    [DataRow("Acrylic", 1)]
+    [DataRow("None", 2)]
+    [DataRow("Solid", 2)]
+    [DataRow("acrylic", 1)]
+    [DataRow("Blurple", 0)]
+    public void SelectedBackdropIndex_BackdropValue_MapsToExpectedIndex(string backdrop, int expected)
+    {
+        // Arrange
+        _settingsManagerMock.SetupGet(m => m.BackdropType).Returns(backdrop);
+
+        // Act
+        var viewModel = new SettingsViewModel(
+            _settingsManagerMock.Object,
+            _dialogServiceMock.Object,
+            _updateServiceMock.Object,
+            _logServiceMock.Object,
+            _pathManagerMock.Object,
+            _scriptRegistryMock.Object,
+            _dependencyManagerMock.Object
+        );
+
+        // Assert
+        viewModel.SelectedBackdropIndex.Should().Be(expected);
+    }
+
+    /// <summary>
+    /// Проверяет, что выбор индекса фона фиксируется каноническим значением,
+    /// а выход за границы списка безопасно отображается на Mica.
+    /// </summary>
+    [TestMethod]
+    [DataRow(0, "Mica")]
+    [DataRow(1, "Acrylic")]
+    [DataRow(2, "None")]
+    [DataRow(99, "Mica")]
+    [DataRow(-1, "Mica")]
+    public void SelectedBackdropIndex_IndexChange_PersistsExpectedBackdrop(int index, string expected)
+    {
+        // Arrange
+        _settingsManagerMock
+            .Setup(m => m.SetSetting("General", "BackdropType", It.IsAny<string>()))
+            .Returns<string, string, string>((group, key, value) => PersistenceResult.Succeeded(new[] { group + "/" + key }));
+        var viewModel = new SettingsViewModel(
+            _settingsManagerMock.Object,
+            _dialogServiceMock.Object,
+            _updateServiceMock.Object,
+            _logServiceMock.Object,
+            _pathManagerMock.Object,
+            _scriptRegistryMock.Object,
+            _dependencyManagerMock.Object
+        );
+        viewModel.SelectedBackdropIndex = index == 2 ? 1 : 2;
+        _settingsManagerMock.Invocations.Clear();
+
+        // Act
+        viewModel.SelectedBackdropIndex = index;
+
+        // Assert
+        _settingsManagerMock.Verify(
+            m => m.SetSetting("General", "BackdropType", expected),
+            Times.Once,
+            "выбор фона сохраняется типизированным вызовом SetSetting каноническим значением");
+        viewModel.LastCommitState.Should().Be(SettingCommitState.Persisted);
+    }
 }

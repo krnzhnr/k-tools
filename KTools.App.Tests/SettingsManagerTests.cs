@@ -724,6 +724,80 @@ public class SettingsManagerTests
         manager.GetAllSettingsInGroup("General").Should().ContainKey("Theme");
     }
 
+    /// <summary>
+    /// Проверяет, что неизвестное значение фона из старой конфигурации нормализуется к Mica.
+    /// </summary>
+    [TestMethod]
+    public void BackdropType_UnknownValueFromConfig_ReturnsMica()
+    {
+        // Arrange
+        var manager = CreateManager();
+        manager.SetSetting("General", "BackdropType", "Blurple");
+
+        // Act
+        string actual = manager.BackdropType;
+
+        // Assert
+        actual.Should().Be("Mica");
+    }
+
+    /// <summary>
+    /// Проверяет, что значение обычного фона сохраняется и переживает перезагрузку.
+    /// </summary>
+    [TestMethod]
+    public void BackdropType_NoneValue_PersistsAndReadsNone()
+    {
+        // Arrange
+        var manager = CreateManager();
+
+        // Act
+        manager.BackdropType = "None";
+
+        // Assert
+        manager.BackdropType.Should().Be("None");
+
+        // Проверяем перезагрузку
+        var reloaded = CreateManager();
+        reloaded.BackdropType.Should().Be("None");
+    }
+
+    /// <summary>
+    /// Проверяет, что псевдоним Solid нормализуется к каноническому значению None.
+    /// </summary>
+    [TestMethod]
+    public void BackdropType_SolidAlias_NormalizesToNone()
+    {
+        // Arrange
+        var manager = CreateManager();
+
+        // Act
+        manager.BackdropType = "Solid";
+
+        // Assert
+        manager.BackdropType.Should().Be("None");
+    }
+
+    /// <summary>
+    /// Проверяет, что запись неизвестного значения через свойство нормализуется к Mica,
+    /// а регистр ввода не влияет на каноническое значение.
+    /// </summary>
+    [TestMethod]
+    public void BackdropType_PropertySetter_NormalizesValues()
+    {
+        // Arrange
+        var manager = CreateManager();
+
+        // Act
+        manager.BackdropType = "вздор";
+        string unknown = manager.BackdropType;
+        manager.BackdropType = "acrylic";
+        string lowered = manager.BackdropType;
+
+        // Assert
+        unknown.Should().Be("Mica");
+        lowered.Should().Be("Acrylic");
+    }
+
     private SettingsManager CreateManager()
     {
         var manager = new SettingsManager(_logService, _pathManagerMock.Object);

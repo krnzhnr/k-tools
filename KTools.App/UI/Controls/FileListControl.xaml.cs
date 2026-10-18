@@ -605,7 +605,9 @@ public sealed partial class FileListControl : UserControl
     /// </summary>
     public void AddFiles(IEnumerable<string> filePaths)
     {
-        if (_settingsManager.ClearListOnAdd)
+        // Скрипты с накапливаемой очередью (например, сборка MKV) игнорируют
+        // глобальную очистку: видео и сопутствующие файлы добавляются по очереди.
+        if (_settingsManager.ClearListOnAdd && ActiveScript?.KeepQueueOnAdd != true)
         {
             Clear();
         }

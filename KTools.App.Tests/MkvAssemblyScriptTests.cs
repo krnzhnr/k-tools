@@ -1,6 +1,7 @@
 // -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using FluentAssertions;
 using Moq;
@@ -57,6 +58,28 @@ public class MkvAssemblyScriptTests
     {
         _script.Category.Should().Be("Контейнеры");
         _script.IconName.Should().Be(AppConstants.ScriptIcons.MkvAssembly);
+    }
+
+    /// <summary>
+    /// Сборка MKV накапливает очередь: видео и сопутствующие дорожки добавляются по очереди,
+    /// поэтому глобальная очистка очереди при добавлении не должна применяться.
+    /// </summary>
+    [TestMethod]
+    public void KeepQueueOnAdd_MkvAssemblyScript_ReturnsTrue()
+    {
+        _script.KeepQueueOnAdd.Should().BeTrue();
+    }
+
+    /// <summary>
+    /// Проверяет, что формат контейнера по умолчанию — MKV, а не MP4.
+    /// </summary>
+    [TestMethod]
+    public void SettingsSchema_OutputContainer_DefaultsToMkv()
+    {
+        var field = _script.SettingsSchema.Single(f => f.Key == "output_container");
+
+        field.DefaultValue.Should().Be("MKV");
+        field.Options.Should().StartWith("MKV");
     }
 
     /// <summary>

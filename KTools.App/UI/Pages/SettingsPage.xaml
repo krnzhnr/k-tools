@@ -43,7 +43,7 @@
                 <!-- Очищать ли очередь при добавлении -->
                 <community:SettingsCard
                     Padding="16,12,16,12"
-                    Description="Автоматически сбрасывать предыдущую очередь файлов при добавлении новых"
+                    Description="Автоматически сбрасывать предыдущую очередь файлов при добавлении новых. Не действует для скриптов с накапливаемой очередью (сборка MKV)"
                     Header="Очищать очередь при добавлении">
                     <ToggleSwitch
                         x:Name="ClearListToggle"
@@ -326,7 +326,7 @@
                 <!-- Эффект прозрачности (Backdrop) -->
                 <community:SettingsCard
                     Padding="16,12,16,12"
-                    Description="Выберите эффект оформления фона окон приложения (Mica или Acrylic)"
+                    Description="Выберите эффект оформления фона окон приложения (Mica, Acrylic или Обычный без эффектов)"
                     Header="Эффект фона окон">
                     <ComboBox
                         x:Name="BackdropComboBox"
@@ -338,6 +338,9 @@
                         <ComboBoxItem
                             Tag="Acrylic"
                             Content="Acrylic" />
+                        <ComboBoxItem
+                            Tag="None"
+                            Content="Обычный" />
                     </ComboBox>
                 </community:SettingsCard>
             </StackPanel>

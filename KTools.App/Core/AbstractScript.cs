@@ -157,6 +157,14 @@ public abstract class AbstractScript
     public virtual bool UseCustomWidget => false;
 
     /// <summary>
+    /// Указывает, должен ли скрипт накапливать очередь при добавлении файлов.
+    /// Если включено, глобальная настройка «Очищать очередь при добавлении» не действует:
+    /// файлы дописываются к уже загруженным. Нужно скриптам, где пользователь
+    /// последовательно добавляет видео и сопутствующие файлы в общую очередь.
+    /// </summary>
+    public virtual bool KeepQueueOnAdd => false;
+
+    /// <summary>
     /// Список строковых ключей внешних зависимостей, необходимых для работы скрипта.
     /// </summary>
     public virtual string[] RequiredDependencies => Array.Empty<string>();

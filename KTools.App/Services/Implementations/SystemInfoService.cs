@@ -1,9 +1,12 @@
 ﻿// -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Threading;
+using System.Threading.Tasks;
 
 using KTools_App.Core;
 using KTools_App.Diagnostics;
@@ -23,6 +26,14 @@ public sealed class SystemInfoService : ISystemInfoService
     private readonly ILogService _logService;
     private readonly IDiskTypeDetectorService? _diskTypeDetector;
     private const string LogCategory = "SystemInfo";
+
+    // Общий бюджет фонового опроса дисков: после его исчерпания оставшиеся диски
+    // пропускаются, чтобы зависший сетевой накопитель не держал фоновую задачу бесконечно.
+    private static readonly TimeSpan DrivesOverallTimeout = TimeSpan.FromSeconds(30);
+
+    // Бюджет опроса одного диска: спящий HDD успевает раскрутиться и ответить,
+    // зависший отвечает таймаутом, остальные диски опрашиваются дальше.
+    private static readonly TimeSpan DriveSingleTimeout = TimeSpan.FromSeconds(10);
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
     private struct MEMORYSTATUSEX
@@ -65,15 +76,65 @@ public sealed class SystemInfoService : ISystemInfoService
     /// <inheritdoc/>
     public void LogSystemCharacteristics()
     {
+        // Обёртка совместимости: быстрая часть выполняется синхронно на вызывающем
+        // потоке, тяжёлая дожимается фоном, поэтому прямой вызов не блокирует UI
+        // даже при спящем диске. Набор событий system.* в журнале сохраняется,
+        // меняется только поток и время их появления.
+        LogEssentialCharacteristics();
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await LogExtendedCharacteristicsAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logService.Write(
+                    "system.snapshot.failed",
+                    LogLevel.Error,
+                    LogStatus.Failed,
+                    "Не удалось собрать сведения о системе и оборудовании",
+                    ex,
+                    LogCategory,
+                    properties: LogProps.Create("ErrorCode", "SYSTEM_SNAPSHOT_FAILED"));
+            }
+        }, CancellationToken.None);
+    }
+
+    /// <inheritdoc/>
+    public void LogEssentialCharacteristics()
+    {
         try
         {
             LogOperatingSystem();
             LogRuntimeAndProcess();
             LogProcessor();
             LogMemory();
-            LogGraphicsAdapters();
-            LogDrives();
             LogCultureAndEncodings();
+        }
+        catch (Exception ex)
+        {
+            _logService.Write(
+                "system.snapshot.failed",
+                LogLevel.Error,
+                LogStatus.Failed,
+                "Не удалось собрать сведения о системе и оборудовании",
+                ex,
+                LogCategory,
+                properties: LogProps.Create("ErrorCode", "SYSTEM_SNAPSHOT_FAILED"));
+        }
+    }
+
+    /// <inheritdoc/>
+    public async Task LogExtendedCharacteristicsAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            await Task.Run(LogGraphicsAdapters, cancellationToken).ConfigureAwait(false);
+            await LogDrivesAsync(cancellationToken).ConfigureAwait(false);
 
             _logService.Write(
                 "system.snapshot.completed",
@@ -82,6 +143,17 @@ public sealed class SystemInfoService : ISystemInfoService
                 "Сведения о системе и оборудовании собраны",
                 source: LogCategory,
                 properties: LogProps.Create("Schema", "system.snapshot.v1"));
+        }
+        catch (OperationCanceledException ex)
+        {
+            _logService.Write(
+                "system.snapshot.failed",
+                LogLevel.Debug,
+                LogStatus.Cancelled,
+                "Сбор сведений о системе и оборудовании отменён",
+                ex,
+                LogCategory,
+                properties: LogProps.Create("ErrorCode", "SYSTEM_SNAPSHOT_CANCELLED"));
         }
         catch (Exception ex)
         {
@@ -384,83 +456,16 @@ public sealed class SystemInfoService : ISystemInfoService
         }
     }
 
-    private void LogDrives()
+    private async Task LogDrivesAsync(CancellationToken cancellationToken)
     {
+        DriveInfo[] drives;
         try
         {
-            DriveInfo[] drives = DriveInfo.GetDrives();
-            foreach (DriveInfo drive in drives)
-            {
-                string root = LogProps.RootName(drive.RootDirectory.FullName);
-                try
-                {
-                    if (!drive.IsReady)
-                    {
-                        continue;
-                    }
-
-                    double totalGb = drive.TotalSize / (1024.0 * 1024.0 * 1024.0);
-                    double freeGb = drive.AvailableFreeSpace / (1024.0 * 1024.0 * 1024.0);
-
-                    string mediaTypeStr = string.Empty;
-                    if (_diskTypeDetector != null)
-                    {
-                        try
-                        {
-                            var mediaType = _diskTypeDetector.GetDriveTypeForPath(drive.RootDirectory.FullName);
-                            if (mediaType != DriveMediaType.Unknown)
-                            {
-                                mediaTypeStr = $", {mediaType}";
-                            }
-                        }
-                        catch (Exception mediaEx)
-                        {
-                            _logService.Write(
-                                "system.drive.media_type_failed",
-                                LogLevel.Debug,
-                                LogStatus.Skipped,
-                                $"Физический тип носителя {drive.Name} не определён",
-                                mediaEx,
-                                LogCategory,
-                                properties: LogProps
-                                    .Create("FileName", root)
-                                    .With("ErrorCode", "MEDIA_TYPE_UNAVAILABLE"));
-                        }
-                    }
-
-                    _logService.Write(
-                        "system.drive.detected",
-                        LogLevel.Info,
-                        LogStatus.Succeeded,
-                        string.Format(
-                            CultureInfo.InvariantCulture,
-                            "Накопитель {0} ({1}{2}, {3}): свободно {4:F1} ГБ из {5:F1} ГБ",
-                            drive.Name,
-                            drive.DriveType,
-                            mediaTypeStr,
-                            drive.DriveFormat,
-                            freeGb,
-                            totalGb),
-                        source: LogCategory,
-                        properties: LogProps
-                            .Create("FileName", root)
-                            .With("TotalBytes", drive.TotalSize)
-                            .With("Container", drive.DriveFormat));
-                }
-                catch (Exception driveEx)
-                {
-                    _logService.Write(
-                        "system.drive.detail_failed",
-                        LogLevel.Debug,
-                        LogStatus.Skipped,
-                        $"Детальные сведения о накопителе {drive.Name} недоступны",
-                        driveEx,
-                        LogCategory,
-                        properties: LogProps
-                            .Create("FileName", root)
-                            .With("ErrorCode", "DRIVE_DETAIL_UNAVAILABLE"));
-                }
-            }
+            drives = await Task.Run(DriveInfo.GetDrives, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -472,6 +477,116 @@ public sealed class SystemInfoService : ISystemInfoService
                 ex,
                 LogCategory,
                 properties: LogProps.Create("ErrorCode", "DRIVE_ENUMERATION_FAILED"));
+            return;
+        }
+
+        Stopwatch budget = Stopwatch.StartNew();
+        foreach (DriveInfo drive in drives)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (budget.Elapsed > DrivesOverallTimeout)
+            {
+                break;
+            }
+
+            try
+            {
+                await Task.Run(() => LogSingleDrive(drive), cancellationToken)
+                    .WaitAsync(DriveSingleTimeout, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (TimeoutException timeEx)
+            {
+                string root = LogProps.RootName(drive.RootDirectory.FullName);
+                _logService.Write(
+                    "system.drive.detail_failed",
+                    LogLevel.Debug,
+                    LogStatus.Skipped,
+                    $"Детальные сведения о накопителе {drive.Name} недоступны",
+                    timeEx,
+                    LogCategory,
+                    properties: LogProps
+                        .Create("FileName", root)
+                        .With("ErrorCode", "DRIVE_DETAIL_UNAVAILABLE"));
+            }
+        }
+    }
+
+    private void LogSingleDrive(DriveInfo drive)
+    {
+        string root = LogProps.RootName(drive.RootDirectory.FullName);
+        try
+        {
+            if (!drive.IsReady)
+            {
+                return;
+            }
+
+            double totalGb = drive.TotalSize / (1024.0 * 1024.0 * 1024.0);
+            double freeGb = drive.AvailableFreeSpace / (1024.0 * 1024.0 * 1024.0);
+
+            string mediaTypeStr = string.Empty;
+            if (_diskTypeDetector != null)
+            {
+                try
+                {
+                    var mediaType = _diskTypeDetector.GetDriveTypeForPath(drive.RootDirectory.FullName);
+                    if (mediaType != DriveMediaType.Unknown)
+                    {
+                        mediaTypeStr = $", {mediaType}";
+                    }
+                }
+                catch (Exception mediaEx)
+                {
+                    _logService.Write(
+                        "system.drive.media_type_failed",
+                        LogLevel.Debug,
+                        LogStatus.Skipped,
+                        $"Физический тип носителя {drive.Name} не определён",
+                        mediaEx,
+                        LogCategory,
+                        properties: LogProps
+                            .Create("FileName", root)
+                            .With("ErrorCode", "MEDIA_TYPE_UNAVAILABLE"));
+                }
+            }
+
+            _logService.Write(
+                "system.drive.detected",
+                LogLevel.Info,
+                LogStatus.Succeeded,
+                string.Format(
+                    CultureInfo.InvariantCulture,
+                    "Накопитель {0} ({1}{2}, {3}): свободно {4:F1} ГБ из {5:F1} ГБ",
+                    drive.Name,
+                    drive.DriveType,
+                    mediaTypeStr,
+                    drive.DriveFormat,
+                    freeGb,
+                    totalGb),
+                source: LogCategory,
+                properties: LogProps
+                    .Create("FileName", root)
+                    .With("TotalBytes", drive.TotalSize)
+                    .With("Container", drive.DriveFormat));
+        }
+        catch (Exception driveEx)
+        {
+            _logService.Write(
+                "system.drive.detail_failed",
+                LogLevel.Debug,
+                LogStatus.Skipped,
+                $"Детальные сведения о накопителе {drive.Name} недоступны",
+                driveEx,
+                LogCategory,
+                properties: LogProps
+                    .Create("FileName", root)
+                    .With("ErrorCode", "DRIVE_DETAIL_UNAVAILABLE"));
         }
     }
 
