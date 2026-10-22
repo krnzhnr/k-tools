@@ -131,7 +131,7 @@ public class DependencySetupViewModelTests
         // Assert
         vm.RequiredDependencies.Should().BeEmpty();
         vm.OptionalDependencies.Should().BeEmpty();
-        vm.IsInstallAllEnabled.Should().BeFalse("нет отсутствующих зависимостей — кнопка не нужна");
+        vm.IsInstallRequiredEnabled.Should().BeFalse("нет отсутствующих обязательных — кнопка не нужна");
         vm.RefreshText.Should().Be("Проверить обновления");
         vm.IsHomeState.Should().BeFalse();
     }
@@ -282,24 +282,24 @@ public class DependencySetupViewModelTests
     }
 
     /// <summary>
-    /// Проверяет пакетную установку: при пустом реестре менеджер не вызывается,
+    /// Проверяет установку обязательных: при пустом реестре менеджер не вызывается,
     /// кнопка блокируется и лог пишется.
     /// </summary>
     [TestMethod]
-    public async Task InstallAllCommand_EmptyRegistry_LogsAndDisablesButton()
+    public async Task InstallRequiredCommand_EmptyRegistry_LogsAndDisablesButton()
     {
         // Arrange
         var vm = CreateViewModel();
 
         // Act
-        await vm.InstallAllCommand.ExecuteAsync(null);
+        await vm.InstallRequiredCommand.ExecuteAsync(null);
 
         // Assert
         _dependencyManagerMock.Verify(d => d.InstallDependencyAsync(It.IsAny<string>()), Times.Never);
-        vm.IsInstallAllEnabled.Should().BeFalse("кнопка блокируется на время пакетной установки даже без задач");
+        vm.IsInstallRequiredEnabled.Should().BeFalse("кнопка блокируется на время установки даже без задач");
         _logServiceMock.Verify(
             l => l.Write(
-                "ui.dependencies.install_all_requested",
+                "ui.dependencies.install_required_requested",
                 LogLevel.Info,
                 LogStatus.Running,
                 It.IsAny<string>(),
@@ -308,7 +308,7 @@ public class DependencySetupViewModelTests
                 It.IsAny<LogContext?>(),
                 It.IsAny<IReadOnlyDictionary<string, object?>>()),
             Times.Once,
-            "пакетная установка фиксируется структурированным событием");
+            "установка обязательных фиксируется структурированным событием");
     }
 
     /// <summary>
@@ -331,7 +331,7 @@ public class DependencySetupViewModelTests
         vm.OptionalDependencies.Should().HaveCount(1);
         vm.RequiredDependencies.Select(d => d.Info.Key).Should().Equal("ffmpeg", "mkvtoolnix");
         vm.OptionalDependencies.Select(d => d.Info.Key).Should().Equal("yt-dlp");
-        vm.IsInstallAllEnabled.Should().BeTrue("есть незагруженные зависимости");
+        vm.IsInstallRequiredEnabled.Should().BeTrue("есть незагруженные обязательные зависимости");
     }
 
     /// <summary>
@@ -380,10 +380,11 @@ public class DependencySetupViewModelTests
     }
 
     /// <summary>
-    /// Проверяет пакетную установку только отсутствующих/ошибочных зависимостей.
+    /// Проверяет установку обязательных: ставятся только отсутствующие/ошибочные обязательные,
+    /// необязательные кнопкой не затрагиваются.
     /// </summary>
     [TestMethod]
-    public async Task InstallAllCommand_MixedStatuses_InstallsOnlyMissing()
+    public async Task InstallRequiredCommand_MixedStatuses_InstallsOnlyRequired()
     {
         // Arrange
         SetupRegistry(
@@ -393,15 +394,37 @@ public class DependencySetupViewModelTests
         var vm = CreateViewModel();
 
         // Act
-        await vm.InstallAllCommand.ExecuteAsync(null);
+        await vm.InstallRequiredCommand.ExecuteAsync(null);
 
         // Assert
         _dependencyManagerMock.Verify(d => d.InstallDependencyAsync("ffmpeg"), Times.Never,
             "установленная зависимость не должна переустанавливаться");
         _dependencyManagerMock.Verify(d => d.InstallDependencyAsync("mkvtoolnix"), Times.Once);
-        _dependencyManagerMock.Verify(d => d.InstallDependencyAsync("yt-dlp"), Times.Once,
-            "зависимость в статусе Error входит в пакетную установку");
-        vm.IsInstallAllEnabled.Should().BeFalse("кнопка блокируется на время пакетной установки");
+        _dependencyManagerMock.Verify(d => d.InstallDependencyAsync("yt-dlp"), Times.Never,
+            "необязательная зависимость кнопкой не ставится даже в статусе Error");
+        vm.IsInstallRequiredEnabled.Should().BeFalse("кнопка блокируется на время установки");
+    }
+
+    /// <summary>
+    /// Проверяет, что при отсутствии обязательных к установке кнопка выключена
+    /// и команда ничего не ставит, даже если необязательные отсутствуют.
+    /// </summary>
+    [TestMethod]
+    public async Task InstallRequiredCommand_OnlyOptionalMissing_DoesNothingAndDisablesButton()
+    {
+        // Arrange
+        SetupRegistry(
+            (CreateDependency("ffmpeg", isRequired: true, DependencyStatus.Installed), DependencyStatus.Installed),
+            (CreateDependency("yt-dlp", isRequired: false, DependencyStatus.NotInstalled), DependencyStatus.NotInstalled));
+        var vm = CreateViewModel();
+
+        // Act
+        await vm.InstallRequiredCommand.ExecuteAsync(null);
+
+        // Assert
+        vm.IsInstallRequiredEnabled.Should().BeFalse("ставить нечего: обязательные на месте");
+        _dependencyManagerMock.Verify(d => d.InstallDependencyAsync(It.IsAny<string>()), Times.Never,
+            "необязательные зависимости кнопкой не ставятся");
     }
 
     /// <summary>

@@ -48,10 +48,10 @@ public partial class DependencySetupViewModel : ThreadSafeViewModel
     private readonly Dictionary<string, DependencyVM> _dependencyLookup = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
-    /// Указывает, доступна ли кнопка пакетной установки всех компонентов.
+    /// Указывает, доступна ли кнопка установки обязательных компонентов.
     /// </summary>
     [ObservableProperty]
-    public partial bool IsInstallAllEnabled { get; set; }
+    public partial bool IsInstallRequiredEnabled { get; set; }
 
     /// <summary>
     /// Указывает, находится ли интерфейс в состоянии готовности к переходу на главный экран.
@@ -126,14 +126,15 @@ public partial class DependencySetupViewModel : ThreadSafeViewModel
     }
 
     /// <summary>
-    /// Обновляет логические состояния интерфейса: доступность кнопок и режим кнопки перепроверки.
+    /// Обновляет логические состояния интерфейса: доступность кнопки и режим кнопки перепроверки.
+    /// Кнопка учитывает только обязательные зависимости: необязательные ставятся по одной с карточки.
     /// </summary>
     private void UpdateUIStates()
     {
-        bool hasMissing = RequiredDependencies.Concat(OptionalDependencies)
+        bool hasMissing = RequiredDependencies
             .Any(d => d.Status == DependencyStatus.NotInstalled || d.Status == DependencyStatus.Error);
 
-        IsInstallAllEnabled = hasMissing;
+        IsInstallRequiredEnabled = hasMissing;
         RefreshText = "Проверить обновления";
     }
 
@@ -235,15 +236,16 @@ public partial class DependencySetupViewModel : ThreadSafeViewModel
     }
 
     /// <summary>
-    /// Выполняет параллельную пакетную установку всех отсутствующих зависимостей.
+    /// Выполняет параллельную установку всех отсутствующих обязательных зависимостей.
+    /// Необязательные компоненты кнопкой не ставятся: их пользователь ставит по одному с карточки.
     /// </summary>
     [RelayCommand]
-    private async Task InstallAllAsync()
+    private async Task InstallRequiredAsync()
     {
-        _logService.Write("ui.dependencies.install_all_requested", LogLevel.Info, LogStatus.Running, "Пользователь запустил пакетную установку отсутствующих компонентов", source: SourceName, properties: LogProps.Create("Group", "AllDependencies"));
-        IsInstallAllEnabled = false;
+        _logService.Write("ui.dependencies.install_required_requested", LogLevel.Info, LogStatus.Running, "Пользователь запустил установку обязательных компонентов", source: SourceName, properties: LogProps.Create("Group", "Required"));
+        IsInstallRequiredEnabled = false;
 
-        var missing = RequiredDependencies.Concat(OptionalDependencies)
+        var missing = RequiredDependencies
             .Where(d => d.Status == DependencyStatus.NotInstalled || d.Status == DependencyStatus.Error)
             .ToList();
 

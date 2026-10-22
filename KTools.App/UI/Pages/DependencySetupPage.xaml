@@ -159,13 +159,13 @@
             
             <!-- Панель быстрых действий сверху -->
             <StackPanel Orientation="Horizontal" Spacing="12" Margin="0,0,0,8">
-                <Button x:Name="InstallAllButton" 
+                <Button x:Name="InstallRequiredButton"
                         Style="{StaticResource AccentButtonStyle}"
-                        IsEnabled="{x:Bind ViewModel.IsInstallAllEnabled, Mode=OneWay}"
-                        Command="{x:Bind ViewModel.InstallAllCommand}">
+                        IsEnabled="{x:Bind ViewModel.IsInstallRequiredEnabled, Mode=OneWay}"
+                        Command="{x:Bind ViewModel.InstallRequiredCommand}">
                     <StackPanel Orientation="Horizontal" Spacing="8">
                         <SymbolIcon Symbol="Download" />
-                        <TextBlock Text="Установить все отсутствующие" />
+                        <TextBlock Text="Установить обязательные" />
                     </StackPanel>
                 </Button>
                 <Button x:Name="RefreshButton"

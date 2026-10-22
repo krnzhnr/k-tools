@@ -212,28 +212,16 @@ def generate_inno_script(version: str, publish_dir: Path) -> Path:
     iss_file = BASE_DIR / "KTools_CSharp.iss"
     output_dir = BASE_DIR / "setup_output"
     icon_file = SRC_DIR / "KTools.App" / "Assets" / "AppIcon.ico"
-    decoders_exe = BASE_DIR / "bin" / "eac3to_decoders" / "eac3to Decoder Pack 1.4.exe"
-    # Флаг временного включения/отключения упаковывания декодеров eac3to в инсталлятор
-    include_decoders = False and decoders_exe.exists()
-
-    components_section = """[Components]
-Name: "main"; Description: "Основные файлы KTools"; Types: full compact custom; Flags: fixed"""
-    if include_decoders:
-        components_section += '\nName: "decoders"; Description: "Декодеры eac3to (опционально, для работы с DTS/DTS-HD)"; Types: custom; Flags: dontinheritcheck'
-
-    files_decoders_line = f'Source: "{decoders_exe}"; DestDir: "{{tmp}}"; Flags: deleteafterinstall; Components: decoders' if include_decoders else ''
-
-    run_decoders_line = f"""Filename: "{{tmp}}\\eac3to Decoder Pack 1.4.exe"; \\
-Parameters: "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART"; \\
-StatusMsg: "Установка декодеров для eac3to..."; \\
-Flags: runascurrentuser; Components: decoders""" if include_decoders else ''
 
     iss_content = f"""; === АВТОМАТИЧЕСКИ СГЕНЕРИРОВАННЫЙ СКРИПТ INNO SETUP ===
 [Setup]
+; AppId зафиксирован навсегда: смена AppId плодит параллельные установки.
+; Миграция старых идентификаторов выполняется кодом ниже (PrepareToInstall).
 AppId=krnzhnr.ktools
 AppName=KTools
 AppVersion={version}
 DefaultDirName={{autopf}}\\KTools
+UsePreviousAppDir=yes
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 DefaultGroupName=KTools
@@ -245,17 +233,14 @@ SolidCompression=yes
 LZMADictionarySize=65536
 ArchitecturesInstallIn64BitMode=x64compatible
 
-{components_section}
-
 [Tasks]
 Name: "desktopicon"; Description: "{{cm:CreateDesktopIcon}}"; \\
-GroupDescription: "{{cm:AdditionalIcons}}"; Flags: unchecked checkedonce
+GroupDescription: "{{cm:AdditionalIcons}}"; Flags: unchecked
 
 [Files]
 ; Основная папка публикации .NET self-contained
 Source: "{publish_dir}\\*"; DestDir: "{{app}}"; \\
 Flags: ignoreversion recursesubdirs createallsubdirs
-{files_decoders_line}
 
 [Icons]
 Name: "{{group}}\\KTools"; \\
@@ -270,7 +255,6 @@ Description: "{{cm:LaunchProgram,KTools}}"; \\
 Flags: nowait postinstall skipifsilent runasoriginaluser
 Filename: "{{app}}\\KTools.App.exe"; \\
 Flags: nowait runasoriginaluser; Check: IsSilentUpdate
-{run_decoders_line}
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{{app}}\\bin"
@@ -352,27 +336,161 @@ begin
   end;
 end;
 
-procedure RemoveOldVersion(const AppIdStr: String);
-var
-  sUnInstallString: String;
-  sInstallDir: String;
-  iResultCode: Integer;
+; === Миграция старых версий: на ПК допускается только одна установка KTools ===
+; Старая установка per-machine (HKLM, Program Files) не может быть удалена
+; из непривилегированного процесса: для неё запрашивается повышение прав (runas).
+; Если удалить не удалось, PrepareToInstall блокирует установку вместо
+; тихой параллельной копии.
+
+function IsUninstallEntryPresent(const AppIdStr: String): Boolean;
 begin
-  sInstallDir := GetInstallDir(AppIdStr);
-  sUnInstallString := GetUninstallString(AppIdStr);
-  if sUnInstallString <> '' then
+  Result := GetUninstallString(AppIdStr) <> '';
+end;
+
+function IsPerMachineEntryPresent(const AppIdStr: String): Boolean;
+var
+  sValue: String;
+begin
+  Result := RegQueryStringValue(HKLM,
+    'Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\' + AppIdStr + '_is1',
+    'UninstallString', sValue) and (sValue <> '');
+end;
+
+function NeedsElevationForMigration: Boolean;
+begin
+  Result := (not IsAdminInstallMode) and (
+    IsPerMachineEntryPresent('krnzhnr.ktools.v1') or
+    IsPerMachineEntryPresent('krnzhnr.ktools.csharp.v2') or
+    IsPerMachineEntryPresent('krnzhnr.ktools.v2') or
+    IsPerMachineEntryPresent('krnzhnr.ktools'));
+end;
+
+function RemoveUninstallEntry(const AppIdStr: String; RootKey: Integer): Boolean;
+var
+  sUnKey, sUnInstallString, sInstallDir, sLogFile, sParams, sExecState: String;
+  iResultCode, iExecError: Integer;
+  bExecOk: Boolean;
+begin
+  Result := True;
+  sUnKey := 'Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\' + AppIdStr + '_is1';
+  if (not RegQueryStringValue(RootKey, sUnKey, 'UninstallString', sUnInstallString))
+    or (sUnInstallString = '') then
   begin
-    if sInstallDir = '' then
-    begin
-      sInstallDir := ExtractFilePath(RemoveQuotes(sUnInstallString));
-    end;
-    sUnInstallString := RemoveQuotes(sUnInstallString);
-    Exec(sUnInstallString, '/VERYSILENT /NORESTART /SUPPRESSMSGBOXES /_?="' + sInstallDir + '"', '', SW_HIDE, ewWaitUntilTerminated, iResultCode);
-    // Принудительно удаляем оставшуюся папку со старыми файлами Python версии
-    if (sInstallDir <> '') and DirExists(sInstallDir) then
-    begin
-      DelTree(sInstallDir, True, True, True);
-    end;
+    Log('Миграция: запись ' + AppIdStr + ' отсутствует, пропуск');
+    Exit;
+  end;
+  if (not RegQueryStringValue(RootKey, sUnKey, 'InstallLocation', sInstallDir))
+    or (sInstallDir = '') then
+    sInstallDir := ExtractFilePath(RemoveQuotes(sUnInstallString));
+  sUnInstallString := RemoveQuotes(sUnInstallString);
+  sLogFile := ExpandConstant('{{tmp}}\\uninstall-' + AppIdStr + '.log');
+  sParams := '/VERYSILENT /NORESTART /SUPPRESSMSGBOXES /LOG="' + sLogFile + '"';
+  if sInstallDir <> '' then
+    sParams := sParams + ' /_?="' + sInstallDir + '"';
+  Log('Миграция: удаление ' + AppIdStr + ', команда: ' + sUnInstallString + ' ' + sParams);
+  bExecOk := Exec(sUnInstallString, sParams, '', SW_HIDE, ewWaitUntilTerminated, iResultCode);
+  if bExecOk then sExecState := 'True' else sExecState := 'False';
+  Log('Миграция: Exec(' + AppIdStr + ') ok=' + sExecState + ' код=' + IntToStr(iResultCode));
+  if ((not bExecOk) or (iResultCode <> 0)) and (RootKey = HKLM) then
+  begin
+    Log('Миграция: прямой запуск не удался, повтор с повышением прав (runas)');
+    if ShellExec('runas', sUnInstallString, sParams, '', SW_HIDE, ewWaitUntilTerminated, iExecError) then
+      Log('Миграция: запуск с повышением выполнен, код=' + IntToStr(iExecError))
+    else
+      Log('Миграция: запуск с повышением отклонён, код=' + IntToStr(iExecError));
+  end;
+  if (sInstallDir <> '') and DirExists(sInstallDir) then
+  begin
+    Log('Миграция: удаление остатков каталога ' + sInstallDir);
+    if DelTree(sInstallDir, True, True, True) then
+      Log('Миграция: каталог удалён ' + sInstallDir)
+    else
+      Log('Миграция: DelTree не смог удалить ' + sInstallDir);
+  end;
+  if RegQueryStringValue(RootKey, sUnKey, 'UninstallString', sUnInstallString)
+    and (sUnInstallString <> '') then
+  begin
+    Log('Миграция: запись ' + AppIdStr + ' осталась в реестре');
+    Result := False;
+    Exit;
+  end;
+  if (sInstallDir <> '') and DirExists(sInstallDir) then
+  begin
+    Log('Миграция: каталог ' + sInstallDir + ' остался на диске (возможно, старая версия запущена)');
+    Result := False;
+    Exit;
+  end;
+  Log('Миграция: ' + AppIdStr + ' удалён');
+end;
+
+function RemoveOldVersion(const AppIdStr: String): Boolean;
+begin
+  Result := True;
+  if not RemoveUninstallEntry(AppIdStr, HKLM) then Result := False;
+  if not RemoveUninstallEntry(AppIdStr, HKCU) then Result := False;
+end;
+
+function RemoveAppIdEverywhere(const AppIdStr: String): Boolean;
+var
+  i: Integer;
+begin
+  Result := True;
+  for i := 1 to 3 do
+  begin
+    if not IsUninstallEntryPresent(AppIdStr) then Exit;
+    if not RemoveOldVersion(AppIdStr) then Result := False;
+  end;
+  if IsUninstallEntryPresent(AppIdStr) then Result := False;
+end;
+
+function InitializeSetup: Boolean;
+begin
+  Result := True;
+  if NeedsElevationForMigration and (not WizardSilent) then
+    MsgBox('Обнаружена старая версия KTools, установленная для всех пользователей. '
+      + 'Для её удаления будут запрошены права администратора. '
+      + 'Без удаления старая версия установка новой будет заблокирована, '
+      + 'чтобы не плодить две копии программы.',
+      mbInformation, MB_OK);
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  sLeftovers, sCurrentModeCopy: String;
+begin
+  Result := '';
+  NeedsRestart := False;
+  sCurrentModeCopy := '';
+  RemoveAppIdEverywhere('krnzhnr.ktools.v1');
+  RemoveAppIdEverywhere('krnzhnr.ktools.csharp.v2');
+  RemoveAppIdEverywhere('krnzhnr.ktools.v2');
+  if IsAdminInstallMode then
+  begin
+    if not RemoveUninstallEntry('krnzhnr.ktools', HKCU) then
+      sCurrentModeCopy := 'копия продукта в режиме для текущего пользователя';
+  end
+  else
+  begin
+    if not RemoveUninstallEntry('krnzhnr.ktools', HKLM) then
+      sCurrentModeCopy := 'копия продукта в режиме для всех пользователей';
+  end;
+  sLeftovers := '';
+  if IsUninstallEntryPresent('krnzhnr.ktools.v1') then
+    sLeftovers := sLeftovers + #13#10 + '- старая версия 1.x: ' + GetInstallDir('krnzhnr.ktools.v1');
+  if IsUninstallEntryPresent('krnzhnr.ktools.csharp.v2') then
+    sLeftovers := sLeftovers + #13#10 + '- промежуточная версия: ' + GetInstallDir('krnzhnr.ktools.csharp.v2');
+  if IsUninstallEntryPresent('krnzhnr.ktools.v2') then
+    sLeftovers := sLeftovers + #13#10 + '- промежуточная версия: ' + GetInstallDir('krnzhnr.ktools.v2');
+  if sCurrentModeCopy <> '' then
+    sLeftovers := sLeftovers + #13#10 + '- ' + sCurrentModeCopy;
+  if sLeftovers <> '' then
+  begin
+    Log('Миграция: остались неудалённые версии:' + sLeftovers);
+    Result := 'На компьютере осталась старая версия KTools, удалить её автоматически не удалось.'
+      + ' Установка заблокирована, чтобы не плодить две копии программы.' + #13#10 + #13#10
+      + 'Закройте работающую старую версию, затем запустите установщик от имени администратора '
+      + 'или удалите старую версию вручную через «Программы и компоненты».'
+      + ' Остатки:' + sLeftovers;
   end;
 end;
 
@@ -380,11 +498,8 @@ procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssInstall then
   begin
-    // Бесшумное удаление всех старых промежуточных версий
-    RemoveOldVersion('krnzhnr.ktools.v1');
-    RemoveOldVersion('krnzhnr.ktools.csharp.v2');
-    RemoveOldVersion('krnzhnr.ktools.v2');
-    // Удаление устаревших ярлыков с дефисом
+    // Удаление старых версий выполняется в PrepareToInstall до старта установки.
+    // Здесь только чистка устаревших ярлыков с дефисом.
     DeleteFile(ExpandConstant('{{autodesktop}}\\K-Tools.lnk'));
     DeleteFile(ExpandConstant('{{userdesktop}}\\K-Tools.lnk'));
   end;
