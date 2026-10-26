@@ -77,16 +77,87 @@ def extract_release_notes_section() -> str:
     return (header + "\n" + section).strip() + "\n"
 
 
-def bake_release_notes() -> None:
+def is_preview_version(version: str) -> bool:
+    """Является ли версия пререлизной (вид 2.2.0-preview.171)."""
+    return bool(re.search(r"-preview\.\d+", version or ""))
+
+
+def normalize_note_item(line: str) -> str:
+    """Нормализовать пункт заметок для сравнения: срезать нумерацию и маркеры списка."""
+    text = line.strip()
+    text = re.sub(r"^\d+[.)]\s*", "", text)
+    text = re.sub(r"^[-*+]\s*", "", text)
+    return text.strip()
+
+
+def split_notes_body(body: str) -> list:
+    """Разбить тело заметок на подсекции: список пар (заголовок, строки пунктов)."""
+    sections = []
+    current_title = None
+    current_items: list = []
+    for raw_line in (body or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith("### "):
+            if current_title is not None and current_items:
+                sections.append((current_title, list(current_items)))
+            current_title = line[4:].strip()
+            current_items = []
+            continue
+        if line.startswith("#"):
+            continue
+        if current_title is None:
+            current_title = "Добавлено"
+        current_items.append(raw_line.rstrip())
+    if current_title is not None and current_items:
+        sections.append((current_title, list(current_items)))
+    return sections
+
+
+def compute_preview_delta(current_body: str, prev_body: str) -> str:
+    """Вычислить дельту пунктов текущего пререлиза относительно прошлого.
+
+    Сравнение идёт по тексту пунктов без ведущих номеров, поэтому вставка
+    в середину со сдвигом нумерации ложных срабатываний не даёт.
+    Переформулированные и сжатые пункты попадают в дельту как новые.
+    Пустой результат означает отсутствие изменений для окна «Что нового».
+    """
+    prev_known: dict = {}
+    for title, items in split_notes_body(prev_body):
+        prev_known.setdefault(title, set()).update(
+            normalize_note_item(i) for i in items)
+    delta_parts: list = []
+    for title, items in split_notes_body(current_body):
+        known = prev_known.get(title, set())
+        new_items = [i for i in items if normalize_note_item(i) not in known]
+        if new_items:
+            delta_parts.append("### " + title)
+            delta_parts.extend(new_items)
+    return ("\n".join(delta_parts).strip() + "\n") if delta_parts else ""
+
+
+def bake_release_notes(version: str | None = None, prev_body: str | None = None) -> None:
     """Запечь снапшот изменений текущей версии для окна «Что нового».
 
+    В заголовок подставляется полная версия сборки (включая -preview.N),
+    чтобы окно показывалось один раз на каждый пререлиз.
+    Для пререлиза запекается только дельта относительно прошлого
+    опубликованного пререлиза; для стабильного релиза — полная секция.
+    Пустая дельта означает пропуск автопоказа через гейт версий.
     Файл кладётся рядом с GIF-сценами и пакуется в установщик как Content.
     Ошибка не роняет сборку: без файла окно просто не показывается.
     """
     try:
-        notes = extract_release_notes_section()
+        section = extract_release_notes_section()
+        header, _, body = section.partition("\n")
+        if not version:
+            version = header.lstrip("#").strip()
+        if is_preview_version(version) and (prev_body or "").strip():
+            body = compute_preview_delta(body, prev_body or "")
+        text = f"# {version}\n\n{body.strip()}\n" if body.strip() else f"# {version}\n"
         RELEASE_NOTES_FILE.parent.mkdir(parents=True, exist_ok=True)
-        RELEASE_NOTES_FILE.write_text(notes, encoding="utf-8")
+        RELEASE_NOTES_FILE.write_text(text, encoding="utf-8")
         print(f"[✓] Снапшот изменений версии записан: {RELEASE_NOTES_FILE.name}")
     except Exception as e:
         print(f"[!] Не удалось запечь изменения версии: {e}")
@@ -582,7 +653,12 @@ def main():
     version = prompt_version_update()
     print(f"[*] Сборка версии: {version}")
 
-    bake_release_notes()
+    prev_body = None
+    prev_file = os.environ.get("PREV_RELEASE_NOTES_FILE", "")
+    if prev_file and Path(prev_file).exists():
+        prev_body = Path(prev_file).read_text(encoding="utf-8-sig")
+
+    bake_release_notes(version, prev_body)
 
     publish_dir = build_csharp_app(version)
 

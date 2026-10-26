@@ -391,13 +391,14 @@ public static class ReleaseNotesLoader
 public static class WhatsNewGate
 {
     /// <summary>
-    /// Возвращает true, если окно стоит показать: автопоказ включён
-    /// и запечённая версия отличается от уже показанной.
+    /// Возвращает true, если окно стоит показать: автопоказ включён,
+    /// запечённая версия отличается от уже показанной и в заметках есть пункты.
     /// Пустая запечённая версия означает отсутствие данных: не показываем.
+    /// Пустые заметки (дельта пререлиза без изменений) автопоказ пропускает.
     /// </summary>
-    public static bool ShouldShow(string? lastSeenVersion, string? bakedVersion, bool enabled = true)
+    public static bool ShouldShow(string? lastSeenVersion, string? bakedVersion, bool enabled = true, bool hasContent = true)
     {
-        if (!enabled)
+        if (!enabled || !hasContent)
         {
             return false;
         }

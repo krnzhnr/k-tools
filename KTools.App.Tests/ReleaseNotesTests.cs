@@ -196,6 +196,25 @@ public class ReleaseNotesTests
     }
 
     [TestMethod]
+    public void WhatsNewGate_NoContent_ReturnsFalse()
+    {
+        // Пустая дельта пререлиза автопоказ пропускает, даже если версия новая.
+        // Assert
+        WhatsNewGate.ShouldShow("2.2.0-preview.170", "2.2.0-preview.171", true, false).Should().BeFalse();
+        WhatsNewGate.ShouldShow(null, "2.2.0-preview.171", true, false).Should().BeFalse();
+    }
+
+    [TestMethod]
+    public void WhatsNewGate_PreviewVersionDiffers_ReturnsTrue()
+    {
+        // Каждое новое превью показывает окно, стабильный релиз после превью — тоже.
+        // Assert
+        WhatsNewGate.ShouldShow("2.2.0-preview.170", "2.2.0-preview.171").Should().BeTrue();
+        WhatsNewGate.ShouldShow("2.2.0-preview.171", "2.2.0").Should().BeTrue();
+        WhatsNewGate.ShouldShow("2.2.0", "2.2.0").Should().BeFalse();
+    }
+
+    [TestMethod]
     public void TryLoadBakedNotes_ValidFile_ParsesVersionAndBody()
     {
         // Arrange
@@ -217,6 +236,35 @@ public class ReleaseNotesTests
             notes.Should().NotBeNull();
             notes!.Version.Should().Be("2.2.0");
             notes.Highlights.Should().ContainSingle().Which.Should().Be("Главный пункт.");
+            notes.Sections.Should().ContainSingle().Which.Title.Should().Be("Добавлено");
+        }
+        finally
+        {
+            System.IO.Directory.Delete(dir, true);
+        }
+    }
+
+    [TestMethod]
+    public void TryLoadBakedNotes_PreviewVersion_ParsesFullVersion()
+    {
+        // Arrange
+        string dir = System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(), System.Guid.NewGuid().ToString("N"));
+        string file = System.IO.Path.Combine(dir, "release-notes.md");
+        try
+        {
+            System.IO.Directory.CreateDirectory(dir);
+            System.IO.File.WriteAllText(
+                file,
+                "# 2.2.0-preview.171\n\n### Добавлено\n\n1. Новый пункт.\n");
+
+            // Act
+            bool ok = ReleaseNotesLoader.TryLoadBakedNotes(file, out ReleaseNotes? notes);
+
+            // Assert
+            ok.Should().BeTrue();
+            notes.Should().NotBeNull();
+            notes!.Version.Should().Be("2.2.0-preview.171");
             notes.Sections.Should().ContainSingle().Which.Title.Should().Be("Добавлено");
         }
         finally

@@ -99,9 +99,20 @@ jobs:
       run: |
         dotnet test KTools.App.Tests/KTools.App.Tests.csproj -c Release -p:Platform=x64 --no-restore
 
+    - name: Fetch Previous Pre-Release Notes
+      if: steps.prep.outputs.is_prerelease == 'true'
+      shell: pwsh
+      run: |
+        $body = gh release view pre-release --json body --jq .body 2>$null
+        if (-not $body) { $body = "" }
+        Set-Content -Path prev_release_notes.md -Value $body -Encoding UTF8
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
     - name: Build C# App and Installer
       env:
         BUILD_VERSION: ${{ steps.prep.outputs.version }}
+        PREV_RELEASE_NOTES_FILE: prev_release_notes.md
       run: |
         python build_csharp.py
 

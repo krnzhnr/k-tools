@@ -310,7 +310,8 @@ public partial class MainViewModel : ThreadSafeViewModel
             if (!WhatsNewGate.ShouldShow(
                 _settingsManager.LastSeenWhatsNewVersion,
                 notes.Version,
-                _settingsManager.ShowWhatsNewAfterUpdate))
+                _settingsManager.ShowWhatsNewAfterUpdate,
+                notes.Highlights.Count + notes.Sections.Sum(s => s.Items.Count) > 0))
             {
                 return;
             }
