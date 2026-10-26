@@ -183,7 +183,7 @@ public static class AppConstants
         public const string AudioConverterName = "Кодирование аудио";
         public const string AudioConverterDesc = "Перекодирование аудио в QAAC, AAC, FLAC, WAV, E-AC3, AC3 и др. с настройкой качества";
 
-        public const string AudioDownmixName = "Сведение в стерео";
+        public const string AudioDownmixName = "Даунмикс в Stereo";
         public const string AudioDownmixDesc = "Сведение аудио 5.1/7.1 в стерео 2.0 (DDP/DD) с помощью Dolby Encoding Engine";
 
         public const string AudioSpeedName = "Изменение скорости аудио";
@@ -206,10 +206,10 @@ public static class AppConstants
         public const string MuxerName = "Сборка MKV";
         public const string MuxerDesc = "Сборка контейнера MKV из отдельных медиапотоков видео, аудио и субтитров с сопоставлением по имени";
 
-        public const string StreamMgrName = "Управление дорожками";
+        public const string StreamMgrName = "Управление потоками";
         public const string StreamMgrDesc = "Удаление или сохранение выбранных дорожек (видео, аудио, субтитры) в файлах MKV и MP4.";
 
-        public const string StreamReplName = "Замена дорожек";
+        public const string StreamReplName = "Замена потоков";
         public const string StreamReplDesc = "Заменяет дорожки в MKV/MP4 на внешние файлы (видео, аудио, субтитры).";
 
         public const string TrackExtrName = "Разборка контейнера";

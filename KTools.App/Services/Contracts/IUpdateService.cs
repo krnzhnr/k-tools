@@ -83,4 +83,12 @@ public interface IUpdateService
         string fileName,
         Action<double> progressCallback,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Удаляет устаревшие файлы собственных установщиков из временной папки.
+    /// Файлы моложе часового порога не трогаются: это может быть незавершённая загрузка.
+    /// </summary>
+    /// <param name="directory">Папка для чистки (при null используется системная временная папка).</param>
+    /// <returns>Количество удалённых файлов.</returns>
+    int CleanupStaleSetupFiles(string? directory = null);
 }

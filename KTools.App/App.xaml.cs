@@ -992,6 +992,7 @@ public partial class App : Application
             QueueSystemInfoSnapshotInBackground(startupBackgroundToken);
             QueueShellIntegrationRefreshInBackground(startupBackgroundToken);
             QueueStaleCopyCheckInBackground(startupBackgroundToken);
+            QueueStaleSetupCleanupInBackground(startupBackgroundToken);
 
             // Обрабатываем собственные параметры запуска
             var ownArgs = Environment.GetCommandLineArgs();
@@ -1449,6 +1450,33 @@ public partial class App : Application
         try
         {
             _ = Task.Run(() => CheckStaleCopyInBackgroundAsync(cancellationToken), cancellationToken);
+        }
+        catch (Exception)
+        {
+        }
+    }
+
+    /// <summary>
+    /// Удаляет в фоне устаревшие файлы собственных установщиков из временной папки.
+    /// Каждый автоапдейт оставляет там копию установщика, без чистки они копятся гигабайтами.
+    /// </summary>
+    /// <param name="cancellationToken">Токен отмены при закрытии приложения.</param>
+    private static void QueueStaleSetupCleanupInBackground(CancellationToken cancellationToken)
+    {
+        try
+        {
+            _ = Task.Run(() =>
+            {
+                try
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    Services.GetRequiredService<IUpdateService>().CleanupStaleSetupFiles();
+                }
+                catch (Exception)
+                {
+                    // Чистка мусора не должна ронять фоновую задачу: сбои уже залогированы внутри службы.
+                }
+            }, cancellationToken);
         }
         catch (Exception)
         {

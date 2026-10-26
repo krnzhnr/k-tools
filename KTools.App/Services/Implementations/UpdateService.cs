@@ -74,6 +74,16 @@ public sealed class UpdateService : IUpdateService
     private readonly ISettingsManager _settingsManager;
 
     /// <summary>
+    /// Шаблон имён собственных файлов установщиков, оставляемых службой обновлений во временной папке.
+    /// </summary>
+    private const string StaleSetupFilePattern = "KTools_v*_Setup.exe";
+
+    /// <summary>
+    /// Возраст файла, моложе которого он считается возможно незавершённой загрузкой и не удаляется.
+    /// </summary>
+    private static readonly TimeSpan StaleSetupGracePeriod = TimeSpan.FromHours(1);
+
+    /// <summary>
     /// Инициализирует новый экземпляр класса UpdateService с внедрением логгера, настроек и фабрики HTTP-клиентов.
     /// </summary>
     public UpdateService(
@@ -379,6 +389,70 @@ public sealed class UpdateService : IUpdateService
 
             throw;
         }
+    }
+
+    /// <inheritdoc/>
+    public int CleanupStaleSetupFiles(string? directory = null)
+    {
+        string targetDir;
+        try
+        {
+            targetDir = string.IsNullOrWhiteSpace(directory) ? Path.GetTempPath() : directory;
+        }
+        catch (Exception ex)
+        {
+            _logService.Write("update.stale_setup_cleanup_failed", LogLevel.Warning, LogStatus.Failed, "Не удалось определить папку для чистки старых установщиков", ex, SourceName, properties: LogProps.Create("Stage", "cleanup").With("ErrorCode", "TEMP_DIR_RESOLVE_FAILED"));
+            return 0;
+        }
+
+        List<FileInfo> candidates;
+        try
+        {
+            candidates = new DirectoryInfo(targetDir)
+                .EnumerateFiles(StaleSetupFilePattern, SearchOption.TopDirectoryOnly)
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            _logService.Write("update.stale_setup_cleanup_failed", LogLevel.Warning, LogStatus.Failed, "Не удалось перечислить старые установщики во временной папке", ex, SourceName, properties: LogProps.Create("Stage", "cleanup").With("ErrorCode", "STALE_SETUP_ENUM_FAILED"));
+            return 0;
+        }
+
+        int removed = 0;
+        long freedBytes = 0;
+        DateTime thresholdUtc = DateTime.UtcNow - StaleSetupGracePeriod;
+        foreach (FileInfo file in candidates)
+        {
+            try
+            {
+                file.Refresh();
+                if (!file.Exists || file.LastWriteTimeUtc >= thresholdUtc)
+                {
+                    continue;
+                }
+
+                long size = file.Length;
+                file.Delete();
+                removed++;
+                freedBytes += size;
+            }
+            catch (Exception ex)
+            {
+                _logService.Write("update.stale_setup_delete_failed", LogLevel.Warning, LogStatus.PartiallySucceeded, $"Не удалось удалить старый установщик '{LogProps.FileName(file.Name)}'", ex, SourceName, properties: LogProps.Create("Stage", "cleanup").With("ErrorCode", "STALE_SETUP_DELETE_FAILED"));
+            }
+        }
+
+        _logService.Write(
+            "update.stale_setup_cleaned",
+            LogLevel.Info,
+            removed > 0 ? LogStatus.Succeeded : LogStatus.Skipped,
+            removed > 0
+                ? $"Удалены устаревшие установщики обновлений: {removed} шт."
+                : "Устаревших установщиков обновлений во временной папке нет",
+            null,
+            SourceName,
+            properties: LogProps.Create("Stage", "cleanup").With("Count", removed).With("Bytes", freedBytes));
+        return removed;
     }
 
     /// <summary>
