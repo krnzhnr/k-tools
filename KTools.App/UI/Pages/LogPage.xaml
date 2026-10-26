@@ -12,8 +12,58 @@
     mc:Ignorable="d">
 
     <Page.Resources>
-        <!-- Регистрация конвертера для раскраски текста логов по уровням -->
-        <converters:LogLevelToBrushConverter x:Key="LogLevelToBrushConverter" />
+        <!-- Строки логов красятся стандартными ThemeResource-кистями:
+             Debug — третичный текст, Info — основной, Warning — Caution,
+             Error/Fatal — Critical (Fatal дополнительно полужирный).
+             За смену темы отвечает XAML-движок, код цвета не задаёт. -->
+        <DataTemplate x:Key="DebugLogTemplate" x:DataType="models:LogItem">
+            <TextBlock
+                Text="{x:Bind Message}"
+                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                FontFamily="Consolas"
+                FontSize="13"
+                TextWrapping="Wrap" />
+        </DataTemplate>
+        <DataTemplate x:Key="InfoLogTemplate" x:DataType="models:LogItem">
+            <TextBlock
+                Text="{x:Bind Message}"
+                Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+                FontFamily="Consolas"
+                FontSize="13"
+                TextWrapping="Wrap" />
+        </DataTemplate>
+        <DataTemplate x:Key="WarningLogTemplate" x:DataType="models:LogItem">
+            <TextBlock
+                Text="{x:Bind Message}"
+                Foreground="{ThemeResource SystemFillColorCautionBrush}"
+                FontFamily="Consolas"
+                FontSize="13"
+                TextWrapping="Wrap" />
+        </DataTemplate>
+        <DataTemplate x:Key="ErrorLogTemplate" x:DataType="models:LogItem">
+            <TextBlock
+                Text="{x:Bind Message}"
+                Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+                FontFamily="Consolas"
+                FontSize="13"
+                TextWrapping="Wrap" />
+        </DataTemplate>
+        <DataTemplate x:Key="FatalLogTemplate" x:DataType="models:LogItem">
+            <TextBlock
+                Text="{x:Bind Message}"
+                Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+                FontWeight="SemiBold"
+                FontFamily="Consolas"
+                FontSize="13"
+                TextWrapping="Wrap" />
+        </DataTemplate>
+        <converters:LogLevelTemplateSelector
+            x:Key="LogLevelTemplateSelector"
+            DebugTemplate="{StaticResource DebugLogTemplate}"
+            InfoTemplate="{StaticResource InfoLogTemplate}"
+            WarningTemplate="{StaticResource WarningLogTemplate}"
+            ErrorTemplate="{StaticResource ErrorLogTemplate}"
+            FatalTemplate="{StaticResource FatalLogTemplate}" />
     </Page.Resources>
 
     <Grid Padding="36,12,36,36">
@@ -62,6 +112,7 @@
             Grid.Row="1"
             x:Name="LogListView"
             ItemsSource="{x:Bind ViewModel.Logs, Mode=OneWay}"
+            ItemTemplateSelector="{StaticResource LogLevelTemplateSelector}"
             SelectionMode="Extended"
             KeyDown="LogListView_KeyDown"
             HorizontalAlignment="Stretch"
@@ -94,19 +145,7 @@
                     </MenuFlyoutItem>
                 </MenuFlyout>
             </ListView.ContextFlyout>
-            
-            <ListView.ItemTemplate>
-                <DataTemplate x:DataType="models:LogItem">
-                    <!-- Вывод строки лога шрифтом фиксированной ширины Consolas -->
-                    <TextBlock 
-                        Text="{x:Bind Message}" 
-                        Foreground="{x:Bind Level, Converter={StaticResource LogLevelToBrushConverter}}"
-                        FontFamily="Consolas"
-                        FontSize="13"
-                        TextWrapping="Wrap" />
-                </DataTemplate>
-            </ListView.ItemTemplate>
-            
+
             <ListView.ItemContainerStyle>
                 <!-- Настройка красивого построчного выделения элементов Fluent Design -->
                 <Style TargetType="ListViewItem">

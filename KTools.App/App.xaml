@@ -14,9 +14,16 @@
             <ResourceDictionary.ThemeDictionaries>
                 <ResourceDictionary x:Key="Light">
                     <SolidColorBrush x:Key="SuccessStrokeBrush" Color="#107C41" />
+                    <!-- Сплошной фон режима «Обычный»: #F3F3F3 = SolidBackgroundFillColorBase светлой палитры. -->
+                    <SolidColorBrush x:Key="SolidBackdropBackgroundBrush" Color="#F3F3F3" />
                 </ResourceDictionary>
                 <ResourceDictionary x:Key="Dark">
                     <SolidColorBrush x:Key="SuccessStrokeBrush" Color="#6BC285" />
+                    <!-- Сплошной фон режима «Обычный»: единый #080808 вместо чистого чёрного. -->
+                    <SolidColorBrush x:Key="SolidBackdropBackgroundBrush" Color="#080808" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="HighContrast">
+                    <SolidColorBrush x:Key="SolidBackdropBackgroundBrush" Color="{ThemeResource SystemColorWindowColor}" />
                 </ResourceDictionary>
             </ResourceDictionary.ThemeDictionaries>
 

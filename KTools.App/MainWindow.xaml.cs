@@ -372,7 +372,8 @@ public sealed partial class MainWindow : Window
             // Применение сохраненного типа фона при запуске
             ApplySavedBackdrop();
 
-            // Регистрация на получение сообщения об изменении темы для мгновенного применения
+            // Регистрация на получение сообщения об изменении темы для мгновенного применения.
+            // Подложка режима «Обычный» задана в XAML через ThemeResource и за темой следит сама.
             WeakReferenceMessenger.Default.Register<ThemeChangedMessage>(this, (r, m) =>
             {
                 DispatcherQueue.TryEnqueue(() =>
@@ -758,6 +759,10 @@ public sealed partial class MainWindow : Window
 
     /// <summary>
     /// Применяет выбранный тип фона (Mica, Acrylic или Обычный без эффектов) к окну приложения.
+    /// В режиме «Обычный» показывается подложка SolidBackdropOverlay (кисть SolidBackdropBackgroundBrush
+    /// из ThemeDictionaries: тёмная — #080808, светлая — стандартный цвет палитры), поэтому панель,
+    /// тайтлбар и контент — единое пятно, а за сменой темы следит сам XAML-движок.
+    /// В режимах Mica/Acrylic подложка скрыта и виден системный эффект.
     /// Неизвестные значения отображаются на Mica, поэтому битое значение из конфигурации не роняет окно.
     /// </summary>
     private void ApplyBackdrop(string backdropType)
@@ -768,14 +773,17 @@ public sealed partial class MainWindow : Window
             if (normalized.Equals("Acrylic", StringComparison.OrdinalIgnoreCase))
             {
                 SystemBackdrop = new Microsoft.UI.Xaml.Media.DesktopAcrylicBackdrop();
+                SolidBackdropOverlay.Visibility = Visibility.Collapsed;
             }
             else if (normalized.Equals("None", StringComparison.OrdinalIgnoreCase))
             {
                 SystemBackdrop = null;
+                SolidBackdropOverlay.Visibility = Visibility.Visible;
             }
             else
             {
                 SystemBackdrop = new Microsoft.UI.Xaml.Media.MicaBackdrop();
+                SolidBackdropOverlay.Visibility = Visibility.Collapsed;
             }
             _logService.Write(
                 "window.backdrop_applied",

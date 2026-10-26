@@ -64,6 +64,13 @@ public sealed partial class MainPage : Page
             this,
             (r, m) => r.OnActiveScriptChanged(m.Script));
 
+        // В режиме «Обычный» гасим фон контентной области NavigationView в прозрачный,
+        // чтобы окно было единым пятном подложки; в Mica/Acrylic возвращаем как было.
+        messenger.Register<MainPage, BackdropChangedMessage>(
+            this,
+            (r, m) => r.OnBackdropChanged(m.NewBackdrop));
+        ApplyContentBackgroundOverride(ReadSavedBackdropType());
+
         // Регистрируем глобальный обработчик Enter для снятия фокуса с текстовых полей ввода
         AddHandler(UIElement.KeyDownEvent, new Microsoft.UI.Xaml.Input.KeyEventHandler(OnGlobalKeyDown), handledEventsToo: true);
     }
@@ -435,6 +442,62 @@ public sealed partial class MainPage : Page
         if (targetTag != null)
         {
             SyncNavigationSelection(targetTag);
+        }
+    }
+
+    /// <summary>
+    /// Применяет переопределение фона контентной области под режим backdrop.
+    /// </summary>
+    private void OnBackdropChanged(string backdropType)
+    {
+        DispatcherQueue.TryEnqueue(() => ApplyContentBackgroundOverride(backdropType));
+    }
+
+    /// <summary>
+    /// Считывает сохранённый тип фона из настроек.
+    /// </summary>
+    private string ReadSavedBackdropType()
+    {
+        try
+        {
+            return App.Services.GetRequiredService<ISettingsManager>().BackdropType;
+        }
+        catch (Exception ex)
+        {
+            _logService.Write(
+                "ui.backdrop.read_failed",
+                LogLevel.Warning,
+                LogStatus.PartiallySucceeded,
+                "Сохранённый тип фона не прочитан, переопределение контентной области не применено",
+                ex,
+                SourceName,
+                properties: LogProps
+                    .Create("Stage", "backdrop")
+                    .With("ErrorCode", "BACKDROP_READ_FAILED"));
+            return "Mica";
+        }
+    }
+
+    /// <summary>
+    /// В режиме «Обычный» задаёт контентной области NavigationView прозрачный фон,
+    /// чтобы панель, тайтлбар и контент были единым пятном подложки окна.
+    /// В режимах Mica/Acrylic переопределение снимается и действует шаблон по умолчанию.
+    /// </summary>
+    private void ApplyContentBackgroundOverride(string? backdropType)
+    {
+        if (NavView == null)
+        {
+            return;
+        }
+
+        if (Core.SolidBackdropTheme.RequiresContentBackgroundOverride(backdropType))
+        {
+            NavView.Resources["NavigationViewContentBackground"] =
+                new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Transparent);
+        }
+        else
+        {
+            NavView.Resources.Remove("NavigationViewContentBackground");
         }
     }
 

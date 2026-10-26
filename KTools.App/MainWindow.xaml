@@ -10,13 +10,21 @@
     mc:Ignorable="d">
 
 
-    <Grid>
+    <Grid x:Name="RootGrid">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <TitleBar x:Name="AppTitleBar" Title="K-Tools">
+        <!-- Сплошная подложка режима «Обычный» без эффектов.
+             Кисть SolidBackdropBackgroundBrush из ThemeDictionaries сама следит за темой,
+             код только показывает или скрывает слой. Первый дочерний — рисуется позади всего. -->
+        <Grid x:Name="SolidBackdropOverlay"
+              Grid.Row="0" Grid.RowSpan="2"
+              Background="{ThemeResource SolidBackdropBackgroundBrush}"
+              Visibility="Collapsed" />
+
+        <TitleBar x:Name="AppTitleBar" Title="K-Tools" Grid.Row="0">
             <TitleBar.IconSource>
                 <ImageIconSource ImageSource="/Assets/AppIcon.ico" />
             </TitleBar.IconSource>
