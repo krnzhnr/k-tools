@@ -79,7 +79,9 @@ public class AudioSpeedScriptTests
         _dependencyManagerMock.Setup(d => d.IsInstalled("eac3to")).Returns(true);
         _pathManagerMock.Setup(p => p.GetShortPath(Moq.It.IsAny<string>())).Returns<string>(s => s);
 
-        string tempFile = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "test_audio.wav");
+        string tempDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "KTools_AudioSpeed23976_" + System.Guid.NewGuid().ToString("N"));
+        System.IO.Directory.CreateDirectory(tempDir);
+        string tempFile = System.IO.Path.Combine(tempDir, "test_audio.wav");
         await System.IO.File.WriteAllTextAsync(tempFile, "fake wav");
 
         List<string>? capturedArgs = null;
@@ -113,7 +115,7 @@ public class AudioSpeedScriptTests
             var result = await _script.ExecuteSingleAsync(
                 tempFile,
                 settings,
-                System.IO.Path.GetTempPath(),
+                tempDir,
                 (idx, total, status, pct, fps, bit) => { },
                 0,
                 1);
@@ -126,14 +128,88 @@ public class AudioSpeedScriptTests
         }
         finally
         {
-            if (System.IO.File.Exists(tempFile))
+            if (System.IO.Directory.Exists(tempDir))
             {
-                System.IO.File.Delete(tempFile);
+                System.IO.Directory.Delete(tempDir, true);
             }
-            string expectedResult = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "test_audio_23_to_24.wav");
-            if (System.IO.File.Exists(expectedResult))
+        }
+    }
+
+    /// <summary>
+    /// Проверяет схему настроек и наличие режима Custom (29.970 → 23.976).
+    /// </summary>
+    [TestMethod]
+    public void SettingsSchema_Contains29970To23976Mode()
+    {
+        var schema = _script.SettingsSchema;
+        schema.Should().NotBeNull();
+        var speedField = schema.Find(f => f.Key == "SpeedMode");
+        speedField.Should().NotBeNull();
+        speedField!.Options.Should().Contain("Custom (29.970 → 23.976)");
+    }
+
+    /// <summary>
+    /// Проверяет передачу аргументов eac3to при выборе режима Custom (29.970 → 23.976).
+    /// </summary>
+    [TestMethod]
+    public async System.Threading.Tasks.Task ExecuteSingleAsync_Custom29970To23976_PassesCorrectEac3toOptions()
+    {
+        // Arrange
+        _dependencyManagerMock.Setup(d => d.IsInstalled("eac3to")).Returns(true);
+        _pathManagerMock.Setup(p => p.GetShortPath(Moq.It.IsAny<string>())).Returns<string>(s => s);
+
+        string tempDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "KTools_AudioSpeed29970_" + System.Guid.NewGuid().ToString("N"));
+        System.IO.Directory.CreateDirectory(tempDir);
+        string tempFile = System.IO.Path.Combine(tempDir, "test_audio.wav");
+        await System.IO.File.WriteAllTextAsync(tempFile, "fake wav");
+
+        List<string>? capturedArgs = null;
+        _eac3toRunnerMock.Setup(e => e.RunAsync(
+                Moq.It.IsAny<List<string>>(),
+                Moq.It.IsAny<string?>(),
+                Moq.It.IsAny<Action<double>?>(),
+                Moq.It.IsAny<System.Threading.CancellationToken>(),
+                Moq.It.IsAny<ProcessExecutionContext?>(),
+                Moq.It.IsAny<string?>()))
+            .Callback<List<string>, string?, Action<double>?, System.Threading.CancellationToken, ProcessExecutionContext?, string?>(
+                (args, wd, prog, ct, ctx, artifact) =>
+                {
+                    capturedArgs = new List<string>(args);
+                    // Имитируем успешное создание выходного файла утилитой eac3to
+                    string outPath = args[1].Trim('"');
+                    System.IO.File.WriteAllText(outPath, "result");
+                })
+            .ReturnsAsync(KTools_App.Tests.TestHelpers.MockBuilders.ProcessSucceeded());
+
+        var settings = new Dictionary<string, object>
+        {
+            ["SpeedMode"] = "Custom (29.970 → 23.976)",
+            ["OutputFormat"] = "WAV",
+            ["DeleteOriginal"] = false
+        };
+
+        try
+        {
+            // Act
+            var result = await _script.ExecuteSingleAsync(
+                tempFile,
+                settings,
+                tempDir,
+                (idx, total, status, pct, fps, bit) => { },
+                0,
+                1);
+
+            // Assert
+            result.Status.Should().Be(KTools_App.Models.ExecutionStatus.Succeeded);
+            capturedArgs.Should().NotBeNull();
+            capturedArgs.Should().Contain("-29.970");
+            capturedArgs.Should().Contain("-changeTo23.976");
+        }
+        finally
+        {
+            if (System.IO.Directory.Exists(tempDir))
             {
-                System.IO.File.Delete(expectedResult);
+                System.IO.Directory.Delete(tempDir, true);
             }
         }
     }

@@ -88,7 +88,8 @@ public sealed class AudioSpeedScript : AbstractScript
                 "Speedup (23.976 → 25.000)",
                 "Custom (24.000 → 23.976)",
                 "Custom (23.976 → 24.000)",
-                "Custom (25.000 → 24.000)"
+                "Custom (25.000 → 24.000)",
+                "Custom (29.970 → 23.976)"
             }),
 
         new SettingField(
@@ -184,6 +185,12 @@ public sealed class AudioSpeedScript : AbstractScript
             options.Add("-25.000");
             options.Add("-changeTo24.000");
             suffix = "_25_to_24";
+        }
+        else if (mode == "Custom (29.970 → 23.976)")
+        {
+            options.Add("-29.970");
+            options.Add("-changeTo23.976");
+            suffix = "_29_to_23";
         }
 
         string ext = format.ToLowerInvariant();
