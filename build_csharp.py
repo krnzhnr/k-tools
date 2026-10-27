@@ -293,6 +293,10 @@ AppName=KTools
 AppVersion={version}
 DefaultDirName={{autopf}}\\KTools
 UsePreviousAppDir=yes
+; Не восстанавливать выбор задач из реестра при обновлении: иначе задача
+; desktopicon, отмеченная при первой установке, молча включается снова
+; (см. ишью #60) и удалённый пользователем ярлык пересоздаётся.
+UsePreviousTasks=no
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 DefaultGroupName=KTools
@@ -306,7 +310,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 
 [Tasks]
 Name: "desktopicon"; Description: "{{cm:CreateDesktopIcon}}"; \\
-GroupDescription: "{{cm:AdditionalIcons}}"; Flags: unchecked
+GroupDescription: "{{cm:AdditionalIcons}}"; Flags: unchecked dontinheritcheck
 
 [Files]
 ; Основная папка публикации .NET self-contained
