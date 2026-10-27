@@ -959,6 +959,34 @@ public partial class App : Application
                     }
 
                     await Services.GetRequiredService<KTools_App.Encoders.IHardwareCapabilityCache>().InitializeAsync().ConfigureAwait(false);
+
+                    // Проба завершена (из кэша или опросом): схема видео-скрипта,
+                    // построенная ранее только с CPU, устарела. Уведомляем интерфейс
+                    // для пересборки через существующий механизм смены набора ключей.
+                    try
+                    {
+                        var dispatcher = UiDispatcherQueue;
+                        if (dispatcher != null)
+                        {
+                            dispatcher.TryEnqueue(() =>
+                            {
+                                try
+                                {
+                                    WeakReferenceMessenger.Default.Send(new HardwareCapabilitiesChangedMessage());
+                                }
+                                catch (Exception)
+                                {
+                                }
+                            });
+                        }
+                        else
+                        {
+                            WeakReferenceMessenger.Default.Send(new HardwareCapabilitiesChangedMessage());
+                        }
+                    }
+                    catch (Exception)
+                    {
+                    }
                 }
                 catch (Exception)
                 {
@@ -2046,6 +2074,15 @@ public sealed class ShellActivationMessage
         ScriptTag = scriptTag;
         Files = files;
     }
+}
+
+/// <summary>
+/// Сообщение о завершении опроса аппаратных возможностей кодирования (NVENC).
+/// Схема настроек видео-скрипта строится до завершения фоновой пробы,
+/// поэтому интерфейс пересобирается по этому сообщению.
+/// </summary>
+public sealed class HardwareCapabilitiesChangedMessage
+{
 }
 
 /// <summary>

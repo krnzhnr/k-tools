@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 
+using CommunityToolkit.Mvvm.Messaging;
 using CommunityToolkit.WinUI.Controls;
 
 using KTools_App.Core;
@@ -68,6 +69,13 @@ public sealed partial class ScriptSettingsControl : UserControl
             _whisperModelManager.DownloadProgressChanged += OnWhisperDownloadProgressChanged;
             _whisperModelManager.DownloadCompleted += OnWhisperDownloadCompleted;
         }
+
+        // Проба NVENC завершается в фоне уже после построения схемы настроек:
+        // ранняя схема содержит только CPU и скрывает чужие поля. По сообщению
+        // пересобираем интерфейс через штатный механизм смены набора ключей.
+        WeakReferenceMessenger.Default.Register<ScriptSettingsControl, HardwareCapabilitiesChangedMessage>(
+            this,
+            (r, m) => r.OnHardwareCapabilitiesChanged());
 
         // Обеспечивает автоматический сброс фокуса с полей ввода при клике на свободную область формы
         this.PointerPressed += (s, e) =>
@@ -143,6 +151,27 @@ public sealed partial class ScriptSettingsControl : UserControl
                 ctrl.PText.Text = $"{percent}%";
                 ctrl.CancelBtn.Visibility = Visibility.Visible;
             }
+        });
+    }
+
+    /// <summary>
+    /// Обновляет интерфейс после завершения фоновой пробы NVENC.
+    /// Отложенное построение не трогаем: оно само возьмёт свежую схему.
+    /// Штатный проход видимости пересоберёт дерево, только если набор ключей изменился.
+    /// Все проверки состояния выполняются в очереди диспетчера: сообщение
+    /// может прийти с фонового потока (переустановка FFmpeg).
+    /// </summary>
+    private void OnHardwareCapabilitiesChanged()
+    {
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            if (_pendingBuildScript != null || _activeScript == null || _builtScript == null || _isSchemaRebuilding)
+            {
+                return;
+            }
+
+            string settingsGroup = _settingsManager.GetSafeGroupName(_activeScript.Name);
+            UpdateVisibility(settingsGroup);
         });
     }
 

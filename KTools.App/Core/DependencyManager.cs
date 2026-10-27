@@ -13,6 +13,8 @@ using KTools_App.Diagnostics;
 using KTools_App.Encoders;
 using KTools_App.Services.Contracts;
 
+using CommunityToolkit.Mvvm.Messaging;
+
 using SharpCompress.Common;
 using SharpCompress.Compressors.Xz;
 using SharpCompress.Readers;
@@ -1240,6 +1242,14 @@ public class DependencyManager : IDependencyManager
                 {
                     _hardwareCache.Invalidate();
                     await _hardwareCache.InitializeAsync();
+                    // Схема видео-скрипта могла быть построена до пробы: просим интерфейс пересобраться.
+                    try
+                    {
+                        WeakReferenceMessenger.Default.Send(new HardwareCapabilitiesChangedMessage());
+                    }
+                    catch (Exception)
+                    {
+                    }
                 }
             }
             else
