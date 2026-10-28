@@ -194,6 +194,34 @@ public sealed class AudioShiftScript : AbstractScript
         {
             progressCallback(fileIndex, totalCount, "Запуск eac3to прямоточного сдвига (Bitstream)...", 10.0);
 
+            // eac3to не декодирует Opus/Vorbis и ряд других кодеков — останавливаемся сразу
+            // с понятным сообщением вместо неинформативной ошибки внешнего процесса.
+            string? unsupportedCodec = await FindUnsupportedEac3toCodecAsync(filePath);
+            if (unsupportedCodec is not null)
+            {
+                string codecMsg = $"❌ Аудиокодек '{unsupportedCodec}' не поддерживается eac3to в режиме Bitstream (без перекодирования). Выберите режим FLAC или WAV.";
+                results.Add(codecMsg);
+                _logService.Write(
+                    "script.audio_shift.eac3to_unsupported_codec",
+                    LogLevel.Error,
+                    LogStatus.Failed,
+                    $"Прямоточный сдвиг через eac3to невозможен: кодек '{LogRedactor.CompactSafeToken(unsupportedCodec)}' не поддерживается",
+                    source: Name,
+                    properties: LogProps
+                        .Create("Tool", "eac3to")
+                        .With("InputName", LogProps.FileName(filePath))
+                        .With("Codec", LogRedactor.CompactSafeToken(unsupportedCodec))
+                        .With("ErrorCode", "EAC3TO_UNSUPPORTED_CODEC")
+                        .With("Retryable", false));
+                progressCallback(fileIndex, totalCount, "Ошибка: кодек не поддерживается eac3to", 100.0);
+                return ExecutionResult.Failed(
+                    context,
+                    results,
+                    errorCode: "eac3to-unsupported-codec",
+                    outputFile: outputFilePath,
+                    outputExists: File.Exists(outputFilePath));
+            }
+
             string shiftArg = signedShiftMs >= 0 ? $"+{signedShiftMs}ms" : $"{signedShiftMs}ms";
             var eac3toArgs = new List<string>
             {
@@ -471,5 +499,32 @@ public sealed class AudioShiftScript : AbstractScript
         results.Add($"✔ Сдвиг аудио выполнен успешно: {outputName}");
 
         return ExecutionResult.Succeeded(context, results, outputFile: outputFilePath, outputExists: File.Exists(outputFilePath));
+    }
+
+    /// <summary>
+    /// Ищет среди аудиодорожек файла первую с кодеком, неподдерживаемым eac3to.
+    /// При отсутствии аудиодорожек или пустом зондировании возвращает null,
+    /// оставляя диагностику внешнему процессу.
+    /// </summary>
+    /// <param name="filePath">Путь к проверяемому медиафайлу.</param>
+    /// <returns>Название неподдерживаемого кодека либо null, если запрет не требуется.</returns>
+    private async Task<string?> FindUnsupportedEac3toCodecAsync(string filePath)
+    {
+        MediaStructure? structure = await _mediaProbeService.ProbeAsync(filePath);
+        var audioTracks = structure?.GetAudioTracks();
+        if (audioTracks is null || audioTracks.Count == 0)
+        {
+            return null;
+        }
+
+        foreach (MediaTrack track in audioTracks)
+        {
+            if (!AudioTransplantScript.IsEac3toSupportedCodec(track.Codec))
+            {
+                return string.IsNullOrWhiteSpace(track.Codec) ? "неизвестный" : track.Codec;
+            }
+        }
+
+        return null;
     }
 }
