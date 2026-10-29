@@ -57,6 +57,7 @@ public sealed partial class WorkPanel : Page
     private TextBox LogTextBox = null!;
     private ScriptSettingsControl ScriptSettings = null!;
     private bool _isLandscape;
+    private bool _layoutDeferred;
 
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _logSyncTimer;
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _rightPanelWidthTimer;
@@ -383,8 +384,15 @@ public sealed partial class WorkPanel : Page
                 ViewModel.Initialize(_script!, FileList.Files);
                 SelectTab("files");
 
-                _isLandscape = IsLandscapeOrientation(ActualWidth, ActualHeight);
-                ApplyLayoutOrientation();
+                if (ActualWidth < 1 || ActualHeight < 1)
+                {
+                    _layoutDeferred = true;
+                }
+                else
+                {
+                    _isLandscape = IsLandscapeOrientation(ActualWidth, ActualHeight);
+                    ApplyLayoutOrientation();
+                }
 
                 UpdateActionButtonState(ViewModel.IsProcessing);
                 FileList.IsProcessing = ViewModel.IsProcessing;
@@ -545,8 +553,15 @@ public sealed partial class WorkPanel : Page
             nvSample.SelectedItem = SamplePage1Item;
 
             // Применяем актуальную ориентацию разметки для нового скрипта при его загрузке
-            _isLandscape = IsLandscapeOrientation(ActualWidth, ActualHeight);
-            ApplyLayoutOrientation();
+            if (ActualWidth < 1 || ActualHeight < 1)
+            {
+                _layoutDeferred = true;
+            }
+            else
+            {
+                _isLandscape = IsLandscapeOrientation(ActualWidth, ActualHeight);
+                ApplyLayoutOrientation();
+            }
 
             // Плавное появление содержимого при смене скрипта: страница кэшируется
             // фреймом, поэтому переход на уровне Frame не срабатывает.
@@ -1003,6 +1018,26 @@ public sealed partial class WorkPanel : Page
             ScriptSettings.SetProcessingMode(ViewModel.IsProcessing);
         }
 
+        // Раскладка, отложенная в OnNavigatedTo из-за нулевого размера страницы
+        // в кэше навигации, пересчитывается здесь по фактическому размеру.
+        if (_script != null)
+        {
+            if (ActualWidth < 1 || ActualHeight < 1)
+            {
+                _layoutDeferred = true;
+            }
+            else
+            {
+                bool currentIsLandscape = IsLandscapeOrientation(ActualWidth, ActualHeight);
+                if (_layoutDeferred || currentIsLandscape != _isLandscape)
+                {
+                    _isLandscape = currentIsLandscape;
+                    ApplyLayoutOrientation();
+                }
+                _layoutDeferred = false;
+            }
+        }
+
         // Переход мог прерваться выгрузкой страницы: рабочая область должна быть полностью видима.
         ResetScriptSwitchVisualState();
 
@@ -1102,10 +1137,11 @@ public sealed partial class WorkPanel : Page
 
         bool newIsLandscape = IsLandscapeOrientation(e.NewSize.Width, e.NewSize.Height);
 
-        if (newIsLandscape != _isLandscape)
+        if (_layoutDeferred || newIsLandscape != _isLandscape)
         {
             _isLandscape = newIsLandscape;
             ApplyLayoutOrientation();
+            _layoutDeferred = false;
         }
     }
 

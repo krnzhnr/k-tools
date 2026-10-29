@@ -176,10 +176,15 @@ public sealed class TrackExtractorScript : AbstractScript
             false);
 
         var filesToExtract = new List<string>();
+        var trackMetaByPath = new Dictionary<string, (int TrackId, string FileName)>(StringComparer.OrdinalIgnoreCase);
+        var fontsToExtract = new List<string>();
+        var fontMetaByPath = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var skippedValid = new List<string>();
+        var skippedMessages = new List<string>();
         var extractResults = new List<string>();
+        var validTracks = new List<string>();
+        var validFonts = new List<string>();
         var ffmpegArgs = new List<string>();
-        bool tracksSuccess = true;
-        bool fontsSuccess = true;
 
         // 4. Определение языковых дубликатов для формирования уникальных суффиксов
         var activeTracks = structure.Tracks
@@ -223,11 +228,31 @@ public sealed class TrackExtractorScript : AbstractScript
                 outFilename = $"{renamedStem}{trackExt}";
                 string outPath = Path.Combine(baseDir, outFilename);
 
-                if (File.Exists(outPath) && !overwrite)
+                // Проверка заглушек: пустой файл (0 байт) удаляется и идёт на повторное извлечение.
+                // Пропуск только для валидных артефактов (существует и длина больше нуля).
+                if (File.Exists(outPath))
                 {
-                    _logService.Write("script.track_extractor.track_skipped", LogLevel.Debug, LogStatus.Skipped, $"Дорожка #{track.TrackId} пропущена: файл '{LogProps.FileName(outFilename)}' уже существует", source: Name, properties: LogProps.Create("Index", track.TrackId).With("OutputName", LogProps.FileName(outFilename)));
-                    extractResults.Add($"⏭ Пропущена дорожка {track.TrackId}: {outFilename}");
-                    continue;
+                    long existingLength = 0;
+                    try
+                    {
+                        existingLength = new FileInfo(outPath).Length;
+                    }
+                    catch (Exception)
+                    {
+                        existingLength = 0;
+                    }
+
+                    if (existingLength == 0)
+                    {
+                        RemoveZeroByteStub(outPath);
+                    }
+                    else if (!overwrite)
+                    {
+                        _logService.Write("script.track_extractor.track_skipped", LogLevel.Debug, LogStatus.Skipped, $"Дорожка #{track.TrackId} пропущена: файл '{LogProps.FileName(outFilename)}' уже существует", source: Name, properties: LogProps.Create("Index", track.TrackId).With("OutputName", LogProps.FileName(outFilename)));
+                        skippedValid.Add(outPath);
+                        skippedMessages.Add($"⏭ Пропущена дорожка {track.TrackId}: {outFilename}");
+                        continue;
+                    }
                 }
 
                 string codecFlag;
@@ -241,13 +266,19 @@ public sealed class TrackExtractorScript : AbstractScript
                 else if (track.TrackType.Equals("audio", StringComparison.OrdinalIgnoreCase))
                 {
                     codecFlag = "-c:a";
-                    // Особая обработка PCM из M2TS/TS
-                    if (track.Codec.Equals("PCM", StringComparison.OrdinalIgnoreCase) &&
-                        ext.Equals(".wav", StringComparison.OrdinalIgnoreCase) &&
-                        (filePath.EndsWith(".m2ts", StringComparison.OrdinalIgnoreCase) || filePath.EndsWith(".ts", StringComparison.OrdinalIgnoreCase)))
+                    // Blu-ray PCM в m2ts/mts/ts хранится без заголовка WAV, поэтому прямое копирование
+                    // даёт пустой или неиграемый файл. Распаковываем в pcm_s24le строго в скоупе m2ts/mts/ts,
+                    // чтобы не затрагивать прочие контейнеры.
+                    string codecName = track.Codec ?? string.Empty;
+                    bool isM2tsScope = filePath.EndsWith(".m2ts", StringComparison.OrdinalIgnoreCase)
+                        || filePath.EndsWith(".mts", StringComparison.OrdinalIgnoreCase)
+                        || filePath.EndsWith(".ts", StringComparison.OrdinalIgnoreCase);
+                    if (isM2tsScope &&
+                        codecName.Contains("pcm", StringComparison.OrdinalIgnoreCase) &&
+                        ext.Equals(".wav", StringComparison.OrdinalIgnoreCase))
                     {
                         codecValue = "pcm_s24le";
-                        _logService.Write("script.track_extractor.pcm_unpack", LogLevel.Debug, LogStatus.Running, $"Применяется распаковка Blu-ray PCM в WAV 24 бит для дорожки #{track.TrackId}", source: Name, properties: LogProps.Create("Index", track.TrackId).With("Codec", LogRedactor.CompactSafeToken(track.Codec)).With("Container", "wav"));
+                        _logService.Write("script.track_extractor.pcm_unpack", LogLevel.Debug, LogStatus.Running, $"Применяется распаковка Blu-ray PCM в WAV 24 бит для дорожки #{track.TrackId}", source: Name, properties: LogProps.Create("Index", track.TrackId).With("Codec", LogRedactor.CompactSafeToken(codecName)).With("Container", "wav"));
                     }
                     else
                     {
@@ -257,10 +288,11 @@ public sealed class TrackExtractorScript : AbstractScript
                 else // Субтитры
                 {
                     codecFlag = "-c:s";
-                    if (AppConstants.SubtitleConvertCodecs.TryGetValue(track.Codec, out string? convertCodec))
+                    string subtitleCodec = track.Codec ?? string.Empty;
+                    if (AppConstants.SubtitleConvertCodecs.TryGetValue(subtitleCodec, out string? convertCodec))
                     {
                         codecValue = convertCodec;
-                        _logService.Write("script.track_extractor.subtitle_convert", LogLevel.Debug, LogStatus.Running, $"Применяется конвертация субтитров {LogRedactor.CompactSafeToken(track.Codec)} -> {LogRedactor.CompactSafeToken(convertCodec)} для дорожки #{track.TrackId}", source: Name, properties: LogProps.Create("Index", track.TrackId).With("Codec", LogRedactor.CompactSafeToken(convertCodec)));
+                        _logService.Write("script.track_extractor.subtitle_convert", LogLevel.Debug, LogStatus.Running, $"Применяется конвертация субтитров {LogRedactor.CompactSafeToken(subtitleCodec)} -> {LogRedactor.CompactSafeToken(convertCodec)} для дорожки #{track.TrackId}", source: Name, properties: LogProps.Create("Index", track.TrackId).With("Codec", LogRedactor.CompactSafeToken(convertCodec)));
                     }
                     else
                     {
@@ -275,12 +307,78 @@ public sealed class TrackExtractorScript : AbstractScript
                 ffmpegArgs.Add($"\"{outPath}\"");
 
                 filesToExtract.Add(outPath);
-                extractResults.Add($"✅ Извлечена дорожка {track.TrackId}: {outFilename}");
+                trackMetaByPath[outPath] = (track.TrackId, outFilename);
             }
         }
 
-        // 6. Запуск FFmpeg для One-Pass извлечения дорожек
-        tracksSuccess = true;
+        // 6. Предварительный отбор шрифтов: заглушки удаляются, валидные пропускаются.
+        List<MediaAttachment> activeFontsForPlan = new();
+        if (hasAttachments && selectedAttachmentIds != null)
+        {
+            activeFontsForPlan = structure.Attachments
+                .Where(a => selectedAttachmentIds.Contains(a.AttachmentId) && a.IsFont)
+                .ToList();
+            foreach (var font in activeFontsForPlan)
+            {
+                string plannedFontPath = Path.Combine(baseDir, font.FileName);
+                if (File.Exists(plannedFontPath))
+                {
+                    long fontLen = 0;
+                    try
+                    {
+                        fontLen = new FileInfo(plannedFontPath).Length;
+                    }
+                    catch (Exception)
+                    {
+                        fontLen = 0;
+                    }
+
+                    if (fontLen == 0)
+                    {
+                        RemoveZeroByteStub(plannedFontPath);
+                    }
+                    else if (!overwrite)
+                    {
+                        _logService.Write("script.track_extractor.font_skipped", LogLevel.Debug, LogStatus.Skipped, $"Шрифт пропущен: '{LogProps.FileName(font.FileName)}' уже существует", source: Name, properties: LogProps.Create("Index", font.AttachmentId).With("OutputName", LogProps.FileName(font.FileName)));
+                        skippedValid.Add(plannedFontPath);
+                        skippedMessages.Add($"Шрифт пропущен: '{LogProps.FileName(font.FileName)}' уже существует");
+                        continue;
+                    }
+                }
+
+                fontsToExtract.Add(plannedFontPath);
+                fontMetaByPath[plannedFontPath] = font.FileName;
+            }
+        }
+
+        int expectedCount = filesToExtract.Count + fontsToExtract.Count;
+        if (expectedCount == 0)
+        {
+            _logService.Write("script.track_extractor.already_processed", LogLevel.Info, LogStatus.Skipped, "Все дорожки и шрифты уже извлечены, повторная обработка не требуется", source: Name, properties: LogProps.Create("Count", skippedValid.Count).With("Verified", true));
+            progressCallback(fileIndex, totalCount, "Уже обработано, пропуск", 100.0);
+            results.AddRange(skippedMessages);
+            results.Add("Все файлы уже извлечены, повторная обработка не требуется");
+            return ExecutionResult.Skipped(
+                context,
+                results,
+                errorCode: "already-processed",
+                outputFile: skippedValid.FirstOrDefault(),
+                outputExists: true,
+                cleanupState: CleanupState.NotRequired);
+        }
+
+        // Снепшот состояния артефактов дорожек до запуска FFmpeg для проверки свежести.
+        var trackSnapshots = new Dictionary<string, (long Length, DateTime MtimeUtc)>(StringComparer.OrdinalIgnoreCase);
+        foreach (var plannedPath in filesToExtract)
+        {
+            var snapshot = CaptureArtifactSnapshot(plannedPath);
+            if (snapshot.HasValue)
+            {
+                trackSnapshots[plannedPath] = snapshot.Value;
+            }
+        }
+
+        // 7. Запуск FFmpeg для One-Pass извлечения дорожек
         if (ffmpegArgs.Count > 0)
         {
             _logService.Write("script.track_extractor.ffmpeg_started", LogLevel.Debug, LogStatus.Running, $"Запущен FFmpeg для извлечения дорожек одним проходом из '{LogProps.FileName(filePath)}'", source: Name, properties: LogProps.Create("Tool", "ffmpeg").With("InputName", LogProps.FileName(filePath)));
@@ -310,74 +408,97 @@ public sealed class TrackExtractorScript : AbstractScript
                 cancellationToken: cts.Token
             );
 
-            tracksSuccess = tracksRun.IsSuccess;
-            if (!tracksSuccess)
+            if (IsCancelled || tracksRun.IsCancelled)
             {
-                if (IsCancelled)
+                CleanupIfCancelled(filesToExtract.ToArray());
+                string cancelMsg = $"⚠ Извлечение отменено пользователем: {Path.GetFileName(filePath)}";
+                _logService.Write("script.track_extractor.cancelled", LogLevel.Info, LogStatus.Cancelled, cancelMsg, source: Name, properties: LogProps.Create("Reason", "UserRequested").With("CleanupState", "NotStarted"));
+                results.Add(cancelMsg);
+                var cancelledValid = filesToExtract.Where(IsValidArtifact).ToList();
+                return ExecutionResult.Cancelled(
+                    context,
+                    results,
+                    errorCode: "cancelled",
+                    outputFile: cancelledValid.FirstOrDefault(),
+                    outputExists: cancelledValid.Count > 0,
+                    cleanupState: CleanupState.Completed);
+            }
+
+            if (!tracksRun.IsSuccess)
+            {
+                RemoveZeroByteArtifacts(filesToExtract);
+                string failMsg = $"❌ Ошибка во время выполнения FFmpeg для {Path.GetFileName(filePath)}";
+                _logService.Write("script.track_extractor.failed", LogLevel.Error, LogStatus.Failed, failMsg, source: Name, properties: LogProps.Create("ErrorCode", "TRACK_EXTRACTION_FAILED").With("InputName", LogProps.FileName(filePath)).With("Retryable", true));
+                results.Add(failMsg);
+                var failedValid = filesToExtract.Where(IsValidArtifact).ToList();
+                return ExecutionResult.Failed(
+                    context,
+                    results,
+                    errorCode: "track-extraction-failed",
+                    outputFile: failedValid.FirstOrDefault(),
+                    outputExists: failedValid.Count > 0,
+                    retryable: true,
+                    cleanupState: CleanupState.Completed);
+            }
+
+            // Верификация артефактов дорожек: существует и длина больше нуля, без порога в килобайтах.
+            // При перезаписи дополнительно требуется свежесть: новее по времени или другой размер.
+            foreach (var plannedPath in filesToExtract)
+            {
+                trackSnapshots.TryGetValue(plannedPath, out var before);
+                bool hasBefore = trackSnapshots.ContainsKey(plannedPath);
+                if (IsFreshArtifact(plannedPath, hasBefore ? before : null, overwrite))
                 {
-                    CleanupIfCancelled(filesToExtract.ToArray());
-                    string cancelMsg = $"⚠ Извлечение отменено пользователем: {Path.GetFileName(filePath)}";
-                    _logService.Write("script.track_extractor.cancelled", LogLevel.Info, LogStatus.Cancelled, cancelMsg, source: Name, properties: LogProps.Create("Reason", "UserRequested").With("CleanupState", "NotStarted"));
-                    results.Add(cancelMsg);
-                    return IsCancelled
-                        ? ExecutionResult.Cancelled(
-                            context,
-                            results,
-                            errorCode: "cancelled",
-                            outputFile: filesToExtract.FirstOrDefault(),
-                            outputExists: filesToExtract.Any(File.Exists),
-                            cleanupState: CleanupState.Completed)
-                        : ExecutionResult.Failed(
-                            context,
-                            results,
-                            errorCode: "track-extraction-failed",
-                            outputFile: filesToExtract.FirstOrDefault(),
-                            outputExists: filesToExtract.Any(File.Exists),
-                            retryable: true,
-                            cleanupState: CleanupState.Completed);
+                    validTracks.Add(plannedPath);
                 }
                 else
                 {
-                    string failMsg = $"❌ Ошибка во время выполнения FFmpeg для {Path.GetFileName(filePath)}";
-                    _logService.Write("script.track_extractor.failed", LogLevel.Error, LogStatus.Failed, failMsg, source: Name, properties: LogProps.Create("ErrorCode", "TRACK_EXTRACTION_FAILED").With("InputName", LogProps.FileName(filePath)).With("Retryable", true));
-                    results.Add(failMsg);
-                    return ExecutionResult.Failed(
-                        context,
-                        results,
-                        errorCode: "track-extraction-failed",
-                        outputFile: filesToExtract.FirstOrDefault(),
-                        outputExists: filesToExtract.Any(File.Exists),
-                        retryable: true,
-                        cleanupState: CleanupState.Completed);
+                    if (File.Exists(plannedPath))
+                    {
+                        try
+                        {
+                            if (new FileInfo(plannedPath).Length == 0)
+                            {
+                                RemoveZeroByteStub(plannedPath);
+                            }
+                        }
+                        catch (Exception)
+                        {
+                        }
+                    }
+
+                    string invalidName = trackMetaByPath.TryGetValue(plannedPath, out var meta)
+                        ? meta.FileName
+                        : Path.GetFileName(plannedPath);
+                    _logService.Write("script.track_extractor.artifact_invalid", LogLevel.Error, LogStatus.Failed, $"Дорожка не извлечена: файл '{LogProps.FileName(invalidName)}' отсутствует, пуст или устарел", source: Name, properties: LogProps.Create("ErrorCode", "OUTPUT_MISSING").With("OutputName", LogProps.FileName(invalidName)).With("Retryable", true));
+                    extractResults.Add($"❌ Дорожка не извлечена (пустой или устаревший файл): {invalidName}");
                 }
             }
         }
 
-        // 7. Последовательное извлечение выбранных шрифтов (вложений)
-        fontsSuccess = true;
-        if (hasAttachments && selectedAttachmentIds != null)
+        // 8. Последовательное извлечение отобранных шрифтов с проверкой артефакта.
+        if (fontsToExtract.Count > 0 && hasAttachments && selectedAttachmentIds != null)
         {
-            var activeFonts = structure.Attachments.Where(a => selectedAttachmentIds.Contains(a.AttachmentId) && a.IsFont).ToList();
+            var activeFonts = structure.Attachments
+                .Where(a => selectedAttachmentIds.Contains(a.AttachmentId) && a.IsFont)
+                .ToDictionary(a => Path.Combine(baseDir, a.FileName), a => a, StringComparer.OrdinalIgnoreCase);
             int fontIndex = 0;
-            int totalFonts = activeFonts.Count;
+            int totalFonts = fontsToExtract.Count;
 
-            foreach (var font in activeFonts)
+            foreach (var outFontPath in fontsToExtract)
             {
                 if (IsCancelled)
                 {
-                    fontsSuccess = false;
                     break;
                 }
 
-                fontIndex++;
-                string outFontPath = Path.Combine(baseDir, font.FileName);
-
-                if (File.Exists(outFontPath) && !overwrite)
+                if (!activeFonts.TryGetValue(outFontPath, out var font))
                 {
-                    _logService.Write("script.track_extractor.font_skipped", LogLevel.Debug, LogStatus.Skipped, $"Шрифт пропущен: '{LogProps.FileName(font.FileName)}' уже существует", source: Name, properties: LogProps.Create("Index", font.AttachmentId).With("OutputName", LogProps.FileName(font.FileName)));
-                    extractResults.Add($"Шрифт пропущен: '{LogProps.FileName(font.FileName)}' уже существует");
                     continue;
                 }
+
+                fontIndex++;
+                var fontBefore = CaptureArtifactSnapshot(outFontPath);
 
                 progressCallback(fileIndex, totalCount, $"Извлечение шрифтов | {fontIndex} из {totalFonts} ({font.FileName})", 100.0 * fontIndex / totalFonts);
 
@@ -395,30 +516,37 @@ public sealed class TrackExtractorScript : AbstractScript
                       structure.Attachments.IndexOf(font)
                     : font.AttachmentId;
 
-                _logService.Write("font.extract.started", LogLevel.Debug, LogStatus.Running, $"Запуск извлечения шрифта #{font.AttachmentId} (индекс FFmpeg: {ffmpegAttachmentIndex}, файл: {font.FileName})", source: SourceName, properties: LogProps.Create("InputName", font.FileName).With("Count", font.AttachmentId).With("Total", ffmpegAttachmentIndex));
+                _logService.Write("font.extract.started", LogLevel.Debug, LogStatus.Running, $"Запуск извлечения шрифта #{font.AttachmentId} (индекс FFmpeg: {ffmpegAttachmentIndex}, файл: {font.FileName})", source: SourceName, properties: LogProps.Create("InputName", LogProps.FileName(font.FileName)).With("Count", font.AttachmentId).With("Total", ffmpegAttachmentIndex));
 
                 ProcessResult fResult = await _ffmpegRunner.ExtractAttachmentAsync(
                     filePath,
                     ffmpegAttachmentIndex,
                     outFontPath,
                     cancellationToken: CancellationToken);
-                bool fSuccess = fResult.IsSuccess;
 
-                if (fSuccess)
+                if (fResult.IsCancelled || IsCancelled)
                 {
-                    extractResults.Add($"✅ Извлечен шрифт: {font.FileName}");
+                    CleanupIfCancelled(outFontPath);
+                    break;
                 }
-                else
+
+                if (!fResult.IsSuccess)
                 {
                     _logService.Write("script.track_extractor.font_failed", LogLevel.Error, LogStatus.Failed, $"Шрифт #{font.AttachmentId} не извлечён", source: Name, properties: LogProps.Create("ErrorCode", "ATTACHMENT_EXTRACTION_FAILED").With("Index", font.AttachmentId).With("OutputName", LogProps.FileName(font.FileName)).With("Retryable", true));
                     extractResults.Add($"❌ Ошибка извлечения шрифта: {font.FileName}");
+                    RemoveZeroByteStub(outFontPath);
+                    continue;
+                }
 
-                    if (IsCancelled)
-                    {
-                        fontsSuccess = false;
-                        CleanupIfCancelled(outFontPath);
-                        break;
-                    }
+                if (IsFreshArtifact(outFontPath, fontBefore, overwrite))
+                {
+                    validFonts.Add(outFontPath);
+                }
+                else
+                {
+                    _logService.Write("script.track_extractor.font_failed", LogLevel.Error, LogStatus.Failed, $"Шрифт #{font.AttachmentId} не извлечён: файл отсутствует, пуст или устарел", source: Name, properties: LogProps.Create("ErrorCode", "ATTACHMENT_EXTRACTION_FAILED").With("Index", font.AttachmentId).With("OutputName", LogProps.FileName(font.FileName)).With("Retryable", true));
+                    extractResults.Add($"❌ Шрифт не извлечён (пустой или устаревший файл): {font.FileName}");
+                    RemoveZeroByteStub(outFontPath);
                 }
             }
         }
@@ -428,78 +556,97 @@ public sealed class TrackExtractorScript : AbstractScript
             string cancelMsg = $"⚠ Извлечение отменено пользователем: {Path.GetFileName(filePath)}";
             _logService.Write("script.track_extractor.cancelled", LogLevel.Info, LogStatus.Cancelled, cancelMsg, source: Name, properties: LogProps.Create("Reason", "UserRequested").With("CleanupState", "NotStarted"));
             results.Add(cancelMsg);
+            var cancelledValid = validTracks.Concat(validFonts).Where(IsValidArtifact).ToList();
             return ExecutionResult.Cancelled(
                 context,
                 results,
                 errorCode: "cancelled",
-                outputFile: filesToExtract.FirstOrDefault(),
-                outputExists: filesToExtract.Any(File.Exists),
+                outputFile: cancelledValid.FirstOrDefault(),
+                outputExists: cancelledValid.Count > 0,
                 cleanupState: CleanupState.Partial);
         }
 
         try
         {
-            if (tracksSuccess && fontsSuccess)
+            // Итоговые сообщения строятся только по проверенным артефактам.
+            foreach (var validPath in validTracks)
             {
-                _logService.Write("script.track_extractor.completed", LogLevel.Info, LogStatus.Succeeded, $"Извлечение дорожек для '{LogProps.FileName(filePath)}' завершено", source: Name, properties: LogProps.Create("InputName", LogProps.FileName(filePath)).With("Verified", true));
+                string validName = trackMetaByPath.TryGetValue(validPath, out var meta)
+                    ? meta.FileName
+                    : Path.GetFileName(validPath);
+                int validId = trackMetaByPath.TryGetValue(validPath, out var metaId)
+                    ? metaId.TrackId
+                    : 0;
+                extractResults.Add($"✅ Извлечена дорожка {validId}: {validName}");
+            }
+
+            foreach (var validFontPath in validFonts)
+            {
+                string validFontName = fontMetaByPath.TryGetValue(validFontPath, out var stored)
+                    ? stored
+                    : Path.GetFileName(validFontPath);
+                extractResults.Add($"✅ Извлечен шрифт: {validFontName}");
+            }
+
+            results.AddRange(skippedMessages);
+            results.AddRange(extractResults);
+
+            var allValid = validTracks.Concat(validFonts).Where(IsValidArtifact).ToList();
+            int validCount = allValid.Count;
+
+            if (validCount == expectedCount && expectedCount > 0)
+            {
+                _logService.Write("script.track_extractor.completed", LogLevel.Info, LogStatus.Succeeded, $"Извлечение дорожек для '{LogProps.FileName(filePath)}' завершено", source: Name, properties: LogProps.Create("InputName", LogProps.FileName(filePath)).With("Count", validCount).With("Total", expectedCount).With("Verified", true));
                 progressCallback(fileIndex, totalCount, "Успешно завершено!", 100.0);
-                results.AddRange(extractResults);
+                return ExecutionResult.Succeeded(
+                    context,
+                    results,
+                    outputFile: allValid.FirstOrDefault(),
+                    outputExists: true,
+                    cleanupState: CleanupState.Completed);
             }
-            else
+
+            if (validCount > 0)
             {
-                CleanupIfCancelled(filesToExtract.ToArray());
-                string failMsg = $"❌ Сбой извлечения потоков из файла: {Path.GetFileName(filePath)}";
-                _logService.Write("script.track_extractor.failed", LogLevel.Error, LogStatus.Failed, failMsg, source: Name, properties: LogProps.Create("ErrorCode", "TRACK_EXTRACTION_FAILED").With("InputName", LogProps.FileName(filePath)).With("Retryable", true));
-                progressCallback(fileIndex, totalCount, "Ошибка выполнения", 0.0);
-                results.Add(failMsg);
+                _logService.Write("script.track_extractor.partially_completed", LogLevel.Warning, LogStatus.PartiallySucceeded, $"Извлечение для '{LogProps.FileName(filePath)}' завершено частично: {validCount} из {expectedCount}", source: Name, properties: LogProps.Create("InputName", LogProps.FileName(filePath)).With("Count", validCount).With("Total", expectedCount).With("Verified", false));
+                progressCallback(fileIndex, totalCount, "Завершено частично", 100.0);
+                return ExecutionResult.PartiallySucceeded(
+                    context,
+                    results,
+                    errorCode: "partial-extraction",
+                    outputFile: allValid.FirstOrDefault(),
+                    outputExists: true,
+                    cleanupState: CleanupState.Partial);
             }
+
+            RemoveZeroByteArtifacts(filesToExtract.Concat(fontsToExtract));
+            string failMsg = $"❌ Сбой извлечения потоков из файла: {Path.GetFileName(filePath)}";
+            _logService.Write("script.track_extractor.failed", LogLevel.Error, LogStatus.Failed, failMsg, source: Name, properties: LogProps.Create("ErrorCode", "TRACK_EXTRACTION_FAILED").With("InputName", LogProps.FileName(filePath)).With("Count", validCount).With("Total", expectedCount).With("Verified", false).With("Retryable", true));
+            progressCallback(fileIndex, totalCount, "Ошибка выполнения", 0.0);
+            results.Add(failMsg);
+            return ExecutionResult.Failed(
+                context,
+                results,
+                errorCode: "output-missing",
+                outputExists: false,
+                retryable: true,
+                cleanupState: CleanupState.Completed);
         }
         catch (Exception ex)
         {
-            CleanupIfCancelled(filesToExtract.ToArray());
             string errorMsg = $"❌ Ошибка выполнения скрипта для {Path.GetFileName(filePath)}";
             results.Add(errorMsg);
             _logService.Write("script.track_extractor.failed", LogLevel.Error, LogStatus.Failed, $"Извлечение дорожек для '{LogProps.FileName(filePath)}' не выполнено", ex, Name, properties: LogProps.Create("ErrorCode", "TRACK_EXTRACTION_FAILED").With("InputName", LogProps.FileName(filePath)).With("Retryable", true));
+            var exceptionValid = validTracks.Concat(validFonts).Where(IsValidArtifact).ToList();
             return ExecutionResult.FromException(
                 context,
                 ex,
                 results,
                 errorCode: "track-extraction-exception",
-                outputFile: filesToExtract.FirstOrDefault(),
-                outputExists: filesToExtract.Any(File.Exists),
+                outputFile: exceptionValid.FirstOrDefault(),
+                outputExists: exceptionValid.Count > 0,
                 cleanupState: CleanupState.Completed);
         }
-
-        string? outputFile = filesToExtract.FirstOrDefault(File.Exists);
-        if (outputFile is null && Directory.Exists(baseDir))
-        {
-            outputFile = Directory.GetFiles(baseDir, "*", SearchOption.TopDirectoryOnly).FirstOrDefault();
-        }
-        if (tracksSuccess && fontsSuccess && outputFile is not null)
-        {
-            return ExecutionResult.Succeeded(
-                context,
-                results,
-                outputFile: outputFile,
-                outputExists: true,
-                cleanupState: CleanupState.Completed);
-        }
-        if (outputFile is not null)
-        {
-            return ExecutionResult.PartiallySucceeded(
-                context,
-                results,
-                errorCode: "partial-extraction",
-                outputFile: outputFile,
-                outputExists: true,
-                cleanupState: CleanupState.Partial);
-        }
-        return ExecutionResult.Failed(
-            context,
-            results,
-            errorCode: "output-missing",
-            outputExists: false,
-            cleanupState: CleanupState.Completed);
     }
 
     /// <summary>
@@ -618,6 +765,110 @@ public sealed class TrackExtractorScript : AbstractScript
         name = Regex.Replace(name, @"-_", "-");
 
         return name.Trim('_', '-', ' ');
+    }
+
+    /// <summary>
+    /// Проверяет артефакт по наличию и ненулевому размеру без порога в килобайтах.
+    /// </summary>
+    private static bool IsValidArtifact(string path)
+    {
+        try
+        {
+            return File.Exists(path) && new FileInfo(path).Length > 0;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Проверяет свежесть артефакта с учётом перезаписи.
+    /// </summary>
+    private static bool IsFreshArtifact(string path, (long Length, DateTime MtimeUtc)? before, bool overwrite)
+    {
+        try
+        {
+            if (!File.Exists(path))
+            {
+                return false;
+            }
+
+            long currentLength = new FileInfo(path).Length;
+            if (currentLength <= 0)
+            {
+                return false;
+            }
+
+            if (!before.HasValue)
+            {
+                return true;
+            }
+
+            if (!overwrite)
+            {
+                return true;
+            }
+
+            DateTime currentMtime = File.GetLastWriteTimeUtc(path);
+            return currentMtime > before.Value.MtimeUtc || currentLength != before.Value.Length;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Снимает снепшот размера и времени изменения для проверки свежести.
+    /// </summary>
+    private static (long Length, DateTime MtimeUtc)? CaptureArtifactSnapshot(string path)
+    {
+        try
+        {
+            if (!File.Exists(path))
+            {
+                return null;
+            }
+
+            long length = new FileInfo(path).Length;
+            DateTime mtime = File.GetLastWriteTimeUtc(path);
+            return (length, mtime);
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Удаляет пустую заглушку (0 байт) перед повторным извлечением.
+    /// </summary>
+    private void RemoveZeroByteStub(string path)
+    {
+        try
+        {
+            if (File.Exists(path) && new FileInfo(path).Length == 0)
+            {
+                File.Delete(path);
+                _logService.Write("script.track_extractor.temp_removed", LogLevel.Debug, LogStatus.Succeeded, "Пустой файл-заглушка удалён перед повторным извлечением", source: Name, properties: LogProps.Create("OutputName", LogProps.FileName(path)).With("CleanupState", "Removed"));
+            }
+        }
+        catch (Exception ex)
+        {
+            _logService.Write("script.track_extractor.temp_cleanup_failed", LogLevel.Warning, LogStatus.Failed, "Пустой файл-заглушка не удалён", ex, Name, properties: LogProps.Create("ErrorCode", "TEMP_CLEANUP_FAILED").With("OutputName", LogProps.FileName(path)).With("CleanupState", "Failed"));
+        }
+    }
+
+    /// <summary>
+    /// Удаляет только пустые артефакты после сбоя, валидные файлы сохраняет.
+    /// </summary>
+    private void RemoveZeroByteArtifacts(IEnumerable<string> paths)
+    {
+        foreach (var path in paths)
+        {
+            RemoveZeroByteStub(path);
+        }
     }
 
     /// <summary>
