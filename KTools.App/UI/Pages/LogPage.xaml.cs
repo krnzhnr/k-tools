@@ -36,6 +36,7 @@ public sealed partial class LogPage
         ViewModel = App.Services.GetRequiredService<LogViewModel>();
         InitializeComponent();
         NavigationCacheMode = NavigationCacheMode.Required;
+        Unloaded += LogPage_Unloaded;
     }
 
     protected override void OnNavigatedTo(NavigationEventArgs e)
@@ -78,27 +79,55 @@ public sealed partial class LogPage
     protected override void OnNavigatedFrom(NavigationEventArgs e)
     {
         base.OnNavigatedFrom(e);
+        ShutdownBatching(writeClosedMarker: true);
+    }
+
+    private void LogPage_Unloaded(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
+    {
+        // Закрытие окна не вызывает OnNavigatedFrom: таймер иначе добивает
+        // в уже disposed ServiceProvider и падает в дебаге.
+        ShutdownBatching(writeClosedMarker: false);
+    }
+
+    private void ShutdownBatching(bool writeClosedMarker)
+    {
         long generation = _generation;
         _session.Deactivate(generation);
-
-        if (_logService is not null && _logReceivedHandler is not null)
-        {
-            _logService.LogReceived -= _logReceivedHandler;
-            _logService.Write(
-                "ui.log_page.closed",
-                LogLevel.Debug,
-                LogStatus.Succeeded,
-                "Панель журнала событий закрыта",
-                source: SourceName);
-        }
-
-        _logService = null;
-        _logReceivedHandler = null;
 
         if (_logBatchTimer is { IsRunning: true })
         {
             _logBatchTimer.Stop();
         }
+
+        if (_logService is not null && _logReceivedHandler is not null)
+        {
+            try
+            {
+                _logService.LogReceived -= _logReceivedHandler;
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+
+            if (writeClosedMarker)
+            {
+                try
+                {
+                    _logService.Write(
+                        "ui.log_page.closed",
+                        LogLevel.Debug,
+                        LogStatus.Succeeded,
+                        "Панель журнала событий закрыта",
+                        source: SourceName);
+                }
+                catch (ObjectDisposedException)
+                {
+                }
+            }
+        }
+
+        _logService = null;
+        _logReceivedHandler = null;
     }
 
     private void OnLogReceived(long generation, LogEvent logEvent)
@@ -145,7 +174,13 @@ public sealed partial class LogPage
     {
         if (_session.IsCurrent(generation))
         {
-            FlushPendingLogs(generation);
+            try
+            {
+                FlushPendingLogs(generation);
+            }
+            catch (ObjectDisposedException)
+            {
+            }
         }
     }
 
@@ -191,16 +226,26 @@ public sealed partial class LogPage
                 LogListView.ScrollIntoView(ViewModel.Logs[ViewModel.Logs.Count - 1]);
             }
         }
+        catch (ObjectDisposedException)
+        {
+            // Гашение при закрытии: провайдер уже disposed, логировать некуда.
+        }
         catch (Exception ex)
         {
-            App.Services.GetRequiredService<ILogService>().Write(
-                "ui.log_page.scroll_failed",
-                LogLevel.Warning,
-                LogStatus.Failed,
-                "Список журнала не прокручен до последнего события",
-                ex,
-                SourceName,
-                properties: LogProps.Create("ErrorCode", "LOG_SCROLL_FAILED").With("Control", "LogListView"));
+            try
+            {
+                _logService?.Write(
+                    "ui.log_page.scroll_failed",
+                    LogLevel.Warning,
+                    LogStatus.Failed,
+                    "Список журнала не прокручен до последнего события",
+                    ex,
+                    SourceName,
+                    properties: LogProps.Create("ErrorCode", "LOG_SCROLL_FAILED").With("Control", "LogListView"));
+            }
+            catch (ObjectDisposedException)
+            {
+            }
         }
     }
 

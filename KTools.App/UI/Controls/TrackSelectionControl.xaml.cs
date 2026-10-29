@@ -210,6 +210,9 @@ public sealed partial class TrackSelectionControl : UserControl
             LogStatus.Changed,
             "Панель выбора дорожек привязана к очереди файлов",
             source: SourceName);
+        // Новая привязка — новый контекст (смена скрипта): фильтры сбрасываем.
+        // Переключение вкладок идёт через Loaded/RebuildTree без Populate и фильтры сохраняет.
+        ViewModel.ClearAllRules();
         if (_files != null)
         {
             _files.CollectionChanged -= OnFilesCollectionChanged;
@@ -412,14 +415,18 @@ public sealed partial class TrackSelectionControl : UserControl
                     }
                 }
 
-                // Принудительно очищаем выбор, дерево, сбрасываем панель фильтров и активные правила
+                // Принудительно очищаем выбор и дерево. Активные правила фильтров
+                // сохраняем: переключение вкладок Файлы/Дорожки дёргает Loaded,
+                // а сброс фильтров нужен только при смене контекста (см. Populate)
+                // и пустой очереди (ветка ниже).
                 TracksTreeView.SelectedNodes.Clear();
                 TracksTreeView.RootNodes.Clear();
                 FiltersBorder.Visibility = Visibility.Collapsed;
-                ViewModel.ClearAllRules();
 
                 if (_files == null || _files.Count == 0)
                 {
+                    // Очереди нет — фильтровать нечего, активные правила сбрасываем.
+                    ViewModel.ClearAllRules();
                     // Показываем пустое состояние
                     EmptyStatePanel.Visibility = Visibility.Visible;
                     TracksTreeView.Visibility = Visibility.Collapsed;
