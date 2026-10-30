@@ -1,4 +1,4 @@
-name: PR review (opencode)
+name: opencode-review
 
 on:
   pull_request:
@@ -6,31 +6,28 @@ on:
 
 jobs:
   review:
-    runs-on: ubuntu-latest
     if: github.event.pull_request.draft == false
-    concurrency:
-      group: review-${{ github.event.pull_request.number }}
-      cancel-in-progress: true
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: read
       issues: write
     steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-      - name: Install opencode
-        run: npm install -g --allow-scripts=@opencode/cli @opencode/cli
-      - name: Verify opencode
-        run: opencode --version
-      - name: Review PR
+      - uses: actions/checkout@v6
+      - run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      - uses: anomalyco/opencode/github@latest
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          OPENCODE_AUTH_JSON: ${{ secrets.OPENCODE_AUTH_JSON }}
-          MODEL: ${{ vars.OPENCODE_MODEL }}
-          FALLBACK_MODEL: ${{ vars.OPENCODE_FALLBACK_MODEL }}
-        run: node .github/scripts/agent.cjs review
-        timeout-minutes: 15
+          OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          model: ${{ vars.OPENCODE_MODEL || 'opencode-go/muse-spark-1.3-contributor' }}
+          use_github_token: true
+          prompt: |
+            Сделай код-ревью этого PR (репозиторий k-tools — утилиты для Windows на C# для работы с видео/аудио).
+            Ответь СТРОГО в формате:
+            **Что хорошо** (1–3 пункта, только если реально есть)
+            **Замечания** (конкретные: файл/строки, в чём проблема, как исправить; воды не лей; если замечаний нет — напиши «Замечаний нет»)
+            **Вердикт** (одна строка: «Можно мержить» / «Нужны правки» / «Нужен человек» + почему)
+            Правила: пиши по-русски, коротко, Markdown. Не упоминай имён людей. Не вноси изменения в код — только текст ревью.
