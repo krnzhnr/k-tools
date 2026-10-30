@@ -33,5 +33,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENCODE_AUTH_JSON: ${{ secrets.OPENCODE_AUTH_JSON }}
           MODEL: ${{ vars.OPENCODE_MODEL }}
-        run: node .github/scripts/agent.mjs ondemand
+          FALLBACK_MODEL: ${{ vars.OPENCODE_FALLBACK_MODEL }}
+        run: node .github/scripts/agent.cjs ondemand
         timeout-minutes: 30
