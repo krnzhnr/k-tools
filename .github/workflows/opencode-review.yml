@@ -9,7 +9,7 @@ jobs:
     if: github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     permissions:
-      id-token: ***
+      id-token: write
       contents: read
     steps:
       - uses: actions/checkout@v6
