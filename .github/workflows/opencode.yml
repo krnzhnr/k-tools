@@ -1,0 +1,37 @@
+name: opencode on-demand
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  opencode:
+    runs-on: ubuntu-latest
+    if: >-
+      ${{ github.event.comment.user.type != 'Bot' &&
+        (contains(github.event.comment.body, '/oc') ||
+         contains(github.event.comment.body, '/opencode')) }}
+    concurrency:
+      group: oc-${{ github.event.issue.number }}-${{ github.event.comment.id }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install opencode
+        run: npm i -g @opencode/cli
+      - name: Run opencode
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENCODE_AUTH_JSON: ${{ secrets.OPENCODE_AUTH_JSON }}
+          MODEL: ${{ vars.OPENCODE_MODEL }}
+        run: node .github/scripts/agent.mjs ondemand
+        timeout-minutes: 30

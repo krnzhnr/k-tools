@@ -1,0 +1,32 @@
+name: Issue triage (opencode)
+
+on:
+  issues:
+    types: [opened, reopened]
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    if: github.event.issue.user.type != 'Bot'
+    concurrency:
+      group: triage-${{ github.event.issue.number }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install opencode
+        run: npm i -g @opencode/cli
+      - name: Triage issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENCODE_AUTH_JSON: ${{ secrets.OPENCODE_AUTH_JSON }}
+          MODEL: ${{ vars.OPENCODE_MODEL }}
+        run: node .github/scripts/agent.mjs triage
+        timeout-minutes: 10
