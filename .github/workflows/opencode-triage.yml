@@ -17,9 +17,9 @@ jobs:
           persist-credentials: false
       - uses: anomalyco/opencode/github@latest
         env:
-          OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         with:
-          model: ${{ vars.OPENCODE_MODEL || 'deepseek-v4.1-flash' }}
+          model: ${{ vars.OPENCODE_MODEL || 'opencode-go/deepseek-v4.1-flash' }}
           prompt: |
             Ты ревьюер ишью в репозитории k-tools — утилиты для Windows (C#) по работе с видео/аудио: пересадка дорожек, извлечение, тайминги, сабы.
             Прочитай ишью и ответь СТРОГО в формате:

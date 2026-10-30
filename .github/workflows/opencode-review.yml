@@ -17,9 +17,9 @@ jobs:
           persist-credentials: false
       - uses: anomalyco/opencode/github@latest
         env:
-          OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         with:
-          model: ${{ vars.OPENCODE_MODEL || 'muse-spark-1.3-contributor' }}
+          model: ${{ vars.OPENCODE_MODEL || 'opencode-go/muse-spark-1.3-contributor' }}
           prompt: |
             Сделай код-ревью этого PR (репозиторий k-tools — утилиты для Windows на C# для работы с видео/аудио).
             Ответь СТРОГО в формате:
