@@ -478,14 +478,16 @@ public abstract class AbstractScript
                 // 1. Сначала вычисляем все переменные форматирования (даты, uuid, нумерацию) в строке замены
                 string resolvedReplacement = EvaluatePowerRenameVariables(replacement, fileNum, DateTime.Now);
 
-                // 2. Выполняем поиск и замену (через Regex или стандартный текст)
+                // 2. Выполняем поиск и замену (через Regex или стандартный текст).
+                // Пустые совпадения пропускаются при наличии непустых, иначе шаблон ".*"
+                // даёт удвоение замены (совпадение всего имени + пустое совпадение в конце).
                 if (useRegex)
                 {
                     var options = caseSensitive
                         ? System.Text.RegularExpressions.RegexOptions.None
                         : System.Text.RegularExpressions.RegexOptions.IgnoreCase;
 
-                    stem = System.Text.RegularExpressions.Regex.Replace(stem, pattern, resolvedReplacement, options);
+                    stem = SafeRegexReplace(stem, pattern, resolvedReplacement, options);
                 }
                 else
                 {
@@ -493,7 +495,7 @@ public abstract class AbstractScript
                         ? System.Text.RegularExpressions.RegexOptions.None
                         : System.Text.RegularExpressions.RegexOptions.IgnoreCase;
 
-                    stem = System.Text.RegularExpressions.Regex.Replace(stem, System.Text.RegularExpressions.Regex.Escape(pattern), resolvedReplacement, options);
+                    stem = SafeRegexReplace(stem, System.Text.RegularExpressions.Regex.Escape(pattern), resolvedReplacement, options);
                 }
 
                 if (oldStem != stem)
@@ -735,6 +737,54 @@ public abstract class AbstractScript
         }, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
         return replacement;
+    }
+
+    /// <summary>
+    /// Безопасная замена по регулярному выражению для переименования файлов.
+    /// Игнорирует пустые совпадения при наличии хотя бы одного непустого, иначе шаблон ".*"
+    /// даёт удвоение (совпадение всего имени + пустое совпадение в конце строки).
+    /// Шаблоны только из пустых совпадений ("^", "$") сохраняют стандартное поведение вставки.
+    /// </summary>
+    private static string SafeRegexReplace(string input, string pattern, string replacement, System.Text.RegularExpressions.RegexOptions options)
+    {
+        var regex = new System.Text.RegularExpressions.Regex(pattern, options);
+        var matches = regex.Matches(input);
+        if (matches.Count == 0)
+        {
+            return input;
+        }
+
+        bool hasNonEmpty = false;
+        foreach (System.Text.RegularExpressions.Match match in matches)
+        {
+            if (match.Length > 0)
+            {
+                hasNonEmpty = true;
+                break;
+            }
+        }
+
+        if (!hasNonEmpty)
+        {
+            return regex.Replace(input, replacement);
+        }
+
+        var builder = new System.Text.StringBuilder(input.Length + replacement.Length);
+        int lastPos = 0;
+        foreach (System.Text.RegularExpressions.Match match in matches)
+        {
+            if (match.Length == 0)
+            {
+                continue;
+            }
+
+            builder.Append(input, lastPos, match.Index - lastPos);
+            builder.Append(match.Result(replacement));
+            lastPos = match.Index + match.Length;
+        }
+
+        builder.Append(input, lastPos, input.Length - lastPos);
+        return builder.ToString();
     }
 
     /// <summary>
