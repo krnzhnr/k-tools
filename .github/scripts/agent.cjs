@@ -23,11 +23,20 @@ function ghPatchComment(id, body) {
 }
 
 function setupAuth() {
-  const raw = process.env.OPENCODE_AUTH_JSON || '';
-  if (!raw.trim()) {
+  const raw = (process.env.OPENCODE_AUTH_JSON || '').trim();
+  if (!raw) {
     console.log('NOTICE: OPENCODE_AUTH_JSON secret is empty — agent step skipped.');
     process.exit(0);
   }
+  let auth;
+  try { auth = JSON.parse(raw); }
+  catch { console.log('AUTH ERROR: secret is not valid JSON. It must be the whole auth.json object, e.g. {"opencode-go":{"type":"api","key":"..."}} — not a bare key.'); process.exit(1); }
+  const entry = auth['opencode-go'];
+  if (!entry || typeof entry !== 'object' || !entry.key) {
+    console.log('AUTH ERROR: JSON parses but has no opencode-go.key. Present top-level keys: ' + Object.keys(auth).join(', '));
+    process.exit(1);
+  }
+  console.log('Auth OK: opencode-go entry present (key length ' + String(entry.key).length + ').');
   const dir = path.join(os.homedir(), '.local', 'share', 'opencode');
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'auth.json'), raw, { mode: 0o600 });
