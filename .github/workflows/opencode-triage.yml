@@ -22,7 +22,9 @@ jobs:
         with:
           node-version: 24
       - name: Install opencode
-        run: npm i -g @opencode/cli
+        run: npm install -g --allow-scripts=@opencode/cli @opencode/cli
+      - name: Verify opencode
+        run: opencode --version
       - name: Triage issue
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
