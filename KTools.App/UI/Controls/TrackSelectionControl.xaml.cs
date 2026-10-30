@@ -1,9 +1,10 @@
-﻿// -*- coding: utf-8 -*-
+// -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 
@@ -712,6 +713,8 @@ public sealed partial class TrackSelectionControl : UserControl
                 properties: LogProps.Create("Group", category));
 
             // Для аудио/видео настраиваем отображение специальной кнопки деталей
+            // Текст кнопки идентификаторов един для всех категорий.
+            IdFilterText.Text = "ID ▼";
             if (category == "video")
             {
                 DetailFilterText.Text = "Разрешение ▼";
@@ -741,6 +744,20 @@ public sealed partial class TrackSelectionControl : UserControl
                     "extension",
                     DetailFilterContainer,
                     DetailFilterButton);
+
+                // Для вложений фильтр идентификаторов не строится и кнопка скрывается.
+                // Для video/audio/subtitles группа «id» остаётся первой слева (ветка ниже).
+                IdFilterButton.Visibility = Visibility.Collapsed;
+                IdInfoBadge.Visibility = Visibility.Collapsed;
+                _logService.Write(
+                    "ui.track_filter.group_absent",
+                    LogLevel.Debug,
+                    LogStatus.Skipped,
+                    "Фильтр идентификаторов для вложений скрыт, группа не строится",
+                    source: SourceName,
+                    properties: LogProps
+                        .Create("Group", category)
+                        .With("Key", "id"));
 
                 PopulateFilterGroup(
                     category,
@@ -778,6 +795,12 @@ public sealed partial class TrackSelectionControl : UserControl
                         DetailFilterContainer,
                         DetailFilterButton);
                 }
+
+                PopulateFilterGroup(
+                    category,
+                    "id",
+                    IdFilterContainer,
+                    IdFilterButton);
 
                 PopulateFilterGroup(
                     category,
@@ -833,7 +856,19 @@ public sealed partial class TrackSelectionControl : UserControl
         }
 
         parentButton.Visibility = Visibility.Visible;
-        var sortedValues = values.OrderBy(v => v).ToList();
+        // Идентификаторы сортируем численно, иначе строковая сортировка даст «10» раньше «2».
+        List<string> sortedValues;
+        if (propKey == "id")
+        {
+            sortedValues = values
+                .OrderBy(v => int.TryParse(v, NumberStyles.Integer, CultureInfo.InvariantCulture, out int n) ? n : int.MaxValue)
+                .ThenBy(v => v, StringComparer.Ordinal)
+                .ToList();
+        }
+        else
+        {
+            sortedValues = values.OrderBy(v => v).ToList();
+        }
 
         foreach (var val in sortedValues)
         {
@@ -1002,6 +1037,31 @@ public sealed partial class TrackSelectionControl : UserControl
                 NameInfoBadge.Visibility = Visibility.Collapsed;
             }
 
+            // 5. Идентификатор дорожки или вложения
+            if (rules.TryGetValue("id", out var idRules) &&
+                idRules.Count > 0)
+            {
+                // Фиксируем текст кнопки и отображаем количество выбранных идентификаторов в бейдже
+                IdFilterText.Text = "ID ▼";
+                IdInfoBadge.Value = idRules.Count;
+                IdInfoBadge.Visibility = Visibility.Visible;
+                _logService.Write(
+                    "ui.track_filter.badge_updated",
+                    LogLevel.Debug,
+                    LogStatus.Changed,
+                    $"Бейдж идентификаторов обновлён, правил: {idRules.Count}",
+                    source: SourceName,
+                    properties: LogProps
+                        .Create("Group", "id")
+                        .With("Count", idRules.Count));
+            }
+            else
+            {
+                // Скрываем бейдж, так как правила фильтрации по идентификаторам не выбраны
+                IdFilterText.Text = "ID ▼";
+                IdInfoBadge.Visibility = Visibility.Collapsed;
+            }
+
             _logService.Write(
                 "ui.track_filter.labels_updated",
                 LogLevel.Debug,
@@ -1103,6 +1163,7 @@ public sealed partial class TrackSelectionControl : UserControl
                 LanguageFilterContainer,
                 CodecFilterContainer,
                 DetailFilterContainer,
+                IdFilterContainer,
                 NameFilterContainer
             };
 
@@ -1673,6 +1734,7 @@ public sealed partial class TrackSelectionControl : UserControl
 
             SyncActiveScriptSelectionAndNotify();
 
+            UpdateButtonLabels(currentCategory);
             UpdateSelectAllCheckBoxState();
             UpdateTabCounts();
         }
