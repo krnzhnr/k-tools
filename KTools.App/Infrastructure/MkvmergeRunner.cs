@@ -1,10 +1,13 @@
+﻿// -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+
 using KTools_App.Core;
+using KTools_App.Diagnostics;
 using KTools_App.Services.Contracts;
 
 namespace KTools_App.Infrastructure;
@@ -17,12 +20,12 @@ public record MkvInputSource(string Path, List<string>? Args = null);
 /// <summary>
 /// Синглтон-обертка для запуска утилиты mkvmerge (из пакета MKVToolNix).
 /// Обеспечивает объединение видео, аудио и субтитров в единый файл матроски (.mkv).
-/// Поддерживает гибкую передачу аргументов разметки и захват предупреждений (код 1).
-/// Все комментарии и логирование выполнены строго на русском языке.
 /// </summary>
 public sealed class MkvmergeRunner : AbstractProcessRunner, IMkvmergeRunner
 {
+    private const string SourceName = nameof(MkvmergeRunner);
 
+    public const int MaxWarningExitCode = 1;
 
     /// <summary>
     /// Инициализирует новый экземпляр MkvmergeRunner с внедрением зависимостей.
@@ -33,8 +36,6 @@ public sealed class MkvmergeRunner : AbstractProcessRunner, IMkvmergeRunner
     {
     }
 
-
-
     /// <summary>
     /// Запустить процесс сборки контейнера MKV через mkvmerge.
     /// </summary>
@@ -44,19 +45,36 @@ public sealed class MkvmergeRunner : AbstractProcessRunner, IMkvmergeRunner
     /// <param name="extraArgs">Глобальные дополнительные аргументы для mkvmerge.</param>
     /// <param name="onProgress">Колбек для передачи процентов прогресса (от 0 до 100).</param>
     /// <param name="cancellationToken">Токен отмены операции.</param>
-    /// <returns>True, если процесс завершился успешно (код 0 или 1), иначе false.</returns>
-    public async Task<bool> RunAsync(
+    public async Task<ProcessResult> RunAsync(
         string outputPath,
         List<MkvInputSource> inputs,
         string? title = null,
         List<string>? extraArgs = null,
         Action<double>? onProgress = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        ProcessExecutionContext? context = null)
     {
+        ProcessExecutionContext executionContext = (context ?? ProcessExecutionContext.NewOperation("mkvmerge"))
+            .WithExpectedArtifact(outputPath);
+
         if (inputs == null || inputs.Count == 0)
         {
-            Log.Error("Не переданы входные файлы для сборки в mkvmerge", "MkvmergeRunner");
-            return false;
+            Log.Write(
+                "mkvmerge.inputs_missing",
+                LogLevel.Error,
+                LogStatus.Failed,
+                "Не переданы входные файлы для сборки в mkvmerge",
+                null,
+                "MkvmergeRunner",
+                executionContext.ToLogContext(),
+                new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["ErrorCode"] = "inputs-missing"
+                });
+            return ProcessResult.NotStarted(
+                executionContext,
+                "inputs-missing",
+                "Не переданы входные файлы для сборки в mkvmerge");
         }
 
         // Базовые аргументы: выходной файл
@@ -85,115 +103,148 @@ public sealed class MkvmergeRunner : AbstractProcessRunner, IMkvmergeRunner
             {
                 argsList.AddRange(input.Args);
             }
+
             argsList.Add($"\"{input.Path}\"");
         }
 
         string arguments = string.Join(" ", argsList);
 
-        // Буферы для сбора вывода
-        var stdoutLines = new List<string>();
-        var stderrLines = new List<string>();
-
-        Log.Info($"Начало сборки MKV: '{Path.GetFileName(outputPath)}'. Количество входов: {inputs.Count}", "MkvmergeRunner");
+        Log.Write(
+            ProcessEventIds.Started,
+            LogLevel.Info,
+            LogStatus.Running,
+            $"Запущена сборка контейнера MKV, входов: {inputs.Count}",
+            source: SourceName,
+            context: executionContext.ToLogContext(),
+            properties: LogProps
+                .Create("Tool", "mkvmerge")
+                .With("OutputName", LogProps.FileName(outputPath))
+                .With("Count", inputs.Count));
 
         var result = await RunProcessAsync(
             "mkvmerge",
             arguments,
             onOutputLine: line =>
             {
-                lock (stdoutLines)
+                if (onProgress is null)
                 {
-                    stdoutLines.Add(line);
+                    return;
                 }
 
-                if (onProgress != null)
+                double? percent = MkvmergeOutputParser.ParseLine(line);
+                if (percent.HasValue)
                 {
-                    double? percent = MkvmergeOutputParser.ParseLine(line);
-                    if (percent.HasValue)
-                    {
-                        onProgress(percent.Value);
-                    }
+                    onProgress(percent.Value);
                 }
             },
-            onErrorLine: line =>
-            {
-                lock (stderrLines)
-                {
-                    stderrLines.Add(line);
-                }
-            },
-            cancellationToken
-        );
+            onErrorLine: null,
+            cancellationToken,
+            context: executionContext,
+            expectedArtifact: outputPath,
+            maxSuccessExitCode: MaxWarningExitCode);
 
-        string stdoutText = string.Join(Environment.NewLine, stdoutLines);
-        string stderrText = string.Join(Environment.NewLine, stderrLines);
+        if (result.IsSuccess)
+        {
+            return result;
+        }
 
-        // mkvmerge возвращает: 0 - успех, 1 - завершено с предупреждениями, 2 - ошибка
-        if (result.ExitCode == 0)
+        if (result.IsCancelled)
         {
-            Log.Info($"mkvmerge успешно завершил сборку файла '{Path.GetFileName(outputPath)}'", "MkvmergeRunner");
-            return true;
+            return result;
         }
-        else if (result.ExitCode == 1)
+
+        if (File.Exists(outputPath))
         {
-            Log.Warn($"mkvmerge завершил сборку файла '{Path.GetFileName(outputPath)}' с предупреждениями:\n{stdoutText}", "MkvmergeRunner");
-            return true;
-        }
-        else
-        {
-            Log.Error($"Ошибка выполнения mkvmerge (Код: {result.ExitCode}).\nSTDOUT:\n{stdoutText}\nSTDERR:\n{stderrText}", "MkvmergeRunner");
-            
-            // Физически удаляем поврежденный выходной файл при сбое выполнения сборки MKV
-            if (File.Exists(outputPath))
+            try
             {
-                try
-                {
-                    File.Delete(outputPath);
-                    Log.DebugLog($"Удален поврежденный выходной файл после сбоя mkvmerge: '{Path.GetFileName(outputPath)}'", "MkvmergeRunner");
-                }
-                catch (Exception deleteEx)
-                {
-                    Log.Exception(deleteEx, $"Не удалось удалить поврежденный выходной файл '{outputPath}' после сбоя mkvmerge: {deleteEx.Message}", "MkvmergeRunner");
-                }
+                File.Delete(outputPath);
+                Log.Write(
+                ProcessEventIds.ArtifactMissing,
+                LogLevel.Debug,
+                LogStatus.Succeeded,
+                "Повреждённый выходной файл удалён после сбоя mkvmerge",
+                source: SourceName,
+                context: executionContext.ToLogContext(),
+                properties: LogProps
+                    .Create("Tool", "mkvmerge")
+                    .With("OutputName", LogProps.FileName(outputPath))
+                    .With("CleanupState", "Removed"));
             }
-            
-            return false;
+            catch (Exception deleteEx)
+            {
+                Log.Write(
+                    ProcessEventIds.ArtifactMissing,
+                    LogLevel.Warning,
+                    LogStatus.PartiallySucceeded,
+                    $"Не удалось удалить повреждённый выходной файл '{Path.GetFileName(outputPath)}' после сбоя mkvmerge",
+                    deleteEx,
+                    "MkvmergeRunner",
+                    executionContext.ToLogContext().WithProcess(result.ProcessId),
+                    new Dictionary<string, object?>(StringComparer.Ordinal)
+                    {
+                        ["Stage"] = "artifact_cleanup",
+                        ["ErrorCode"] = ProcessResult.ErrorArtifactMissing
+                    });
+            }
         }
+
+        return result;
     }
 
     /// <summary>
     /// Получить техническую информацию о MKV-файле в формате JSON через mkvmerge.
-    /// Все комментарии и логирование выполнены на русском языке.
     /// </summary>
     /// <param name="filePath">Абсолютный путь к исследуемому MKV-файлу.</param>
     /// <returns>Документ JsonDocument со свойствами дорожек и вложений, или null.</returns>
-    public async Task<JsonDocument?> IdentifyAsync(string filePath)
+    public async Task<JsonDocument?> IdentifyAsync(string filePath, ProcessExecutionContext? context = null)
     {
         string arguments = $"--identify --identification-format json \"{filePath}\"";
-        
+        string fileName = Path.GetFileName(filePath);
+        ProcessExecutionContext executionContext = context ?? ProcessExecutionContext.NewOperation("mkvmerge");
         var outputLines = new List<string>();
-        var errorLines = new List<string>();
 
         // mkvmerge --identify возвращает 0 при успехе или 1 при наличии предупреждений
         var result = await RunProcessAsync(
             "mkvmerge",
             arguments,
             onOutputLine: line => outputLines.Add(line),
-            onErrorLine: line => errorLines.Add(line),
-            CancellationToken.None
-        );
+            onErrorLine: null,
+            CancellationToken.None,
+            context: executionContext,
+            maxSuccessExitCode: MaxWarningExitCode,
+            verifyParseResult: () => outputLines.Count > 0);
 
-        if (result.ExitCode > 1)
+        if (!result.IsSuccess)
         {
-            string errText = string.Join(" ", errorLines);
-            Log.Error($"Ошибка вызова mkvmerge --identify для файла '{filePath}': {errText}", "MkvmergeRunner");
+            Dictionary<string, object?> identifyProperties = result.ToLogProperties();
+            Log.Write(
+                ProcessEventIds.PostconditionFailed,
+                LogLevel.Error,
+                LogStatus.Failed,
+                $"Ошибка вызова mkvmerge --identify для файла '{fileName}'",
+                null,
+                "MkvmergeRunner",
+                result.Context.ToLogContext().WithProcess(result.ProcessId),
+                identifyProperties.With("ErrorCode", result.ErrorCode ?? "MKVMERGE_IDENTIFY_FAILED"));
             return null;
         }
 
         string fullOutput = string.Join("", outputLines);
         if (string.IsNullOrWhiteSpace(fullOutput))
         {
-            Log.Error($"mkvmerge --identify вернул пустой вывод для '{filePath}'", "MkvmergeRunner");
+            Log.Write(
+                ProcessEventIds.PostconditionFailed,
+                LogLevel.Error,
+                LogStatus.Failed,
+                $"mkvmerge --identify вернул пустой вывод для '{fileName}'",
+                null,
+                "MkvmergeRunner",
+                result.Context.ToLogContext().WithProcess(result.ProcessId),
+                new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["ErrorCode"] = ProcessResult.ErrorOutputEmpty,
+                    ["OutputName"] = fileName
+                });
             return null;
         }
 
@@ -203,7 +254,19 @@ public sealed class MkvmergeRunner : AbstractProcessRunner, IMkvmergeRunner
         }
         catch (JsonException ex)
         {
-            Log.Exception(ex, $"Ошибка парсинга JSON от mkvmerge для '{filePath}'", "MkvmergeRunner");
+            Log.Write(
+                ProcessEventIds.PostconditionFailed,
+                LogLevel.Error,
+                LogStatus.Failed,
+                $"Ошибка парсинга JSON от mkvmerge для '{fileName}'",
+                ex,
+                "MkvmergeRunner",
+                result.Context.ToLogContext().WithProcess(result.ProcessId),
+                new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["ErrorCode"] = ProcessResult.ErrorParseInvalid,
+                    ["OutputName"] = fileName
+                });
             return null;
         }
     }

@@ -1,11 +1,18 @@
 using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
-using Microsoft.UI.Xaml;
-using KTools_App.Services.Contracts;
-using Windows.Graphics;
+
 using CommunityToolkit.Mvvm.Messaging;
+
 using KTools_App.Core;
+using KTools_App.Diagnostics;
+using KTools_App.Services.Contracts;
 using KTools_App.ViewModels;
+
+using Microsoft.UI.Windowing;
+using Microsoft.UI.Xaml;
+
+using Windows.Graphics;
 
 namespace KTools_App;
 
@@ -16,10 +23,12 @@ namespace KTools_App;
 /// </summary>
 public sealed partial class MainWindow : Window
 {
+    private const string SourceName = nameof(MainWindow);
     private const int WM_GETMINMAXINFO = 0x0024;
     private const int WM_NCHITTEST = 0x0084;
     private const int HTSYSMENU = 3;
     private const int HTCAPTION = 2;
+    private static readonly TimeSpan ShutdownWaitTimeout = TimeSpan.FromSeconds(10);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct POINT
@@ -96,6 +105,11 @@ public sealed partial class MainWindow : Window
     private readonly IDialogService _dialogService;
     private readonly IScriptRegistry _scriptRegistry;
     private bool _isForcedClose;
+    private SizeInt32 _lastWindowSize;
+    private PointInt32 _lastWindowPosition = new(WindowPlacementHelper.UnspecifiedPosition, WindowPlacementHelper.UnspecifiedPosition);
+    private bool _isMaximized;
+    private float _lastScaleFactor = 1f;
+    private bool _hasWindowSize;
 
     public MainWindow(
         ILogService logService,
@@ -140,9 +154,18 @@ public sealed partial class MainWindow : Window
                     }
                     catch (Exception iconEx)
                     {
-                        _logService.Warn(
-                            $"Не удалось установить иконку TitleBar: {iconEx.Message}",
-                            "MainWindow");
+                        _logService.Write(
+                            "window.titlebar_icon_failed",
+                            LogLevel.Warning,
+                            LogStatus.PartiallySucceeded,
+                            "Не удалось установить иконку TitleBar",
+                            iconEx,
+                            "MainWindow",
+                            properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                            {
+                                ["Stage"] = "titlebar_icon",
+                                ["ErrorCode"] = "icon-apply-failed"
+                            });
                     }
                 }
 
@@ -173,44 +196,133 @@ public sealed partial class MainWindow : Window
             }
             catch (Exception ex)
             {
-                _logService.Warn(
-                    $"Не удалось установить иконку приложения: {ex.Message}",
-                    "MainWindow");
+                _logService.Write(
+                    "window.icon_failed",
+                    LogLevel.Warning,
+                    LogStatus.PartiallySucceeded,
+                    "Не удалось установить иконку приложения",
+                    ex,
+                    "MainWindow",
+                    properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                    {
+                        ["Stage"] = "window_icon",
+                        ["ErrorCode"] = "icon-apply-failed"
+                    });
             }
 
-            // Определение DPI и масштабирование размеров окна (базовый размер 800 x 960 логических пикселей)
+            // Определение DPI и масштабирование размеров окна
             IntPtr windowHandle = WinRT.Interop.WindowNative.GetWindowHandle(this);
             uint dpi = GetDpiForWindow(windowHandle);
             float scaleFactor = dpi / 96.0f;
 
-            double savedWidth = _settingsManager.GetSetting("Window", "Width", 800.0);
-            double savedHeight = _settingsManager.GetSetting("Window", "Height", 740.0);
+            double savedWidth = _settingsManager.GetSetting("Window", "Width", WindowPlacementHelper.DefaultWidth);
+            double savedHeight = _settingsManager.GetSetting("Window", "Height", WindowPlacementHelper.DefaultHeight);
+            int savedX = _settingsManager.GetSetting("Window", "X", WindowPlacementHelper.UnspecifiedPosition);
+            int savedY = _settingsManager.GetSetting("Window", "Y", WindowPlacementHelper.UnspecifiedPosition);
+            bool savedIsMaximized = _settingsManager.GetSetting("Window", "IsMaximized", false);
 
             int scaledWidth = (int)Math.Round(savedWidth * scaleFactor);
             int scaledHeight = (int)Math.Round(savedHeight * scaleFactor);
 
-            // Защита от вылезания окна за пределы рабочей области экрана при любом масштабе DPI
-            try
+            bool positionApplied = false;
+            if (WindowPlacementHelper.HasValidPosition(savedX, savedY))
             {
-                var windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(windowHandle);
-                var displayArea = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(windowId, Microsoft.UI.Windowing.DisplayAreaFallback.Nearest);
-                if (displayArea != null)
+                try
                 {
-                    int maxWorkAreaHeight = displayArea.WorkArea.Height - 40;
-                    if (scaledHeight > maxWorkAreaHeight)
+                    RectInt32 targetRect = new(savedX, savedY, scaledWidth, scaledHeight);
+                    DisplayArea displayArea = DisplayArea.GetFromRect(targetRect, DisplayAreaFallback.Nearest);
+                    if (displayArea != null)
                     {
-                        scaledHeight = Math.Max(500, maxWorkAreaHeight);
+                        var clamped = WindowPlacementHelper.ClampToWorkArea(
+                            savedX,
+                            savedY,
+                            scaledWidth,
+                            scaledHeight,
+                            displayArea.WorkArea.X,
+                            displayArea.WorkArea.Y,
+                            displayArea.WorkArea.Width,
+                            displayArea.WorkArea.Height);
+
+                        AppWindow.MoveAndResize(new RectInt32(clamped.X, clamped.Y, clamped.Width, clamped.Height));
+                        positionApplied = true;
+
+                        _logService.Write(
+                            "window.placement.restored",
+                            LogLevel.Debug,
+                            LogStatus.Succeeded,
+                            $"Геометрия окна восстановлена: {clamped.Width}x{clamped.Height} по координатам ({clamped.X}, {clamped.Y})",
+                            source: SourceName,
+                            properties: LogProps
+                                .Create("Resolution", $"{clamped.Width}x{clamped.Height} px")
+                                .With("Percent", (int)dpi)
+                                .With("Count", clamped.X));
                     }
                 }
+                catch (Exception ex)
+                {
+                    _logService.Write(
+                        "window.placement.restore_failed",
+                        LogLevel.Warning,
+                        LogStatus.PartiallySucceeded,
+                        "Не удалось применить сохранённые координаты окна, применяется базовый размер",
+                        ex,
+                        SourceName,
+                        properties: LogProps
+                            .Create("Stage", "window_placement")
+                            .With("ErrorCode", "PLACEMENT_RESTORE_FAILED"));
+                }
             }
-            catch { }
 
-            _logService.Info(
-                $"Вычисление размеров окна с учетом DPI. Текущее значение DPI: {dpi}, коэффициент масштабирования: {scaleFactor:F2}. " +
-                $"Логические размеры: {savedWidth:F1}x{savedHeight:F1}, итоговые физические размеры для изменения: {scaledWidth}x{scaledHeight} пикселей.",
-                "MainWindow");
+            if (!positionApplied)
+            {
+                // Защита от вылезания окна за пределы рабочей области экрана при любом масштабе DPI
+                try
+                {
+                    var windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(windowHandle);
+                    var displayArea = DisplayArea.GetFromWindowId(windowId, DisplayAreaFallback.Nearest);
+                    if (displayArea != null)
+                    {
+                        int maxWorkAreaHeight = displayArea.WorkArea.Height - 40;
+                        if (scaledHeight > maxWorkAreaHeight)
+                        {
+                            scaledHeight = Math.Max(500, maxWorkAreaHeight);
+                        }
+                    }
+                }
+                catch { }
 
-            AppWindow.Resize(new SizeInt32(scaledWidth, scaledHeight));
+                _logService.Write(
+                    "window.size.dpi_applied",
+                    LogLevel.Debug,
+                    LogStatus.Succeeded,
+                    $"Размеры окна пересчитаны с учётом DPI: коэффициент {scaleFactor:F2}, итог {scaledWidth}x{scaledHeight} px",
+                    source: SourceName,
+                    properties: LogProps
+                        .Create("Resolution", $"{scaledWidth}x{scaledHeight} px")
+                        .With("Percent", (int)dpi)
+                        .With("Count", savedWidth));
+
+                AppWindow.Resize(new SizeInt32(scaledWidth, scaledHeight));
+            }
+
+            CaptureWindowPlacement();
+
+            if (savedIsMaximized && AppWindow.Presenter is OverlappedPresenter presenter)
+            {
+                presenter.Maximize();
+                _isMaximized = true;
+                _logService.Write(
+                    "window.state.maximized",
+                    LogLevel.Debug,
+                    LogStatus.Succeeded,
+                    "Окно переведено в развёрнутое состояние согласно сохранённым настройкам",
+                    source: SourceName,
+                    properties: LogProps
+                        .Create("Stage", "window_state")
+                        .With("Mode", "Maximized"));
+            }
+
+            AppWindow.Changed += OnAppWindowChanged;
 
             // Навигация по умолчанию на главную страницу
             RootFrame.Navigate(typeof(MainPage));
@@ -226,19 +338,32 @@ public sealed partial class MainWindow : Window
                     bool result = SetWindowSubclass(hwnd, _subclassProcDelegate, 1, IntPtr.Zero);
                     if (!result)
                     {
-                        _logService.Warn(
-                            "SetWindowSubclass вернул false - обработчик размера не установлен.",
-                            "MainWindow");
+                        _logService.Write(
+                            "window.subclass.failed",
+                            LogLevel.Warning,
+                            LogStatus.PartiallySucceeded,
+                            "Обработчик изменения размеров окна не зарегистрирован, динамический пересчёт размеров недоступен",
+                            source: SourceName,
+                            properties: LogProps
+                                .Create("ErrorCode", "WINDOW_SUBCLASS_FAILED")
+                                .With("Control", "WindowSubclass"));
                     }
                 }
             }
             catch (Exception ex)
             {
                 // Если SetWindowSubclass не работает, логируем, но не падаем
-                _logService.Warn(
-                    $"Не удалось установить обработчик минимального размера окна: {ex.Message}. " +
-                    "Будет использован размер по умолчанию.",
-                    "MainWindow");
+                _logService.Write(
+                    "window.subclass.failed",
+                    LogLevel.Warning,
+                    LogStatus.PartiallySucceeded,
+                    "Не удалось установить обработчик минимального размера окна, будет использован размер по умолчанию",
+                    ex,
+                    SourceName,
+                    properties: LogProps
+                        .Create("Stage", "window_subclass")
+                        .With("Control", "WindowSubclass")
+                        .With("ErrorCode", "WINDOW_SUBCLASS_UNHANDLED"));
             }
 
             // Применение сохраненной темы при запуске
@@ -247,7 +372,8 @@ public sealed partial class MainWindow : Window
             // Применение сохраненного типа фона при запуске
             ApplySavedBackdrop();
 
-            // Регистрация на получение сообщения об изменении темы для мгновенного применения
+            // Регистрация на получение сообщения об изменении темы для мгновенного применения.
+            // Подложка режима «Обычный» задана в XAML через ThemeResource и за темой следит сама.
             WeakReferenceMessenger.Default.Register<ThemeChangedMessage>(this, (r, m) =>
             {
                 DispatcherQueue.TryEnqueue(() =>
@@ -277,6 +403,7 @@ public sealed partial class MainWindow : Window
             // запрашиваем подтверждение пользователя через модальный диалог.
             AppWindow.Closing += async (sender, args) =>
             {
+                CaptureWindowSize();
                 if (_isForcedClose) return;
 
                 bool isDownloading = _dependencyManager.HasActiveOperations;
@@ -286,9 +413,17 @@ public sealed partial class MainWindow : Window
                 {
                     args.Cancel = true;
 
-                    _logService.Warn(
-                        $"Пользователь попытался закрыть приложение во время активных операций (Скачивание: {isDownloading}, Обработка: {isProcessing}). Отображение диалога подтверждения.",
-                        "MainWindow");
+                    _logService.Write(
+                        "app.shutdown.blocked",
+                        LogLevel.Warning,
+                        LogStatus.Skipped,
+                        "Закрытие приложения запрошено во время активных операций, запрошено подтверждение пользователя",
+                        source: SourceName,
+                        properties: LogProps
+                            .Create("Succeeded", false)
+                            .With("Cancelled", false)
+                            .With("ErrorCode", "SHUTDOWN_BLOCKED_BY_ACTIVE_OPERATIONS")
+                            .With("CleanupState", "NotStarted"));
 
                     string reason = isDownloading && isProcessing
                         ? "В данный момент выполняется загрузка/распаковка компонентов и активная обработка файлов."
@@ -304,81 +439,256 @@ public sealed partial class MainWindow : Window
 
                     if (shouldExit)
                     {
-                        _logService.Info("Пользователь подтвердил принудительный выход из приложения во время активных операций.", "MainWindow");
+                        _logService.Write(
+                            "app.shutdown.forced_confirmed",
+                            LogLevel.Warning,
+                            LogStatus.Running,
+                            "Пользователь подтвердил принудительное закрытие приложения во время активных операций",
+                            source: SourceName,
+                            properties: LogProps
+                                .Create("Succeeded", true)
+                                .With("ErrorCode", "FORCED_CLOSE_CONFIRMED")
+                                .With("CleanupState", "Pending"));
                         _isForcedClose = true;
                         Close();
                     }
                     else
                     {
-                        _logService.Info("Пользователь отменил закрытие приложения, фоновые операции продолжаются.", "MainWindow");
+                        _logService.Write(
+                            "app.shutdown.cancelled",
+                            LogLevel.Info,
+                            LogStatus.Cancelled,
+                            "Пользователь отменил закрытие приложения, фоновые операции продолжаются",
+                            source: SourceName,
+                            properties: LogProps
+                                .Create("Cancelled", true)
+                                .With("Reason", "UserRequested")
+                                .With("CleanupState", "NotStarted"));
                     }
                 }
             };
 
-            // Подписка на событие закрытия окна для гарантированного завершения процесса приложения
-            Closed += (sender, args) =>
+            Closed += async (_, _) =>
             {
-                _logService.Info(
-                    "Главное окно закрыто пользователем. Запуск процедуры полного завершения процесса приложения.", 
-                    "MainWindow");
-                
                 try
                 {
-                    // Сохраняем размеры окна при закрытии
-                    var size = AppWindow.Size;
-                    IntPtr hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
-                    uint dpi = GetDpiForWindow(hwnd);
-                    float scaleFactor = dpi / 96.0f;
-
-                    double logicalWidth = size.Width / scaleFactor;
-                    double logicalHeight = size.Height / scaleFactor;
-
-                    _settingsManager.SetSetting("Window", "Width", logicalWidth);
-                    _settingsManager.SetSetting("Window", "Height", logicalHeight);
-                    _settingsManager.SaveSettings();
-
-                    _logService.Info(
-                        $"Сохранение размеров окна при закрытии завершено. Физические: {size.Width}x{size.Height}, Логические: {logicalWidth:F1}x{logicalHeight:F1}.",
-                        "MainWindow");
+                    AppWindow.Changed -= OnAppWindowChanged;
                 }
-                catch (Exception saveEx)
-                {
-                    _logService.Error($"Не удалось сохранить размеры окна при закрытии: {saveEx.Message}", "MainWindow");
-                }
+                catch { }
 
-                try
-                {
-                    // Гарантированно убиваем все активные дочерние процессы (ffmpeg, yt-dlp и др.)
-                    ActiveProcessTracker.KillAll();
-                    _logService.Info("Все дочерние процессы были успешно остановлены при закрытии.", "MainWindow");
-
-                    Application.Current.Exit();
-                    _logService.Info(
-                        "Запрос на выход из приложения успешно отправлен через Application.Current.Exit().", 
-                        "MainWindow");
-                }
-                catch (Exception ex)
-                {
-                    _logService.Exception(
-                        ex, 
-                        "Возникло исключение при попытке принудительного завершения работы приложения.", 
-                        "MainWindow");
-                }
+                await CloseAndShutdownAsync();
             };
         }
         catch (Exception ex)
         {
-            _logService.Exception(
+            _logService.Write(
+                "window.init.failed",
+                LogLevel.Fatal,
+                LogStatus.Failed,
+                "Главное окно не инициализировано, продолжение работы приложения невозможно",
                 ex,
-                "Критическая ошибка при инициализации главного окна.",
-                "MainWindow");
+                SourceName,
+                properties: LogProps
+                    .Create("ErrorCode", "WINDOW_INIT_FAILED")
+                    .With("CleanupState", "NotStarted"));
             throw;
+        }
+
+        App.RegisterShutdownSettingsStage(PersistWindowSettings);
+    }
+
+    public static MainWindowShutdownResult EvaluateShutdown(
+        SettingsPersistenceResult settings,
+        ProcessTerminationSummary processes,
+        bool flushSucceeded,
+        bool watcherStopped)
+    {
+        return MainWindowShutdownPolicy.Evaluate(settings, processes, flushSucceeded, watcherStopped);
+    }
+
+    public static bool CanReportShutdownSuccess(
+        SettingsPersistenceResult settings,
+        ProcessTerminationSummary processes,
+        bool flushSucceeded,
+        bool watcherStopped)
+    {
+        return EvaluateShutdown(settings, processes, flushSucceeded, watcherStopped).Succeeded;
+    }
+
+    private void CloseAndShutdown()
+    {
+        _ = CloseAndShutdownAsync();
+    }
+
+    private async Task CloseAndShutdownAsync()
+    {
+        bool completed = await App.TryBeginControlledShutdownAsync(
+            App.CrashShutdownReasonWindowClosed,
+            ShutdownWaitTimeout);
+        if (completed)
+        {
+            return;
+        }
+
+        _logService.Write(
+            "app.shutdown.not_completed",
+            LogLevel.Error,
+            LogStatus.Failed,
+            "Контролируемое завершение не завершилось до закрытия окна",
+            null,
+            SourceName,
+            properties: LogProps
+                .Create("Stage", "controlled_shutdown")
+                .With("Succeeded", false)
+                .With("Failed", true)
+                .With("ErrorCode", "shutdown-not-completed"));
+    }
+
+    private SettingsPersistenceResult PersistWindowSettings()
+    {
+        try
+        {
+            CaptureWindowPlacement();
+
+            SizeInt32 size = ReadWindowSize();
+            PointInt32 position = ReadWindowPosition();
+            float scaleFactor = _hasWindowSize && _lastScaleFactor > 0f ? _lastScaleFactor : ReadWindowScaleFactor();
+
+            _settingsManager.SetSetting("Window", "Width", size.Width / scaleFactor);
+            _settingsManager.SetSetting("Window", "Height", size.Height / scaleFactor);
+
+            if (WindowPlacementHelper.HasValidPosition(position.X, position.Y))
+            {
+                _settingsManager.SetSetting("Window", "X", position.X);
+                _settingsManager.SetSetting("Window", "Y", position.Y);
+            }
+
+            _settingsManager.SetSetting("Window", "IsMaximized", _isMaximized);
+
+            PersistenceResult saveResult = _settingsManager.SaveSettings();
+            SettingsPersistenceResult persistence = SettingsPersistenceInvoker.ReadResult(saveResult);
+            if (!persistence.Persisted)
+            {
+                _logService.Write(
+                    "app.shutdown.settings_persistence_failed",
+                    LogLevel.Error,
+                    LogStatus.Failed,
+                    "Настройки окна не сохранены",
+                    null,
+                    SourceName,
+                    properties: LogProps
+                        .Create("Persisted", false)
+                        .With("Stage", "settings_persistence")
+                        .With("ErrorCode", persistence.ErrorCode ?? "persistence-failed"));
+            }
+
+            return persistence;
+        }
+        catch (Exception ex)
+        {
+            _logService.Write(
+                "app.shutdown.settings_persistence_failed",
+                LogLevel.Error,
+                LogStatus.Failed,
+                "Сохранение настроек окна вызвало исключение",
+                ex,
+                SourceName,
+                properties: LogProps
+                    .Create("Persisted", false)
+                    .With("Stage", "settings_persistence")
+                    .With("ErrorCode", "save-exception"));
+            return SettingsPersistenceResult.Failure("save-exception");
         }
     }
 
-    /// <summary>
-    /// Считывает сохраненную тему оформления из SettingsManager и применяет её к корневому контейнеру окна.
-    /// </summary>
+    private void OnAppWindowChanged(AppWindow sender, AppWindowChangedEventArgs args)
+    {
+        CaptureWindowPlacement();
+    }
+
+    private void CaptureWindowPlacement()
+    {
+        try
+        {
+            if (AppWindow.Presenter is OverlappedPresenter presenter)
+            {
+                OverlappedPresenterState state = presenter.State;
+                _isMaximized = WindowPlacementHelper.ResolveIsMaximized(state, _isMaximized);
+
+                if (WindowPlacementHelper.ShouldUpdateNormalBounds(state))
+                {
+                    _lastWindowSize = AppWindow.Size;
+                    _lastWindowPosition = AppWindow.Position;
+                    _lastScaleFactor = ReadWindowScaleFactor();
+                    _hasWindowSize = true;
+                }
+            }
+            else
+            {
+                _lastWindowSize = AppWindow.Size;
+                _lastWindowPosition = AppWindow.Position;
+                _lastScaleFactor = ReadWindowScaleFactor();
+                _hasWindowSize = true;
+            }
+        }
+        catch (Exception)
+        {
+        }
+    }
+
+    private void CaptureWindowSize()
+    {
+        CaptureWindowPlacement();
+    }
+
+    private SizeInt32 ReadWindowSize()
+    {
+        if (_hasWindowSize)
+        {
+            return _lastWindowSize;
+        }
+
+        try
+        {
+            return AppWindow.Size;
+        }
+        catch
+        {
+            return _lastWindowSize;
+        }
+    }
+
+    private PointInt32 ReadWindowPosition()
+    {
+        if (WindowPlacementHelper.HasValidPosition(_lastWindowPosition.X, _lastWindowPosition.Y))
+        {
+            return _lastWindowPosition;
+        }
+
+        try
+        {
+            return AppWindow.Position;
+        }
+        catch
+        {
+            return _lastWindowPosition;
+        }
+    }
+
+    private float ReadWindowScaleFactor()
+    {
+        try
+        {
+            IntPtr windowHandle = WinRT.Interop.WindowNative.GetWindowHandle(this);
+            uint dpi = windowHandle == IntPtr.Zero ? 0u : GetDpiForWindow(windowHandle);
+            return dpi == 0 ? 1f : dpi / 96.0f;
+        }
+        catch (Exception)
+        {
+            return 1f;
+        }
+    }
+
     private void ApplySavedTheme()
     {
         try
@@ -392,12 +702,29 @@ public sealed partial class MainWindow : Window
                     "dark" => ElementTheme.Dark,
                     _ => ElementTheme.Default
                 };
-                _logService.Info($"Успешно применена сохраненная тема оформления: '{theme}'", "MainWindow");
+                _logService.Write(
+                    "window.theme_applied",
+                    LogLevel.Debug,
+                    LogStatus.Succeeded,
+                    $"Сохранённая тема оформления применена: '{LogRedactor.CompactSafeToken(theme)}'",
+                    source: SourceName,
+                    properties: LogProps.Create("Theme", LogRedactor.CompactSafeToken(theme)));
             }
         }
         catch (Exception ex)
         {
-            _logService.Error($"Не удалось применить сохраненную тему оформления при старте: {ex.Message}", "MainWindow");
+            _logService.Write(
+                "window.theme_failed",
+                LogLevel.Warning,
+                LogStatus.PartiallySucceeded,
+                "Не удалось применить сохранённую тему оформления при старте, применена тема по умолчанию",
+                ex,
+                "MainWindow",
+                properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["Stage"] = "theme",
+                    ["ErrorCode"] = "theme-apply-failed"
+                });
         }
     }
 
@@ -406,38 +733,101 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private void ApplySavedBackdrop()
     {
+        string backdrop = "Mica";
         try
         {
-            string backdrop = _settingsManager.BackdropType;
+            backdrop = _settingsManager.BackdropType;
             ApplyBackdrop(backdrop);
         }
         catch (Exception ex)
         {
-            _logService.Error($"Не удалось применить сохраненный тип фона при старте: {ex.Message}", "MainWindow");
+            _logService.Write(
+                "window.backdrop_failed",
+                LogLevel.Warning,
+                LogStatus.PartiallySucceeded,
+                "Не удалось применить сохранённый тип фона при старте",
+                ex,
+                "MainWindow",
+                properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["Stage"] = "backdrop",
+                    ["ErrorCode"] = "backdrop-apply-failed",
+                    ["Value"] = LogRedactor.CompactSafeToken(backdrop)
+                });
         }
     }
 
     /// <summary>
-    /// Применяет выбранный тип фона (Mica или Acrylic) к окну приложения.
+    /// Применяет выбранный тип фона (Mica, Acrylic или Обычный без эффектов) к окну приложения.
+    /// В режиме «Обычный» показывается подложка SolidBackdropOverlay (кисть SolidBackdropBackgroundBrush
+    /// из ThemeDictionaries: тёмная — #080808, светлая — стандартный цвет палитры), поэтому панель,
+    /// тайтлбар и контент — единое пятно, а за сменой темы следит сам XAML-движок.
+    /// В режимах Mica/Acrylic подложка скрыта и виден системный эффект.
+    /// Неизвестные значения отображаются на Mica, поэтому битое значение из конфигурации не роняет окно.
     /// </summary>
     private void ApplyBackdrop(string backdropType)
     {
+        string normalized = NormalizeBackdropType(backdropType);
         try
         {
-            if (backdropType.Equals("Acrylic", StringComparison.OrdinalIgnoreCase))
+            if (normalized.Equals("Acrylic", StringComparison.OrdinalIgnoreCase))
             {
                 SystemBackdrop = new Microsoft.UI.Xaml.Media.DesktopAcrylicBackdrop();
+                SolidBackdropOverlay.Visibility = Visibility.Collapsed;
+            }
+            else if (normalized.Equals("None", StringComparison.OrdinalIgnoreCase))
+            {
+                SystemBackdrop = null;
+                SolidBackdropOverlay.Visibility = Visibility.Visible;
             }
             else
             {
                 SystemBackdrop = new Microsoft.UI.Xaml.Media.MicaBackdrop();
+                SolidBackdropOverlay.Visibility = Visibility.Collapsed;
             }
-            _logService.Info($"Успешно применен тип фона окна: '{backdropType}'", "MainWindow");
+            _logService.Write(
+                "window.backdrop_applied",
+                LogLevel.Debug,
+                LogStatus.Succeeded,
+                $"Тип фона окна применён: '{LogRedactor.CompactSafeToken(normalized)}'",
+                source: SourceName,
+                properties: LogProps.Create("Value", LogRedactor.CompactSafeToken(normalized)));
         }
         catch (Exception ex)
         {
-            _logService.Error($"Не удалось применить тип фона окна '{backdropType}': {ex.Message}", "MainWindow");
+            _logService.Write(
+                "window.backdrop_failed",
+                LogLevel.Warning,
+                LogStatus.PartiallySucceeded,
+                $"Не удалось применить тип фона окна '{LogRedactor.CompactSafeToken(normalized)}'",
+                ex,
+                "MainWindow",
+                properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["Stage"] = "backdrop",
+                    ["ErrorCode"] = "backdrop-apply-failed",
+                    ["Value"] = LogRedactor.CompactSafeToken(normalized)
+                });
         }
+    }
+
+    /// <summary>
+    /// Нормализует строковое значение типа фона к допустимому набору (Mica, Acrylic, None).
+    /// </summary>
+    private static string NormalizeBackdropType(string? backdropType)
+    {
+        if (string.Equals(backdropType, "Acrylic", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Acrylic";
+        }
+
+        if (string.Equals(backdropType, "None", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(backdropType, "Solid", StringComparison.OrdinalIgnoreCase))
+        {
+            return "None";
+        }
+
+        return "Mica";
     }
 
     /// <summary>
@@ -492,16 +882,22 @@ public sealed partial class MainWindow : Window
                 catch { }
 
                 minMax.ptMinTrackSize.y = minHeight;
-                
+
                 Marshal.StructureToPtr(minMax, lParam, false);
                 return IntPtr.Zero; // Сообщение обработано
             }
             catch (Exception ex)
             {
-                _logService.Exception(
+                _logService.Write(
+                    "window.min_max_info_failed",
+                    LogLevel.Warning,
+                    LogStatus.Failed,
+                    "Ограничения размера окна с учётом DPI не рассчитаны, применены значения по умолчанию",
                     ex,
-                    "Возникло исключение при обработке сообщения WM_GETMINMAXINFO с динамическим расчетом масштабирования DPI.",
-                    "MainWindow");
+                    SourceName,
+                    properties: LogProps
+                        .Create("ErrorCode", "WINDOW_MINMAXINFO_FAILED")
+                        .With("Control", "WM_GETMINMAXINFO"));
             }
         }
 

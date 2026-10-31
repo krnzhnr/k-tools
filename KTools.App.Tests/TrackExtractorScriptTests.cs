@@ -1,13 +1,20 @@
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using FluentAssertions;
 using Moq;
 using KTools_App.Scripts;
 using KTools_App.Core;
+using KTools_App.Models;
 using KTools_App.Services.Contracts;
 using KTools_App.Infrastructure;
+using KTools_App.Tests.TestHelpers;
+
 
 namespace KTools_App.Tests;
 
@@ -24,6 +31,7 @@ public class TrackExtractorScriptTests
     private Mock<IMediaProbeService> _mediaProbeServiceMock = null!;
     private Mock<IFFmpegRunner> _ffmpegRunnerMock = null!;
     private TrackExtractorScript _script = null!;
+    private string _tempDir = string.Empty;
 
     [TestInitialize]
     public void Setup()
@@ -41,6 +49,102 @@ public class TrackExtractorScriptTests
             _mediaProbeServiceMock.Object,
             _ffmpegRunnerMock.Object
         );
+        _tempDir = string.Empty;
+    }
+
+    [TestCleanup]
+    public void Cleanup()
+    {
+        try
+        {
+            if (!string.IsNullOrEmpty(_tempDir) && Directory.Exists(_tempDir))
+            {
+                Directory.Delete(_tempDir, true);
+            }
+        }
+        catch (Exception)
+        {
+        }
+    }
+
+    /// <summary>
+    /// Создаёт уникальную временную папку для изоляции файлового состояния теста.
+    /// </summary>
+    private string CreateTempRoot()
+    {
+        _tempDir = Path.Combine(Path.GetTempPath(), "KToolsTrackExtractorTests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_tempDir);
+        return _tempDir;
+    }
+
+    /// <summary>
+    /// Создаёт выходные артефакты для всех путей из аргументов FFmpeg.
+    /// </summary>
+    private static void CreateValidArtifacts(List<string>? args)
+    {
+        if (args == null)
+        {
+            return;
+        }
+
+        foreach (string raw in args)
+        {
+            string trimmed = raw.Trim().Trim('"');
+            if (trimmed.Length < 4 || !Path.IsPathRooted(trimmed))
+            {
+                continue;
+            }
+
+            try
+            {
+                string? dir = Path.GetDirectoryName(trimmed);
+                if (string.IsNullOrEmpty(dir))
+                {
+                    continue;
+                }
+
+                Directory.CreateDirectory(dir);
+                File.WriteAllText(trimmed, "test-data");
+            }
+            catch (Exception)
+            {
+            }
+        }
+    }
+
+    /// <summary>
+    /// Создаёт пустые заглушки (0 байт) для всех путей из аргументов FFmpeg.
+    /// </summary>
+    private static void CreateZeroByteArtifacts(List<string>? args)
+    {
+        if (args == null)
+        {
+            return;
+        }
+
+        foreach (string raw in args)
+        {
+            string trimmed = raw.Trim().Trim('"');
+            if (trimmed.Length < 4 || !Path.IsPathRooted(trimmed))
+            {
+                continue;
+            }
+
+            try
+            {
+                string? dir = Path.GetDirectoryName(trimmed);
+                if (string.IsNullOrEmpty(dir))
+                {
+                    continue;
+                }
+
+                Directory.CreateDirectory(dir);
+                File.WriteAllBytes(trimmed, Array.Empty<byte>());
+            }
+            catch (Exception)
+            {
+            }
+        }
     }
 
     /// <summary>
@@ -193,10 +297,13 @@ public class TrackExtractorScriptTests
     /// выходные файлы и аргументы FFmpeg получают корректно переименованные имена файлов.
     /// </summary>
     [TestMethod]
-    public async Task ExecuteSingleAsync_WithLocalRename_ShouldApplyRenameToExtractedTracks()
+    public async Task ExecuteSingleAsync_LocalRenameEnabled_AppliesRenameToExtractedTracks()
     {
-        string inputPath = @"C:\Test\Yomi no Tsugai - 10 TG.mp4";
-        string outputDir = @"C:\Test\Output";
+        string tempRoot = CreateTempRoot();
+        string inputPath = Path.Combine(tempRoot, "Yomi no Tsugai - 10 TG.mp4");
+        File.WriteAllText(inputPath, "input");
+        string outputDir = Path.Combine(tempRoot, "Output");
+        Directory.CreateDirectory(outputDir);
 
         var structure = new MediaStructure
         {
@@ -218,23 +325,26 @@ public class TrackExtractorScriptTests
         List<string>? capturedExtraArgs = null;
         _ffmpegRunnerMock
             .Setup(r => r.RunAsync(
-                inputPath,
-                null,
-                It.IsAny<List<string>>(),
-                null,
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<List<string>?>(),
+                It.IsAny<List<string>?>(),
                 It.IsAny<bool>(),
                 It.IsAny<double>(),
-                It.IsAny<Action<ProgressInfo>>(),
-                It.IsAny<CancellationToken>()))
-            .Callback<string, string?, List<string>?, List<string>?, bool, double, Action<ProgressInfo>?, CancellationToken>(
-                (inP, outP, args, inArgs, ow, dur, prog, ct) =>
+                It.IsAny<Action<ProgressInfo>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<ProcessExecutionContext?>()))
+            .Callback<string, string?, List<string>?, List<string>?, bool, double, Action<ProgressInfo>?, CancellationToken, ProcessExecutionContext?>(
+                (inP, outP, args, inArgs, ow, dur, prog, ct, processContext) =>
                 {
                     if (args != null)
                     {
                         capturedExtraArgs = new List<string>(args);
                     }
+
+                    CreateValidArtifacts(args);
                 })
-            .ReturnsAsync(true);
+            .ReturnsAsync(MockBuilders.ProcessSucceeded());
 
         var settings = new Dictionary<string, object>
         {
@@ -247,7 +357,7 @@ public class TrackExtractorScriptTests
             { "LocalRenameCaseSensitive", false }
         };
 
-        var results = await _script.ExecuteSingleAsync(
+        var result = await _script.ExecuteSingleAsync(
             inputPath,
             settings,
             outputDir,
@@ -255,20 +365,26 @@ public class TrackExtractorScriptTests
             1,
             1);
 
-        results.Should().Contain(r => r.Contains("✅ Извлечена дорожка 1: Yomi no Tsugai - [10].aac"));
+        result.Status.Should().Be(ExecutionStatus.Succeeded);
+        result.OutputExists.Should().BeTrue();
+        result.Should().Contain(r => r.Contains("✅ Извлечена дорожка 1: Yomi no Tsugai - [10].aac"));
         capturedExtraArgs.Should().NotBeNull();
         string expectedPathArg = $"\"{Path.Combine(outputDir, "Yomi no Tsugai - [10].aac")}\"";
         capturedExtraArgs.Should().Contain(expectedPathArg);
+        File.Exists(Path.Combine(outputDir, "Yomi no Tsugai - [10].aac")).Should().BeTrue();
     }
 
     /// <summary>
     /// Проверяет, что при глобальных настройках переименования дорожки извлекаются с корректно обновленным именем.
     /// </summary>
     [TestMethod]
-    public async Task ExecuteSingleAsync_WithGlobalRename_ShouldApplyRenameToExtractedTracks()
+    public async Task ExecuteSingleAsync_GlobalRenameEnabled_AppliesRenameToExtractedTracks()
     {
-        string inputPath = @"C:\Test\Anime_Episode_01.mkv";
-        string outputDir = @"C:\Test\Output";
+        string tempRoot = CreateTempRoot();
+        string inputPath = Path.Combine(tempRoot, "Anime_Episode_01.mkv");
+        File.WriteAllText(inputPath, "input");
+        string outputDir = Path.Combine(tempRoot, "Output");
+        Directory.CreateDirectory(outputDir);
 
         var structure = new MediaStructure
         {
@@ -295,23 +411,26 @@ public class TrackExtractorScriptTests
         List<string>? capturedExtraArgs = null;
         _ffmpegRunnerMock
             .Setup(r => r.RunAsync(
-                inputPath,
-                null,
-                It.IsAny<List<string>>(),
-                null,
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<List<string>?>(),
+                It.IsAny<List<string>?>(),
                 It.IsAny<bool>(),
                 It.IsAny<double>(),
-                It.IsAny<Action<ProgressInfo>>(),
-                It.IsAny<CancellationToken>()))
-            .Callback<string, string?, List<string>?, List<string>?, bool, double, Action<ProgressInfo>?, CancellationToken>(
-                (inP, outP, args, inArgs, ow, dur, prog, ct) =>
+                It.IsAny<Action<ProgressInfo>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<ProcessExecutionContext?>()))
+            .Callback<string, string?, List<string>?, List<string>?, bool, double, Action<ProgressInfo>?, CancellationToken, ProcessExecutionContext?>(
+                (inP, outP, args, inArgs, ow, dur, prog, ct, processContext) =>
                 {
                     if (args != null)
                     {
                         capturedExtraArgs = new List<string>(args);
                     }
+
+                    CreateValidArtifacts(args);
                 })
-            .ReturnsAsync(true);
+            .ReturnsAsync(MockBuilders.ProcessSucceeded());
 
         var settings = new Dictionary<string, object>
         {
@@ -320,7 +439,7 @@ public class TrackExtractorScriptTests
             { "LocalRenameOverride", false }
         };
 
-        var results = await _script.ExecuteSingleAsync(
+        var result = await _script.ExecuteSingleAsync(
             inputPath,
             settings,
             outputDir,
@@ -328,9 +447,305 @@ public class TrackExtractorScriptTests
             1,
             1);
 
-        results.Should().Contain(r => r.Contains("✅ Извлечена дорожка 0: Anime_E01.srt"));
+        result.Status.Should().Be(ExecutionStatus.Succeeded);
+        result.OutputExists.Should().BeTrue();
+        result.Should().Contain(r => r.Contains("✅ Извлечена дорожка 0: Anime_E01.srt"));
         capturedExtraArgs.Should().NotBeNull();
         string expectedPathArg = $"\"{Path.Combine(outputDir, "Anime_E01.srt")}\"";
         capturedExtraArgs.Should().Contain(expectedPathArg);
+        File.Exists(Path.Combine(outputDir, "Anime_E01.srt")).Should().BeTrue();
+    }
+
+    /// <summary>
+    /// Проверяет, что успешный код возврата FFmpeg с пустым артефактом возвращает сбой с повтором.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_ZeroByteArtifact_ReturnsFailedWithRetryable()
+    {
+        string tempRoot = CreateTempRoot();
+        string inputPath = Path.Combine(tempRoot, "movie.m2ts");
+        File.WriteAllText(inputPath, "input");
+        string outputDir = Path.Combine(tempRoot, "Output");
+        Directory.CreateDirectory(outputDir);
+
+        var structure = new MediaStructure { Duration = 10.0 };
+        structure.Tracks.Add(new MediaTrack
+        {
+            TrackId = 1,
+            TrackType = "audio",
+            Codec = "ac3",
+            Language = "rus"
+        });
+
+        _mediaProbeServiceMock.Setup(m => m.ProbeAsync(inputPath)).ReturnsAsync(structure);
+
+        _ffmpegRunnerMock
+            .Setup(r => r.RunAsync(
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<List<string>?>(),
+                It.IsAny<List<string>?>(),
+                It.IsAny<bool>(),
+                It.IsAny<double>(),
+                It.IsAny<Action<ProgressInfo>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<ProcessExecutionContext?>()))
+            .Callback<string, string?, List<string>?, List<string>?, bool, double, Action<ProgressInfo>?, CancellationToken, ProcessExecutionContext?>(
+                (inP, outP, args, inArgs, ow, dur, prog, ct, ctx) => CreateZeroByteArtifacts(args))
+            .ReturnsAsync(MockBuilders.ProcessSucceeded());
+
+        var settings = new Dictionary<string, object>
+        {
+            { "selected_tracks_per_file", new Dictionary<string, List<int>> { { inputPath, new List<int> { 1 } } } },
+            { "name_format", "{original}" }
+        };
+
+        var result = await _script.ExecuteSingleAsync(
+            inputPath, settings, outputDir,
+            (cur, total, msg, pct, fps, br) => { }, 1, 1);
+
+        result.Status.Should().Be(ExecutionStatus.Failed);
+        result.Retryable.Should().BeTrue();
+        result.OutputExists.Should().BeFalse();
+        result.ErrorCode.Should().Be("output-missing");
+    }
+
+    /// <summary>
+    /// Проверяет, что валидная дорожка и сбой шрифта дают частичный успех.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_TrackOkFontFails_ReturnsPartiallySucceeded()
+    {
+        string tempRoot = CreateTempRoot();
+        string inputPath = Path.Combine(tempRoot, "movie.mkv");
+        File.WriteAllText(inputPath, "input");
+        string outputDir = Path.Combine(tempRoot, "Output");
+        Directory.CreateDirectory(outputDir);
+
+        var structure = new MediaStructure { Duration = 20.0 };
+        structure.Tracks.Add(new MediaTrack
+        {
+            TrackId = 0,
+            TrackType = "audio",
+            Codec = "aac",
+            Language = "rus"
+        });
+        structure.Attachments.Add(new MediaAttachment
+        {
+            AttachmentId = 0,
+            FileName = "font.ttf",
+            MimeType = "application/x-truetype-font"
+        });
+
+        _mediaProbeServiceMock.Setup(m => m.ProbeAsync(inputPath)).ReturnsAsync(structure);
+
+        _ffmpegRunnerMock
+            .Setup(r => r.RunAsync(
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<List<string>?>(),
+                It.IsAny<List<string>?>(),
+                It.IsAny<bool>(),
+                It.IsAny<double>(),
+                It.IsAny<Action<ProgressInfo>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<ProcessExecutionContext?>()))
+            .Callback<string, string?, List<string>?, List<string>?, bool, double, Action<ProgressInfo>?, CancellationToken, ProcessExecutionContext?>(
+                (inP, outP, args, inArgs, ow, dur, prog, ct, ctx) => CreateValidArtifacts(args))
+            .ReturnsAsync(MockBuilders.ProcessSucceeded());
+
+        _ffmpegRunnerMock
+            .Setup(r => r.ExtractAttachmentAsync(
+                It.IsAny<string>(),
+                It.IsAny<int>(),
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(MockBuilders.ProcessFailed("attachment-failed", "Не удалось извлечь вложение"));
+
+        var settings = new Dictionary<string, object>
+        {
+            { "selected_tracks_per_file", new Dictionary<string, List<int>> { { inputPath, new List<int> { 0 } } } },
+            { "selected_attachments_per_file", new Dictionary<string, List<int>> { { inputPath, new List<int> { 0 } } } },
+            { "name_format", "{original}" }
+        };
+
+        var result = await _script.ExecuteSingleAsync(
+            inputPath, settings, outputDir,
+            (cur, total, msg, pct, fps, br) => { }, 1, 1);
+
+        result.Status.Should().Be(ExecutionStatus.PartiallySucceeded);
+        result.OutputExists.Should().BeTrue();
+        result.OutputFile.Should().NotBeNullOrEmpty();
+        File.Exists(result.OutputFile!).Should().BeTrue();
+    }
+
+    /// <summary>
+    /// Проверяет, что повторный прогон поверх пустых заглушек удаляет их и завершается успехом.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_StaleZeroByteStubs_ReturnsSucceeded()
+    {
+        string tempRoot = CreateTempRoot();
+        string inputPath = Path.Combine(tempRoot, "movie.mkv");
+        File.WriteAllText(inputPath, "input");
+        string outputDir = Path.Combine(tempRoot, "Output");
+        Directory.CreateDirectory(outputDir);
+
+        var structure = new MediaStructure { Duration = 15.0 };
+        structure.Tracks.Add(new MediaTrack
+        {
+            TrackId = 0,
+            TrackType = "audio",
+            Codec = "aac",
+            Language = "rus"
+        });
+
+        _mediaProbeServiceMock.Setup(m => m.ProbeAsync(inputPath)).ReturnsAsync(structure);
+
+        string stubPath = Path.Combine(outputDir, "movie.aac");
+        File.WriteAllBytes(stubPath, Array.Empty<byte>());
+
+        _ffmpegRunnerMock
+            .Setup(r => r.RunAsync(
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<List<string>?>(),
+                It.IsAny<List<string>?>(),
+                It.IsAny<bool>(),
+                It.IsAny<double>(),
+                It.IsAny<Action<ProgressInfo>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<ProcessExecutionContext?>()))
+            .Callback<string, string?, List<string>?, List<string>?, bool, double, Action<ProgressInfo>?, CancellationToken, ProcessExecutionContext?>(
+                (inP, outP, args, inArgs, ow, dur, prog, ct, ctx) => CreateValidArtifacts(args))
+            .ReturnsAsync(MockBuilders.ProcessSucceeded());
+
+        var settings = new Dictionary<string, object>
+        {
+            { "selected_tracks_per_file", new Dictionary<string, List<int>> { { inputPath, new List<int> { 0 } } } },
+            { "name_format", "{original}" }
+        };
+
+        var result = await _script.ExecuteSingleAsync(
+            inputPath, settings, outputDir,
+            (cur, total, msg, pct, fps, br) => { }, 1, 1);
+
+        result.Status.Should().Be(ExecutionStatus.Succeeded);
+        result.OutputExists.Should().BeTrue();
+        new FileInfo(stubPath).Length.Should().BeGreaterThan(0);
+        result.Should().Contain(r => r.Contains("✅ Извлечена дорожка 0"));
+    }
+
+    /// <summary>
+    /// Проверяет, что устаревший файл при перезаписи без обновления считается сбоем.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_StaleFileWithOverwrite_ReturnsFailed()
+    {
+        string tempRoot = CreateTempRoot();
+        string inputPath = Path.Combine(tempRoot, "movie.mkv");
+        File.WriteAllText(inputPath, "input");
+        string outputDir = Path.Combine(tempRoot, "Output");
+        Directory.CreateDirectory(outputDir);
+
+        var structure = new MediaStructure { Duration = 12.0 };
+        structure.Tracks.Add(new MediaTrack
+        {
+            TrackId = 0,
+            TrackType = "audio",
+            Codec = "aac",
+            Language = "rus"
+        });
+
+        _mediaProbeServiceMock.Setup(m => m.ProbeAsync(inputPath)).ReturnsAsync(structure);
+
+        _settingsManagerMock
+            .Setup(m => m.GetSetting("General", "OverwriteExisting", It.IsAny<bool>()))
+            .Returns(true);
+
+        string stalePath = Path.Combine(outputDir, "movie.aac");
+        File.WriteAllText(stalePath, "old-data");
+        File.SetLastWriteTimeUtc(stalePath, DateTime.UtcNow.AddDays(-2));
+
+        _ffmpegRunnerMock
+            .Setup(r => r.RunAsync(
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<List<string>?>(),
+                It.IsAny<List<string>?>(),
+                It.IsAny<bool>(),
+                It.IsAny<double>(),
+                It.IsAny<Action<ProgressInfo>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<ProcessExecutionContext?>()))
+            .ReturnsAsync(MockBuilders.ProcessSucceeded());
+
+        var settings = new Dictionary<string, object>
+        {
+            { "selected_tracks_per_file", new Dictionary<string, List<int>> { { inputPath, new List<int> { 0 } } } },
+            { "name_format", "{original}" }
+        };
+
+        var result = await _script.ExecuteSingleAsync(
+            inputPath, settings, outputDir,
+            (cur, total, msg, pct, fps, br) => { }, 1, 1);
+
+        result.Status.Should().Be(ExecutionStatus.Failed);
+        result.Retryable.Should().BeTrue();
+        result.OutputExists.Should().BeFalse();
+    }
+
+    /// <summary>
+    /// Проверяет, что все уже извлечённые файлы возвращают пропуск без запуска FFmpeg.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_AllOutputsExist_ReturnsSkippedAlreadyProcessed()
+    {
+        string tempRoot = CreateTempRoot();
+        string inputPath = Path.Combine(tempRoot, "movie.mkv");
+        File.WriteAllText(inputPath, "input");
+        string outputDir = Path.Combine(tempRoot, "Output");
+        Directory.CreateDirectory(outputDir);
+
+        var structure = new MediaStructure { Duration = 8.0 };
+        structure.Tracks.Add(new MediaTrack
+        {
+            TrackId = 0,
+            TrackType = "audio",
+            Codec = "aac",
+            Language = "rus"
+        });
+
+        _mediaProbeServiceMock.Setup(m => m.ProbeAsync(inputPath)).ReturnsAsync(structure);
+
+        string existingPath = Path.Combine(outputDir, "movie.aac");
+        File.WriteAllText(existingPath, "valid-data");
+
+        var settings = new Dictionary<string, object>
+        {
+            { "selected_tracks_per_file", new Dictionary<string, List<int>> { { inputPath, new List<int> { 0 } } } },
+            { "name_format", "{original}" }
+        };
+
+        var result = await _script.ExecuteSingleAsync(
+            inputPath, settings, outputDir,
+            (cur, total, msg, pct, fps, br) => { }, 1, 1);
+
+        result.Status.Should().Be(ExecutionStatus.Skipped);
+        result.ErrorCode.Should().Be("already-processed");
+        result.OutputExists.Should().BeTrue();
+        result.OutputFile.Should().Be(existingPath);
+        _ffmpegRunnerMock.Verify(
+            r => r.RunAsync(
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<List<string>?>(),
+                It.IsAny<List<string>?>(),
+                It.IsAny<bool>(),
+                It.IsAny<double>(),
+                It.IsAny<Action<ProgressInfo>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<ProcessExecutionContext?>()),
+            Times.Never);
     }
 }

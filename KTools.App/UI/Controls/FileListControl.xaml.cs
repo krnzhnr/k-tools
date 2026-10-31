@@ -1,25 +1,29 @@
 using System;
-using System.Diagnostics;
-using KTools_App.Services.Contracts;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
-using Microsoft.UI.Xaml;
-using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Media;
-using Microsoft.UI.Xaml.Media.Animation;
-using Microsoft.UI.Xaml.Hosting;
-using Windows.ApplicationModel.DataTransfer;
-using Windows.Storage;
 
 using KTools_App.Core;
+using KTools_App.Diagnostics;
+using KTools_App.Infrastructure;
 using KTools_App.Scripts;
+using KTools_App.Services.Contracts;
+
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Hosting;
+using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Animation;
+
+using Windows.ApplicationModel.DataTransfer;
+using Windows.Storage;
 
 namespace KTools_App.UI.Controls;
 
@@ -73,36 +77,38 @@ public sealed class MuxTrackItem : INotifyPropertyChanged
     public bool IsAudioTrack => !ShowRoleSelector;
 
     /// <summary>
-    /// Встроенный заголовок дорожки из метаданных файла (поле Title/Name зонда MediaInfo),
-    /// например "AniLibria". Пусто, если метаданных нет или заголовок не задан.
+    /// Отображаемый заголовок дорожки: ручной из диалога дропа, иначе встроенный
+    /// из метаданных файла (поле Title/Name зонда MediaInfo), например "— AniLibria".
+    /// Пусто, если заголовок не задан ни вручную, ни в метаданных.
     /// </summary>
-    public string TitleHint
-    {
-        get
-        {
-            var tracks = File.MediaInfo?.Tracks;
-            if (tracks == null || tracks.Count == 0)
-            {
-                return string.Empty;
-            }
+    private string _titleHint = string.Empty;
 
-            foreach (var track in tracks)
-            {
-                bool isAudioType = track.TrackType.Equals("audio", StringComparison.OrdinalIgnoreCase);
-                if (isAudioType == IsAudioTrack && !string.IsNullOrWhiteSpace(track.Name))
-                {
-                    return $"— {track.Name.Trim()}";
-                }
-            }
-
-            return string.Empty;
-        }
-    }
+    public string TitleHint => _titleHint;
 
     /// <summary>
-    /// Признак наличия встроенного заголовка (для видимости подписи в UI).
+    /// Сырой встроенный заголовок из метаданных без оформительского тире.
+    /// Используется подсказкой в поле ручного ввода заголовка аудио.
     /// </summary>
-    public bool HasTitleHint => !string.IsNullOrEmpty(TitleHint);
+    private string _probedTitle = string.Empty;
+
+    /// <summary>
+    /// Признак наличия отображаемого заголовка (для видимости подписи в UI).
+    /// </summary>
+    public bool HasTitleHint => !string.IsNullOrEmpty(_titleHint);
+
+    /// <summary>
+    /// Показ текстовой подписи заголовка: только у субтитров.
+    /// У аудио вместо подписи поле ручного ввода заголовка.
+    /// </summary>
+    public bool ShowTitleHint => !IsAudioTrack && HasTitleHint;
+
+    /// <summary>
+    /// Подсказка поля ручного ввода заголовка аудио: встроенный заголовок
+    /// либо нейтральное приглашение, если метаданных нет.
+    /// </summary>
+    public string AudioTitlePlaceholder => !string.IsNullOrEmpty(_probedTitle)
+        ? _probedTitle
+        : "Заголовок…";
 
     /// <summary>
     /// Индекс выбранной роли в селекторе (0 — Авто, 1 — Полные, 2 — Надписи, 3 — Другие).
@@ -122,6 +128,7 @@ public sealed class MuxTrackItem : INotifyPropertyChanged
         ShowRoleSelector = showRoleSelector;
         _isMainTrack = isMainTrack;
         File.PropertyChanged += OnFilePropertyChanged;
+        UpdateTitleHint();
     }
 
     /// <summary>
@@ -144,8 +151,44 @@ public sealed class MuxTrackItem : INotifyPropertyChanged
         }
         else if (e.PropertyName == nameof(FileQueueItem.MediaInfo))
         {
+            UpdateTitleHint();
+        }
+        else if (e.PropertyName == nameof(FileQueueItem.MuxAudioTitle))
+        {
+            UpdateTitleHint();
+        }
+    }
+
+    private void UpdateTitleHint()
+    {
+        string probed = string.Empty;
+        var tracks = File.MediaInfo?.Tracks;
+        if (tracks != null && tracks.Count > 0)
+        {
+            foreach (var track in tracks)
+            {
+                bool isAudioType = track.TrackType.Equals("audio", StringComparison.OrdinalIgnoreCase);
+                if (isAudioType == IsAudioTrack && !string.IsNullOrWhiteSpace(track.Name))
+                {
+                    probed = track.Name.Trim();
+                    break;
+                }
+            }
+        }
+
+        string manual = File.MuxAudioTitle?.Trim() ?? string.Empty;
+        string effective = !string.IsNullOrEmpty(manual) ? manual : probed;
+        string hint = !string.IsNullOrEmpty(effective) ? $"— {effective}" : string.Empty;
+
+        if (!string.Equals(_titleHint, hint, StringComparison.Ordinal)
+            || !string.Equals(_probedTitle, probed, StringComparison.Ordinal))
+        {
+            _titleHint = hint;
+            _probedTitle = probed;
             OnPropertyChanged(nameof(TitleHint));
             OnPropertyChanged(nameof(HasTitleHint));
+            OnPropertyChanged(nameof(ShowTitleHint));
+            OnPropertyChanged(nameof(AudioTitlePlaceholder));
         }
     }
 
@@ -298,6 +341,38 @@ public sealed class MuxingRowItem : INotifyPropertyChanged
     }
 
     /// <summary>
+    /// Освобождает подписки строки муксинга перед её удалением из таблицы.
+    /// Вызывается при полной перестройке таблицы, где очистка коллекции
+    /// не присылает OldItems и отписка не происходит автоматически.
+    /// </summary>
+    public void Detach()
+    {
+        foreach (var track in AudioTracks)
+        {
+            track.File.PropertyChanged -= OnFilePropertyChanged;
+            track.Detach();
+        }
+
+        foreach (var track in AllSubsTracks())
+        {
+            track.File.PropertyChanged -= OnFilePropertyChanged;
+            track.Detach();
+        }
+
+        AudioTracks.CollectionChanged -= OnTrackCollectionChanged;
+        FullSubsTracks.CollectionChanged -= OnTrackCollectionChanged;
+        SignsSubsTracks.CollectionChanged -= OnTrackCollectionChanged;
+        OtherSubsTracks.CollectionChanged -= OnTrackCollectionChanged;
+
+        AudioTracks.Clear();
+        FullSubsTracks.Clear();
+        SignsSubsTracks.Clear();
+        OtherSubsTracks.Clear();
+
+        VideoFile = null;
+    }
+
+    /// <summary>
     /// Инициализирует новую строку муксинга для заданного имени.
     /// </summary>
     public MuxingRowItem(string stem)
@@ -355,16 +430,19 @@ public sealed class MuxingRowItem : INotifyPropertyChanged
 /// </summary>
 public sealed partial class FileListControl : UserControl
 {
+    private const string SourceName = nameof(FileListControl);
+
     private readonly ILogService _logService;
     private readonly ISettingsManager _settingsManager;
     private readonly IMediaProbeService _mediaProbeService;
     private readonly IPathManager _pathManager;
 
-    private readonly Microsoft.UI.Dispatching.DispatcherQueue _dispatcherQueue = 
+    private readonly Microsoft.UI.Dispatching.DispatcherQueue _dispatcherQueue =
         Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
     private ObservableCollection<FileQueueItem> _files = new();
     private readonly ObservableCollection<MuxingRowItem> _muxingRows = new();
     private AbstractScript? _activeScript;
+    private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _syncMuxingTimer;
 
     /// <summary>
     /// Инициализирует FileListControl.
@@ -375,6 +453,11 @@ public sealed partial class FileListControl : UserControl
         _settingsManager = App.Services.GetRequiredService<ISettingsManager>();
         _mediaProbeService = App.Services.GetRequiredService<IMediaProbeService>();
         _pathManager = App.Services.GetRequiredService<IPathManager>();
+
+        _syncMuxingTimer = _dispatcherQueue.CreateTimer();
+        _syncMuxingTimer.Interval = TimeSpan.FromMilliseconds(100);
+        _syncMuxingTimer.IsRepeating = false;
+        _syncMuxingTimer.Tick += (s, e) => SyncMuxingRows();
 
         InitializeComponent();
         _files.CollectionChanged += OnFilesCollectionChanged;
@@ -418,7 +501,17 @@ public sealed partial class FileListControl : UserControl
         object? sender,
         NotifyCollectionChangedEventArgs e)
     {
-        SyncMuxingRows();
+        if (e.Action == NotifyCollectionChangedAction.Reset)
+        {
+            _syncMuxingTimer.Stop();
+            SyncMuxingRows();
+        }
+        else
+        {
+            _syncMuxingTimer.Stop();
+            _syncMuxingTimer.Start();
+        }
+
         UpdateEmptyState();
     }
 
@@ -512,7 +605,9 @@ public sealed partial class FileListControl : UserControl
     /// </summary>
     public void AddFiles(IEnumerable<string> filePaths)
     {
-        if (_settingsManager.ClearListOnAdd)
+        // Скрипты с накапливаемой очередью (например, сборка MKV) игнорируют
+        // глобальную очистку: видео и сопутствующие файлы добавляются по очереди.
+        if (_settingsManager.ClearListOnAdd && ActiveScript?.KeepQueueOnAdd != true)
         {
             Clear();
         }
@@ -570,19 +665,12 @@ public sealed partial class FileListControl : UserControl
                     {
                         item.MediaInfo = structure;
                     });
-                    _logService.Info(
-                        $"Фоновый анализ завершен для '{item.FileName}'. " +
-                        $"Дорожек: {structure.Tracks.Count}, " +
-                        $"вложений: {structure.Attachments.Count}",
-                        "FileListControl");
+                    _logService.Write("media.probe.completed", LogLevel.Debug, LogStatus.Succeeded, $"Фоновый анализ завершён для '{LogProps.FileName(item.FilePath)}': дорожек {structure.Tracks.Count}, вложений {structure.Attachments.Count}", source: SourceName, properties: LogProps.Create("FileName", LogProps.FileName(item.FilePath)).With("Count", structure.Tracks.Count).With("Total", structure.Attachments.Count));
                 }
             }
             catch (Exception ex)
             {
-                _logService.Exception(
-                    ex,
-                    $"Ошибка при попытке фонового анализа структуры файла '{item.FileName}'",
-                    "FileListControl");
+                _logService.Write("media.probe.failed", LogLevel.Warning, LogStatus.Failed, $"Фоновый анализ структуры файла '{LogProps.FileName(item.FilePath)}' не выполнен", ex, SourceName, properties: LogProps.Create("ErrorCode", "BACKGROUND_PROBE_FAILED").With("FileName", LogProps.FileName(item.FilePath)));
             }
         });
     }
@@ -597,6 +685,13 @@ public sealed partial class FileListControl : UserControl
     /// </summary>
     private void SyncMuxingRows()
     {
+        // Освобождаем подписки старых строк: Clear() не передает OldItems,
+        // поэтому без явной отписки обработчики накапливались бы при каждой перестройке.
+        foreach (var oldRow in _muxingRows)
+        {
+            oldRow.Detach();
+        }
+
         _muxingRows.Clear();
         if (ActiveScript is not MkvAssemblyScript)
         {
@@ -816,13 +911,50 @@ public sealed partial class FileListControl : UserControl
                 var package = new Windows.ApplicationModel.DataTransfer.DataPackage();
                 package.SetText(item.FilePath);
                 Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(package);
-                _logService.Info($"Ссылка скопирована в буфер обмена: '{item.FilePath}'", "FileListControl");
+                _logService.Write(
+                    "file_list.url_copied",
+                    LogLevel.Debug,
+                    LogStatus.Changed,
+                    "Ссылка скопирована в буфер обмена",
+                    null,
+                    "FileListControl",
+                    properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                    {
+                        ["Stage"] = "clipboard",
+                        ["HostLabel"] = SafeHostLabel(item.FilePath)
+                    });
             }
             catch (Exception ex)
             {
-                _logService.Exception(ex, "Ошибка при копировании ссылки в буфер обмена", "FileListControl");
+                _logService.Write(
+                    "file_list.clipboard_failed",
+                    LogLevel.Warning,
+                    LogStatus.PartiallySucceeded,
+                    "Не удалось скопировать ссылку в буфер обмена",
+                    ex,
+                    "FileListControl",
+                    properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                    {
+                        ["Stage"] = "clipboard",
+                        ["ErrorCode"] = "clipboard-failed"
+                    });
             }
         }
+    }
+
+    private static string SafeHostLabel(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            return "unknown";
+        }
+
+        if (!Uri.TryCreate(url, UriKind.Absolute, out Uri? uri) || string.IsNullOrEmpty(uri.Host))
+        {
+            return "unknown";
+        }
+
+        return LogRedactor.CompactSafeToken(uri.Host);
     }
 
     private void RetryDownloadButton_Click(object sender, RoutedEventArgs e)
@@ -830,7 +962,7 @@ public sealed partial class FileListControl : UserControl
         if (sender is Button btn && btn.DataContext is FileQueueItem item)
         {
             item.ResetStateForRetry();
-            _logService.Info($"Состояние элемента очереди '{item.DisplayName}' сброшено для повторного скачивания.", "FileListControl");
+            _logService.Write("ui.queue_item.download_state_reset", LogLevel.Debug, LogStatus.Changed, $"Состояние элемента очереди '{LogProps.FileName(item.FilePath)}' сброшено для повторной загрузки", source: SourceName, properties: LogProps.Create("FileName", LogProps.FileName(item.FilePath)));
         }
     }
 
@@ -868,6 +1000,61 @@ public sealed partial class FileListControl : UserControl
             Files.Remove(track.File);
             SyncMuxingRows();
             UpdateEmptyState();
+        }
+    }
+
+    /// <summary>
+    /// Открывает диалог переименования заголовка дорожки: новый заголовок
+    /// записывается во все аудиофайлы очереди с таким же текущим заголовком
+    /// (все серии), а не только в выбранную дорожку.
+    /// </summary>
+    private async void RenameMuxTrackTitle_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button btn && btn.DataContext is MuxTrackItem track)
+        {
+            if (ActiveScript is not MkvAssemblyScript)
+            {
+                return;
+            }
+
+            string oldTitle = MuxAudioTitlePresets.GetEffectiveTitle(track.File);
+            var matches = Files
+                .Where(f => IsAudioPath(f.FilePath)
+                    && string.Equals(MuxAudioTitlePresets.GetEffectiveTitle(f), oldTitle, StringComparison.Ordinal))
+                .ToList();
+            if (matches.Count == 0)
+            {
+                return;
+            }
+
+            if (!TryGetMuxerTitleSettings(out string group, out _, out var storedPresets, requirePrompt: false))
+            {
+                return;
+            }
+
+            var presets = new ObservableCollection<string>(MuxAudioTitlePresets.ToWords(storedPresets));
+            var dialogService = App.Services.GetRequiredService<IDialogService>();
+            string? newTitle;
+            try
+            {
+                newTitle = await dialogService.RenameAudioTitleAsync(oldTitle, matches.Count, presets);
+            }
+            catch (Exception ex)
+            {
+                _logService.Write("ui.audio_title.prompt_failed", LogLevel.Warning, LogStatus.Failed, "Диалог переименования заголовка не показан, заголовки не изменены", ex, SourceName, properties: LogProps.Create("ErrorCode", "AUDIO_TITLE_PROMPT_FAILED").With("Count", matches.Count));
+                return;
+            }
+
+            SaveTitlePresetsIfChanged(group, storedPresets, presets);
+
+            if (newTitle == null)
+            {
+                _logService.Write("ui.audio_title.prompt_cancelled", LogLevel.Info, LogStatus.Cancelled, $"Переименование заголовка отменено, дорожек: {matches.Count}", source: SourceName, properties: LogProps.Create("Count", matches.Count).With("Reason", "UserRequested"));
+                return;
+            }
+
+            int renamed = MuxAudioTitlePresets.ApplyRename(matches, oldTitle, newTitle);
+            _logService.Write("ui.audio_title.renamed", LogLevel.Info, LogStatus.Succeeded, $"Заголовок «{oldTitle}» переименован в «{newTitle.Trim()}», дорожек: {renamed}", source: SourceName, properties: LogProps.Create("Count", renamed).With("Value", newTitle.Trim()));
         }
     }
 
@@ -1000,6 +1187,7 @@ public sealed partial class FileListControl : UserControl
                 AddFiles(paths);
 
                 int attached = 0;
+                var addedAudio = new List<FileQueueItem>();
                 foreach (string path in paths)
                 {
                     var queueItem = Files.FirstOrDefault(f => f.FilePath.Equals(path, StringComparison.OrdinalIgnoreCase));
@@ -1024,16 +1212,24 @@ public sealed partial class FileListControl : UserControl
                     {
                         queueItem.MuxRoleOverride = zoneRole;
                     }
+
+                    if (isAudio)
+                    {
+                        addedAudio.Add(queueItem);
+                    }
+
                     attached++;
                 }
 
                 SyncMuxingRows();
-                _logService.Info($"Дроп-зона '{zoneTag}': добавлено файлов: {attached}", "FileListControl");
+                _logService.Write("ui.files.dropped", LogLevel.Debug, LogStatus.Succeeded, $"В зону '{LogRedactor.CompactSafeToken(zoneTag)}' добавлено файлов: {attached}", source: SourceName, properties: LogProps.Create("Count", attached).With("Key", LogRedactor.CompactSafeToken(zoneTag)));
+
+                await MaybeAskAudioTitleAsync(addedAudio);
             }
         }
         catch (Exception ex)
         {
-            _logService.Exception(ex, "Ошибка при сбросе файлов на дроп-зону категорий сборки MKV", "FileListControl");
+            _logService.Write("ui.mkv_drop.reset_failed", LogLevel.Warning, LogStatus.Failed, "Файлы в зоне категорий сборки MKV не сброшены", ex, SourceName, properties: LogProps.Create("ErrorCode", "MKV_DROP_RESET_FAILED"));
         }
     }
 
@@ -1063,9 +1259,137 @@ public sealed partial class FileListControl : UserControl
             if (MuxGroupMatcher.BelongsToVideo(targetStem, otherStem, other.MuxPinnedStem))
             {
                 other.MuxAudioMain = false;
-                _logService.Info($"Дорожка '{other.FileName}' переведена в дополнительные (основная: '{newMain.FileName}')", "FileListControl");
+                _logService.Write("ui.track.promoted_to_additional", LogLevel.Debug, LogStatus.Changed, $"Дорожка '{other.FileName}' переведена в дополнительные, основная дорожка '{newMain.FileName}'", source: SourceName, properties: LogProps.Create("InputName", other.FileName).With("OutputName", newMain.FileName));
             }
         }
+    }
+
+    /// <summary>
+    /// Проверяет, является ли путь аудиофайлом, подходящим для сборки MKV.
+    /// </summary>
+    private static bool IsAudioPath(string path)
+    {
+        string ext = Path.GetExtension(path).ToLowerInvariant();
+        return AppConstants.AudioContainers.Contains(ext) || AppConstants.AudioStreams.Contains(ext);
+    }
+
+    /// <summary>
+    /// Читает настройки заголовков аудио скрипта сборки (опрос, дефолт, заготовки).
+    /// С включённым требованием опроса возвращает false при выключенном тумблере.
+    /// </summary>
+    private bool TryGetMuxerTitleSettings(
+        out string group,
+        out string defaultTitle,
+        out List<Dictionary<string, object>> storedPresets,
+        bool requirePrompt)
+    {
+        group = string.Empty;
+        defaultTitle = string.Empty;
+        storedPresets = new List<Dictionary<string, object>>();
+
+        if (ActiveScript is not MkvAssemblyScript)
+        {
+            return false;
+        }
+
+        try
+        {
+            group = _settingsManager.GetSafeGroupName(ActiveScript.Name);
+        }
+        catch
+        {
+            return false;
+        }
+
+        try
+        {
+            if (requirePrompt && !_settingsManager.GetSetting(group, "audio_title_prompt", false))
+            {
+                return false;
+            }
+
+            defaultTitle = _settingsManager.GetSetting(group, "audio_title_default", string.Empty);
+            storedPresets = _settingsManager.GetSetting(group, MuxAudioTitlePresets.PresetsSettingKey, new List<Dictionary<string, object>>());
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logService.Write("ui.audio_title.settings_failed", LogLevel.Warning, LogStatus.Failed, "Настройки заголовков аудио не прочитаны, опрос пропущен", ex, SourceName, properties: LogProps.Create("ErrorCode", "AUDIO_TITLE_SETTINGS_FAILED"));
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Сохраняет заготовки заголовков при их изменении в диалоге.
+    /// </summary>
+    private void SaveTitlePresetsIfChanged(
+        string group,
+        List<Dictionary<string, object>> storedPresets,
+        ObservableCollection<string> presets)
+    {
+        try
+        {
+            var currentWords = presets.ToList();
+            if (!currentWords.SequenceEqual(MuxAudioTitlePresets.ToWords(storedPresets)))
+            {
+                _settingsManager.SetSetting(group, MuxAudioTitlePresets.PresetsSettingKey, MuxAudioTitlePresets.FromWords(currentWords));
+                _logService.Write("ui.audio_title.presets_saved", LogLevel.Debug, LogStatus.Changed, $"Список заготовок заголовков обновлён, заготовок: {currentWords.Count}", source: SourceName, properties: LogProps.Create("Count", currentWords.Count));
+            }
+        }
+        catch (Exception ex)
+        {
+            _logService.Write("ui.audio_title.presets_save_failed", LogLevel.Warning, LogStatus.PartiallySucceeded, "Заготовки заголовков не сохранены, заголовок применён без сохранения списка", ex, SourceName, properties: LogProps.Create("ErrorCode", "AUDIO_TITLE_PRESETS_SAVE_FAILED"));
+        }
+    }
+
+    /// <summary>
+    /// Запрашивает общий заголовок для только что добавленных аудиодорожек,
+    /// если в настройках сборки включён опрос. Заготовки подтягиваются из настроек
+    /// и сохраняются обратно при изменении в диалоге. Отмена оставляет файлы без заголовка.
+    /// </summary>
+    private async Task MaybeAskAudioTitleAsync(List<FileQueueItem> addedAudio)
+    {
+        if (addedAudio.Count == 0)
+        {
+            return;
+        }
+
+        if (!TryGetMuxerTitleSettings(out string group, out string defaultTitle, out var storedPresets, requirePrompt: true))
+        {
+            return;
+        }
+
+        var presets = new ObservableCollection<string>(MuxAudioTitlePresets.ToWords(storedPresets));
+        var dialogService = App.Services.GetRequiredService<IDialogService>();
+        string? title;
+        try
+        {
+            title = await dialogService.AskAudioTitleAsync(
+                addedAudio.Select(a => a.FileName).ToList(),
+                defaultTitle,
+                presets);
+        }
+        catch (Exception ex)
+        {
+            _logService.Write("ui.audio_title.prompt_failed", LogLevel.Warning, LogStatus.Failed, "Диалог заголовка аудиодорожек не показан, файлы добавлены без заголовка", ex, SourceName, properties: LogProps.Create("ErrorCode", "AUDIO_TITLE_PROMPT_FAILED").With("Count", addedAudio.Count));
+            return;
+        }
+
+        SaveTitlePresetsIfChanged(group, storedPresets, presets);
+
+        if (title == null)
+        {
+            _logService.Write("ui.audio_title.prompt_cancelled", LogLevel.Info, LogStatus.Cancelled, $"Ввод заголовка отменён, файлов без заголовка: {addedAudio.Count}", source: SourceName, properties: LogProps.Create("Count", addedAudio.Count).With("Reason", "UserRequested"));
+            return;
+        }
+
+        string? manualTitle = string.IsNullOrWhiteSpace(title) ? null : title.Trim();
+        foreach (var item in addedAudio)
+        {
+            item.MuxAudioTitle = manualTitle;
+        }
+
+        _logService.Write("ui.audio_title.applied", LogLevel.Info, LogStatus.Succeeded, manualTitle != null ? $"Общий заголовок применён к аудиодорожкам: {addedAudio.Count}" : $"Аудиодорожки оставлены без заголовка: {addedAudio.Count}", source: SourceName, properties: LogProps.Create("Count", addedAudio.Count).With("Value", manualTitle ?? string.Empty));
     }
 
     private void ClearListButton_Click(object sender, RoutedEventArgs e)
@@ -1075,9 +1399,7 @@ public sealed partial class FileListControl : UserControl
 
     private async void AddFilesButton_Click(object sender, RoutedEventArgs e)
     {
-        _logService.Info(
-            "[FileListControl] Открытие диалога выбора файлов с повышенными привилегиями через Microsoft.Windows.Storage.Pickers",
-            "FileListControl");
+        _logService.Write("ui.file_picker.opening", LogLevel.Debug, LogStatus.Running, "Открывается системный диалог выбора файлов с повышенными привилегиями", source: SourceName, properties: LogProps.Create("Control", "FilePicker").With("IsAdmin", true));
 
         try
         {
@@ -1085,7 +1407,7 @@ public sealed partial class FileListControl : UserControl
             var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(App.CurrentMainWindow);
             // Получаем WindowId из HWND
             var windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(hwnd);
-            
+
             // Инициализируем picker с WindowId
             var picker = new Microsoft.Windows.Storage.Pickers.FileOpenPicker(windowId);
 
@@ -1108,18 +1430,18 @@ public sealed partial class FileListControl : UserControl
             var files = await picker.PickMultipleFilesAsync();
             if (files != null && files.Count > 0)
             {
-                _logService.Info(
-                    $"[FileListControl] Выбрано файлов вручную: {files.Count}",
-                    "FileListControl");
+                _logService.Write("ui.file_picker.completed", LogLevel.Debug, LogStatus.Succeeded, $"В диалоге выбора файлов выбрано объектов: {files.Count}", source: SourceName, properties: LogProps.Create("Count", files.Count));
+                var knownBefore = new HashSet<string>(Files.Select(f => f.FilePath), StringComparer.OrdinalIgnoreCase);
                 AddFiles(files.Select(f => f.Path));
+                var addedAudio = Files
+                    .Where(f => !knownBefore.Contains(f.FilePath) && IsAudioPath(f.FilePath))
+                    .ToList();
+                await MaybeAskAudioTitleAsync(addedAudio);
             }
         }
         catch (Exception ex)
         {
-            _logService.Exception(
-                ex,
-                "Ошибка при открытии диалогового окна выбора файлов через Microsoft.Windows.Storage.Pickers",
-                "FileListControl");
+            _logService.Write("ui.file_picker.failed", LogLevel.Warning, LogStatus.Failed, "Системный диалог выбора файлов не открыт", ex, SourceName, properties: LogProps.Create("ErrorCode", "FILE_PICKER_FAILED").With("Control", "FilePicker"));
         }
     }
 
@@ -1198,7 +1520,12 @@ public sealed partial class FileListControl : UserControl
                     }
                 }
 
+                var knownBefore = new HashSet<string>(Files.Select(f => f.FilePath), StringComparer.OrdinalIgnoreCase);
                 AddFiles(paths);
+                var addedAudio = Files
+                    .Where(f => !knownBefore.Contains(f.FilePath) && IsAudioPath(f.FilePath))
+                    .ToList();
+                await MaybeAskAudioTitleAsync(addedAudio);
             }
         }
         catch (Exception ex)
@@ -1213,11 +1540,7 @@ public sealed partial class FileListControl : UserControl
                 formatsList = "не удалось извлечь форматы";
             }
 
-            _logService.Exception(
-                ex,
-                $"Возникло исключение при обработке события Drop (перетаскивание файлов). " +
-                $"Доступные форматы в DataView: [{formatsList}]",
-                "FileListControl");
+            _logService.Write("ui.files.drop_failed", LogLevel.Warning, LogStatus.Failed, $"Обработка перетаскивания файлов не выполнена, доступные форматы: {formatsList}", ex, SourceName, properties: LogProps.Create("ErrorCode", "FILE_DROP_FAILED").With("Reason", LogRedactor.CompactSafeToken(formatsList)));
         }
     }
 
@@ -1238,21 +1561,14 @@ public sealed partial class FileListControl : UserControl
                     AdminWarningBar.IsOpen = true;
                     DragDropPromptTextBlock.Text = "Перетаскивание заблокировано (запущено от администратора)";
                     DragDropSubPromptTextBlock.Text = "Используйте кнопку «Добавить файлы» ниже для выбора файлов вручную.";
-                    
-                    _logService.Info(
-                        "FileListControl: Обнаружен запуск процесса от имени администратора. " +
-                        "Drag-and-Drop заблокирован операционной системой Windows (UIPI). " +
-                        "Пользователю выведено предупреждение в интерфейсе.",
-                        "FileListControl");
+
+                    _logService.Write("ui.files.drop_blocked_uipi", LogLevel.Warning, LogStatus.Skipped, "Перетаскивание файлов заблокировано системой: процесс запущен с повышенными привилегиями, в интерфейс выведено предупреждение", source: SourceName, properties: LogProps.Create("ErrorCode", "DROP_BLOCKED_BY_UIPI").With("IsAdmin", true));
                 }
             }
         }
         catch (Exception ex)
         {
-            _logService.Exception(
-                ex,
-                "Исключение при проверке прав администратора для управления отображением Drag-and-Drop",
-                "FileListControl");
+            _logService.Write("ui.admin_check.failed", LogLevel.Warning, LogStatus.Failed, "Проверка прав администратора для перетаскивания файлов не выполнена", ex, SourceName, properties: LogProps.Create("ErrorCode", "ADMIN_CHECK_FAILED"));
         }
     }
 
@@ -1264,7 +1580,7 @@ public sealed partial class FileListControl : UserControl
         if (string.IsNullOrWhiteSpace(url)) return;
 
         var item = new FileQueueItem(url);
-        
+
         // Добавляем дефолтные варианты качеств
         item.AvailableFormats.Add(new DownloadFormatItem
         {
@@ -1288,219 +1604,265 @@ public sealed partial class FileListControl : UserControl
         item.SelectedSubtitle = item.AvailableSubtitles[0];
 
         Files.Add(item);
-        
+
         // Запуск фонового получения информации
         _ = Task.Run(() => FetchUrlInfoAsync(item));
     }
 
     private async Task FetchUrlInfoAsync(FileQueueItem item)
     {
+        string processId = ProcessExecutionContext.CreateProcessId();
+        ProcessExecutionContext context = ProcessExecutionContext.Create(
+            "yt-dlp",
+            itemId: ProcessExecutionContext.HashArguments(item.FilePath),
+            attempt: 1);
+        string hostLabel = SafeHostLabel(item.FilePath);
+
         try
         {
             string ytdlpPath = _pathManager.GetBinaryPath("yt-dlp");
-            if (!File.Exists(ytdlpPath)) return;
+            if (!File.Exists(ytdlpPath))
+            {
+                return;
+            }
 
             string nodePath = _pathManager.GetBinaryPath("node");
-            string jsRuntimeArg = "";
-            if (File.Exists(nodePath))
-            {
-                jsRuntimeArg = $"--js-runtimes \"node:{nodePath}\" ";
-            }
+            string jsRuntimeArg = File.Exists(nodePath) ? "--js-runtimes \"node:node\" " : string.Empty;
+            string arguments = $"{jsRuntimeArg}--dump-json \"{item.FilePath}\"";
 
-            var startInfo = new ProcessStartInfo
+            var runner = new DirectProcessRunner(_logService);
+            string stdout = string.Empty;
+            var collector = new ProcessOutputBuffer(maxLines: 4096, maxBytes: 4 * 1024 * 1024)
             {
-                FileName = ytdlpPath,
-                Arguments = $"{jsRuntimeArg}--dump-json \"{item.FilePath}\"",
-                CreateNoWindow = true,
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = false
+                Stream = "stdout"
             };
 
-            using var process = new Process { StartInfo = startInfo };
-            process.Start();
-            ActiveProcessTracker.Register(process);
+            ProcessResult result = await runner.RunAsync(
+                ytdlpPath,
+                "yt-dlp",
+                arguments,
+                context,
+                onOutputLine: line => collector.Append(line),
+                cancellationToken: CancellationToken.None,
+                workingDir: Path.GetDirectoryName(ytdlpPath));
 
-            string stdout;
-            try
+            stdout = string.Join(string.Empty, collector.Snapshot());
+            if (!result.IsSuccess || string.IsNullOrWhiteSpace(stdout))
             {
-                // Читаем stdout асинхронно
-                stdout = await process.StandardOutput.ReadToEndAsync();
-                await process.WaitForExitAsync();
+                return;
             }
-            finally
-            {
-                ActiveProcessTracker.Unregister(process);
-            }
 
-            if (process.ExitCode == 0 && !string.IsNullOrWhiteSpace(stdout))
-            {
-                using var doc = System.Text.Json.JsonDocument.Parse(stdout);
-                var root = doc.RootElement;
+            using var doc = System.Text.Json.JsonDocument.Parse(stdout);
+            var root = doc.RootElement;
 
-                // 1. Get Title
-                if (root.TryGetProperty("title", out var titleProp))
+            // 1. Get Title
+            if (root.TryGetProperty("title", out var titleProp))
+            {
+                string title = titleProp.GetString() ?? "";
+                if (!string.IsNullOrEmpty(title))
                 {
-                    string title = titleProp.GetString() ?? "";
-                    if (!string.IsNullOrEmpty(title))
+                    _dispatcherQueue.TryEnqueue(() =>
                     {
-                        _dispatcherQueue.TryEnqueue(() =>
-                        {
-                            item.DisplayName = title;
-                        });
+                        item.DisplayName = title;
+                    });
+                }
+            }
+
+            // 2. Parse Formats с дедупликацией по уникальным разрешениям
+            var tempFormats = new List<DownloadFormatItem>();
+            tempFormats.Add(new DownloadFormatItem
+            {
+                Id = "best_quality",
+                DisplayName = "Наилучшее качество (Видео+Аудио)",
+                FormatArg = "bv*+ba/b",
+                IsAudioOnly = false,
+                Height = 99999
+            });
+            tempFormats.Add(new DownloadFormatItem
+            {
+                Id = "best_audio",
+                DisplayName = "Только звук (Наилучшее качество)",
+                FormatArg = "ba/b",
+                IsAudioOnly = true,
+                Height = 0
+            });
+
+            if (root.TryGetProperty("formats", out var formatsProp) && formatsProp.ValueKind == System.Text.Json.JsonValueKind.Array)
+            {
+                // Вспомогательный класс для сбора и дедупликации потоков
+                var videoStreamGroups = new Dictionary<string, (int height, int fps, double tbr, string formatId, string note)>();
+
+                foreach (var format in formatsProp.EnumerateArray())
+                {
+                    string formatId = format.TryGetProperty("format_id", out var fid) ? fid.GetString() ?? "" : "";
+                    if (string.IsNullOrEmpty(formatId)) continue;
+
+                    bool hasVideo = format.TryGetProperty("vcodec", out var vcodecProp) && vcodecProp.GetString() != "none";
+                    if (!hasVideo) continue;
+
+                    int height = 0;
+                    if (format.TryGetProperty("height", out var hP) && hP.ValueKind == System.Text.Json.JsonValueKind.Number)
+                    {
+                        height = (int)Math.Round(hP.GetDouble());
+                    }
+
+                    if (height <= 0) continue;
+
+                    int fps = 0;
+                    if (format.TryGetProperty("fps", out var fpsP) && fpsP.ValueKind == System.Text.Json.JsonValueKind.Number)
+                    {
+                        fps = (int)Math.Round(fpsP.GetDouble());
+                    }
+
+                    double tbr = 0;
+                    if (format.TryGetProperty("tbr", out var tbrP) && tbrP.ValueKind == System.Text.Json.JsonValueKind.Number)
+                    {
+                        tbr = tbrP.GetDouble();
+                    }
+
+                    // Нормализуем FPS для группировки: 50-60 -> 60fps, иначе стандарт
+                    int fpsGroup = fps >= 48 ? 60 : 0;
+                    string groupKey = $"{height}p" + (fpsGroup > 0 ? $"_{fpsGroup}fps" : "");
+
+                    // Понятное обозначение разрешения
+                    string resName = height switch
+                    {
+                        >= 2160 => $"4K Ultra HD ({height}p)",
+                        >= 1440 => $"2K Quad HD ({height}p)",
+                        >= 1080 => $"Full HD ({height}p)",
+                        >= 720 => $"HD ({height}p)",
+                        _ => $"{height}p"
+                    };
+
+                    if (fpsGroup > 0)
+                    {
+                        resName += $" {fpsGroup}fps";
+                    }
+
+                    // Сохраняем поток с максимальным битрейтом для данного разрешения
+                    if (!videoStreamGroups.TryGetValue(groupKey, out var existing) || tbr > existing.tbr)
+                    {
+                        videoStreamGroups[groupKey] = (height, fpsGroup, tbr, formatId, resName);
                     }
                 }
 
-                // 2. Parse Formats с дедупликацией по уникальным разрешениям
-                var tempFormats = new List<DownloadFormatItem>();
-                tempFormats.Add(new DownloadFormatItem
-                {
-                    Id = "best_quality",
-                    DisplayName = "Наилучшее качество (Видео+Аудио)",
-                    FormatArg = "bv*+ba/b",
-                    IsAudioOnly = false,
-                    Height = 99999
-                });
-                tempFormats.Add(new DownloadFormatItem
-                {
-                    Id = "best_audio",
-                    DisplayName = "Только звук (Наилучшее качество)",
-                    FormatArg = "ba/b",
-                    IsAudioOnly = true,
-                    Height = 0
-                });
+                // Сортируем разрешения по убыванию качества (высота, затем fps)
+                var sortedStreams = videoStreamGroups.Values
+                    .OrderByDescending(v => v.height)
+                    .ThenByDescending(v => v.fps)
+                    .ToList();
 
-                if (root.TryGetProperty("formats", out var formatsProp) && formatsProp.ValueKind == System.Text.Json.JsonValueKind.Array)
+                foreach (var stream in sortedStreams)
                 {
-                    // Вспомогательный класс для сбора и дедупликации потоков
-                    var videoStreamGroups = new Dictionary<string, (int height, int fps, double tbr, string formatId, string note)>();
-
-                    foreach (var format in formatsProp.EnumerateArray())
+                    tempFormats.Add(new DownloadFormatItem
                     {
-                        string formatId = format.TryGetProperty("format_id", out var fid) ? fid.GetString() ?? "" : "";
-                        if (string.IsNullOrEmpty(formatId)) continue;
-
-                        bool hasVideo = format.TryGetProperty("vcodec", out var vcodecProp) && vcodecProp.GetString() != "none";
-                        if (!hasVideo) continue;
-
-                        int height = 0;
-                        if (format.TryGetProperty("height", out var hP) && hP.ValueKind == System.Text.Json.JsonValueKind.Number)
-                        {
-                            height = (int)Math.Round(hP.GetDouble());
-                        }
-
-                        if (height <= 0) continue;
-
-                        int fps = 0;
-                        if (format.TryGetProperty("fps", out var fpsP) && fpsP.ValueKind == System.Text.Json.JsonValueKind.Number)
-                        {
-                            fps = (int)Math.Round(fpsP.GetDouble());
-                        }
-
-                        double tbr = 0;
-                        if (format.TryGetProperty("tbr", out var tbrP) && tbrP.ValueKind == System.Text.Json.JsonValueKind.Number)
-                        {
-                            tbr = tbrP.GetDouble();
-                        }
-
-                        // Нормализуем FPS для группировки: 50-60 -> 60fps, иначе стандарт
-                        int fpsGroup = fps >= 48 ? 60 : 0;
-                        string groupKey = $"{height}p" + (fpsGroup > 0 ? $"_{fpsGroup}fps" : "");
-
-                        // Понятное обозначение разрешения
-                        string resName = height switch
-                        {
-                            >= 2160 => $"4K Ultra HD ({height}p)",
-                            >= 1440 => $"2K Quad HD ({height}p)",
-                            >= 1080 => $"Full HD ({height}p)",
-                            >= 720 => $"HD ({height}p)",
-                            _ => $"{height}p"
-                        };
-
-                        if (fpsGroup > 0)
-                        {
-                            resName += $" {fpsGroup}fps";
-                        }
-
-                        // Сохраняем поток с максимальным битрейтом для данного разрешения
-                        if (!videoStreamGroups.TryGetValue(groupKey, out var existing) || tbr > existing.tbr)
-                        {
-                            videoStreamGroups[groupKey] = (height, fpsGroup, tbr, formatId, resName);
-                        }
-                    }
-
-                    // Сортируем разрешения по убыванию качества (высота, затем fps)
-                    var sortedStreams = videoStreamGroups.Values
-                        .OrderByDescending(v => v.height)
-                        .ThenByDescending(v => v.fps)
-                        .ToList();
-
-                    foreach (var stream in sortedStreams)
-                    {
-                        tempFormats.Add(new DownloadFormatItem
-                        {
-                            Id = $"video_{stream.height}p_{stream.fps}",
-                            DisplayName = stream.note,
-                            FormatArg = $"bv*[height<={stream.height}]+ba/b[height<={stream.height}]/b",
-                            IsAudioOnly = false,
-                            Height = stream.height
-                        });
-                    }
+                        Id = $"video_{stream.height}p_{stream.fps}",
+                        DisplayName = stream.note,
+                        FormatArg = $"bv*[height<={stream.height}]+ba/b[height<={stream.height}]/b",
+                        IsAudioOnly = false,
+                        Height = stream.height
+                    });
                 }
+            }
 
-                // 3. Parse Subtitles
-                var tempSubtitles = new List<DownloadSubtitleItem>();
-                tempSubtitles.Add(new DownloadSubtitleItem { Code = "none", DisplayName = "Без субтитров" });
-                tempSubtitles.Add(new DownloadSubtitleItem { Code = "all", DisplayName = "Все субтитры" });
+            // 3. Parse Subtitles
+            var tempSubtitles = new List<DownloadSubtitleItem>();
+            tempSubtitles.Add(new DownloadSubtitleItem { Code = "none", DisplayName = "Без субтитров" });
+            tempSubtitles.Add(new DownloadSubtitleItem { Code = "all", DisplayName = "Все субтитры" });
 
-                var addedCodes = new HashSet<string>();
+            var addedCodes = new HashSet<string>();
 
-                if (root.TryGetProperty("subtitles", out var subsProp) && subsProp.ValueKind == System.Text.Json.JsonValueKind.Object)
+            if (root.TryGetProperty("subtitles", out var subsProp) && subsProp.ValueKind == System.Text.Json.JsonValueKind.Object)
+            {
+                foreach (var prop in subsProp.EnumerateObject())
                 {
-                    foreach (var prop in subsProp.EnumerateObject())
+                    string code = prop.Name;
+                    addedCodes.Add(code);
+                    string name = TranslateLanguageCode(code);
+                    tempSubtitles.Add(new DownloadSubtitleItem { Code = code, DisplayName = $"{name} ({code})" });
+                }
+            }
+
+            if (root.TryGetProperty("automatic_captions", out var autoSubsProp) && autoSubsProp.ValueKind == System.Text.Json.JsonValueKind.Object)
+            {
+                foreach (var prop in autoSubsProp.EnumerateObject())
+                {
+                    string code = prop.Name;
+                    if (!addedCodes.Contains(code))
                     {
-                        string code = prop.Name;
                         addedCodes.Add(code);
                         string name = TranslateLanguageCode(code);
-                        tempSubtitles.Add(new DownloadSubtitleItem { Code = code, DisplayName = $"{name} ({code})" });
+                        tempSubtitles.Add(new DownloadSubtitleItem { Code = code, DisplayName = $"{name} ({code}) [авто]" });
                     }
                 }
-
-                if (root.TryGetProperty("automatic_captions", out var autoSubsProp) && autoSubsProp.ValueKind == System.Text.Json.JsonValueKind.Object)
-                {
-                    foreach (var prop in autoSubsProp.EnumerateObject())
-                    {
-                        string code = prop.Name;
-                        if (!addedCodes.Contains(code))
-                        {
-                            addedCodes.Add(code);
-                            string name = TranslateLanguageCode(code);
-                            tempSubtitles.Add(new DownloadSubtitleItem { Code = code, DisplayName = $"{name} ({code}) [авто]" });
-                        }
-                    }
-                }
-
-                _dispatcherQueue.TryEnqueue(() =>
-                {
-                    item.AvailableFormats.Clear();
-                    foreach (var f in tempFormats)
-                    {
-                        item.AvailableFormats.Add(f);
-                    }
-                    item.SelectedFormat = item.AvailableFormats.FirstOrDefault(f => f.Id == "best_quality") ?? item.AvailableFormats.FirstOrDefault();
-
-                    item.AvailableSubtitles.Clear();
-                    foreach (var s in tempSubtitles)
-                    {
-                        item.AvailableSubtitles.Add(s);
-                    }
-                    item.SelectedSubtitle = item.AvailableSubtitles.FirstOrDefault(s => s.Code == "none") ?? item.AvailableSubtitles.FirstOrDefault();
-                });
             }
+
+            _dispatcherQueue.TryEnqueue(() =>
+            {
+                item.AvailableFormats.Clear();
+                foreach (var f in tempFormats)
+                {
+                    item.AvailableFormats.Add(f);
+                }
+                item.SelectedFormat = item.AvailableFormats.FirstOrDefault(f => f.Id == "best_quality") ?? item.AvailableFormats.FirstOrDefault();
+
+                item.AvailableSubtitles.Clear();
+                foreach (var s in tempSubtitles)
+                {
+                    item.AvailableSubtitles.Add(s);
+                }
+                item.SelectedSubtitle = item.AvailableSubtitles.FirstOrDefault(s => s.Code == "none") ?? item.AvailableSubtitles.FirstOrDefault();
+            });
+        }
+        catch (System.Text.Json.JsonException ex)
+        {
+            WriteMetadataFailure(
+                context,
+                processId,
+                hostLabel,
+                "malformed-metadata",
+                "Ответ фонового запроса метаданных не удалось разобрать",
+                ex);
         }
         catch (Exception ex)
         {
-            _logService.Exception(ex, $"Ошибка фонового запроса информации для {item.FilePath}", "FileListControl");
+            WriteMetadataFailure(
+                context,
+                processId,
+                hostLabel,
+                "metadata-request-failed",
+                "Ошибка фонового запроса информации о ссылке",
+                ex);
+        }
+    }
+
+    private void WriteMetadataFailure(
+        ProcessExecutionContext context,
+        string processId,
+        string hostLabel,
+        string errorCode,
+        string message,
+        Exception exception)
+    {
+        try
+        {
+            _logService.Write(
+                "file_list.metadata_failed",
+                LogLevel.Warning,
+                LogStatus.Skipped,
+                message,
+                exception,
+                "FileListControl",
+                context: context.ToLogContext().WithProcess(processId),
+                properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["Stage"] = "metadata",
+                    ["ErrorCode"] = errorCode,
+                    ["HostLabel"] = hostLabel
+                });
+        }
+        catch (Exception)
+        {
         }
     }
 

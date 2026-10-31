@@ -1,5 +1,6 @@
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
 using System;
+
 using Microsoft.UI.Xaml.Data;
 
 namespace KTools_App.Converters;

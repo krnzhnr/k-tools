@@ -20,8 +20,22 @@ namespace KTools_App.Tests.Core;
 /// Все комментарии выполнены на русском языке.
 /// </summary>
 [TestClass]
+[DoNotParallelize]
 public class CoreHelpersTests
 {
+    [TestInitialize]
+    public void SetUp()
+    {
+        ActiveProcessTracker.ResetForTests();
+    }
+
+    [TestCleanup]
+    public void TearDown()
+    {
+        ActiveProcessTracker.KillAll(TimeSpan.FromSeconds(1));
+        ActiveProcessTracker.ResetForTests();
+    }
+
     // =====================================================================
     //                          ObservableRangeCollection
     // =====================================================================

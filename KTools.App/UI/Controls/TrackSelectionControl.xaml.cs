@@ -1,23 +1,28 @@
 // -*- coding: utf-8 -*-
 using System;
-using KTools_App.Services.Contracts;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
+using System.Globalization;
 using System.IO;
 using System.Linq;
-using Microsoft.UI.Xaml;
-using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Text;
-using Windows.UI.Text;
+
+using CommunityToolkit.Mvvm.Messaging;
+using CommunityToolkit.WinUI.Controls;
 
 using KTools_App.Core;
+using KTools_App.Diagnostics;
 using KTools_App.Scripts;
+using KTools_App.Services.Contracts;
 using KTools_App.ViewModels;
-using CommunityToolkit.WinUI.Controls;
-using CommunityToolkit.Mvvm.Messaging;
+
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.UI.Text;
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
+
+using Windows.UI.Text;
 
 namespace KTools_App.UI.Controls;
 
@@ -79,8 +84,8 @@ public sealed class TrackNodeItem
     /// Возвращает отрицательный отступ слева для дочерних узлов (дорожек),
     /// чтобы скрыть пустое пространство, зарезервированное под стрелку раскрытия.
     /// </summary>
-    public Thickness NodeMargin => IsFile 
-        ? new Thickness(0, 0, 0, 0) 
+    public Thickness NodeMargin => IsFile
+        ? new Thickness(0, 0, 0, 0)
         : new Thickness(-24, 0, 0, 0);
 }
 
@@ -91,10 +96,11 @@ public sealed class TrackNodeItem
 /// </summary>
 public sealed partial class TrackSelectionControl : UserControl
 {
+    private const string SourceName = nameof(TrackSelectionControl);
     public TrackSelectionViewModel ViewModel { get; }
     private readonly ILogService _logService;
 
-    private readonly Microsoft.UI.Dispatching.DispatcherQueue _dispatcherQueue = 
+    private readonly Microsoft.UI.Dispatching.DispatcherQueue _dispatcherQueue =
         Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
     private ObservableCollection<FileQueueItem>? _files;
     private readonly HashSet<FileQueueItem> _subscribedItems = new();
@@ -123,6 +129,7 @@ public sealed partial class TrackSelectionControl : UserControl
     private bool _isUpdatingSelection;
     private bool _hasShownScrollTip;
     private bool _isUnloaded;
+    private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _rebuildTreeTimer;
 
     public TrackSelectionControl()
     {
@@ -132,6 +139,11 @@ public sealed partial class TrackSelectionControl : UserControl
         InitializeComponent();
         Loaded += TrackSelectionControl_Loaded;
         Unloaded += TrackSelectionControl_Unloaded;
+
+        _rebuildTreeTimer = _dispatcherQueue.CreateTimer();
+        _rebuildTreeTimer.Interval = TimeSpan.FromMilliseconds(100);
+        _rebuildTreeTimer.IsRepeating = false;
+        _rebuildTreeTimer.Tick += (s, e) => RebuildTreeCore();
     }
 
     /// <summary>
@@ -165,17 +177,19 @@ public sealed partial class TrackSelectionControl : UserControl
     {
         _isUnloaded = false;
         UpdateHeaderAndDescription();
-        _logService.Info(
-            "Загрузка виджета выбора дорожек: " +
-            "восстановление зарегистрированных подписок и перестроение дерева",
-            "TrackSelectionControl");
+        _logService.Write(
+            "ui.track_selection.loaded",
+            LogLevel.Debug,
+            LogStatus.Succeeded,
+            "Панель выбора дорожек загружена, подписки восстановлены",
+            source: SourceName);
 
         if (_files != null)
         {
             _files.CollectionChanged -= OnFilesCollectionChanged;
             _files.CollectionChanged += OnFilesCollectionChanged;
             ViewModel.Files = _files;
-            
+
             // Восстанавливаем индивидуальные подписки на файлы
             UnsubscribeFromItems();
             SubscribeToItems();
@@ -191,7 +205,15 @@ public sealed partial class TrackSelectionControl : UserControl
     /// <param name="files">Наблюдаемая коллекция импортированных файлов.</param>
     public void Populate(ObservableCollection<FileQueueItem> files)
     {
-        _logService.Info("Инициализация привязки очереди файлов в виджете дорожек", "TrackSelectionControl");
+        _logService.Write(
+            "ui.track_selection.queue_bound",
+            LogLevel.Debug,
+            LogStatus.Changed,
+            "Панель выбора дорожек привязана к очереди файлов",
+            source: SourceName);
+        // Новая привязка — новый контекст (смена скрипта): фильтры сбрасываем.
+        // Переключение вкладок идёт через Loaded/RebuildTree без Populate и фильтры сохраняет.
+        ViewModel.ClearAllRules();
         if (_files != null)
         {
             _files.CollectionChanged -= OnFilesCollectionChanged;
@@ -221,8 +243,6 @@ public sealed partial class TrackSelectionControl : UserControl
 
         try
         {
-            _logService.Info("Сбор выбранных элементов из дерева TreeView через обход RootNodes", "TrackSelectionControl");
-
             var selectedNodes = TracksTreeView.SelectedNodes;
 
             foreach (var fileNode in TracksTreeView.RootNodes)
@@ -261,11 +281,26 @@ public sealed partial class TrackSelectionControl : UserControl
 
             int tracksCount = selectedTracks.Values.Sum(l => l.Count);
             int attachCount = selectedAttachments.Values.Sum(l => l.Count);
-            _logService.Info($"Сбор завершен. Выбрано дорожек: {tracksCount}, шрифтов: {attachCount}", "TrackSelectionControl");
+            _logService.Write(
+                "ui.track_selection.collected",
+                LogLevel.Debug,
+                LogStatus.Succeeded,
+                $"Выбор в панели дорожек собран: дорожек {tracksCount}, вложений {attachCount}",
+                source: SourceName,
+                properties: LogProps
+                    .Create("Count", tracksCount)
+                    .With("Total", attachCount));
         }
         catch (Exception ex)
         {
-            _logService.Exception(ex, "Критическая ошибка при сборе выбранных дорожек из дерева TreeView", "TrackSelectionControl");
+            _logService.Write(
+                "ui.track_selection.collect_failed",
+                LogLevel.Error,
+                LogStatus.Failed,
+                "Выбор дорожек и вложений не собран",
+                ex,
+                SourceName,
+                properties: LogProps.Create("ErrorCode", "TRACK_SELECTION_COLLECT_FAILED"));
         }
     }
 
@@ -304,10 +339,14 @@ public sealed partial class TrackSelectionControl : UserControl
     {
         _dispatcherQueue.TryEnqueue(() =>
         {
-            _logService.DebugLog(
-                "Синхронизация списка файлов в дереве выбора дорожек", 
-                "TrackSelectionControl");
-            
+            _logService.Write(
+                "ui.track_selection.files_synced",
+                LogLevel.Debug,
+                LogStatus.Changed,
+                "Список файлов панели дорожек синхронизирован",
+                source: SourceName,
+                properties: LogProps.Create("Count", _files.Count));
+
             // Обновляем подписки на элементы
             UnsubscribeFromItems();
             SubscribeToItems();
@@ -327,10 +366,15 @@ public sealed partial class TrackSelectionControl : UserControl
             {
                 if (sender is FileQueueItem item)
                 {
-                    _logService.Info(
-                        $"Получено уведомление о завершении анализа для " +
-                        $"файла: {item.FileName}. Перестраиваем дерево.", 
-                        "TrackSelectionControl");
+                    _logService.Write(
+                        "ui.track_selection.analysis_completed",
+                        LogLevel.Debug,
+                        LogStatus.Changed,
+                        $"Анализ файла '{item.FileName}' завершён, дерево дорожек перестраивается",
+                        source: SourceName,
+                        properties: LogProps
+                            .Create("FileName", item.FileName)
+                            .With("Count", 1));
                     RebuildTree();
                 }
             });
@@ -342,6 +386,15 @@ public sealed partial class TrackSelectionControl : UserControl
     /// Гарантирует сохранение пользовательского выбора при асинхронных обновлениях.
     /// </summary>
     private void RebuildTree()
+    {
+        _rebuildTreeTimer.Stop();
+        _rebuildTreeTimer.Start();
+    }
+
+    /// <summary>
+    /// Отложенная перестройка дерева (не более одного запланированного прохода на интервал).
+    /// </summary>
+    private void RebuildTreeCore()
     {
         _dispatcherQueue.TryEnqueue(() =>
         {
@@ -363,14 +416,18 @@ public sealed partial class TrackSelectionControl : UserControl
                     }
                 }
 
-                // Принудительно очищаем выбор, дерево, сбрасываем панель фильтров и активные правила
+                // Принудительно очищаем выбор и дерево. Активные правила фильтров
+                // сохраняем: переключение вкладок Файлы/Дорожки дёргает Loaded,
+                // а сброс фильтров нужен только при смене контекста (см. Populate)
+                // и пустой очереди (ветка ниже).
                 TracksTreeView.SelectedNodes.Clear();
                 TracksTreeView.RootNodes.Clear();
                 FiltersBorder.Visibility = Visibility.Collapsed;
-                ViewModel.ClearAllRules();
 
                 if (_files == null || _files.Count == 0)
                 {
+                    // Очереди нет — фильтровать нечего, активные правила сбрасываем.
+                    ViewModel.ClearAllRules();
                     // Показываем пустое состояние
                     EmptyStatePanel.Visibility = Visibility.Visible;
                     TracksTreeView.Visibility = Visibility.Collapsed;
@@ -386,14 +443,20 @@ public sealed partial class TrackSelectionControl : UserControl
                         textBlock.Text = "Очередь файлов пуста. Пожалуйста, добавьте медиафайлы на вкладке «Файлы».";
                     }
 
-                    _logService.Info("Дерево дорожек очищено, так как очередь файлов пуста", "TrackSelectionControl");
+                    _logService.Write(
+                        "ui.track_selection.tree_cleared",
+                        LogLevel.Debug,
+                        LogStatus.Skipped,
+                        "Дерево дорожек очищено: очередь файлов пуста",
+                        source: SourceName,
+                        properties: LogProps.Create("Count", 0));
                     return;
                 }
 
                 // Включаем отображение загрузки, если идет анализ
                 bool isAnyAnalyzing = _files.Any(f => f.MediaInfo == null);
                 EmptyStatePanel.Visibility = isAnyAnalyzing ? Visibility.Visible : Visibility.Collapsed;
-                
+
                 if (isAnyAnalyzing)
                 {
                     if (EmptyStatePanel.Children.FirstOrDefault(c => c is ProgressRing) is ProgressRing ring)
@@ -422,14 +485,14 @@ public sealed partial class TrackSelectionControl : UserControl
                         IsFile = true
                     };
 
-                    var fileNode = new TreeViewNode 
-                    { 
+                    var fileNode = new TreeViewNode
+                    {
                         Content = fileNodeItem,
-                        IsExpanded = true 
+                        IsExpanded = true
                     };
 
                     var structure = fileItem.MediaInfo!;
-                    
+
                     // Определяем, есть ли уже сохраненный выбор для ДАННОГО конкретного файла
                     bool hasSavedForThisFile = savedTracks.ContainsKey(fileItem.FilePath) || savedAttachments.ContainsKey(fileItem.FilePath);
 
@@ -455,7 +518,7 @@ public sealed partial class TrackSelectionControl : UserControl
                         };
                         var trackNode = new TreeViewNode { Content = trackItem };
                         fileNode.Children.Add(trackNode);
-                        
+
                         // Выбираем только если узел был выбран пользователем ранее
                         if (savedTracks.TryGetValue(
                             fileItem.FilePath,
@@ -488,7 +551,7 @@ public sealed partial class TrackSelectionControl : UserControl
                         };
                         var trackNode = new TreeViewNode { Content = trackItem };
                         fileNode.Children.Add(trackNode);
-                        
+
                         if (!isMp4Unsupp && savedTracks.TryGetValue(
                             fileItem.FilePath,
                             out var list) &&
@@ -518,7 +581,7 @@ public sealed partial class TrackSelectionControl : UserControl
                         };
                         var trackNode = new TreeViewNode { Content = trackItem };
                         fileNode.Children.Add(trackNode);
-                        
+
                         if (!isMp4Unsupp && savedTracks.TryGetValue(
                             fileItem.FilePath,
                             out var list) &&
@@ -544,7 +607,7 @@ public sealed partial class TrackSelectionControl : UserControl
                         };
                         var trackNode = new TreeViewNode { Content = trackItem };
                         fileNode.Children.Add(trackNode);
-                        
+
                         if (!isMp4Container && savedAttachments.TryGetValue(
                             fileItem.FilePath,
                             out var list) &&
@@ -606,11 +669,26 @@ public sealed partial class TrackSelectionControl : UserControl
                 // Синхронизируем начальное или восстановленное состояние выбора с ActiveScript и моделью представления
                 SyncActiveScriptSelectionAndNotify();
 
-                _logService.Info($"Дерево дорожек успешно перестроено для {_files.Count} файлов (Выбрано по умолчанию/восстановлено: {nodesToSelect.Count})", "TrackSelectionControl");
+                _logService.Write(
+                    "ui.track_selection.tree_rebuilt",
+                    LogLevel.Debug,
+                    LogStatus.Succeeded,
+                    $"Дерево дорожек перестроено для файлов: {_files.Count}, дорожек выбрано: {nodesToSelect.Count}",
+                    source: SourceName,
+                    properties: LogProps
+                        .Create("Count", _files.Count)
+                        .With("Total", nodesToSelect.Count));
             }
             catch (Exception ex)
             {
-                _logService.Exception(ex, "Критическая ошибка во время перестроения дерева дорожек в UI", "TrackSelectionControl");
+                _logService.Write(
+                    "ui.track_selection.tree_rebuild_failed",
+                    LogLevel.Error,
+                    LogStatus.Failed,
+                    "Дерево дорожек не перестроено",
+                    ex,
+                    SourceName,
+                    properties: LogProps.Create("ErrorCode", "TRACK_TREE_REBUILD_FAILED"));
             }
         });
     }
@@ -626,11 +704,17 @@ public sealed partial class TrackSelectionControl : UserControl
     {
         try
         {
-            _logService.Info(
-                $"Обновление панели фильтров для категории: {category}",
-                "TrackSelectionControl");
+            _logService.Write(
+                "ui.track_filter.panel_updated",
+                LogLevel.Debug,
+                LogStatus.Changed,
+                $"Панель фильтров дорожек обновлена для категории: {category}",
+                source: SourceName,
+                properties: LogProps.Create("Group", category));
 
             // Для аудио/видео настраиваем отображение специальной кнопки деталей
+            // Текст кнопки идентификаторов един для всех категорий.
+            IdFilterText.Text = "ID ▼";
             if (category == "video")
             {
                 DetailFilterText.Text = "Разрешение ▼";
@@ -660,6 +744,20 @@ public sealed partial class TrackSelectionControl : UserControl
                     "extension",
                     DetailFilterContainer,
                     DetailFilterButton);
+
+                // Для вложений фильтр идентификаторов не строится и кнопка скрывается.
+                // Для video/audio/subtitles группа «id» остаётся первой слева (ветка ниже).
+                IdFilterButton.Visibility = Visibility.Collapsed;
+                IdInfoBadge.Visibility = Visibility.Collapsed;
+                _logService.Write(
+                    "ui.track_filter.group_absent",
+                    LogLevel.Debug,
+                    LogStatus.Skipped,
+                    "Фильтр идентификаторов для вложений скрыт, группа не строится",
+                    source: SourceName,
+                    properties: LogProps
+                        .Create("Group", category)
+                        .With("Key", "id"));
 
                 PopulateFilterGroup(
                     category,
@@ -700,6 +798,12 @@ public sealed partial class TrackSelectionControl : UserControl
 
                 PopulateFilterGroup(
                     category,
+                    "id",
+                    IdFilterContainer,
+                    IdFilterButton);
+
+                PopulateFilterGroup(
+                    category,
                     "name",
                     NameFilterContainer,
                     NameFilterButton);
@@ -707,10 +811,14 @@ public sealed partial class TrackSelectionControl : UserControl
         }
         catch (Exception ex)
         {
-            _logService.Exception(
+            _logService.Write(
+                "ui.track_filter.panel_update_failed",
+                LogLevel.Warning,
+                LogStatus.Failed,
+                "Панель фильтров дорожек не обновлена",
                 ex,
-                "Исключение при обновлении панели фильтров",
-                "TrackSelectionControl");
+                SourceName,
+                properties: LogProps.Create("ErrorCode", "TRACK_FILTER_PANEL_FAILED"));
         }
     }
 
@@ -735,15 +843,32 @@ public sealed partial class TrackSelectionControl : UserControl
             values.Count == 0)
         {
             parentButton.Visibility = Visibility.Collapsed;
-            _logService.DebugLog(
-                $"Свойства {propKey} для категории {category} " +
-                "отсутствуют. Кнопка скрыта.",
-                "TrackSelectionControl");
+            _logService.Write(
+                "ui.track_filter.group_absent",
+                LogLevel.Debug,
+                LogStatus.Skipped,
+                $"Свойства «{propKey}» для категории «{category}» отсутствуют, фильтр скрыт",
+                source: SourceName,
+                properties: LogProps
+                    .Create("Group", category)
+                    .With("Key", LogRedactor.CompactSafeToken(propKey)));
             return;
         }
 
         parentButton.Visibility = Visibility.Visible;
-        var sortedValues = values.OrderBy(v => v).ToList();
+        // Идентификаторы сортируем численно, иначе строковая сортировка даст «10» раньше «2».
+        List<string> sortedValues;
+        if (propKey == "id")
+        {
+            sortedValues = values
+                .OrderBy(v => int.TryParse(v, NumberStyles.Integer, CultureInfo.InvariantCulture, out int n) ? n : int.MaxValue)
+                .ThenBy(v => v, StringComparer.Ordinal)
+                .ToList();
+        }
+        else
+        {
+            sortedValues = values.OrderBy(v => v).ToList();
+        }
 
         foreach (var val in sortedValues)
         {
@@ -770,10 +895,16 @@ public sealed partial class TrackSelectionControl : UserControl
             container.Children.Add(cb);
         }
 
-        _logService.DebugLog(
-            $"Заполнена группа фильтров [{category}] {propKey}. " +
-            $"Добавлено чекбоксов: {sortedValues.Count}",
-            "TrackSelectionControl");
+        _logService.Write(
+            "ui.track_filter.group_filled",
+            LogLevel.Debug,
+            LogStatus.Succeeded,
+            $"Группа фильтров «{category}» / «{propKey}» заполнена, значений: {sortedValues.Count}",
+            source: SourceName,
+            properties: LogProps
+                .Create("Group", category)
+                .With("Key", LogRedactor.CompactSafeToken(propKey))
+                .With("Count", sortedValues.Count));
     }
 
     /// <summary>
@@ -794,7 +925,15 @@ public sealed partial class TrackSelectionControl : UserControl
                 LanguageFilterText.Text = "Язык ▼";
                 LanguageInfoBadge.Value = langRules.Count;
                 LanguageInfoBadge.Visibility = Visibility.Visible;
-                _logService.DebugLog($"Включен бейдж языка: {langRules.Count} правил", "TrackSelectionControl");
+                _logService.Write(
+                    "ui.track_filter.badge_updated",
+                    LogLevel.Debug,
+                    LogStatus.Changed,
+                    $"Бейдж языка обновлён, правил: {langRules.Count}",
+                    source: SourceName,
+                    properties: LogProps
+                        .Create("Group", "language")
+                        .With("Count", langRules.Count));
             }
             else
             {
@@ -811,7 +950,15 @@ public sealed partial class TrackSelectionControl : UserControl
                 CodecFilterText.Text = "Кодек ▼";
                 CodecInfoBadge.Value = codecRules.Count;
                 CodecInfoBadge.Visibility = Visibility.Visible;
-                _logService.DebugLog($"Включен бейдж кодека: {codecRules.Count} правил", "TrackSelectionControl");
+                _logService.Write(
+                    "ui.track_filter.badge_updated",
+                    LogLevel.Debug,
+                    LogStatus.Changed,
+                    $"Бейдж кодека обновлён, правил: {codecRules.Count}",
+                    source: SourceName,
+                    properties: LogProps
+                        .Create("Group", "codec")
+                        .With("Count", codecRules.Count));
             }
             else
             {
@@ -844,7 +991,15 @@ public sealed partial class TrackSelectionControl : UserControl
                 DetailFilterText.Text = $"{detailLabelBase} ▼";
                 DetailInfoBadge.Value = detailRules.Count;
                 DetailInfoBadge.Visibility = Visibility.Visible;
-                _logService.DebugLog($"Включен бейдж деталей ({detailLabelBase}): {detailRules.Count} правил", "TrackSelectionControl");
+                _logService.Write(
+                    "ui.track_filter.badge_updated",
+                    LogLevel.Debug,
+                    LogStatus.Changed,
+                    $"Бейдж деталей обновлён, правил: {detailRules.Count}",
+                    source: SourceName,
+                    properties: LogProps
+                        .Create("Group", "details")
+                        .With("Count", detailRules.Count));
             }
             else
             {
@@ -865,7 +1020,15 @@ public sealed partial class TrackSelectionControl : UserControl
                 NameFilterText.Text = $"{nameLabelBase} ▼";
                 NameInfoBadge.Value = nameRules.Count;
                 NameInfoBadge.Visibility = Visibility.Visible;
-                _logService.DebugLog($"Включен бейдж названия ({nameLabelBase}): {nameRules.Count} правил", "TrackSelectionControl");
+                _logService.Write(
+                    "ui.track_filter.badge_updated",
+                    LogLevel.Debug,
+                    LogStatus.Changed,
+                    $"Бейдж названия дорожки обновлён, правил: {nameRules.Count}",
+                    source: SourceName,
+                    properties: LogProps
+                        .Create("Group", "name")
+                        .With("Count", nameRules.Count));
             }
             else
             {
@@ -874,16 +1037,49 @@ public sealed partial class TrackSelectionControl : UserControl
                 NameInfoBadge.Visibility = Visibility.Collapsed;
             }
 
-            _logService.DebugLog(
-                $"Обновлены текстовые метки кнопок и бейджи для категории: {category}",
-                "TrackSelectionControl");
+            // 5. Идентификатор дорожки или вложения
+            if (rules.TryGetValue("id", out var idRules) &&
+                idRules.Count > 0)
+            {
+                // Фиксируем текст кнопки и отображаем количество выбранных идентификаторов в бейдже
+                IdFilterText.Text = "ID ▼";
+                IdInfoBadge.Value = idRules.Count;
+                IdInfoBadge.Visibility = Visibility.Visible;
+                _logService.Write(
+                    "ui.track_filter.badge_updated",
+                    LogLevel.Debug,
+                    LogStatus.Changed,
+                    $"Бейдж идентификаторов обновлён, правил: {idRules.Count}",
+                    source: SourceName,
+                    properties: LogProps
+                        .Create("Group", "id")
+                        .With("Count", idRules.Count));
+            }
+            else
+            {
+                // Скрываем бейдж, так как правила фильтрации по идентификаторам не выбраны
+                IdFilterText.Text = "ID ▼";
+                IdInfoBadge.Visibility = Visibility.Collapsed;
+            }
+
+            _logService.Write(
+                "ui.track_filter.labels_updated",
+                LogLevel.Debug,
+                LogStatus.Changed,
+                $"Метки кнопок и бейджи фильтров обновлены для категории: {category}",
+                source: SourceName,
+                properties: LogProps.Create("Group", category));
         }
         catch (Exception ex)
         {
-            _logService.Exception(
+            _logService.Write(
+                "ui.track_filter.labels_update_failed",
+                LogLevel.Warning,
+                LogStatus.Failed,
+                "Метки кнопок и бейджи фильтров не обновлены",
                 ex,
-                "Ошибка при обновлении меток кнопок фильтров и бейджей",
-                "TrackSelectionControl");
+                SourceName,
+                properties: LogProps.Create("ErrorCode", "TRACK_FILTER_LABELS_FAILED"));
         }
     }
 
@@ -913,10 +1109,16 @@ public sealed partial class TrackSelectionControl : UserControl
                 }
             }
 
-            _logService.Info(
-                $"Изменено правило фильтрации [{category}] {propKey}: " +
-                $"{value} -> {isChecked}",
-                "TrackSelectionControl");
+            _logService.Write(
+                "ui.track_filter.rule_changed",
+                LogLevel.Debug,
+                LogStatus.Changed,
+                $"Правило фильтрации «{category}» / «{propKey}» изменено: {value} -> {isChecked}",
+                source: SourceName,
+                properties: LogProps
+                    .Create("Group", category)
+                    .With("Key", LogRedactor.CompactSafeToken(propKey))
+                    .With("Changed", isChecked));
 
             // Сбрасываем чекбокс "Выбрать все" для текущей категории
             _isUpdatingSelectAll = true;
@@ -928,10 +1130,14 @@ public sealed partial class TrackSelectionControl : UserControl
         }
         catch (Exception ex)
         {
-            _logService.Exception(
+            _logService.Write(
+                "ui.track_filter.rule_change_failed",
+                LogLevel.Warning,
+                LogStatus.Failed,
+                "Изменение правила фильтрации не применено",
                 ex,
-                "Ошибка при обработке изменения чекбокса правила",
-                "TrackSelectionControl");
+                SourceName,
+                properties: LogProps.Create("ErrorCode", "TRACK_FILTER_RULE_FAILED"));
         }
     }
 
@@ -944,15 +1150,20 @@ public sealed partial class TrackSelectionControl : UserControl
         _isResettingFilters = true;
         try
         {
-            _logService.Info(
-                $"Сброс чекбоксов в Flyout-фильтрах для категории: {category}",
-                "TrackSelectionControl");
+            _logService.Write(
+                "ui.track_filter.rules_reset",
+                LogLevel.Debug,
+                LogStatus.Changed,
+                $"Фильтры дорожек сброшены для категории: {category}",
+                source: SourceName,
+                properties: LogProps.Create("Group", category));
 
             var containers = new List<StackPanel>
             {
                 LanguageFilterContainer,
                 CodecFilterContainer,
                 DetailFilterContainer,
+                IdFilterContainer,
                 NameFilterContainer
             };
 
@@ -968,10 +1179,14 @@ public sealed partial class TrackSelectionControl : UserControl
         }
         catch (Exception ex)
         {
-            _logService.Exception(
+            _logService.Write(
+                "ui.track_filter.reset_failed",
+                LogLevel.Warning,
+                LogStatus.Failed,
+                "Фильтры дорожек не сброшены",
                 ex,
-                "Ошибка при сбросе чекбоксов фильтров",
-                "TrackSelectionControl");
+                SourceName,
+                properties: LogProps.Create("ErrorCode", "TRACK_FILTER_RESET_FAILED"));
         }
         finally
         {
@@ -986,7 +1201,13 @@ public sealed partial class TrackSelectionControl : UserControl
     {
         try
         {
-            _logService.Info($"Применение правил фильтрации для категории: {targetCategory ?? "все"}", "TrackSelectionControl");
+            _logService.Write(
+            "ui.track_filter.applied",
+            LogLevel.Debug,
+            LogStatus.Succeeded,
+            $"Правила фильтрации применены для категории: {targetCategory ?? "все"}",
+            source: SourceName,
+            properties: LogProps.Create("Group", targetCategory ?? "all"));
 
             // Копируем текущий набор выбранных узлов
             var selectedNodes = new HashSet<TreeViewNode>(TracksTreeView.SelectedNodes);
@@ -1065,7 +1286,14 @@ public sealed partial class TrackSelectionControl : UserControl
         }
         catch (Exception ex)
         {
-            _logService.Exception(ex, "Ошибка во время применения правил фильтрации к дереву дорожек", "TrackSelectionControl");
+            _logService.Write(
+                "ui.track_filter.apply_failed",
+                LogLevel.Warning,
+                LogStatus.Failed,
+                "Правила фильтрации не применены к дереву дорожек",
+                ex,
+                SourceName,
+                properties: LogProps.Create("ErrorCode", "TRACK_FILTER_APPLY_FAILED"));
         }
     }
 
@@ -1144,7 +1372,14 @@ public sealed partial class TrackSelectionControl : UserControl
         }
         catch (Exception ex)
         {
-            _logService.Exception(ex, "Ошибка при обновлении состояния чекбокса Выбрать все", "TrackSelectionControl");
+            _logService.Write(
+                "ui.track_filter.select_all_state_failed",
+                LogLevel.Warning,
+                LogStatus.Failed,
+                "Состояние кнопки «Выбрать все» не обновлено",
+                ex,
+                SourceName,
+                properties: LogProps.Create("ErrorCode", "TRACK_SELECT_ALL_STATE_FAILED"));
         }
     }
 
@@ -1206,7 +1441,14 @@ public sealed partial class TrackSelectionControl : UserControl
         }
         catch (Exception ex)
         {
-            _logService.Exception(ex, "Ошибка при обновлении счетчиков вкладок фильтрации", "TrackSelectionControl");
+            _logService.Write(
+                "ui.track_filter.counters_failed",
+                LogLevel.Warning,
+                LogStatus.Failed,
+                "Счётчики вкладок фильтрации не обновлены",
+                ex,
+                SourceName,
+                properties: LogProps.Create("ErrorCode", "TRACK_FILTER_COUNTERS_FAILED"));
         }
     }
 
@@ -1222,9 +1464,13 @@ public sealed partial class TrackSelectionControl : UserControl
             if (args.SelectedItemContainer is NavigationViewItem selectedItem &&
                 selectedItem.Tag is string tag)
             {
-                _logService.DebugLog(
-                    $"Вкладка фильтра изменена на: {tag}",
-                    "TrackSelectionControl");
+                _logService.Write(
+                    "ui.track_filter.tab_changed",
+                    LogLevel.Debug,
+                    LogStatus.Changed,
+                    $"Вкладка фильтра дорожек переключена на: {tag}",
+                    source: SourceName,
+                    properties: LogProps.Create("Group", tag));
 
                 UpdateFiltersPanel(tag);
                 UpdateButtonLabels(tag);
@@ -1233,10 +1479,14 @@ public sealed partial class TrackSelectionControl : UserControl
         }
         catch (Exception ex)
         {
-            _logService.Exception(
+            _logService.Write(
+                "ui.track_filter.tab_change_failed",
+                LogLevel.Warning,
+                LogStatus.Failed,
+                "Вкладка фильтра дорожек не переключена",
                 ex,
-                "Ошибка при смене вкладки фильтрации",
-                "TrackSelectionControl");
+                SourceName,
+                properties: LogProps.Create("ErrorCode", "TRACK_FILTER_TAB_FAILED"));
         }
     }
 
@@ -1321,10 +1571,14 @@ public sealed partial class TrackSelectionControl : UserControl
         }
         catch (Exception ex)
         {
-            _logService.Exception(
-                ex, 
-                "Ошибка при синхронизации изменения выделения в дереве", 
-                "TrackSelectionControl");
+            _logService.Write(
+                "ui.track_selection.selection_sync_failed",
+                LogLevel.Warning,
+                LogStatus.Failed,
+                "Изменение выделения в дереве дорожек не синхронизировано",
+                ex,
+                SourceName,
+                properties: LogProps.Create("ErrorCode", "TRACK_SELECTION_SYNC_FAILED"));
         }
         finally
         {
@@ -1341,9 +1595,14 @@ public sealed partial class TrackSelectionControl : UserControl
         {
             if (ActiveScript != null)
             {
-                _logService.Info("Запуск синхронизации выделенных в UI дорожек с моделью скрипта", "TrackSelectionControl");
+                _logService.Write(
+                "ui.track_selection.sync_started",
+                LogLevel.Debug,
+                LogStatus.Running,
+                "Выбор дорожек из интерфейса синхронизируется с моделью скрипта",
+                source: SourceName);
                 GetSelectedTracksAndAttachments(
-                    out var currentTracks, 
+                    out var currentTracks,
                     out var currentAttachments);
 
                 ActiveScript.SelectedTrackIds.Clear();
@@ -1358,9 +1617,15 @@ public sealed partial class TrackSelectionControl : UserControl
                     ActiveScript.SelectedAttachmentIds[kvp.Key] = kvp.Value;
                 }
 
-                _logService.DebugLog(
-                    $"Синхронизировано дорожек: {currentTracks.Values.Sum(v => v.Count)}, вложений: {currentAttachments.Values.Sum(v => v.Count)}. Рассылка сообщения TrackSelectedMessage.",
-                    "TrackSelectionControl");
+                _logService.Write(
+                    "ui.track_selection.sync_completed",
+                    LogLevel.Debug,
+                    LogStatus.Succeeded,
+                    $"Выбор дорожек синхронизирован с моделью скрипта: дорожек {currentTracks.Values.Sum(v => v.Count)}, вложений {currentAttachments.Values.Sum(v => v.Count)}",
+                    source: SourceName,
+                    properties: LogProps
+                        .Create("Count", currentTracks.Values.Sum(v => v.Count))
+                        .With("Total", currentAttachments.Values.Sum(v => v.Count)));
 
                 CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Send(
                     new KTools_App.ViewModels.Messages.TrackSelectedMessage(currentTracks, currentAttachments));
@@ -1368,10 +1633,14 @@ public sealed partial class TrackSelectionControl : UserControl
         }
         catch (Exception ex)
         {
-            _logService.Exception(
+            _logService.Write(
+                "ui.track_selection.broadcast_failed",
+                LogLevel.Warning,
+                LogStatus.Failed,
+                "Выбор дорожек не передан в модель скрипта",
                 ex,
-                "Ошибка во время синхронизации выделения и рассылки сообщения",
-                "TrackSelectionControl");
+                SourceName,
+                properties: LogProps.Create("ErrorCode", "TRACK_SELECTION_BROADCAST_FAILED"));
         }
     }
 
@@ -1388,10 +1657,15 @@ public sealed partial class TrackSelectionControl : UserControl
             if (currentCategory == null) return;
 
             bool isChecked = SelectAllCheckBox.IsChecked == true;
-            _logService.Info(
-                $"Клик по чекбоксу Выбрать все [{currentCategory}]: " +
-                $"{isChecked}",
-                "TrackSelectionControl");
+            _logService.Write(
+                "ui.track_selection.select_all_toggled",
+                LogLevel.Debug,
+                LogStatus.Changed,
+                $"Кнопка «Выбрать все» для категории «{currentCategory}»: {isChecked}",
+                source: SourceName,
+                properties: LogProps
+                    .Create("Group", currentCategory)
+                    .With("Changed", isChecked));
 
             ViewModel.ClearRules(currentCategory);
 
@@ -1460,15 +1734,20 @@ public sealed partial class TrackSelectionControl : UserControl
 
             SyncActiveScriptSelectionAndNotify();
 
+            UpdateButtonLabels(currentCategory);
             UpdateSelectAllCheckBoxState();
             UpdateTabCounts();
         }
         catch (Exception ex)
         {
-            _logService.Exception(
+            _logService.Write(
+                "ui.track_selection.select_all_failed",
+                LogLevel.Warning,
+                LogStatus.Failed,
+                "Операция «Выбрать все» не выполнена",
                 ex,
-                "Ошибка при клике по чекбоксу Выбрать все",
-                "TrackSelectionControl");
+                SourceName,
+                properties: LogProps.Create("ErrorCode", "TRACK_SELECT_ALL_FAILED"));
         }
     }
 
@@ -1504,17 +1783,24 @@ public sealed partial class TrackSelectionControl : UserControl
             {
                 _hasShownScrollTip = true;
                 FilterScrollTeachingTip.IsOpen = true;
-                _logService.Info(
-                    "Отображена подсказка о горизонтальном скроллинге фильтров",
-                    "TrackSelectionControl");
+                _logService.Write(
+                    "ui.track_filter.scroll_hint_shown",
+                    LogLevel.Debug,
+                    LogStatus.Succeeded,
+                    "Показана подсказка о горизонтальной прокрутке панели фильтров",
+                    source: SourceName);
             }
         }
         catch (Exception ex)
         {
-            _logService.Exception(
+            _logService.Write(
+                "ui.track_filter.scroll_hint_failed",
+                LogLevel.Debug,
+                LogStatus.Failed,
+                "Проверка переполнения панели фильтров не выполнена",
                 ex,
-                "Ошибка при проверке переполнения панели фильтров для подсказки",
-                "TrackSelectionControl");
+                SourceName,
+                properties: LogProps.Create("ErrorCode", "TRACK_FILTER_OVERFLOW_CHECK_FAILED"));
         }
     }
 
@@ -1522,14 +1808,20 @@ public sealed partial class TrackSelectionControl : UserControl
     /// Освобождает ресурсы при выгрузке элемента управления из дерева.
     /// </summary>
     private void TrackSelectionControl_Unloaded(
-        object sender, 
+        object sender,
         RoutedEventArgs e)
     {
         _isUnloaded = true;
-        _logService.Info(
-            "Выгрузка виджета выбора дорожек: " +
-            "освобождение зарегистрированных подписок",
-            "TrackSelectionControl");
+        _logService.Write(
+            "ui.track_selection.unloaded",
+            LogLevel.Debug,
+            LogStatus.Succeeded,
+            "Панель выбора дорожек выгружена, подписки освобождены",
+            source: SourceName);
+
+        // Отложенное перестроение не должно срабатывать на отсоединенном элементе:
+        // актуальное состояние будет построено заново при следующей загрузке.
+        _rebuildTreeTimer.Stop();
 
         if (_files != null)
         {

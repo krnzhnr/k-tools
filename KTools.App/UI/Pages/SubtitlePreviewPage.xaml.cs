@@ -1,17 +1,20 @@
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
 using System;
 using System.ComponentModel;
 using System.Linq;
+
+using KTools_App.Infrastructure;
+using KTools_App.Services.Contracts;
+using KTools_App.ViewModels;
+
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Media;
+
 using Windows.UI;
 using Windows.UI.Text;
-using KTools_App.Infrastructure;
-using KTools_App.ViewModels;
-using KTools_App.Services.Contracts;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace KTools_App.UI.Pages;
 
@@ -70,7 +73,7 @@ public sealed partial class SubtitlePreviewPage : Page
     /// Переключает видимость контентных панелей в зависимости от выбранного пункта бокового меню.
     /// </summary>
     private void MainNavigation_SelectionChanged(
-        NavigationView sender, 
+        NavigationView sender,
         NavigationViewSelectionChangedEventArgs args)
     {
         if (args.SelectedItemContainer is NavigationViewItem item)
@@ -285,7 +288,7 @@ public sealed partial class SubtitlePreviewPage : Page
             {
                 i++;
             }
-            
+
             string runText = part.Substring(runStart, i - runStart);
             var run = new Run { Text = runText };
             if (isDeleted)

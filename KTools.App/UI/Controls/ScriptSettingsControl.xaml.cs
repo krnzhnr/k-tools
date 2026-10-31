@@ -2,15 +2,18 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+
+using CommunityToolkit.Mvvm.Messaging;
+using CommunityToolkit.WinUI.Controls;
+
+using KTools_App.Core;
+using KTools_App.Services.Contracts;
+using KTools_App.ViewModels;
+
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
-using CommunityToolkit.WinUI.Controls;
-using KTools_App.Core;
-
-using KTools_App.Services.Contracts;
-using KTools_App.ViewModels;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace KTools_App.UI.Controls;
 
@@ -44,6 +47,13 @@ public sealed partial class ScriptSettingsControl : UserControl
     private bool _isInternalNumberBoxUpdate;
     private static readonly Dictionary<string, string> _lastActiveTabs = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, (Button ActionBtn, ProgressRing Ring, TextBlock PText, Button CancelBtn)> _whisperActionControls = new(StringComparer.OrdinalIgnoreCase);
+    private AbstractScript? _pendingBuildScript;
+    private AbstractScript? _builtScript;
+
+    /// <summary>
+    /// Страховка от повторной перестройки схемы внутри одного прохода обновления видимости.
+    /// </summary>
+    private bool _isSchemaRebuilding;
 
     public ScriptSettingsControl()
     {
@@ -59,6 +69,13 @@ public sealed partial class ScriptSettingsControl : UserControl
             _whisperModelManager.DownloadProgressChanged += OnWhisperDownloadProgressChanged;
             _whisperModelManager.DownloadCompleted += OnWhisperDownloadCompleted;
         }
+
+        // Проба NVENC завершается в фоне уже после построения схемы настроек:
+        // ранняя схема содержит только CPU и скрывает чужие поля. По сообщению
+        // пересобираем интерфейс через штатный механизм смены набора ключей.
+        WeakReferenceMessenger.Default.Register<ScriptSettingsControl, HardwareCapabilitiesChangedMessage>(
+            this,
+            (r, m) => r.OnHardwareCapabilitiesChanged());
 
         // Обеспечивает автоматический сброс фокуса с полей ввода при клике на свободную область формы
         this.PointerPressed += (s, e) =>
@@ -80,8 +97,45 @@ public sealed partial class ScriptSettingsControl : UserControl
                 _whisperModelManager.DownloadCompleted -= OnWhisperDownloadCompleted;
             }
 
-            _whisperActionControls.Clear();
+            // Несохранённые правки фиксируются одним проходом при уходе со вкладки.
+            ViewModel.FlushStaged();
         };
+
+        // Страница может кэшироваться навигационным фреймом, поэтому после выгрузки
+        // подписки восстанавливаются, а визуальное состояние кнопок синхронизируется заново.
+        this.Loaded += (s, e) => RestoreSubscriptions();
+    }
+
+    /// <summary>
+    /// Восстанавливает подписки после выгрузки страницы и актуализирует состояние
+    /// элементов управления моделями Whisper (загрузка могла завершиться, пока вкладка была скрыта).
+    /// </summary>
+    private void RestoreSubscriptions()
+    {
+        if (_activeScript != null)
+        {
+            _activeScript.FilesQueue.CollectionChanged -= OnFilesQueueCollectionChanged;
+            _activeScript.FilesQueue.CollectionChanged += OnFilesQueueCollectionChanged;
+        }
+
+        if (_whisperModelManager != null)
+        {
+            _whisperModelManager.DownloadProgressChanged -= OnWhisperDownloadProgressChanged;
+            _whisperModelManager.DownloadProgressChanged += OnWhisperDownloadProgressChanged;
+            _whisperModelManager.DownloadCompleted -= OnWhisperDownloadCompleted;
+            _whisperModelManager.DownloadCompleted += OnWhisperDownloadCompleted;
+
+            foreach (var (modelKey, ctrl) in _whisperActionControls)
+            {
+                ctrl.ActionBtn.IsEnabled = true;
+                ctrl.Ring.Visibility = Visibility.Collapsed;
+                ctrl.Ring.IsActive = false;
+                ctrl.PText.Visibility = Visibility.Collapsed;
+                ctrl.PText.Text = string.Empty;
+                ctrl.CancelBtn.Visibility = Visibility.Collapsed;
+                UpdateWhisperButtonVisuals(ctrl.ActionBtn, _whisperModelManager.IsModelDownloaded(modelKey));
+            }
+        }
     }
 
     private void OnWhisperDownloadProgressChanged(string modelKey, int percent)
@@ -97,6 +151,27 @@ public sealed partial class ScriptSettingsControl : UserControl
                 ctrl.PText.Text = $"{percent}%";
                 ctrl.CancelBtn.Visibility = Visibility.Visible;
             }
+        });
+    }
+
+    /// <summary>
+    /// Обновляет интерфейс после завершения фоновой пробы NVENC.
+    /// Отложенное построение не трогаем: оно само возьмёт свежую схему.
+    /// Штатный проход видимости пересоберёт дерево, только если набор ключей изменился.
+    /// Все проверки состояния выполняются в очереди диспетчера: сообщение
+    /// может прийти с фонового потока (переустановка FFmpeg).
+    /// </summary>
+    private void OnHardwareCapabilitiesChanged()
+    {
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            if (_pendingBuildScript != null || _activeScript == null || _builtScript == null || _isSchemaRebuilding)
+            {
+                return;
+            }
+
+            string settingsGroup = _settingsManager.GetSafeGroupName(_activeScript.Name);
+            UpdateVisibility(settingsGroup);
         });
     }
 
@@ -124,7 +199,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                     string currentModel = _settingsManager.GetSetting(settingsGroup, "whisper_model", string.Empty);
                     if (string.IsNullOrWhiteSpace(currentModel) || currentModel.Contains("Нет загруженных", StringComparison.OrdinalIgnoreCase))
                     {
-                        _settingsManager.SetSetting(settingsGroup, "whisper_model", modelKey);
+                        ViewModel.CommitSetting("whisper_model", modelKey);
                     }
                 }
                 UpdateVisibility(settingsGroup);
@@ -137,6 +212,50 @@ public sealed partial class ScriptSettingsControl : UserControl
     /// </summary>
     public void GenerateSettingsUI(AbstractScript script)
     {
+        _pendingBuildScript = null;
+        PrepareSettingsState(script);
+        BuildSettingsUi(script);
+    }
+
+    /// <summary>
+    /// Подготавливает состояние настроек скрипта без построения визуального дерева.
+    /// Тяжелое построение карточек откладывается до первого открытия вкладки «Настройки»
+    /// (метод <see cref="GenerateSettingsUIIfPending"/>), что убирает задержку при
+    /// переходе на скрипт. Значения настроек при этом полностью готовы к чтению
+    /// через ReadCurrentSettings, как и раньше.
+    /// </summary>
+    public void EnsureSettingsUI(AbstractScript script)
+    {
+        if (ReferenceEquals(_activeScript, script) && ReferenceEquals(_builtScript, script))
+        {
+            return;
+        }
+
+        PrepareSettingsState(script);
+        _pendingBuildScript = script;
+    }
+
+    /// <summary>
+    /// Строит отложенное визуальное дерево настроек, если скрипт сменился.
+    /// </summary>
+    public void GenerateSettingsUIIfPending()
+    {
+        if (_pendingBuildScript == null)
+        {
+            return;
+        }
+
+        AbstractScript script = _pendingBuildScript;
+        _pendingBuildScript = null;
+        BuildSettingsUi(script);
+    }
+
+    /// <summary>
+    /// Переключает подписку на очередь файлов и модель представления настроек на новый скрипт,
+    /// применяя побочные настройки (пресеты lossless). Не строит визуальное дерево.
+    /// </summary>
+    private void PrepareSettingsState(AbstractScript script)
+    {
         if (_activeScript != null)
         {
             _activeScript.FilesQueue.CollectionChanged -= OnFilesQueueCollectionChanged;
@@ -146,6 +265,51 @@ public sealed partial class ScriptSettingsControl : UserControl
         _activeScript.FilesQueue.CollectionChanged += OnFilesQueueCollectionChanged;
         _isPreviewExpanded = false;
 
+        string settingsGroup = _settingsManager.GetSafeGroupName(script.Name);
+        if (_settingsManager.GetSetting(settingsGroup, "lossless", false))
+        {
+            ApplyFastestPresetOnLossless(settingsGroup);
+        }
+    }
+
+    /// <summary>
+    /// Считывает живые значения настроек строковой нормализацией: именно в таком виде
+    /// их ожидают диспетчеры кодеков (сравнение селекторов, флаг lossless), а типизированное
+    /// чтение JsonElement со старых конфигураций здесь не требуется.
+    /// </summary>
+    private Dictionary<string, object> ReadLiveSettingsSnapshot(AbstractScript script, string settingsGroup)
+    {
+        var probeSchema = script.GetFullSettingsSchema(null);
+        var snapshot = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+        if (probeSchema == null)
+        {
+            return snapshot;
+        }
+
+        foreach (var field in probeSchema)
+        {
+            snapshot[field.Key] = _settingsManager.GetSetting(
+                settingsGroup,
+                field.Key,
+                field.DefaultValue?.ToString() ?? string.Empty);
+            foreach (var child in field.ChildFields)
+            {
+                snapshot[child.Key] = _settingsManager.GetSetting(
+                    settingsGroup,
+                    child.Key,
+                    child.DefaultValue?.ToString() ?? string.Empty);
+            }
+        }
+
+        return snapshot;
+    }
+
+    /// <summary>
+    /// Строит визуальное дерево параметров скрипта (карточки, группы, вкладки).
+    /// </summary>
+    private void BuildSettingsUi(AbstractScript script)
+    {
+        _whisperActionControls.Clear();
         SettingsContainer.Children.Clear();
         _generatedElements.Clear();
         _childFieldToParentExpanderKey.Clear();
@@ -153,7 +317,13 @@ public sealed partial class ScriptSettingsControl : UserControl
         _groupContainers.Clear();
         SettingsNavigationView.MenuItems.Clear();
 
-        var fullSchema = script.GetFullSettingsSchema();
+        string earlySettingsGroup = _settingsManager.GetSafeGroupName(script.Name);
+
+        // Схему строим от живых настроек, а не от дефолтов: иначе после смены кодека
+        // (cpu_codec / nvenc_codec) покажутся поля прежнего кодека, а новый будет
+        // кодироваться дефолтами. Ключи-селекторы присутствуют в схеме всегда,
+        // поэтому одного прохода достаточно для верного разрешения.
+        var fullSchema = script.GetFullSettingsSchema(ReadLiveSettingsSnapshot(script, earlySettingsGroup));
 
         if (fullSchema == null ||
             fullSchema.Count == 0)
@@ -168,6 +338,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                 HorizontalAlignment = HorizontalAlignment.Center
             };
             SettingsContainer.Children.Add(noSettingsText);
+            _builtScript = script;
             return;
         }
 
@@ -284,6 +455,8 @@ public sealed partial class ScriptSettingsControl : UserControl
         {
             ApplyFastestPresetOnLossless(settingsGroup);
         }
+
+        _builtScript = script;
     }
 
     /// <summary>
@@ -393,7 +566,7 @@ public sealed partial class ScriptSettingsControl : UserControl
             if (field.Type == SettingType.Checkbox)
             {
                 var checkContent = new StackPanel { Spacing = 2 };
-                
+
                 checkContent.Children.Add(new TextBlock
                 {
                     Text = field.Label,
@@ -425,12 +598,11 @@ public sealed partial class ScriptSettingsControl : UserControl
                 checkBox.Checked += (s, e) =>
                 {
                     if (_isInternalCheckBoxUpdate) return;
-                    _settingsManager.SetSetting(
-                        settingsGroup, field.Key, true);
+                    ViewModel.CommitSetting(field.Key, true);
                     UpdateVisibility(settingsGroup);
-                    if (field.Key == "auto_bitrate")
+                    if (BitrateAutoMode.IsAutoBitrateController(field.Key))
                     {
-                        RecalculateAutoBitrate(settingsGroup);
+                        RecalculateAutoBitrate(settingsGroup, field.Key);
                     }
                     else if (field.Key == "lossless")
                     {
@@ -460,8 +632,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                         }
                     }
 
-                    _settingsManager.SetSetting(
-                        settingsGroup, field.Key, false);
+                    ViewModel.CommitSetting(field.Key, false);
                     UpdateVisibility(settingsGroup);
 
                     UpdatePreview();
@@ -512,7 +683,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                     toggleSwitch.Toggled += (s, e) =>
                     {
                         bool isOn = toggleSwitch.IsOn;
-                        _settingsManager.SetSetting(settingsGroup, field.Key, isOn);
+                        ViewModel.CommitSetting(field.Key, isOn);
 
                         // Переключаем активность дочерних карточек напрямую — это единственное,
                         // что реально нужно при переключении тумблера экспандера.
@@ -522,11 +693,19 @@ public sealed partial class ScriptSettingsControl : UserControl
                         //   для VisibleIf / DisableConditions;
                         // — UpdatePreview обновляет предпросмотр переименования файлов, к которому
                         //   тумблер экспандера фильтров не имеет отношения.
+                        // IsHitTestVisible восстанавливаем обязательно: UpdateVisibility сбрасывает
+                        // его в false при выключенном тумблере, без этого включённые карточки
+                        // выглядят активными, но не реагируют на клики.
                         foreach (var card in childCards)
                         {
                             card.IsEnabled = isOn;
+                            card.IsHitTestVisible = isOn;
                             card.Opacity = 1.0;
                         }
+
+                        // Тумблер намеренно не вызывает UpdateVisibility, поэтому сообщаем скрипту
+                        // об изменении отдельно: скрипты с фоновыми превью пересчитают своё состояние.
+                        _activeScript?.NotifySettingsChanged();
                     };
                 }
 
@@ -565,19 +744,19 @@ public sealed partial class ScriptSettingsControl : UserControl
                 HorizontalAlignment = HorizontalAlignment.Stretch,
                 VerticalAlignment = VerticalAlignment.Center
             };
-            
+
             bool isRenameField = field.Key == "LocalRenameSearch" || field.Key == "LocalRenameReplace";
 
-            rowGrid.ColumnDefinitions.Add(new ColumnDefinition 
-                { Width = isRenameField ? GridLength.Auto : new GridLength(1, GridUnitType.Star) });
-            rowGrid.ColumnDefinitions.Add(new ColumnDefinition 
-                { Width = isRenameField ? new GridLength(1, GridUnitType.Star) : GridLength.Auto });
+            rowGrid.ColumnDefinitions.Add(new ColumnDefinition
+            { Width = isRenameField ? GridLength.Auto : new GridLength(1, GridUnitType.Star) });
+            rowGrid.ColumnDefinitions.Add(new ColumnDefinition
+            { Width = isRenameField ? new GridLength(1, GridUnitType.Star) : GridLength.Auto });
 
-            var textStack = new StackPanel 
-            { 
-                Spacing = 2, 
+            var textStack = new StackPanel
+            {
+                Spacing = 2,
                 Margin = new Thickness(0, 0, 16, 0),
-                VerticalAlignment = VerticalAlignment.Center 
+                VerticalAlignment = VerticalAlignment.Center
             };
 
             textStack.Children.Add(new TextBlock
@@ -598,7 +777,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                 TextWrapping = TextWrapping.Wrap,
                 Visibility = string.IsNullOrEmpty(field.Comment) ? Visibility.Collapsed : Visibility.Visible
             });
-            
+
             Grid.SetColumn(textStack, 0);
             rowGrid.Children.Add(textStack);
 
@@ -667,8 +846,8 @@ public sealed partial class ScriptSettingsControl : UserControl
                 };
                 textBox.TextChanged += (s, e) =>
                 {
-                    _settingsManager.SetSetting(
-                        settingsGroup, field.Key, textBox.Text);
+                    // На каждый keystroke только обновляется in-memory значение без записи и журнала.
+                    ViewModel.StageSetting(field.Key, textBox.Text);
                     if (isRenameField)
                     {
                         UpdatePreview();
@@ -676,8 +855,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                 };
                 textBox.LostFocus += (s, e) =>
                 {
-                    _settingsManager.SetSetting(
-                        settingsGroup, field.Key, textBox.Text);
+                    ViewModel.CommitSetting(field.Key, textBox.Text);
                     UpdateVisibility(settingsGroup);
                     if (isRenameField)
                     {
@@ -770,14 +948,14 @@ public sealed partial class ScriptSettingsControl : UserControl
                         if (isFloat)
                         {
                             double roundedVal = Math.Round(numberBox.Value, 2);
-                            _settingsManager.SetSetting(settingsGroup, field.Key, roundedVal);
+                            ViewModel.CommitSetting(field.Key, roundedVal);
                             UpdateVisibility(settingsGroup);
                             HandleIntSettingChanged(settingsGroup, field.Key, (int)roundedVal);
                         }
                         else
                         {
                             int valInt = (int)numberBox.Value;
-                            _settingsManager.SetSetting(settingsGroup, field.Key, valInt);
+                            ViewModel.CommitSetting(field.Key, valInt);
                             UpdateVisibility(settingsGroup);
                             HandleIntSettingChanged(settingsGroup, field.Key, valInt);
                         }
@@ -797,7 +975,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                 {
                     comboBox.Items.Add(opt);
                 }
-                
+
                 string defaultValStr = field.DefaultValue?
                     .ToString() ?? string.Empty;
                 if (field.Key == "nvenc_preset" && _settingsManager.GetSetting(settingsGroup, "lossless", false))
@@ -808,22 +986,38 @@ public sealed partial class ScriptSettingsControl : UserControl
                 {
                     defaultValStr = "ultrafast";
                 }
+                else if (field.Key == "x264_preset" && _settingsManager.GetSetting(settingsGroup, "lossless", false))
+                {
+                    defaultValStr = "ultrafast";
+                }
 
                 string currentSelection = _settingsManager
                     .GetSetting(
                         settingsGroup,
                         field.Key,
                         defaultValStr);
-                
+
+                string matchedOption = field.Options
+                    .FirstOrDefault(opt => opt.Equals(
+                        currentSelection,
+                        StringComparison.OrdinalIgnoreCase))
+                    ?? field.Options.FirstOrDefault()
+                    ?? defaultValStr;
+
+                comboBox.SelectedItem = matchedOption;
+
+                if (comboBox.SelectedIndex == -1 &&
+                    comboBox.Items.Count > 0)
+                {
+                    comboBox.SelectedIndex = 0;
+                }
+
                 comboBox.SelectionChanged += (s, e) =>
                 {
                     if (comboBox.SelectedItem != null)
                     {
                         string selectedVal = comboBox.SelectedItem.ToString() ?? string.Empty;
-                        _settingsManager.SetSetting(
-                            settingsGroup,
-                            field.Key,
-                            selectedVal);
+                        ViewModel.CommitSetting(field.Key, selectedVal);
                         UpdateVisibility(settingsGroup);
                         if (field.Key == "encoder" && _settingsManager.GetSetting(settingsGroup, "lossless", false))
                         {
@@ -834,20 +1028,6 @@ public sealed partial class ScriptSettingsControl : UserControl
                     }
                 };
 
-                string matchedOption = field.Options
-                    .FirstOrDefault(opt => opt.Equals(
-                        currentSelection,
-                        StringComparison.OrdinalIgnoreCase))
-                    ?? field.Options.FirstOrDefault()
-                    ?? defaultValStr;
-
-                comboBox.SelectedItem = matchedOption;
-                
-                if (comboBox.SelectedIndex == -1 && 
-                    comboBox.Items.Count > 0)
-                {
-                    comboBox.SelectedIndex = 0;
-                }
                 inputControl = comboBox;
                 break;
 
@@ -864,7 +1044,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                 };
                 toggle.Toggled += (s, e) =>
                 {
-                    _settingsManager.SetSetting(settingsGroup, field.Key, toggle.IsOn);
+                    ViewModel.CommitSetting(field.Key, toggle.IsOn);
                     UpdateVisibility(settingsGroup);
                     UpdatePreview();
                 };
@@ -893,6 +1073,27 @@ public sealed partial class ScriptSettingsControl : UserControl
                 currentSettings[item.Field.Key] = _settingsManager.GetSetting(settingsGroup, item.Field.Key, item.Field.DefaultValue ?? string.Empty);
             }
             var dynamicSchema = _activeScript.GetFullSettingsSchema(currentSettings);
+
+            // Состав схемы изменился (смена кодека cpu_codec / nvenc_codec): чинить варианты
+            // существующих контролов бессмысленно — нужны другие поля. Перестраиваем дерево
+            // целиком; сохранённые значения подтянутся из SettingsManager, вкладка — из истории.
+            if (!_isSchemaRebuilding
+                && dynamicSchema != null
+                && !SettingsSchemaComparer.HasSameKeys(
+                    dynamicSchema,
+                    _generatedElements.Select(item => item.Field.Key)))
+            {
+                _isSchemaRebuilding = true;
+                try
+                {
+                    BuildSettingsUi(_activeScript);
+                }
+                finally
+                {
+                    _isSchemaRebuilding = false;
+                }
+                return;
+            }
             if (dynamicSchema != null)
             {
                 foreach (var item in _generatedElements)
@@ -1053,36 +1254,25 @@ public sealed partial class ScriptSettingsControl : UserControl
 
             if (item.Field.DisableConditions != null && item.Field.DisableConditions.Count > 0)
             {
-                bool isDisabled = false;
-                foreach (var cond in item.Field.DisableConditions)
+                // Универсальная оценка через SettingConditionEvaluator: условия, ссылающиеся
+                // на скрытый управляющий параметр (настройка невыбранного энкодера), игнорируются.
+                string GetCondValue(string key)
                 {
-                    object? targetDefVal = _generatedElements.FirstOrDefault(x => x.Field.Key == cond.Key).Field?.DefaultValue;
-                    string condValue = _settingsManager.GetSetting(
+                    object? targetDefVal = _generatedElements.FirstOrDefault(x => x.Field.Key == key).Field?.DefaultValue;
+                    return _settingsManager.GetSetting(
                         settingsGroup,
-                        cond.Key,
+                        key,
                         targetDefVal?.ToString() ?? string.Empty);
-
-                    bool matches = false;
-                    foreach (var val in cond.Values)
-                    {
-                        if (val.Equals(condValue, StringComparison.OrdinalIgnoreCase))
-                        {
-                            matches = true;
-                            break;
-                        }
-                    }
-
-                    if (cond.Negate)
-                    {
-                        matches = !matches;
-                    }
-
-                    if (matches)
-                    {
-                        isDisabled = true;
-                        break;
-                    }
                 }
+
+                bool IsControllerVisible(string key)
+                {
+                    var controller = _generatedElements.FirstOrDefault(x => x.Field.Key == key);
+                    // Неизвестный ключ трактуем как видимый, сохраняя прежнее поведение оценки по значению.
+                    return controller.Element == null || controller.Element.Visibility == Visibility.Visible;
+                }
+
+                bool isDisabled = SettingConditionEvaluator.IsDisabled(item.Field, GetCondValue, IsControllerVisible);
 
                 bool effectiveEnabled = !isDisabled && isParentExpanderOn;
                 if (item.Element is Control ctrl)
@@ -1128,17 +1318,22 @@ public sealed partial class ScriptSettingsControl : UserControl
         foreach (var group in _groups)
         {
             bool hasVisibleElements = group.Elements.Any(e => e.Visibility == Visibility.Visible);
-            
+
             if (group.GroupPanel != null)
             {
                 group.GroupPanel.Visibility = hasVisibleElements ? Visibility.Visible : Visibility.Collapsed;
             }
-            
+
             if (group.CardBorder != null)
             {
                 group.CardBorder.Visibility = hasVisibleElements ? Visibility.Visible : Visibility.Collapsed;
             }
         }
+
+        // 3. Сообщаем активному скрипту об изменении настроек, чтобы скрипты
+        // с фоновыми превью (бейджи разрешений) пересчитали своё состояние.
+        // Метод скрипта отвечает за подавление дребезга; базовая реализация — пустая.
+        _activeScript?.NotifySettingsChanged();
     }
 
     /// <summary>
@@ -1209,6 +1404,18 @@ public sealed partial class ScriptSettingsControl : UserControl
         // Локальная функция для сохранения списка в SettingsManager
         void SaveList()
         {
+            ViewModel.CommitSetting(field.Key, CollectList());
+        }
+
+        // Набор правки без записи: используется на каждый keystroke,
+        // фиксация выполняется один раз при потере фокуса или явном действии.
+        void StageList()
+        {
+            ViewModel.StageSetting(field.Key, CollectList());
+        }
+
+        List<Dictionary<string, object>> CollectList()
+        {
             var listToSave = new List<Dictionary<string, object>>();
             foreach (Grid row in itemsStack.Children.OfType<Grid>())
             {
@@ -1229,7 +1436,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                     listToSave.Add(itemDict);
                 }
             }
-            _settingsManager.SetSetting(settingsGroup, field.Key, listToSave);
+            return listToSave;
         }
 
         // Вспомогательная локальная функция добавления строки ключевого слова в UI
@@ -1273,7 +1480,8 @@ public sealed partial class ScriptSettingsControl : UserControl
                 Height = 32,
                 Margin = new Thickness(0, 0, 8, 0)
             };
-            textBox.TextChanged += (s, e) => SaveList();
+            textBox.TextChanged += (s, e) => StageList();
+            textBox.LostFocus += (s, e) => SaveList();
             Grid.SetColumn(textBox, 1);
             rowGrid.Children.Add(textBox);
 
@@ -1479,7 +1687,7 @@ public sealed partial class ScriptSettingsControl : UserControl
         void UpdateLocalPreview()
         {
             string pattern = textBox.Text;
-            
+
             // Тестовые данные для отображения примера
             string originalStem = "Overlord - 01";
             string trackIdStr = "track03";
@@ -1507,8 +1715,13 @@ public sealed partial class ScriptSettingsControl : UserControl
         // Подписываемся на события изменения текста
         textBox.TextChanged += (s, e) =>
         {
-            _settingsManager.SetSetting(settingsGroup, field.Key, textBox.Text);
+            ViewModel.StageSetting(field.Key, textBox.Text);
             UpdateLocalPreview();
+        };
+
+        textBox.LostFocus += (s, e) =>
+        {
+            ViewModel.CommitSetting(field.Key, textBox.Text);
         };
 
         // Первоначальное обновление предпросмотра
@@ -1543,7 +1756,7 @@ public sealed partial class ScriptSettingsControl : UserControl
     private static string CleanSeparatorsLocal(string name)
     {
         if (string.IsNullOrEmpty(name)) return string.Empty;
-        
+
         // 1. Очистка пустых скобок, оставшихся от незаполненных плейсхолдеров
         name = System.Text.RegularExpressions.Regex.Replace(name, @"\[\s*\]", "");
         name = System.Text.RegularExpressions.Regex.Replace(name, @"\(\s*\)", "");
@@ -1555,7 +1768,7 @@ public sealed partial class ScriptSettingsControl : UserControl
         name = System.Text.RegularExpressions.Regex.Replace(name, @"\s+", " ");
         name = System.Text.RegularExpressions.Regex.Replace(name, @"_-", "-");
         name = System.Text.RegularExpressions.Regex.Replace(name, @"-_", "-");
-        
+
         return name.Trim('_', '-', ' ');
     }
 
@@ -1591,28 +1804,29 @@ public sealed partial class ScriptSettingsControl : UserControl
 
     /// <summary>
     /// Вызывается при изменении целочисленного параметра в интерфейсе.
+    /// Значение уже зафиксировано обработчиком NumberBox, поэтому здесь выполняется
+    /// только побочная логика без повторной записи в настройки.
     /// </summary>
     private void HandleIntSettingChanged(string settingsGroup, string key, int newValue)
     {
         if (_isInternalNumberBoxUpdate) return;
 
-        _settingsManager.SetSetting(settingsGroup, key, newValue);
-
-        if (key == "v_bitrate")
+        // Универсальный пересчёт границ битрейта для любого кодека: префикс выводится из ключа поля.
+        string? prefix = BitrateAutoMode.TryGetPrefix(key);
+        if (prefix != null)
         {
-            bool autoBitrate = _settingsManager.GetSetting(settingsGroup, "auto_bitrate", true);
-            if (autoBitrate)
+            bool controllerOn = _settingsManager.GetSetting(settingsGroup, BitrateAutoMode.WithPrefix(prefix, "auto_bitrate"), true);
+            if (controllerOn)
             {
-                RecalculateAutoBitrate(settingsGroup, newValue);
-            }
-        }
-        else if (key == "max_bitrate")
-        {
-            bool autoBitrate = _settingsManager.GetSetting(settingsGroup, "auto_bitrate", true);
-            if (autoBitrate)
-            {
-                int bufSize = newValue * 2;
-                UpdateIntSettingAndUI(settingsGroup, "bufsize", bufSize);
+                if (key.Equals(BitrateAutoMode.TargetBitrateKey(prefix), StringComparison.OrdinalIgnoreCase))
+                {
+                    RecalculateAutoBitrate(settingsGroup, BitrateAutoMode.WithPrefix(prefix, "auto_bitrate"), newValue);
+                }
+                else if (key.Equals(BitrateAutoMode.MaxBitrateKey(prefix), StringComparison.OrdinalIgnoreCase))
+                {
+                    int bufSize = newValue * 2;
+                    UpdateIntSettingAndUI(settingsGroup, BitrateAutoMode.BufsizeKey(prefix), bufSize);
+                }
             }
         }
 
@@ -1620,28 +1834,27 @@ public sealed partial class ScriptSettingsControl : UserControl
     }
 
     /// <summary>
-    /// Выполняет авторасчет параметров битрейта (min_bitrate, max_bitrate, bufsize) на основе целевого битрейта.
+    /// Выполняет авторасчет параметров битрейта (мин/макс битрейт, размер буфера) на основе целевого битрейта.
+    /// Контроллер задаётся ключом (<c>auto_bitrate</c> или <c>&lt;префикс&gt;_auto_bitrate</c>), зависимые
+    /// ключи выводятся из его префикса, поэтому механизм един для всех кодеков.
     /// </summary>
-    public void RecalculateAutoBitrate(string settingsGroup, int? targetBitrate = null)
+    public void RecalculateAutoBitrate(string settingsGroup, string controllerKey = "auto_bitrate", int? targetBitrate = null)
     {
-        int vBr = targetBitrate ?? _settingsManager.GetSetting(settingsGroup, "v_bitrate", 4000);
-        int minBr = vBr;
-        int maxBr = vBr * 2;
-        int bufSize = maxBr * 2;
+        string? prefix = BitrateAutoMode.TryGetPrefix(controllerKey) ?? string.Empty;
+        int vBr = targetBitrate ?? _settingsManager.GetSetting(settingsGroup, BitrateAutoMode.TargetBitrateKey(prefix), 4000);
+        var (minBr, maxBr, bufSize) = BitrateAutoMode.ComputeBounds(vBr);
 
-        UpdateIntSettingAndUI(settingsGroup, "min_bitrate", minBr);
-        UpdateIntSettingAndUI(settingsGroup, "max_bitrate", maxBr);
-        UpdateIntSettingAndUI(settingsGroup, "bufsize", bufSize);
+        UpdateIntSettingAndUI(settingsGroup, BitrateAutoMode.MinBitrateKey(prefix), minBr);
+        UpdateIntSettingAndUI(settingsGroup, BitrateAutoMode.MaxBitrateKey(prefix), maxBr);
+        UpdateIntSettingAndUI(settingsGroup, BitrateAutoMode.BufsizeKey(prefix), bufSize);
     }
 
     private void ApplyFastestPresetOnLossless(string settingsGroup)
     {
-        _settingsManager.SetSetting(settingsGroup, "nvenc_preset", "p1");
-        _settingsManager.SetSetting(settingsGroup, "x265_preset", "ultrafast");
-
-        var presetsToSync = new[] { ("nvenc_preset", "p1"), ("x265_preset", "ultrafast") };
+        var presetsToSync = new[] { ("nvenc_preset", "p1"), ("x265_preset", "ultrafast"), ("x264_preset", "ultrafast") };
         foreach (var (key, fastest) in presetsToSync)
         {
+            bool uiSynced = false;
             var targetItem = _generatedElements.FirstOrDefault(x => x.Field.Key == key);
             if (targetItem.Element != null)
             {
@@ -1651,18 +1864,27 @@ public sealed partial class ScriptSettingsControl : UserControl
                     string? matchedOption = combo.Items.Cast<object>()
                         .Select(o => o.ToString() ?? "")
                         .FirstOrDefault(o => o.Equals(fastest, StringComparison.OrdinalIgnoreCase));
-                    if (matchedOption != null && !object.Equals(combo.SelectedItem, matchedOption))
+                    if (matchedOption != null)
                     {
-                        combo.SelectedItem = matchedOption;
+                        if (!object.Equals(combo.SelectedItem, matchedOption))
+                        {
+                            combo.SelectedItem = matchedOption;
+                        }
+                        uiSynced = true;
                     }
                 }
+            }
+
+            if (!uiSynced)
+            {
+                ViewModel.CommitSetting(key, fastest);
             }
         }
     }
 
     private void UpdateIntSettingAndUI(string settingsGroup, string key, int value)
     {
-        _settingsManager.SetSetting(settingsGroup, key, value);
+        ViewModel.CommitSetting(key, value);
 
         var targetItem = _generatedElements.FirstOrDefault(x => x.Field.Key == key);
         if (targetItem.Element != null)
@@ -1685,29 +1907,29 @@ public sealed partial class ScriptSettingsControl : UserControl
     private void AttachSearchHelpFlyout(Button button, TextBox textBox)
     {
         var flyout = new Flyout { Placement = Microsoft.UI.Xaml.Controls.Primitives.FlyoutPlacementMode.BottomEdgeAlignedRight };
-        
+
         var mainStack = new StackPanel { Spacing = 6, Width = 280 };
-        
-        var title = new TextBlock 
-        { 
-            Text = "Шаблоны поиска", 
-            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, 
-            FontSize = 14, 
-            Margin = new Thickness(0, 0, 0, 4) 
+
+        var title = new TextBlock
+        {
+            Text = "Шаблоны поиска",
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            FontSize = 14,
+            Margin = new Thickness(0, 0, 0, 4)
         };
-        var desc = new TextBlock 
-        { 
-            Text = "Нажмите на шаблон, чтобы скопировать:", 
-            FontSize = 12, 
-            Style = (Style)Application.Current.Resources["SettingsSecondaryTextBlockStyle"], 
-            Margin = new Thickness(0, 0, 0, 8) 
+        var desc = new TextBlock
+        {
+            Text = "Нажмите на шаблон, чтобы скопировать:",
+            FontSize = 12,
+            Style = (Style)Application.Current.Resources["SettingsSecondaryTextBlockStyle"],
+            Margin = new Thickness(0, 0, 0, 8)
         };
-        
+
         mainStack.Children.Add(title);
         mainStack.Children.Add(desc);
-        
+
         var variables = _settingsManager.SearchTemplates;
-        
+
         foreach (var item in variables)
         {
             if (string.IsNullOrEmpty(item.Pattern)) continue;
@@ -1741,17 +1963,17 @@ public sealed partial class ScriptSettingsControl : UserControl
                 Height = 32,
                 VerticalAlignment = VerticalAlignment.Center
             };
-            
+
             var btnGrid = new Grid { HorizontalAlignment = HorizontalAlignment.Stretch };
             var rowStack = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-            rowStack.Children.Add(new TextBlock 
-            { 
-                Text = item.Pattern, 
-                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, 
-                Style = (Style)Application.Current.Resources["SettingsAccentTextBlockStyle"] 
+            rowStack.Children.Add(new TextBlock
+            {
+                Text = item.Pattern,
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                Style = (Style)Application.Current.Resources["SettingsAccentTextBlockStyle"]
             });
             rowStack.Children.Add(new TextBlock { Text = string.IsNullOrEmpty(item.Description) ? "" : $"— {CleanDescription(item.Description)}", FontSize = 12 });
-            
+
             var copiedText = new TextBlock
             {
                 Text = "Скопировано!",
@@ -1762,20 +1984,20 @@ public sealed partial class ScriptSettingsControl : UserControl
                 VerticalAlignment = VerticalAlignment.Center,
                 Visibility = Visibility.Collapsed
             };
-            
+
             btnGrid.Children.Add(rowStack);
             btnGrid.Children.Add(copiedText);
             btn.Content = btnGrid;
-            
+
             btn.Click += (s, e) =>
             {
                 var dataPackage = new Windows.ApplicationModel.DataTransfer.DataPackage();
                 dataPackage.SetText(item.Pattern);
                 Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(dataPackage);
-                
+
                 rowStack.Opacity = 0;
                 copiedText.Visibility = Visibility.Visible;
-                
+
                 var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
                 timer.Tick += (s2, ev) =>
                 {
@@ -1785,13 +2007,13 @@ public sealed partial class ScriptSettingsControl : UserControl
                 };
                 timer.Start();
             };
-            
+
             Grid.SetColumn(btn, 1);
             rowGrid.Children.Add(btn);
 
             mainStack.Children.Add(rowGrid);
         }
-        
+
         flyout.Content = mainStack;
         button.Flyout = flyout;
     }
@@ -1802,29 +2024,29 @@ public sealed partial class ScriptSettingsControl : UserControl
     private void AttachReplaceHelpFlyout(Button button, TextBox textBox)
     {
         var flyout = new Flyout { Placement = Microsoft.UI.Xaml.Controls.Primitives.FlyoutPlacementMode.BottomEdgeAlignedRight };
-        
+
         var mainStack = new StackPanel { Spacing = 6, Width = 280 };
-        
-        var title = new TextBlock 
-        { 
-            Text = "Переменные замены", 
-            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, 
-            FontSize = 14, 
-            Margin = new Thickness(0, 0, 0, 4) 
+
+        var title = new TextBlock
+        {
+            Text = "Переменные замены",
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            FontSize = 14,
+            Margin = new Thickness(0, 0, 0, 4)
         };
-        var desc = new TextBlock 
-        { 
-            Text = "Нажмите на шаблон, чтобы скопировать:", 
-            FontSize = 12, 
-            Style = (Style)Application.Current.Resources["SettingsSecondaryTextBlockStyle"], 
-            Margin = new Thickness(0, 0, 0, 8) 
+        var desc = new TextBlock
+        {
+            Text = "Нажмите на шаблон, чтобы скопировать:",
+            FontSize = 12,
+            Style = (Style)Application.Current.Resources["SettingsSecondaryTextBlockStyle"],
+            Margin = new Thickness(0, 0, 0, 8)
         };
-        
+
         mainStack.Children.Add(title);
         mainStack.Children.Add(desc);
-        
+
         var variables = _settingsManager.ReplaceTemplates;
-        
+
         foreach (var item in variables)
         {
             if (string.IsNullOrEmpty(item.Pattern)) continue;
@@ -1858,17 +2080,17 @@ public sealed partial class ScriptSettingsControl : UserControl
                 Height = 32,
                 VerticalAlignment = VerticalAlignment.Center
             };
-            
+
             var btnGrid = new Grid { HorizontalAlignment = HorizontalAlignment.Stretch };
             var rowStack = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-            rowStack.Children.Add(new TextBlock 
-            { 
-                Text = item.Pattern, 
-                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, 
-                Style = (Style)Application.Current.Resources["SettingsAccentTextBlockStyle"] 
+            rowStack.Children.Add(new TextBlock
+            {
+                Text = item.Pattern,
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                Style = (Style)Application.Current.Resources["SettingsAccentTextBlockStyle"]
             });
             rowStack.Children.Add(new TextBlock { Text = string.IsNullOrEmpty(item.Description) ? "" : $"— {CleanDescription(item.Description)}", FontSize = 12 });
-            
+
             var copiedText = new TextBlock
             {
                 Text = "Скопировано!",
@@ -1879,20 +2101,20 @@ public sealed partial class ScriptSettingsControl : UserControl
                 VerticalAlignment = VerticalAlignment.Center,
                 Visibility = Visibility.Collapsed
             };
-            
+
             btnGrid.Children.Add(rowStack);
             btnGrid.Children.Add(copiedText);
             btn.Content = btnGrid;
-            
+
             btn.Click += (s, e) =>
             {
                 var dataPackage = new Windows.ApplicationModel.DataTransfer.DataPackage();
                 dataPackage.SetText(item.Pattern);
                 Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(dataPackage);
-                
+
                 rowStack.Opacity = 0;
                 copiedText.Visibility = Visibility.Visible;
-                
+
                 var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
                 timer.Tick += (s2, ev) =>
                 {
@@ -1902,13 +2124,13 @@ public sealed partial class ScriptSettingsControl : UserControl
                 };
                 timer.Start();
             };
-            
+
             Grid.SetColumn(btn, 1);
             rowGrid.Children.Add(btn);
 
             mainStack.Children.Add(rowGrid);
         }
-        
+
         flyout.Content = mainStack;
         button.Flyout = flyout;
     }
@@ -2102,14 +2324,14 @@ public sealed partial class ScriptSettingsControl : UserControl
             return;
         }
 
-        string settingsGroup = _settingsManager.GetSafeGroupName(_activeScript.Name);
-        bool renameEnabled = false;
-        string pattern = "";
-
-        bool localOverride = _settingsManager.GetSetting(settingsGroup, "LocalRenameOverride", false);
+        // Чтение через ViewModel учитывает несохранённые правки текущего поля,
+        // поэтому предпросмотр остаётся живым без записи на каждый keystroke.
+        bool renameEnabled;
+        string pattern;
+        bool localOverride = ViewModel.GetSetting("LocalRenameOverride", false);
         if (localOverride)
         {
-            pattern = _settingsManager.GetSetting(settingsGroup, "LocalRenameSearch", string.Empty);
+            pattern = ViewModel.GetSetting("LocalRenameSearch", string.Empty);
             renameEnabled = !string.IsNullOrEmpty(pattern);
         }
         else
@@ -2140,7 +2362,7 @@ public sealed partial class ScriptSettingsControl : UserControl
         {
             if (field.Type != SettingType.Subtitle)
             {
-                settings[field.Key] = _settingsManager.GetSetting(settingsGroup, field.Key, field.DefaultValue);
+                settings[field.Key] = ViewModel.GetSetting(field.Key, field.DefaultValue!);
             }
 
             if (field.ChildFields != null && field.ChildFields.Count > 0)
@@ -2149,7 +2371,7 @@ public sealed partial class ScriptSettingsControl : UserControl
                 {
                     if (child.Type != SettingType.Subtitle)
                     {
-                        settings[child.Key] = _settingsManager.GetSetting(settingsGroup, child.Key, child.DefaultValue);
+                        settings[child.Key] = ViewModel.GetSetting(child.Key, child.DefaultValue!);
                     }
                 }
             }

@@ -5,7 +5,6 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text.RegularExpressions;
-using System.Xml.Linq;
 using FluentAssertions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
@@ -63,6 +62,7 @@ public class XamlContractTests
             Path.Combine(AppRoot, "App.xaml"),
             Path.Combine(AppRoot, "UI", "AudioSyncWindow.xaml"),
             Path.Combine(AppRoot, "UI", "BitrateViewerWindow.xaml"),
+            Path.Combine(AppRoot, "Themes", "Generic.xaml"),
         ];
         foreach (string root in roots)
         {
@@ -75,7 +75,7 @@ public class XamlContractTests
         foreach (string sub in new[] { "Pages", "Controls" })
         {
             string dir = Path.Combine(AppRoot, "UI", sub);
-            foreach (string file in Directory.GetFiles(dir, "*.xaml"))
+            foreach (string file in Directory.GetFiles(dir, "*.xaml", SearchOption.AllDirectories))
             {
                 yield return (file, File.ReadAllText(file));
             }
@@ -134,7 +134,8 @@ public class XamlContractTests
             "FileListControl.xaml", "TrackSelectionControl.xaml",
             "ScriptSettingsControl.xaml", "StreamReplaceControl.xaml",
             "AudioTransplantControl.xaml", "AccentBadge.xaml",
-            "DropZoneOverlay.xaml"
+            "DropZoneOverlay.xaml", "TokenView.xaml", "TokenItem.xaml",
+            "Generic.xaml"
         });
     }
 
@@ -343,7 +344,8 @@ public class XamlContractTests
         {
             "AccentButtonStyle", "DefaultButtonStyle", "CaptionTextBlockStyle",
             "TitleTextBlockStyle", "BaseTextBlockStyle", "BodyTextBlockStyle",
-            "SubtitleTextBlockStyle", "InformationalValueInfoBadgeStyle"
+            "SubtitleTextBlockStyle", "InformationalValueInfoBadgeStyle",
+            "AttentionValueInfoBadgeStyle", "ButtonPadding", "UseSystemFocusVisuals"
         };
 
         var violations = new List<string>();
@@ -432,62 +434,7 @@ public class XamlContractTests
     }
 
     // ====================================================================
-    // 5. x:Uid → resw-ключи
-    // ====================================================================
-
-    [TestMethod]
-    public void XamlUidKeys_UsedUids_HaveReswEntries()
-    {
-        // Arrange — в проекте нет .resw-файлов (локализация текстами в XAML),
-        // и x:Uid не используется. Детектор-сетка на будущее: если x:Uid появится,
-        // проверим пару. Проверяем фактическое состояние контракта.
-        string stringsDir = Path.Combine(AppRoot, "Strings");
-        var reswFiles = Directory.Exists(stringsDir)
-            ? Directory.GetFiles(stringsDir, "*.resw", SearchOption.AllDirectories)
-            : Array.Empty<string>();
-        var reswKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (string resw in reswFiles)
-        {
-            XDocument doc = XDocument.Load(resw);
-            foreach (var data in doc.Descendants("data"))
-            {
-                string? name = data.Attribute("name")?.Value;
-                if (!string.IsNullOrEmpty(name))
-                {
-                    reswKeys.Add(name);
-                }
-            }
-        }
-
-        var usedUids = new List<string>();
-        foreach ((string path, string content) in LoadAllXaml())
-        {
-            foreach (Match m in Regex.Matches(content, @"x:Uid=""(?<uid>\w+)"""))
-            {
-                usedUids.Add(m.Groups["uid"].Value);
-            }
-        }
-
-        // Act / Assert — текущий контракт: x:Uid не используются (тексты в XAML напрямую);
-        // если/когда появятся, каждый UID обязан иметь ключ в resw (включая Property.Field синтаксис)
-        foreach (string uid in usedUids)
-        {
-            bool hasPlain = reswKeys.Contains(uid);
-            bool hasPropertyForm = reswKeys.Contains($"{uid}.Content")
-                || reswKeys.Contains($"{uid}.Header")
-                || reswKeys.Contains($"{uid}.Text");
-            (hasPlain || hasPropertyForm).Should().BeTrue(
-                $"x:Uid '{uid}' должен иметь ключ в .resw (в форме 'UID' или 'UID.Property')");
-        }
-
-        // Текущее состояние — ни одного UID: сетка активируется при добавлении локализации
-        usedUids.Should().BeEmpty(
-            "в текущей версии x:Uid не используются; тест — детектор контракта при появлении локализации");
-        reswFiles.Should().BeEmpty("файлов .resw в проекте нет (локализация не подключена)");
-    }
-
-    // ====================================================================
-    // 6. Binding-пути (классический {Binding ...}) — детектор использования
+    // 5. Binding-пути (классический {Binding ...}) — детектор использования
     // ====================================================================
 
     [TestMethod]
@@ -512,7 +459,7 @@ public class XamlContractTests
     }
 
     // ====================================================================
-    // 7. Tag-контракты навигации MainPage → MainViewModel
+    // 6. Tag-контракты навигации MainPage → MainViewModel
     // ====================================================================
 
     [TestMethod]

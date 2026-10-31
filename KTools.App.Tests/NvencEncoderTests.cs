@@ -313,6 +313,21 @@ public class NvencEncoderTests
     }
 
     [TestMethod]
+    public void GetEncoderSettings_BRefModeField_HasLosslessDisableCondition()
+    {
+        // Act
+        var settings = _encoder.GetEncoderSettings();
+
+        // Assert: в lossless B-пирамида не передаётся, значит переключатель должен быть заблокирован
+        var field = settings.Find(f => f.Key == "nv_b_ref_mode");
+        field.Should().NotBeNull();
+
+        var losslessCond = field!.DisableConditions!.Find(c => c.Key == "lossless");
+        losslessCond.Should().NotBeNull("Field 'nv_b_ref_mode' should have DisableCondition for 'lossless'");
+        losslessCond!.Values.Should().Contain("True");
+    }
+
+    [TestMethod]
     public void GetEncoderSettings_AutoBitrateField_HasDefaultValueTrue()
     {
         // Act
@@ -332,5 +347,16 @@ public class NvencEncoderTests
             autoCond.Should().NotBeNull($"Field '{key}' should have DisableCondition for auto_bitrate");
             autoCond!.Values.Should().Contain("True");
         }
+    }
+
+    [TestMethod]
+    public void GetFfmpegCodecName_JsonElementFromDisk_ResolvesCodec()
+    {
+        // Регрессия: значение с диска (JsonElement) обязано резолвиться так же,
+        // как его показывает интерфейс, а не падать в кодек по умолчанию.
+        using var doc = System.Text.Json.JsonDocument.Parse("\"AVC / H.264\"");
+        var settings = new Dictionary<string, object> { { "nvenc_codec", doc.RootElement.Clone() } };
+
+        _encoder.GetFfmpegCodecName(settings).Should().Be("h264_nvenc");
     }
 }

@@ -1,10 +1,13 @@
 // -*- coding: utf-8 -*-
 using System;
 using System.Reflection;
+
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using CommunityToolkit.Mvvm.Messaging;
+
 using KTools_App.Core;
+using KTools_App.Diagnostics;
 using KTools_App.Services.Contracts;
 
 namespace KTools_App.ViewModels;
@@ -44,11 +47,11 @@ public sealed class ThemeChangedMessage
 }
 
 /// <summary>
-/// Сообщение для уведомления об изменении типа фона (Mica/Acrylic) приложения.
+/// Сообщение для уведомления об изменении типа фона (Mica/Acrylic/None) приложения.
 /// </summary>
 public sealed class BackdropChangedMessage
 {
-    /// <summary>Новый выбранный тип фона ("Mica" или "Acrylic").</summary>
+    /// <summary>Новый выбранный тип фона ("Mica", "Acrylic" или "None").</summary>
     public string NewBackdrop { get; }
 
     /// <summary>
@@ -66,12 +69,14 @@ public sealed class BackdropChangedMessage
 /// </summary>
 public partial class SettingsViewModel : ThreadSafeViewModel
 {
+    private const string SourceName = nameof(SettingsViewModel);
     private readonly ISettingsManager _settingsManager;
     private readonly IDialogService _dialogService;
     private readonly IUpdateService _updateService;
     private readonly ILogService _logService;
     private readonly IPathManager _pathManager;
     private readonly IScriptRegistry _scriptRegistry;
+    private readonly IInstallLocationService _installLocationService;
 
     /// <summary>
     /// Строка версии приложения для отображения в блоке "О программе".
@@ -142,7 +147,7 @@ public partial class SettingsViewModel : ThreadSafeViewModel
         _dependencyManager.SetSimulatedUpdateAvailable("ffmpeg", value);
         _dependencyManager.SetSimulatedUpdateAvailable("mkvtoolnix", value);
         _dependencyManager.SetSimulatedUpdateAvailable("yt-dlp", value);
-        _logService.Info($"[Debug] Имитация обновления зависимостей установлена в state={value}", "SettingsViewModel");
+        _logService.Write("settings.debug.dependency_simulation", LogLevel.Debug, LogStatus.Changed, $"Имитация обновления зависимостей установлена: {value}", source: SourceName, properties: LogProps.Create("Changed", value).With("Group", "Debug"));
     }
 
     /// <summary>
@@ -200,7 +205,7 @@ public partial class SettingsViewModel : ThreadSafeViewModel
     public partial int SelectedThemeIndex { get; set; }
 
     /// <summary>
-    /// Индекс выбранного типа фона окон (0 - Mica, 1 - Acrylic).
+    /// Индекс выбранного типа фона окон (0 - Mica, 1 - Acrylic, 2 - Обычный без эффектов).
     /// </summary>
     [ObservableProperty]
     public partial int SelectedBackdropIndex { get; set; }
@@ -222,6 +227,12 @@ public partial class SettingsViewModel : ThreadSafeViewModel
     /// </summary>
     [ObservableProperty]
     public partial bool AutoCheckUpdates { get; set; }
+
+    /// <summary>
+    /// Показывать ли окно «Что нового» после обновления.
+    /// </summary>
+    [ObservableProperty]
+    public partial bool ShowWhatsNewAfterUpdate { get; set; }
 
     /// <summary>
     /// Флаг включения предварительных версий (Pre-Releases) в проверку обновлений.
@@ -265,7 +276,20 @@ public partial class SettingsViewModel : ThreadSafeViewModel
     [ObservableProperty]
     public partial bool IsContextMenuEnabled { get; set; }
 
+    /// <summary>
+    /// Состояние последней фиксации пользовательской настройки.
+    /// </summary>
+    [ObservableProperty]
+    public partial SettingCommitState LastCommitState { get; set; } = SettingCommitState.None;
+
+    /// <summary>
+    /// Типизированный код ошибки последней фиксации (PersistenceErrorCodes.None при успехе).
+    /// </summary>
+    [ObservableProperty]
+    public partial string LastCommitErrorCode { get; set; } = PersistenceErrorCodes.None;
+
     private readonly IDependencyManager _dependencyManager;
+    private bool _isApplyingManagerState;
 
     /// <summary>
     /// Инициализирует новый экземпляр SettingsViewModel с внедрением зависимостей.
@@ -277,7 +301,8 @@ public partial class SettingsViewModel : ThreadSafeViewModel
         ILogService logService,
         IPathManager pathManager,
         IScriptRegistry scriptRegistry,
-        IDependencyManager dependencyManager)
+        IDependencyManager dependencyManager,
+        IInstallLocationService installLocationService)
     {
         _settingsManager = settingsManager ?? throw new ArgumentNullException(nameof(settingsManager));
         _dialogService = dialogService ?? throw new ArgumentNullException(nameof(dialogService));
@@ -286,6 +311,7 @@ public partial class SettingsViewModel : ThreadSafeViewModel
         _pathManager = pathManager ?? throw new ArgumentNullException(nameof(pathManager));
         _scriptRegistry = scriptRegistry ?? throw new ArgumentNullException(nameof(scriptRegistry));
         _dependencyManager = dependencyManager ?? throw new ArgumentNullException(nameof(dependencyManager));
+        _installLocationService = installLocationService ?? throw new ArgumentNullException(nameof(installLocationService));
 
         UpdateStatusText = "Обновления не проверялись";
         DefaultOutputSubfolder = "KTools_Result";
@@ -302,56 +328,69 @@ public partial class SettingsViewModel : ThreadSafeViewModel
 
     /// <summary>
     /// Загружает текущие значения настроек из SettingsManager в свойства ViewModel.
+    /// Загрузка не является пользовательским изменением, поэтому фиксация в менеджере
+    /// подавляется: чтение состояния никогда не порождает запись и не меняет кэш.
     /// </summary>
     private void LoadCurrentSettings()
     {
-        OverwriteExisting = _settingsManager.OverwriteExisting;
-        ClearListOnAdd = _settingsManager.ClearListOnAdd;
-        EnableParallel = _settingsManager.EnableParallel;
-        MaxParallelTasks = _settingsManager.MaxParallelTasks;
-        DefaultOutputSubfolder = _settingsManager.DefaultOutputSubfolder;
-        UseAutoSubfolder = _settingsManager.UseAutoSubfolder;
-
-        SelectedThemeIndex = _settingsManager.Theme.ToLowerInvariant() switch
+        _isApplyingManagerState = true;
+        try
         {
-            "dark" => 1,
-            "light" => 2,
-            _ => 0
-        };
+            OverwriteExisting = _settingsManager.OverwriteExisting;
+            ClearListOnAdd = _settingsManager.ClearListOnAdd;
+            EnableParallel = _settingsManager.EnableParallel;
+            MaxParallelTasks = Math.Max(1, _settingsManager.MaxParallelTasks);
+            DefaultOutputSubfolder = _settingsManager.DefaultOutputSubfolder;
+            UseAutoSubfolder = _settingsManager.UseAutoSubfolder;
 
-        SelectedBackdropIndex = _settingsManager.BackdropType
-            .Equals("Acrylic", StringComparison.OrdinalIgnoreCase)
-            ? 1
-            : 0;
+            SelectedThemeIndex = _settingsManager.Theme.ToLowerInvariant() switch
+            {
+                "dark" => 1,
+                "light" => 2,
+                _ => 0
+            };
 
-        ShowLogsTab = _settingsManager.ShowLogsTab;
-        LogDir = _settingsManager.LogDir;
+            SelectedBackdropIndex = _settingsManager.BackdropType.ToLowerInvariant() switch
+            {
+                "acrylic" => 1,
+                "none" or "solid" => 2,
+                _ => 0
+            };
 
-        AutoCheckUpdates = _settingsManager.AutoCheckUpdates;
-        IncludePreReleases = _settingsManager.IncludePreReleases;
-        RenameEnableRegex = _settingsManager.RenameEnableRegex;
-        RenameRegexSearch = _settingsManager.RenameRegexSearch;
-        RenameRegexReplace = _settingsManager.RenameRegexReplace;
-        RenameUseRegex = _settingsManager.RenameUseRegex;
-        RenameCaseSensitive = _settingsManager.RenameCaseSensitive;
-        DebugSimulateOldVersion = _settingsManager.DebugSimulateOldVersion;
-        DebugDisableUpdateAction = _settingsManager.DebugDisableUpdateAction;
-        IsContextMenuEnabled = _settingsManager.GetSetting("Shell", "IsContextMenuEnabled", false);
+            ShowLogsTab = _settingsManager.ShowLogsTab;
+            LogDir = _settingsManager.LogDir;
+
+            AutoCheckUpdates = _settingsManager.AutoCheckUpdates;
+            ShowWhatsNewAfterUpdate = _settingsManager.ShowWhatsNewAfterUpdate;
+            IncludePreReleases = _settingsManager.IncludePreReleases;
+            RenameEnableRegex = _settingsManager.RenameEnableRegex;
+            RenameRegexSearch = _settingsManager.RenameRegexSearch;
+            RenameRegexReplace = _settingsManager.RenameRegexReplace;
+            RenameUseRegex = _settingsManager.RenameUseRegex;
+            RenameCaseSensitive = _settingsManager.RenameCaseSensitive;
+            DebugSimulateOldVersion = _settingsManager.DebugSimulateOldVersion;
+            DebugDisableUpdateAction = _settingsManager.DebugDisableUpdateAction;
+            IsContextMenuEnabled = _settingsManager.GetSetting("Shell", "IsContextMenuEnabled", false);
+        }
+        finally
+        {
+            _isApplyingManagerState = false;
+        }
     }
 
     partial void OnDebugDisableUpdateActionChanged(bool value)
     {
-        _settingsManager.DebugDisableUpdateAction = value;
+        CommitSetting("Debug", "DebugDisableUpdateAction", value, "Отключение действия кнопок обновления");
     }
 
     partial void OnOverwriteExistingChanged(bool value)
     {
-        _settingsManager.OverwriteExisting = value;
+        CommitSetting("General", "OverwriteExisting", value, "Перезапись существующих файлов");
     }
 
     partial void OnClearListOnAddChanged(bool value)
     {
-        _settingsManager.ClearListOnAdd = value;
+        CommitSetting("General", "ClearListOnAdd", value, "Очистка списка файлов");
     }
 
     partial void OnMaxParallelTasksChanged(int value)
@@ -361,17 +400,15 @@ public partial class SettingsViewModel : ThreadSafeViewModel
         if (value < 1)
         {
             MaxParallelTasks = 1;
-            _settingsManager.MaxParallelTasks = 1;
+            return;
         }
-        else
-        {
-            _settingsManager.MaxParallelTasks = value;
-        }
+
+        CommitSetting("General", "MaxParallelTasks", value, "Число параллельных задач");
     }
 
     partial void OnEnableParallelChanged(bool value)
     {
-        _settingsManager.EnableParallel = value;
+        CommitSetting("General", "EnableParallel", value, "Параллельное выполнение задач");
     }
 
     partial void OnDefaultOutputSubfolderChanged(string value)
@@ -379,12 +416,12 @@ public partial class SettingsViewModel : ThreadSafeViewModel
         string subfolder = string.IsNullOrEmpty(value)
             ? "KTools_Result"
             : value;
-        _settingsManager.DefaultOutputSubfolder = subfolder;
+        CommitSetting("General", "DefaultOutputSubfolder", subfolder, "Имя папки результатов");
     }
 
     partial void OnUseAutoSubfolderChanged(bool value)
     {
-        _settingsManager.UseAutoSubfolder = value;
+        CommitSetting("General", "UseAutoSubfolder", value, "Автопапка результатов");
     }
 
     partial void OnSelectedThemeIndexChanged(int value)
@@ -395,68 +432,117 @@ public partial class SettingsViewModel : ThreadSafeViewModel
             2 => "Light",
             _ => "System"
         };
-        _settingsManager.Theme = newTheme;
+
+        if (!_isApplyingManagerState)
+        {
+            CommitSetting("General", "Theme", newTheme, "Тема оформления");
+        }
+
         WeakReferenceMessenger.Default.Send(new ThemeChangedMessage(newTheme));
     }
 
     partial void OnSelectedBackdropIndexChanged(int value)
     {
-        string newBackdrop = value == 1 ? "Acrylic" : "Mica";
-        _settingsManager.BackdropType = newBackdrop;
+        string newBackdrop = value switch
+        {
+            1 => "Acrylic",
+            2 => "None",
+            _ => "Mica"
+        };
+
+        if (!_isApplyingManagerState)
+        {
+            CommitSetting("General", "BackdropType", newBackdrop, "Тип фона окон");
+        }
+
         WeakReferenceMessenger.Default.Send(new BackdropChangedMessage(newBackdrop));
     }
 
     partial void OnShowLogsTabChanged(bool value)
     {
-        _settingsManager.ShowLogsTab = value;
+        if (!_isApplyingManagerState)
+        {
+            CommitSetting("Logging", "ShowLogsTab", value, "Вкладка журнала");
+        }
+
         WeakReferenceMessenger.Default.Send(
             new LogsTabVisibilityChangedMessage(value));
     }
 
     partial void OnAutoCheckUpdatesChanged(bool value)
     {
-        _settingsManager.AutoCheckUpdates = value;
+        CommitSetting("Updates", "AutoCheckUpdates", value, "Проверка обновлений при запуске");
+    }
+
+    partial void OnShowWhatsNewAfterUpdateChanged(bool value)
+    {
+        CommitSetting("Updates", "ShowWhatsNewAfterUpdate", value, "Окно изменений после обновления");
+    }
+
+    /// <summary>
+    /// Меняет флаг автопоказа без строки статуса: вызывается из окна
+    /// «Что нового», где подтверждение сохранения неуместно.
+    /// </summary>
+    internal void SetShowWhatsNewAfterUpdateSilent(bool value)
+    {
+        _settingsManager.ShowWhatsNewAfterUpdate = value;
+        _isApplyingManagerState = true;
+        try
+        {
+            ShowWhatsNewAfterUpdate = value;
+        }
+        finally
+        {
+            _isApplyingManagerState = false;
+        }
     }
 
     partial void OnIncludePreReleasesChanged(bool value)
     {
-        _settingsManager.IncludePreReleases = value;
+        CommitSetting("Updates", "IncludePreReleases", value, "Предварительные версии");
     }
 
     partial void OnDebugSimulateOldVersionChanged(bool value)
     {
-        _settingsManager.DebugSimulateOldVersion = value;
+        CommitSetting("Debug", "DebugSimulateOldVersion", value, "Имитация старой версии");
     }
 
     partial void OnRenameEnableRegexChanged(bool value)
     {
-        _settingsManager.RenameEnableRegex = value;
+        CommitSetting("General", "RenameEnableRegex", value, "Переименование по регулярным выражениям");
     }
 
     partial void OnRenameRegexSearchChanged(string value)
     {
-        _settingsManager.RenameRegexSearch = value;
+        CommitSetting("General", "RenameRegexSearch", value, "Шаблон поиска при переименовании");
     }
 
     partial void OnRenameRegexReplaceChanged(string value)
     {
-        _settingsManager.RenameRegexReplace = value;
+        CommitSetting("General", "RenameRegexReplace", value, "Шаблон замены при переименовании");
     }
 
     partial void OnRenameUseRegexChanged(bool value)
     {
-        _settingsManager.RenameUseRegex = value;
+        CommitSetting("General", "RenameUseRegex", value, "Использование регулярных выражений");
     }
 
     partial void OnRenameCaseSensitiveChanged(bool value)
     {
-        _settingsManager.RenameCaseSensitive = value;
+        CommitSetting("General", "RenameCaseSensitive", value, "Учёт регистра при переименовании");
     }
 
     partial void OnIsContextMenuEnabledChanged(bool value)
     {
-        _settingsManager.SetSetting("Shell", "IsContextMenuEnabled", value);
-        _settingsManager.SaveSettings();
+        if (!_isApplyingManagerState)
+        {
+            ApplySettingCommit(
+                "Интеграция с контекстным меню Проводника",
+                PersistenceResult.Normalize(
+                    _settingsManager.SetSetting("Shell", "IsContextMenuEnabled", value)));
+        }
+
+        bool persisted = _isApplyingManagerState || LastCommitState == SettingCommitState.Persisted;
 
         try
         {
@@ -467,31 +553,102 @@ public partial class SettingsViewModel : ThreadSafeViewModel
                 {
                     var scripts = _scriptRegistry.Scripts.Select(s => s.Name).ToList();
                     ShellIntegration.Register(exePath, scripts);
-                    _logService.Info("Интеграция с контекстным меню Проводника успешно включена", "SettingsViewModel");
+                    _logService.Write(SettingsEventIds.DefaultsDeferred, persisted ? LogLevel.Info : LogLevel.Warning, persisted ? LogStatus.Succeeded : LogStatus.Changed, persisted ? "Интеграция с контекстным меню Проводника включена, настройка сохранена" : "Интеграция с контекстным меню Проводника включена только в текущем сеансе, настройка не сохранена", source: SourceName, properties: LogProps.Create("Key", "ShellIntegrationEnabled").With("Persisted", persisted));
                 }
             }
             else
             {
                 ShellIntegration.Unregister();
-                _logService.Info("Интеграция с контекстным меню Проводника успешно отключена", "SettingsViewModel");
+                _logService.Write(SettingsEventIds.DefaultsDeferred, persisted ? LogLevel.Info : LogLevel.Warning, persisted ? LogStatus.Succeeded : LogStatus.Changed, persisted ? "Интеграция с контекстным меню Проводника отключена, настройка сохранена" : "Интеграция с контекстным меню Проводника отключена только в текущем сеансе, настройка не сохранена", source: SourceName, properties: LogProps.Create("Key", "ShellIntegrationEnabled").With("Persisted", persisted));
             }
         }
         catch (Exception ex)
         {
-            _logService.Exception(ex, "Ошибка при изменении состояния контекстного меню", "SettingsViewModel");
-            _dialogService.ShowMessageAsync(
+            _logService.Write("settings.shell_integration.change_failed", LogLevel.Warning, LogStatus.Failed, "Состояние интеграции с контекстным меню не изменено", ex, SourceName, properties: LogProps.Create("Key", "ShellIntegrationEnabled").With("ErrorCode", "SHELL_INTEGRATION_CHANGE_FAILED").With("Persisted", false));
+            _ = _dialogService.ShowMessageAsync(
                 "Ошибка интеграции",
-                $"Не удалось изменить состояние интеграции с контекстным меню: {ex.Message}");
+                "Не удалось изменить состояние интеграции с контекстным меню. Подробности записаны в журнал.");
         }
     }
 
     /// <summary>
-    /// Устанавливает путь к директории хранения логов.
+    /// Фиксирует пользовательское изменение настройки и публикует типизированный результат.
+    /// Значение параметра в журнал и в интерфейс не попадает.
     /// </summary>
-    public void SetLogDirectory(string path)
+    /// <typeparam name="T">Тип значения настройки.</typeparam>
+    /// <param name="group">Группа настройки.</param>
+    /// <param name="key">Ключ настройки.</param>
+    /// <param name="value">Новое значение.</param>
+    /// <param name="displayName">Понятное пользователю название настройки.</param>
+    private void CommitSetting<T>(string group, string key, T value, string displayName)
     {
-        _settingsManager.LogDir = path;
-        LogDir = path;
+        if (_isApplyingManagerState)
+        {
+            return;
+        }
+
+        ApplySettingCommit(
+            displayName,
+            PersistenceResult.Normalize(_settingsManager.SetSetting(group, key, value)));
+    }
+
+    /// <summary>
+    /// Переводит типизированный результат persistence в наблюдаемое состояние фиксации.
+    /// </summary>
+    /// <param name="displayName">Понятное пользователю название настройки.</param>
+    /// <param name="result">Результат операции сохранения.</param>
+    private void ApplySettingCommit(string displayName, PersistenceResult result)
+    {
+        LastCommitErrorCode = result.ErrorCode;
+
+        if (result.IsFailure)
+        {
+            LastCommitState = SettingCommitState.Failed;
+            string failureSummary = $"{displayName}: изменено только в текущем сеансе, сохранить не удалось ({result.ErrorCode}). {result.UserSummary}";
+            _logService.Write("settings.persistence.deferred", LogLevel.Warning, LogStatus.Changed, failureSummary, source: SourceName, properties: LogProps.Create("Persisted", false).With("Group", "Persistence"));
+            return;
+        }
+
+        if (result.IsPending)
+        {
+            LastCommitState = SettingCommitState.ChangedInMemory;
+            return;
+        }
+
+        if (result.ChangedCount == 0)
+        {
+            LastCommitState = SettingCommitState.None;
+            return;
+        }
+
+        LastCommitState = SettingCommitState.Persisted;
+    }
+
+    /// <summary>
+    /// Устанавливает путь к директории хранения логов.
+    /// Каталог активной сессии журналирования не переинициализируется:
+    /// изменение применяется со следующего запуска приложения и только при
+    /// подтверждённой записи настройки на диск.
+    /// </summary>
+    /// <param name="path">Новый путь к каталогу логов.</param>
+    /// <returns>Результат сохранения настройки.</returns>
+    public PersistenceResult SetLogDirectory(string path)
+    {
+        PersistenceResult result = PersistenceResult.Normalize(_settingsManager.SetLogDirectory(path));
+
+        if (result.IsSuccess && result.Persisted)
+        {
+            LogDir = path;
+            LastCommitState = SettingCommitState.Persisted;
+            LastCommitErrorCode = result.ErrorCode;
+            return result;
+        }
+
+        LastCommitState = SettingCommitState.Failed;
+        LastCommitErrorCode = result.ErrorCode;
+        string failureSummary = $"Каталог журналирования не сохранён ({result.ErrorCode}). {PersistenceSummaries.NextLaunchLost}";
+        _logService.Write("settings.persistence.deferred", LogLevel.Warning, LogStatus.Changed, failureSummary, source: SourceName, properties: LogProps.Create("Persisted", false).With("Group", "Persistence"));
+        return result;
     }
 
     /// <summary>
@@ -507,38 +664,107 @@ public partial class SettingsViewModel : ThreadSafeViewModel
             "Да",
             "Отмена");
 
-        if (confirm)
+        if (!confirm)
         {
-            _settingsManager.OverwriteExisting = false;
-            _settingsManager.ClearListOnAdd = false;
-            _settingsManager.EnableParallel = true;
-            _settingsManager.MaxParallelTasks = Math.Max(
-                1,
-                Environment.ProcessorCount / 2);
-            _settingsManager.DefaultOutputSubfolder = "KTools_Result";
-            _settingsManager.UseAutoSubfolder = false;
-            _settingsManager.Theme = "Dark";
-            _settingsManager.BackdropType = "Mica";
-            _settingsManager.ShowLogsTab = false;
-            _settingsManager.LogDir = string.Empty;
-            _settingsManager.AutoCheckUpdates = true;
-            _settingsManager.IncludePreReleases = true;
-            _settingsManager.RenameEnableRegex = false;
-            _settingsManager.RenameRegexSearch = string.Empty;
-            _settingsManager.RenameRegexReplace = string.Empty;
-            _settingsManager.RenameUseRegex = true;
-            _settingsManager.RenameCaseSensitive = false;
-            _settingsManager.DebugSimulateOldVersion = false;
-            IsDebugSettingsVisible = false;
+            return;
+        }
 
-            LoadCurrentSettings();
+        PersistenceResult resetResult = PersistenceResult.Normalize(
+            _settingsManager.ResetToDefaults(_scriptRegistry.Scripts, BuildResetDefaults()));
 
-            WeakReferenceMessenger.Default.Send(
-                new LogsTabVisibilityChangedMessage(false));
+        ApplyResetToViewModel();
 
+        if (resetResult.IsSuccess && resetResult.Persisted)
+        {
+            LastCommitState = SettingCommitState.Persisted;
+            LastCommitErrorCode = PersistenceErrorCodes.None;
             await _dialogService.ShowMessageAsync(
                 "Настройки сброшены",
-                "Все настройки были успешно сброшены к значениям по умолчанию.");
+                "Все настройки сброшены к значениям по умолчанию и сохранены на диск.");
+            return;
+        }
+
+        LastCommitState = SettingCommitState.Failed;
+        LastCommitErrorCode = resetResult.ErrorCode;
+        string resetSummary = $"Сброс настроек не сохранён на диск ({resetResult.ErrorCode}). {resetResult.UserSummary}";
+        _logService.Write("settings.persistence.deferred", LogLevel.Warning, LogStatus.Changed, resetSummary, source: SourceName, properties: LogProps.Create("Persisted", false).With("Group", "Persistence"));
+
+        await _dialogService.ShowMessageAsync(
+            "Сброс не сохранён",
+            $"Настройки сброшены к значениям по умолчанию, но не записаны на диск ({resetResult.ErrorCode}). {resetResult.UserSummary}");
+    }
+
+    /// <summary>
+    /// Формирует явный набор значений по умолчанию для сброса.
+    /// Шаблоны переименования и флаг интеграции с контекстным меню входят в набор,
+    /// поэтому сброс действительно очищает их, а не только переключатели страницы.
+    /// </summary>
+    private static List<KeyValuePair<string, object?>> BuildResetDefaults()
+    {
+        return new List<KeyValuePair<string, object?>>(24)
+        {
+            new("General/OverwriteExisting", false),
+            new("General/ClearListOnAdd", false),
+            new("General/EnableParallel", true),
+            new("General/MaxParallelTasks", Math.Max(1, Environment.ProcessorCount / 2)),
+            new("General/DefaultOutputSubfolder", "KTools_Result"),
+            new("General/UseAutoSubfolder", false),
+            new("General/Theme", "Dark"),
+            new("General/BackdropType", "Mica"),
+            new("General/RenameEnableRegex", false),
+            new("General/RenameRegexSearch", string.Empty),
+            new("General/RenameRegexReplace", string.Empty),
+            new("General/RenameUseRegex", true),
+            new("General/RenameCaseSensitive", false),
+            new("General/SearchTemplates", SettingsDefaults.GetDefaultSearchTemplates()),
+            new("General/ReplaceTemplates", SettingsDefaults.GetDefaultReplaceTemplates()),
+            new("Logging/ShowLogsTab", false),
+            new("Logging/LogDir", string.Empty),
+            new("Updates/AutoCheckUpdates", true),
+            new("Updates/ShowWhatsNewAfterUpdate", true),
+            new("Updates/IncludePreReleases", true),
+            new("Debug/DebugSimulateOldVersion", false),
+            new("Debug/DebugDisableUpdateAction", false),
+            new("Shell/IsContextMenuEnabled", false)
+        };
+    }
+
+    /// <summary>
+    /// Синхронизирует свойства модели представления со сброшенным состоянием.
+    /// Все изменения проходят через свойства и события, поэтому интеграция с контекстным
+    /// меню снимается, а сообщения о теме и фоне отправляются подписчикам.
+    /// </summary>
+    private void ApplyResetToViewModel()
+    {
+        _isApplyingManagerState = true;
+        try
+        {
+            OverwriteExisting = false;
+            ClearListOnAdd = false;
+            EnableParallel = true;
+            MaxParallelTasks = Math.Max(1, Environment.ProcessorCount / 2);
+            DefaultOutputSubfolder = "KTools_Result";
+            UseAutoSubfolder = false;
+            SelectedThemeIndex = 1;
+            SelectedBackdropIndex = 0;
+            ShowLogsTab = false;
+            LogDir = string.Empty;
+            AutoCheckUpdates = true;
+            ShowWhatsNewAfterUpdate = true;
+            IncludePreReleases = true;
+            RenameEnableRegex = false;
+            RenameRegexSearch = string.Empty;
+            RenameRegexReplace = string.Empty;
+            RenameUseRegex = true;
+            RenameCaseSensitive = false;
+            DebugSimulateOldVersion = false;
+            DebugDisableUpdateAction = false;
+            IsContextMenuEnabled = false;
+            IsDebugSettingsVisible = false;
+        }
+        finally
+        {
+            _isApplyingManagerState = false;
         }
     }
 
@@ -552,7 +778,7 @@ public partial class SettingsViewModel : ThreadSafeViewModel
 
         if (DebugDisableUpdateAction)
         {
-            _logService.Info("[Debug] Проверка обновлений заблокирована переключателем.", "SettingsViewModel");
+            _logService.Write("settings.debug.update_check_blocked", LogLevel.Debug, LogStatus.Skipped, "Проверка обновлений заблокирована отладочным переключателем", source: SourceName, properties: LogProps.Create("Reason", "DebugToggle").With("Group", "Update"));
             return;
         }
 
@@ -578,12 +804,81 @@ public partial class SettingsViewModel : ThreadSafeViewModel
         catch (Exception ex)
         {
             UpdateStatusText = "Не удалось выполнить проверку обновлений";
-            _logService.Exception(ex, "Ошибка при ручной проверке обновлений из панели настроек", "SettingsViewModel");
-            await _dialogService.ShowMessageAsync("Ошибка", $"Не удалось проверить обновления: {ex.Message}");
+            _logService.Write("app.update.check_failed", LogLevel.Warning, LogStatus.Failed, "Ручная проверка обновлений не завершена", ex, SourceName, properties: LogProps.Create("ErrorCode", "UPDATE_CHECK_FAILED").With("Reason", "Manual").With("Retryable", true));
+            await _dialogService.ShowMessageAsync(
+                "Ошибка",
+                "Не удалось проверить обновления. Подробности записаны в журнал.");
         }
         finally
         {
             IsChecking = false;
+        }
+    }
+
+    /// <summary>
+    /// Проверяет запуск из неосновной копии перед обновлением: тихая установка
+    /// обновляет зарегистрированную папку, а не текущую, поэтому эта копия останется старой.
+    /// Возвращает true, если обновление нужно прервать (выполнен или запрошен переход к основной копии).
+    /// </summary>
+    private async System.Threading.Tasks.Task<bool> TryRedirectStaleCopyBeforeUpdateAsync()
+    {
+        StaleCopyInfo? staleCopy;
+        try
+        {
+            staleCopy = _installLocationService.DetectStaleCopy();
+        }
+        catch (Exception ex)
+        {
+            _logService.Write("settings.update.stale_copy_check_failed", LogLevel.Warning, LogStatus.Failed, "Проверка неосновной копии перед обновлением не выполнена, обновление продолжается", ex, SourceName, properties: LogProps.Create("ErrorCode", "UPDATE_STALE_COPY_CHECK_FAILED").With("Group", "Update").With("Retryable", true));
+            return false;
+        }
+
+        if (staleCopy is null || !staleCopy.ShouldWarn)
+        {
+            return false;
+        }
+
+        _logService.Write("settings.update.stale_copy_warned", LogLevel.Warning, LogStatus.Changed, "Обновление запрошено из неосновной копии: установщик обновит зарегистрированную папку, а не текущую", source: SourceName, properties: LogProps.Create("Version", staleCopy.RegisteredVersion).With("Reason", "StaleCopy").With("Group", "Update"));
+
+        bool openMain = await _dialogService.ShowConfirmationAsync(
+            "Обновление установится в другую папку",
+            $"Эта копия версии {staleCopy.CurrentVersion} запущена из папки:{Environment.NewLine}{staleCopy.CurrentDirectory}"
+                + $"{Environment.NewLine}{Environment.NewLine}Обновление будет установлено в основную папку:{Environment.NewLine}{staleCopy.RegisteredDirectory}"
+                + $"{Environment.NewLine}{Environment.NewLine}Открыть основную копию вместо обновления этой?",
+            "Открыть основную",
+            "Обновить всё равно");
+
+        if (!openMain)
+        {
+            return false;
+        }
+
+        if (_installLocationService.TryLaunchRegisteredCopy(staleCopy))
+        {
+            ExitToTakeover();
+            return true;
+        }
+
+        await _dialogService.ShowMessageAsync(
+            "Не удалось открыть основную копию",
+            $"Запустите вручную файл:{Environment.NewLine}{staleCopy.RegisteredExecutablePath}");
+        return true;
+    }
+
+    /// <summary>
+    /// Завершает текущую копию после запуска основной: место первичного экземпляра
+    /// освобождается, и основная копия с флагом захвата занимает его.
+    /// Вызывается из UI-потока команды обновления.
+    /// </summary>
+    private void ExitToTakeover()
+    {
+        try
+        {
+            Microsoft.UI.Xaml.Application.Current?.Exit();
+        }
+        catch (Exception ex)
+        {
+            _logService.Write("settings.update.takeover_exit_failed", LogLevel.Warning, LogStatus.PartiallySucceeded, "Основная копия запущена, но завершить текущую копию автоматически не удалось, закройте её вручную", ex, SourceName, properties: LogProps.Create("ErrorCode", "UPDATE_TAKEOVER_EXIT_FAILED").With("Group", "Update"));
         }
     }
 
@@ -597,7 +892,12 @@ public partial class SettingsViewModel : ThreadSafeViewModel
 
         if (DebugDisableUpdateAction)
         {
-            _logService.Info("[Debug] Загрузка и установка обновлений заблокирована переключателем.", "SettingsViewModel");
+            _logService.Write("settings.debug.update_install_blocked", LogLevel.Debug, LogStatus.Skipped, "Загрузка и установка обновлений заблокирована отладочным переключателем", source: SourceName, properties: LogProps.Create("Reason", "DebugToggle").With("Group", "Update"));
+            return;
+        }
+
+        if (await TryRedirectStaleCopyBeforeUpdateAsync())
+        {
             return;
         }
 
@@ -617,8 +917,10 @@ public partial class SettingsViewModel : ThreadSafeViewModel
         catch (Exception ex)
         {
             IsDownloading = false;
-            _logService.Exception(ex, "Ошибка при скачивании или установке обновления", "SettingsViewModel");
-            await _dialogService.ShowMessageAsync("Ошибка", $"Не удалось загрузить или установить обновление: {ex.Message}");
+            _logService.Write("app.update.download_install_failed", LogLevel.Warning, LogStatus.Failed, "Скачивание или установка обновления не завершены", ex, SourceName, properties: LogProps.Create("ErrorCode", "UPDATE_DOWNLOAD_INSTALL_FAILED").With("Retryable", true));
+            await _dialogService.ShowMessageAsync(
+                "Ошибка",
+                "Не удалось загрузить или установить обновление. Подробности записаны в журнал.");
         }
     }
 
@@ -644,6 +946,60 @@ public partial class SettingsViewModel : ThreadSafeViewModel
         }
     }
 
+    /// <summary>
+    /// Открывает окно «Что нового» с запечёнными данными установленной версии.
+    /// </summary>
+    [RelayCommand]
+    private async System.Threading.Tasks.Task ShowWhatsNewAsync()
+    {
+        if (!ReleaseNotesLoader.TryLoadBakedNotes(out ReleaseNotes? notes) || notes == null)
+        {
+            await _dialogService.ShowMessageAsync(
+                "Что нового",
+                $"Запечённые данные версии не найдены:{Environment.NewLine}{ReleaseNotesLoader.BakedFilePath}{Environment.NewLine}Пересоберите приложение скриптом сборки.");
+            return;
+        }
+
+        _logService.Write("settings.whatsnew.manual_open", LogLevel.Debug, LogStatus.Running, $"Открыто окно изменений версии {LogRedactor.CompactSafeToken(notes.Version)} из блока «О программе»", source: SourceName, properties: LogProps.Create("Version", LogRedactor.CompactSafeToken(notes.Version)).With("Group", "Update"));
+        await _dialogService.ShowWhatsNewAsync(notes);
+    }
+
+    /// <summary>
+    /// Открывает окно «Что нового» с демонстрационными данными для проверки вёрстки.
+    /// Стартовая сцена случайная, дальше листание идёт по кругу всего списка.
+    /// </summary>
+    [RelayCommand]
+    private async System.Threading.Tasks.Task ShowWhatsNewDebugAsync()
+    {
+        const string fakeBody =
+            "### Главное\n"
+            + "1. Демонстрационный рассвет в шапке: анимация меняется при каждом открытии.\n"
+            + "2. Краткая выжимка версии вместо длинной простыни изменений.\n"
+            + "3. Раскрывающиеся секции по категориям изменений.\n"
+            + "### Добавлено\n"
+            + "1. Окно «Что нового» с анимированной шапкой.\n"
+            + "2. Случайный выбор сцены из коллекции ascii.rest.\n"
+            + "3. Кнопка «Другая анимация» прямо в шапке окна.\n"
+            + "4. Заглушка-градиент при отсутствии сети.\n"
+            + "### Изменено\n"
+            + "1. Демонстрационный порядок секций для проверки прокрутки.\n"
+            + "2. Подпись версии поверх анимации для наглядности.\n"
+            + "### Исправлено\n"
+            + "1. Демонстрационный пункт первой категории исправлений.\n"
+            + "2. Демонстрационный пункт второй категории исправлений.\n"
+            + "3. Демонстрационный пункт третьей категории исправлений.";
+
+        var notes = ReleaseNotesParser.Parse(
+            GetAppVersion(),
+            "Демонстрационный просмотр окна изменений",
+            fakeBody,
+            WhatsNewArtCatalog.PickRandomAvailable());
+
+        _logService.Write("settings.debug.whatsnew_preview", LogLevel.Debug, LogStatus.Running, $"Открыт демонстрационный просмотр окна изменений с анимацией {LogRedactor.CompactSafeToken(notes.ArtPieceName)}", source: SourceName, properties: LogProps.Create("Group", "Debug").With("Key", LogRedactor.CompactSafeToken(notes.ArtPieceName)));
+
+        await _dialogService.ShowWhatsNewAsync(notes);
+    }
+
     private int _versionClickCount = 0;
 
     /// <summary>
@@ -653,7 +1009,7 @@ public partial class SettingsViewModel : ThreadSafeViewModel
     private async System.Threading.Tasks.Task VersionClickedAsync()
     {
         _versionClickCount++;
-        _logService.Info($"Клик по кнопке версии: {_versionClickCount}/7", "SettingsViewModel");
+        _logService.Write("ui.version_button.clicked", LogLevel.Debug, LogStatus.Changed, $"Нажата кнопка версии {_versionClickCount} из 7", source: SourceName, properties: LogProps.Create("Count", _versionClickCount).With("Total", 7));
         if (_versionClickCount >= 7)
         {
             IsDebugSettingsVisible = true;

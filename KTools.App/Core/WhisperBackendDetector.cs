@@ -1,6 +1,7 @@
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
 using System;
 using System.IO;
+
 using KTools_App.Services.Contracts;
 
 namespace KTools_App.Core;

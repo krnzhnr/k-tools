@@ -38,6 +38,9 @@
     <Content Include="Assets\Square44x44Logo.targetsize-48_altform-lightunplated.png" />
     <Content Include="Assets\StoreLogo.png" />
     <Content Include="Assets\AppIcon.ico" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" TargetPath="AppIcon.ico" />
+    <Content Include="Assets\WhatsNew\art\*.gif" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Assets\WhatsNew\*.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Assets\WhatsNew\art\ATTRIBUTION.txt" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Assets\Wide310x150Logo.scale-200.png" />
   </ItemGroup>
 
@@ -96,6 +99,8 @@
   </PropertyGroup>
 
   <!-- Publish Properties -->
+  <!-- PERF-07: Release публикуется с ReadyToRun=True; build_csharp.py передаёт
+       явное -p:PublishReadyToRun=true, чтобы шип совпадал с этим значением. -->
   <PropertyGroup>
     <PublishReadyToRun Condition="'$(Configuration)' == 'Debug'">False</PublishReadyToRun>
     <PublishReadyToRun Condition="'$(Configuration)' != 'Debug'">True</PublishReadyToRun>
@@ -131,6 +136,8 @@
       <LanguageDirectoriesToDelete Remove="$(PublishDir)en-us" />
       <!-- Папка ресурсов Microsoft.UI.Xaml обязательна для корректной работы UI -->
       <LanguageDirectoriesToDelete Remove="$(PublishDir)Microsoft.UI.Xaml" />
+      <!-- Папка Assets с иконками, GIF-сценами и снапшотом «Что нового» обязательна в рантайме -->
+      <LanguageDirectoriesToDelete Remove="$(PublishDir)Assets" />
     </ItemGroup>
 
     <Message Importance="high" Text="[K-Tools] Удаление неиспользуемых папок локализаций из каталога публикации: @(LanguageDirectoriesToDelete)" />

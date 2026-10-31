@@ -94,11 +94,6 @@ public sealed class AssParser : IAssParser
         @"\b[A-ZА-ЯЁ]{2,}\b",
         RegexOptions.Compiled);
 
-    // Регэкс для удаления HTML-подобных тегов SRT/VTT (<i>, <b>, <font>, etc.)
-    // Исключает случайное повреждение декоративных << >> и кириллицы.
-    private static readonly Regex HtmlTagPattern = new(
-        @"</?[a-z][a-z0-9]*(?:\s+[^>]*?)?>",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     // Регэкс для разделения текста по \N и \n с захватом разделителей.
     private static readonly Regex NewlineSplitPattern = new(
@@ -112,12 +107,35 @@ public sealed class AssParser : IAssParser
 
     private const string DialoguePrefix = "Dialogue:";
 
-    public AssParser() { }
+    private readonly record struct DialogueFieldIndices(
+        int NumFields,
+        int Start,
+        int End,
+        int Style,
+        int Name,
+        int Actor,
+        int Effect,
+        int Text);
 
+    private static readonly DialogueFieldIndices FallbackFieldIndices = new(
+        NumFields: 10,
+        Start: 1,
+        End: 2,
+        Style: 3,
+        Name: 4,
+        Actor: -1,
+        Effect: -1,
+        Text: 9);
 
+    private readonly IVttParser _vttParser;
+
+    public AssParser(IVttParser? vttParser = null)
+    {
+        _vttParser = vttParser ?? new VttParser();
+    }
 
     /// <summary>
-    /// Распарсить файл субтитров (ASS/SSA или SRT).
+    /// Распарсить файл субтитров (ASS/SSA, SRT или WebVTT).
     /// </summary>
     public AssData Parse(string filePath)
     {
@@ -126,8 +144,40 @@ public sealed class AssParser : IAssParser
         {
             return ParseSrt(filePath);
         }
+        if (ext == ".vtt")
+        {
+            return _vttParser.Parse(filePath);
+        }
+        if (IsWebVtt(filePath))
+        {
+            return _vttParser.Parse(filePath);
+        }
         return ParseAss(filePath);
     }
+
+    private static bool IsWebVtt(string filePath)
+    {
+        try
+        {
+            using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var reader = new StreamReader(stream);
+            string? line = reader.ReadLine();
+            while (line != null && string.IsNullOrWhiteSpace(line))
+            {
+                line = reader.ReadLine();
+            }
+            return line != null && line.TrimStart('\uFEFF').StartsWith("WEBVTT", StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Распарсить WebVTT (.vtt) файл и преобразовать в AssData с помощью обособленного сервиса VttParser.
+    /// </summary>
+    public AssData ParseVtt(string filePath) => _vttParser.Parse(filePath);
 
     /// <summary>
     /// Распарсить ASS-файл и извлечь все строки диалогов.
@@ -137,8 +187,8 @@ public sealed class AssParser : IAssParser
         var data = new AssData();
         bool inEvents = false;
         bool metFirstDialogue = false;
-        var formatFields = new List<string>();
         var headerBuilder = new System.Text.StringBuilder();
+        var fieldIndices = FallbackFieldIndices;
 
         string content = ReadFileWithFallbackEncoding(filePath);
 
@@ -151,7 +201,7 @@ public sealed class AssParser : IAssParser
             if (stripped.StartsWith(DialoguePrefix, StringComparison.OrdinalIgnoreCase))
             {
                 metFirstDialogue = true;
-                var dialogue = ParseDialogueLine(stripped, formatFields);
+                var dialogue = ParseDialogueLine(stripped, fieldIndices);
                 if (dialogue != null)
                 {
                     data.Dialogues.Add(dialogue);
@@ -190,9 +240,31 @@ public sealed class AssParser : IAssParser
                 if (stripped.StartsWith("Format:", StringComparison.OrdinalIgnoreCase))
                 {
                     string[] rawFields = stripped.Substring("Format:".Length).Split(',');
-                    formatFields = rawFields
+                    var normalizedFields = rawFields
                         .Select(f => f.Trim().ToLowerInvariant())
                         .ToList();
+
+                    int normalizedFieldsIndex(string name)
+                    {
+                        for (int i = 0; i < normalizedFields.Count; i++)
+                        {
+                            if (normalizedFields[i] == name)
+                            {
+                                return i;
+                            }
+                        }
+                        return -1;
+                    }
+
+                    fieldIndices = new DialogueFieldIndices(
+                        NumFields: normalizedFields.Count,
+                        Start: normalizedFieldsIndex("start"),
+                        End: normalizedFieldsIndex("end"),
+                        Style: normalizedFieldsIndex("style"),
+                        Name: normalizedFieldsIndex("name"),
+                        Actor: normalizedFieldsIndex("actor"),
+                        Effect: normalizedFieldsIndex("effect"),
+                        Text: normalizedFieldsIndex("text"));
                     continue;
                 }
             }
@@ -210,8 +282,8 @@ public sealed class AssParser : IAssParser
         var data = new AssData();
         string content = ReadFileWithFallbackEncoding(filePath);
 
-        // Разделяем на блоки по пустым строкам
-        string[] blocks = Regex.Split(content.Trim(), @"\r?\n\s*\r?\n");
+        // Разделяем на блоки по пустым строкам (Trim в блоках отсекает ведущие/хвостовые пропуски)
+        string[] blocks = Regex.Split(content, @"\r?\n\s*\r?\n");
         foreach (string block in blocks)
         {
             string[] lines = block.Trim().Split(
@@ -274,54 +346,40 @@ public sealed class AssParser : IAssParser
 
     private AssDialogue? ParseDialogueLine(
         string line,
-        List<string> formatFields)
+        DialogueFieldIndices fieldIndices)
     {
         string afterPrefix = line.Substring(DialoguePrefix.Length).Trim();
-        int numFields = formatFields.Count > 0 ? formatFields.Count : 10;
 
-        string[] parts = afterPrefix.Split(',', numFields);
+        string[] parts = afterPrefix.Split(',', fieldIndices.NumFields);
 
-        if (parts.Length < numFields)
+        if (parts.Length < fieldIndices.NumFields)
         {
             return null;
         }
 
-        var fieldMap = new Dictionary<string, string>();
-        if (formatFields.Count > 0)
-        {
-            for (int i = 0; i < formatFields.Count; i++)
-            {
-                fieldMap[formatFields[i]] = parts[i].Trim();
-            }
-        }
-        else
-        {
-            fieldMap["start"] = parts[1].Trim();
-            fieldMap["end"] = parts[2].Trim();
-            fieldMap["style"] = parts[3].Trim();
-            fieldMap["name"] = parts[4].Trim();
-            fieldMap["text"] = parts[9].Trim();
-        }
+        string GetField(int index, string fallback) => index >= 0 ? parts[index].Trim() : fallback;
 
         return new AssDialogue(
-            start: fieldMap.GetValueOrDefault("start", "0:00:00.00"),
-            end: fieldMap.GetValueOrDefault("end", "0:00:00.00"),
-            style: fieldMap.GetValueOrDefault("style", "Default"),
-            actor: fieldMap.GetValueOrDefault("name", fieldMap.GetValueOrDefault("actor", "")),
-            effect: fieldMap.GetValueOrDefault("effect", ""),
-            text: fieldMap.GetValueOrDefault("text", "")
+            start: GetField(fieldIndices.Start, "0:00:00.00"),
+            end: GetField(fieldIndices.End, "0:00:00.00"),
+            style: GetField(fieldIndices.Style, "Default"),
+            actor: fieldIndices.Name >= 0
+                ? parts[fieldIndices.Name].Trim()
+                : GetField(fieldIndices.Actor, ""),
+            effect: GetField(fieldIndices.Effect, ""),
+            text: GetField(fieldIndices.Text, "")
         );
     }
 
     /// <summary>
-    /// Очистить текст субтитров от всех тегов (ASS и HTML).
+    /// Очистить текст субтитров от всех тегов (ASS, HTML и WebVTT) с декодированием HTML-сущностей.
     /// </summary>
     public string StripTags(string text)
     {
         // Удаляем ASS override-блоки
-        string cleaned = TagPattern.Replace(text, "");
-        // Удаляем HTML-теги SRT
-        cleaned = HtmlTagPattern.Replace(cleaned, "");
+        string cleaned = TagPattern.Replace(text, string.Empty);
+        // Удаляем HTML- и WebVTT-теги, караоке-метки и декодируем HTML-сущности через VttParser
+        cleaned = _vttParser.StripVttTags(cleaned);
         // Конвертируем переносы и спецсимволы
         cleaned = cleaned
             .Replace("\\N", "\n")
@@ -381,10 +439,10 @@ public sealed class AssParser : IAssParser
         }
 
         string res = string.Concat(resultParts);
-        
+
         // Убираем повторные \N\N и висящие края (используем скомпилированный паттерн)
         res = DuplicateNewlinePattern.Replace(res, "$1");
-        
+
         // Обрезаем висящие слеши
         res = TrimSlashN(res);
         return res;
@@ -393,12 +451,12 @@ public sealed class AssParser : IAssParser
     private string TrimSlashN(string text)
     {
         string current = text;
-        while (current.StartsWith("\\N", StringComparison.OrdinalIgnoreCase) || 
+        while (current.StartsWith("\\N", StringComparison.OrdinalIgnoreCase) ||
                current.StartsWith("\\n", StringComparison.OrdinalIgnoreCase))
         {
             current = current.Substring(2);
         }
-        while (current.EndsWith("\\N", StringComparison.OrdinalIgnoreCase) || 
+        while (current.EndsWith("\\N", StringComparison.OrdinalIgnoreCase) ||
                current.EndsWith("\\n", StringComparison.OrdinalIgnoreCase))
         {
             current = current.Substring(0, current.Length - 2);
@@ -458,22 +516,57 @@ public sealed class AssParser : IAssParser
     }
 
     /// <summary>
-    /// Конвертировать таймкод SRT (HH:MM:SS,mmm) в ASS (H:MM:SS.CC).
+    /// Конвертировать таймкод WebVTT (HH:MM:SS.mmm или MM:SS.mmm) в ASS (H:MM:SS.CC).
     /// </summary>
-    public static string SrtTimeToAss(string srtTime)
+    public static string VttTimeToAss(string vttTime)
     {
+        if (string.IsNullOrWhiteSpace(vttTime))
+        {
+            return "0:00:00.00";
+        }
+
         try
         {
-            string cleanSrt = srtTime.Replace(',', '.');
-            string[] parts = cleanSrt.Split('.');
+            string clean = vttTime.Trim().Replace(',', '.');
+            string[] parts = clean.Split('.');
             string timePart = parts[0];
-            string msPart = parts[1];
+            string msPart = parts.Length > 1 ? parts[1] : "0";
 
             string[] t = timePart.Split(':');
-            int h = int.Parse(t[0]);
-            int m = int.Parse(t[1]);
-            int s = int.Parse(t[2]);
-            int ms = int.Parse(msPart);
+            int h = 0;
+            int m = 0;
+            int s = 0;
+
+            if (t.Length >= 3)
+            {
+                h = int.Parse(t[0], System.Globalization.CultureInfo.InvariantCulture);
+                m = int.Parse(t[1], System.Globalization.CultureInfo.InvariantCulture);
+                s = int.Parse(t[2], System.Globalization.CultureInfo.InvariantCulture);
+            }
+            else if (t.Length == 2)
+            {
+                m = int.Parse(t[0], System.Globalization.CultureInfo.InvariantCulture);
+                s = int.Parse(t[1], System.Globalization.CultureInfo.InvariantCulture);
+            }
+            else if (t.Length == 1)
+            {
+                s = int.Parse(t[0], System.Globalization.CultureInfo.InvariantCulture);
+            }
+
+            if (msPart.Length == 1)
+            {
+                msPart += "00";
+            }
+            else if (msPart.Length == 2)
+            {
+                msPart += "0";
+            }
+            else if (msPart.Length > 3)
+            {
+                msPart = msPart.Substring(0, 3);
+            }
+
+            int ms = int.Parse(msPart, System.Globalization.CultureInfo.InvariantCulture);
             int cs = ms / 10;
 
             return $"{h}:{m:D2}:{s:D2}.{cs:D2}";
@@ -482,6 +575,14 @@ public sealed class AssParser : IAssParser
         {
             return "0:00:00.00";
         }
+    }
+
+    /// <summary>
+    /// Конвертировать таймкод SRT (HH:MM:SS,mmm) в ASS (H:MM:SS.CC).
+    /// </summary>
+    public static string SrtTimeToAss(string srtTime)
+    {
+        return VttTimeToAss(srtTime);
     }
 
     /// <summary>
@@ -512,14 +613,31 @@ public sealed class AssParser : IAssParser
         var utf8Strict = new UTF8Encoding(
             encoderShouldEmitUTF8Identifier: false,
             throwOnInvalidBytes: true);
+        byte[] bytes = File.ReadAllBytes(filePath);
+
+        // File.ReadAllText раньше снимал BOM автоматически, а GetString оставляет
+        // символ U+FEFF в начале текста, что попадало в заголовок и разбор событий.
+        int offset = HasUtfBom(bytes) ? 3 : 0;
+
         try
         {
-            return File.ReadAllText(filePath, utf8Strict);
+            return utf8Strict.GetString(bytes, offset, bytes.Length - offset);
         }
         catch
         {
             var cp1251 = Encoding.GetEncoding("windows-1251");
-            return File.ReadAllText(filePath, cp1251);
+            return cp1251.GetString(bytes, offset, bytes.Length - offset);
         }
+    }
+
+    /// <summary>
+    /// Определяет наличие UTF-8 BOM в начале файла.
+    /// </summary>
+    private static bool HasUtfBom(byte[] bytes)
+    {
+        return bytes.Length >= 3 &&
+               bytes[0] == 0xEF &&
+               bytes[1] == 0xBB &&
+               bytes[2] == 0xBF;
     }
 }

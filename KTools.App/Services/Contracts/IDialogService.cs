@@ -23,4 +23,50 @@ public interface IDialogService
         string content,
         string confirmText = "ОК",
         string cancelText = "Отмена");
+
+    /// <summary>
+    /// Отображает диалоговое окно со списком доступных дорожек субтитров для выбора дорожки, вшиваемой в видеоряд.
+    /// Возвращает выбранную дорожку субтитров или null, если выбор отменен пользователем или вшивание пропущено.
+    /// </summary>
+    /// <param name="videoFileName">Имя файла обрабатываемого видео для контекста пользователя.</param>
+    /// <param name="tracks">Список доступных дорожек субтитров.</param>
+    Task<KTools_App.Core.MediaTrack?> ChooseSubtitleTrackAsync(
+        string videoFileName,
+        System.Collections.Generic.IReadOnlyList<KTools_App.Core.MediaTrack> tracks);
+
+    /// <summary>
+    /// <summary>
+    /// Отображает диалог ввода общего заголовка для добавляемых аудиодорожек
+    /// со списком заготовленных заголовков для мгновенного применения.
+    /// Список заготовок редактируется прямо в диалоге (удаление крестиком, добавление).
+    /// Возвращает введённый заголовок (пустая строка — без заголовка)
+    /// или null, если ввод отменён пользователем.
+    /// </summary>
+    /// <param name="audioFileNames">Имена добавляемых аудиофайлов для контекста пользователя.</param>
+    /// <param name="defaultTitle">Начальное значение поля заголовка.</param>
+    /// <param name="presets">Живой список заготовок (изменения применяются сразу).</param>
+    Task<string?> AskAudioTitleAsync(
+        System.Collections.Generic.IReadOnlyList<string> audioFileNames,
+        string defaultTitle,
+        System.Collections.Generic.IList<string> presets);
+
+    /// <summary>
+    /// Отображает окно «Что нового» со списком изменений версии:
+    /// сверху анимированная шапка, под ней выжимка и секции изменений.
+    /// </summary>
+    /// <param name="notes">Структурированные данные релиза.</param>
+    Task ShowWhatsNewAsync(KTools_App.Core.ReleaseNotes notes);
+
+    /// <summary>
+    /// Отображает диалог переименования заголовка аудиодорожек со списком заготовок.
+    /// Возвращает новый заголовок (пустая строка — очистить) или null при отмене.
+    /// </summary>
+    /// <param name="oldTitle">Текущий заголовок для контекста пользователя.</param>
+    /// <param name="affectedCount">Число дорожек с таким заголовком.</param>
+    /// <param name="presets">Живой список заготовок (изменения применяются сразу).</param>
+    Task<string?> RenameAudioTitleAsync(
+        string oldTitle,
+        int affectedCount,
+        System.Collections.Generic.IList<string> presets);
 }
+

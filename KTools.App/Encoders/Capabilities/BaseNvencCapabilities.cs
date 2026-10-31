@@ -1,8 +1,9 @@
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+
 using KTools_App.Core;
 using KTools_App.Models;
 
@@ -23,6 +24,12 @@ public abstract class BaseNvencCapabilities : INvencCodecCapabilities
     public abstract string CodecName { get; }
     public abstract string FfmpegCodecName { get; }
     public abstract bool Supports10Bit { get; }
+
+    /// <summary>
+    /// Флаг поддержки математического Lossless (tune lossless). AV1 NVENC его не поддерживает
+    /// (инициализация энкодера падает с ошибкой -542398533), поэтому для него — false.
+    /// </summary>
+    public virtual bool SupportsLossless => true;
 
     public virtual string GetPixelFormat(bool force10Bit)
     {
@@ -69,6 +76,11 @@ public abstract class BaseNvencCapabilities : INvencCodecCapabilities
 
         if (context.IsLossless)
         {
+            if (!SupportsLossless)
+            {
+                throw new InvalidOperationException(
+                    $"Режим Lossless не поддерживается кодеком {CodecName} (NVENC): выключите Lossless или выберите HEVC / H.264.");
+            }
             args.AddRange(new[] { "-rc", "constqp", "-tune", "lossless", "-qp", "0" });
         }
         else
@@ -110,14 +122,16 @@ public abstract class BaseNvencCapabilities : INvencCodecCapabilities
             }
         }
 
-        int lookahead = GetSettingValue(settings, "nv_lookahead", 32);
-        if (lookahead > 0)
-        {
-            args.AddRange(new[] { "-rc-lookahead", Math.Clamp(lookahead, 0, 32).ToString() });
-        }
-
+        // Lookahead и multipass обслуживают rate control, которого в lossless нет
+        // (фиксированный constqp с qp 0), поэтому в нём они только замедляют кодирование.
         if (!context.IsLossless)
         {
+            int lookahead = GetSettingValue(settings, "nv_lookahead", 32);
+            if (lookahead > 0)
+            {
+                args.AddRange(new[] { "-rc-lookahead", Math.Clamp(lookahead, 0, 32).ToString() });
+            }
+
             bool spatialAq = GetSettingValue(settings, "nv_spatial_aq", true);
             if (spatialAq)
             {
@@ -139,12 +153,12 @@ public abstract class BaseNvencCapabilities : INvencCodecCapabilities
             {
                 args.AddRange(new[] { "-temporal-aq", "0" });
             }
-        }
 
-        string multipass = GetSettingValue(settings, "nv_multipass", "fullres");
-        if (!string.IsNullOrEmpty(multipass))
-        {
-            args.AddRange(new[] { "-multipass", multipass });
+            string multipass = GetSettingValue(settings, "nv_multipass", "fullres");
+            if (!string.IsNullOrEmpty(multipass))
+            {
+                args.AddRange(new[] { "-multipass", multipass });
+            }
         }
 
         AppendCodecSpecificArguments(settings, context, args);
@@ -181,7 +195,7 @@ public abstract class BaseNvencCapabilities : INvencCodecCapabilities
         bool isLossless = false;
         if (currentSettings != null && currentSettings.TryGetValue("lossless", out var losslessObj))
         {
-            isLossless = losslessObj is true || (losslessObj is string s && s.Equals("True", StringComparison.OrdinalIgnoreCase));
+            isLossless = KTools_App.Core.SettingValue.AsBool(losslessObj, false);
         }
 
         return new List<SettingField>
@@ -380,7 +394,7 @@ public abstract class BaseNvencCapabilities : INvencCodecCapabilities
                 SettingType.Checkbox,
                 temporalAqSupported,
                 "Видео:Расширенные параметры",
-                comment: temporalAqSupported 
+                comment: temporalAqSupported
                     ? "Временное адаптивное квантование (сохраняет детали в динамике)"
                     : "Не поддерживается вашей видеокартой / драйвером NVIDIA",
                 column: 1,
@@ -392,29 +406,36 @@ public abstract class BaseNvencCapabilities : INvencCodecCapabilities
 
     protected T GetSettingValue<T>(Dictionary<string, object> settings, string key, T defaultValue)
     {
-        if (settings.TryGetValue(key, out object? val) && val != null)
+        if (!settings.TryGetValue(key, out object? val) || val == null)
         {
-            try
-            {
-                if (typeof(T) == typeof(int))
-                {
-                    return (T)(object)Convert.ToInt32(val);
-                }
-                if (typeof(T) == typeof(bool))
-                {
-                    return (T)(object)Convert.ToBoolean(val);
-                }
-                if (typeof(T) == typeof(string))
-                {
-                    return (T)(object)val.ToString()!;
-                }
-                return (T)Convert.ChangeType(val, typeof(T));
-            }
-            catch
-            {
-                return defaultValue;
-            }
+            return defaultValue;
         }
-        return defaultValue;
+        try
+        {
+            // Единая нормализация через SettingValue: значения с диска (JsonElement)
+            // обязаны читаться так же, как их показывает интерфейс.
+            if (typeof(T) == typeof(int))
+            {
+                return (T)(object)KTools_App.Core.SettingValue.AsInt(val, (int)(object)defaultValue!);
+            }
+            if (typeof(T) == typeof(float))
+            {
+                return (T)(object)KTools_App.Core.SettingValue.AsFloat(val, (float)(object)defaultValue!);
+            }
+            if (typeof(T) == typeof(bool))
+            {
+                return (T)(object)KTools_App.Core.SettingValue.AsBool(val, (bool)(object)defaultValue!);
+            }
+            if (typeof(T) == typeof(string))
+            {
+                object? boxedDefault = defaultValue;
+                return (T)(object)KTools_App.Core.SettingValue.AsString(val, boxedDefault as string);
+            }
+            return (T)Convert.ChangeType(val, typeof(T), System.Globalization.CultureInfo.InvariantCulture);
+        }
+        catch
+        {
+            return defaultValue;
+        }
     }
 }

@@ -1,16 +1,20 @@
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
 using System.Linq;
+
 using CommunityToolkit.Mvvm.Messaging;
-using Microsoft.UI.Xaml;
-using Microsoft.UI.Xaml.Controls;
-using Microsoft.Extensions.DependencyInjection;
+
+using KTools_App.Core;
+using KTools_App.Diagnostics;
 using KTools_App.Services.Contracts;
 using KTools_App.Services.Implementations;
-using KTools_App.ViewModels;
 using KTools_App.UI.Pages;
-using KTools_App.Core;
+using KTools_App.ViewModels;
+
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
 
 namespace KTools_App;
 
@@ -20,10 +24,14 @@ namespace KTools_App;
 /// </summary>
 public sealed partial class MainPage : Page
 {
+    private const string SourceName = nameof(MainPage);
+
     private readonly INavigationService _navigationService;
     private readonly ILogService _logService;
     private string? _pendingScriptTag;
     private bool _isSyncingNavigation;
+    private string? _expectedSelectionTag;
+    private string? _workPanelTargetTag;
 
     /// <summary>
     /// Предоставляет доступ к модели представления главной страницы.
@@ -56,6 +64,13 @@ public sealed partial class MainPage : Page
             this,
             (r, m) => r.OnActiveScriptChanged(m.Script));
 
+        // В режиме «Обычный» гасим фон контентной области NavigationView в прозрачный,
+        // чтобы окно было единым пятном подложки; в Mica/Acrylic возвращаем как было.
+        messenger.Register<MainPage, BackdropChangedMessage>(
+            this,
+            (r, m) => r.OnBackdropChanged(m.NewBackdrop));
+        ApplyContentBackgroundOverride(ReadSavedBackdropType());
+
         // Регистрируем глобальный обработчик Enter для снятия фокуса с текстовых полей ввода
         AddHandler(UIElement.KeyDownEvent, new Microsoft.UI.Xaml.Input.KeyEventHandler(OnGlobalKeyDown), handledEventsToo: true);
     }
@@ -71,7 +86,7 @@ public sealed partial class MainPage : Page
             var focused = Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(this.XamlRoot) as UIElement;
             if (FocusHelper.IsTextInputElement(focused))
             {
-                FocusHelper.ClearFocus(this.XamlRoot, RootGrid);
+                FocusHelper.ClearFocus(this.XamlRoot, RootGrid, _logService);
             }
         }
     }
@@ -85,7 +100,7 @@ public sealed partial class MainPage : Page
         var originalSource = e.OriginalSource as UIElement;
         if (!FocusHelper.IsTextInputElement(originalSource))
         {
-            FocusHelper.ClearFocus(this.XamlRoot, RootGrid);
+            FocusHelper.ClearFocus(this.XamlRoot, RootGrid, _logService);
         }
     }
 
@@ -102,9 +117,6 @@ public sealed partial class MainPage : Page
             Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(
                 settingsItem, autoName);
             ToolTipService.SetToolTip(settingsItem, "Настройки");
-            _logService.Info(
-                "Выполнена локализация кнопки настроек на русский язык",
-                "MainPage");
         }
 
         PopulateDynamicNavItems();
@@ -116,9 +128,6 @@ public sealed partial class MainPage : Page
 
         // Устанавливаем начальное состояние видимости разделителя на основе состояния панели
         HomeSeparator.Visibility = NavView.IsPaneOpen ? Visibility.Collapsed : Visibility.Visible;
-        _logService.Info(
-            $"[MainPage] Инициализация видимости разделителя: {(NavView.IsPaneOpen ? "Скрыт" : "Показан")}",
-            "MainPage");
     }
 
     /// <summary>
@@ -216,9 +225,30 @@ public sealed partial class MainPage : Page
         if (args.SelectedItemContainer is NavigationViewItem selectedItem)
         {
             string? tag = selectedItem.Tag?.ToString();
-            if (tag != null && ViewModel.NavigateCommand.CanExecute(tag))
+
+            // NavigationView может доставить событие выделения уже после снятия флага
+            // синхронизации. Если это наше собственное программное выделение, навигацию
+            // повторять нельзя: иначе возникает цикл переходов между WorkPanel и меню.
+            if (tag != null && string.Equals(tag, _expectedSelectionTag, StringComparison.Ordinal))
             {
-                ViewModel.NavigateCommand.Execute(tag);
+                _expectedSelectionTag = null;
+                return;
+            }
+
+            _expectedSelectionTag = null;
+
+            if (tag != null)
+            {
+                // Запоминаем целевой скрипт: событие Navigated приходит раньше,
+                // чем страница применяет новый скрипт, и читать состояние страницы там рано.
+                _workPanelTargetTag = tag.StartsWith("script:", StringComparison.Ordinal)
+                    ? tag
+                    : null;
+
+                if (ViewModel.NavigateCommand.CanExecute(tag))
+                {
+                    ViewModel.NavigateCommand.Execute(tag);
+                }
             }
         }
     }
@@ -228,12 +258,10 @@ public sealed partial class MainPage : Page
     /// Предотвращает рассинхронизацию меню при программных редиректах.
     /// </summary>
     private void OnNavigationServiceNavigated(
-        object? sender, 
+        object? sender,
         string pageTypeName)
     {
-        _logService.Info(
-            $"[MainPage] Получено событие навигации на страницу: '{pageTypeName}'",
-            "MainPage");
+        bool isWorkPanel = pageTypeName == nameof(WorkPanel);
 
         string? targetTag = pageTypeName switch
         {
@@ -242,19 +270,60 @@ public sealed partial class MainPage : Page
             nameof(SettingsPage) => "settings",
             nameof(LogPage) => "logs",
             nameof(DependencySetupPage) => "dependencies",
-            nameof(WorkPanel) => GetActiveScriptTag(),
+            // Для рабочей панели используем целевой тег выбранного пункта меню:
+            // состояние страницы в момент события еще не применено.
+            nameof(WorkPanel) => _workPanelTargetTag ?? GetActiveScriptTag(),
             _ => null
         };
 
-        _logService.Info(
-            $"[MainPage] Вычисленный тег навигации для '{pageTypeName}': '{targetTag ?? "null"}'",
-            "MainPage");
+        if (!isWorkPanel)
+        {
+            _workPanelTargetTag = null;
+        }
 
-        if (targetTag != null)
+        _logService.Write(
+            "ui.navigation.changed",
+            LogLevel.Debug,
+            LogStatus.Changed,
+            $"Открыта страница {ResolvePageTitle(pageTypeName)}",
+            source: SourceName,
+            properties: LogProps
+                .Create("Page", LogRedactor.ReadableMachineValue(pageTypeName))
+                .With("TargetTag", targetTag is null ? null : LogRedactor.ReadableMachineValue(targetTag)));
+
+        // Если целевой тег известен (переход из меню), синхронизируем выделение сразу.
+        // При переходе с домашней страницы выделение выставит событие активного
+        // скрипта уже с применённым состоянием страницы.
+        if (targetTag == null)
+        {
+            return;
+        }
+
+        if (!isWorkPanel || _workPanelTargetTag != null)
         {
             SyncNavigationSelection(targetTag);
-            UpdateHeader(targetTag);
         }
+
+        UpdateHeader(targetTag);
+    }
+
+    /// <summary>
+    /// Возвращает пользовательское название страницы вместо внутреннего имени типа.
+    /// В журнал попадает читаемое название, а машинное имя типа остаётся в свойстве Page.
+    /// </summary>
+    /// <param name="pageTypeName">Имя типа страницы, полученное от INavigationService.</param>
+    private static string ResolvePageTitle(string pageTypeName)
+    {
+        return pageTypeName switch
+        {
+            nameof(HomePage) => "Главная",
+            nameof(LogPage) => "Журнал",
+            nameof(SettingsPage) => "Настройки",
+            nameof(DependencySetupPage) => "Компоненты",
+            nameof(WorkPanel) => "Панель обработки",
+            nameof(TimingCalculatorPage) => "Калькулятор сдвига",
+            _ => pageTypeName
+        };
     }
 
     /// <summary>
@@ -267,25 +336,22 @@ public sealed partial class MainPage : Page
             var script = workPanel.ViewModel.ActiveScript;
             if (script != null)
             {
-                string? tag = ViewModel.GetTagForScriptName(script.Name);
-                _logService.Info(
-                    $"[MainPage] Активный скрипт в WorkPanel: '{script.Name}', тег: '{tag ?? "null"}'",
-                    "MainPage");
-                return tag;
-            }
-            else
-            {
-                _logService.Warn(
-                    "[MainPage] В WorkPanel отсутствует активный скрипт!",
-                    "MainPage");
+                return ViewModel.GetTagForScriptName(script.Name);
             }
         }
-        else
+        else if (ContentFrame.Content is not null)
         {
-            _logService.Warn(
-                $"[MainPage] Контент фрейма не является WorkPanel! Тип: '{ContentFrame.Content?.GetType().Name ?? "null"}'",
-                "MainPage");
+            _logService.Write(
+                "ui.navigation.unexpected_content",
+                LogLevel.Warning,
+                LogStatus.Skipped,
+                "Содержимое рабочей области не является панелью обработки, пункт меню не синхронизирован",
+                source: SourceName,
+                properties: LogProps
+                    .Create("Page", LogRedactor.ReadableMachineValue(ContentFrame.Content.GetType().Name))
+                    .With("ErrorCode", "UNEXPECTED_NAV_CONTENT"));
         }
+
         return null;
     }
 
@@ -297,31 +363,31 @@ public sealed partial class MainPage : Page
         if (targetTag == "home")
         {
             ViewModel.HeaderTitle = "K-Tools";
-            ViewModel.HeaderSubtitle = 
+            ViewModel.HeaderSubtitle =
                 "Ваш персональный набор инструментов для обработки медиа";
         }
         else if (targetTag == "tool:timing_calculator")
         {
             ViewModel.HeaderTitle = "Калькулятор сдвига";
-            ViewModel.HeaderSubtitle = 
+            ViewModel.HeaderSubtitle =
                 "Расчет разницы во времени между двумя таймингами для корректировки сдвига аудио и субтитров";
         }
         else if (targetTag == "settings")
         {
             ViewModel.HeaderTitle = "Настройки";
-            ViewModel.HeaderSubtitle = 
+            ViewModel.HeaderSubtitle =
                 "Общие параметры и конфигурация приложения";
         }
         else if (targetTag == "logs")
         {
             ViewModel.HeaderTitle = "Логи";
-            ViewModel.HeaderSubtitle = 
+            ViewModel.HeaderSubtitle =
                 "Просмотр журналов выполнения и сообщений в реальном времени";
         }
         else if (targetTag == "dependencies")
         {
             ViewModel.HeaderTitle = "Компоненты";
-            ViewModel.HeaderSubtitle = 
+            ViewModel.HeaderSubtitle =
                 "Установка, обновление и удаление внешних бинарных утилит";
         }
         else if (targetTag.StartsWith("script:"))
@@ -376,10 +442,62 @@ public sealed partial class MainPage : Page
         if (targetTag != null)
         {
             SyncNavigationSelection(targetTag);
-            _logService.Info(
-                $"[MainPage] По сообщению синхронизировано выделение для " +
-                $"тега '{targetTag}'",
-                "MainPage");
+        }
+    }
+
+    /// <summary>
+    /// Применяет переопределение фона контентной области под режим backdrop.
+    /// </summary>
+    private void OnBackdropChanged(string backdropType)
+    {
+        DispatcherQueue.TryEnqueue(() => ApplyContentBackgroundOverride(backdropType));
+    }
+
+    /// <summary>
+    /// Считывает сохранённый тип фона из настроек.
+    /// </summary>
+    private string ReadSavedBackdropType()
+    {
+        try
+        {
+            return App.Services.GetRequiredService<ISettingsManager>().BackdropType;
+        }
+        catch (Exception ex)
+        {
+            _logService.Write(
+                "ui.backdrop.read_failed",
+                LogLevel.Warning,
+                LogStatus.PartiallySucceeded,
+                "Сохранённый тип фона не прочитан, переопределение контентной области не применено",
+                ex,
+                SourceName,
+                properties: LogProps
+                    .Create("Stage", "backdrop")
+                    .With("ErrorCode", "BACKDROP_READ_FAILED"));
+            return "Mica";
+        }
+    }
+
+    /// <summary>
+    /// В режиме «Обычный» задаёт контентной области NavigationView прозрачный фон,
+    /// чтобы панель, тайтлбар и контент были единым пятном подложки окна.
+    /// В режимах Mica/Acrylic переопределение снимается и действует шаблон по умолчанию.
+    /// </summary>
+    private void ApplyContentBackgroundOverride(string? backdropType)
+    {
+        if (NavView == null)
+        {
+            return;
+        }
+
+        if (Core.SolidBackdropTheme.RequiresContentBackgroundOverride(backdropType))
+        {
+            NavView.Resources["NavigationViewContentBackground"] =
+                new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Transparent);
+        }
+        else
+        {
+            NavView.Resources.Remove("NavigationViewContentBackground");
         }
     }
 
@@ -408,6 +526,7 @@ public sealed partial class MainPage : Page
             if (targetTag == "settings")
             {
                 NavView.SelectedItem = NavView.SettingsItem;
+                _expectedSelectionTag = null;
             }
             else
             {
@@ -417,7 +536,7 @@ public sealed partial class MainPage : Page
                 if (item != null)
                 {
                     var parentItem = FindParentItemForChildTag(
-                        NavView.MenuItems, 
+                        NavView.MenuItems,
                         targetTag);
 
                     if (parentItem != null && NavView.IsPaneOpen)
@@ -425,6 +544,9 @@ public sealed partial class MainPage : Page
                         parentItem.IsExpanded = true;
                     }
 
+                    // Помечаем тег, чтобы событие выделения, пришедшее уже после
+                    // снятия флага синхронизации, не запускало повторную навигацию.
+                    _expectedSelectionTag = targetTag;
                     NavView.SelectedItem = item;
                 }
             }
@@ -440,7 +562,7 @@ public sealed partial class MainPage : Page
     /// для дочернего тега.
     /// </summary>
     private NavigationViewItem? FindParentItemForChildTag(
-        System.Collections.IEnumerable items, 
+        System.Collections.IEnumerable items,
         string childTag)
     {
         foreach (var obj in items)
@@ -450,7 +572,7 @@ public sealed partial class MainPage : Page
                 // Проверяем непосредственных детей
                 foreach (var subObj in item.MenuItems)
                 {
-                    if (subObj is NavigationViewItem subItem && 
+                    if (subObj is NavigationViewItem subItem &&
                         subItem.Tag?.ToString() == childTag)
                     {
                         return item;
@@ -459,7 +581,7 @@ public sealed partial class MainPage : Page
 
                 // Рекурсивно проверяем более глубокие уровни
                 var parent = FindParentItemForChildTag(
-                    item.MenuItems, 
+                    item.MenuItems,
                     childTag);
                 if (parent != null)
                 {
@@ -479,7 +601,7 @@ public sealed partial class MainPage : Page
         if (_pendingScriptTag != null)
         {
             var parentItem = FindParentItemForChildTag(
-                NavView.MenuItems, 
+                NavView.MenuItems,
                 _pendingScriptTag);
 
             if (parentItem != null)
@@ -493,12 +615,6 @@ public sealed partial class MainPage : Page
                 {
                     _isSyncingNavigation = false;
                 }
-
-                _logService.Info(
-                    $"[MainPage] При открытии панели раскрыта родительская " +
-                    $"категория: '{parentItem.Content}' для тега " +
-                    $"'{_pendingScriptTag}'",
-                    "MainPage");
             }
         }
     }
@@ -520,9 +636,6 @@ public sealed partial class MainPage : Page
     private void NavView_PaneOpening(NavigationView sender, object args)
     {
         HomeSeparator.Visibility = Visibility.Collapsed;
-        _logService.Info(
-            "[MainPage] Панель начинает открываться. Разделитель скрыт мгновенно.",
-            "MainPage");
     }
 
     /// <summary>
@@ -532,9 +645,6 @@ public sealed partial class MainPage : Page
     private void NavView_PaneClosing(NavigationView sender, object args)
     {
         HomeSeparator.Visibility = Visibility.Visible;
-        _logService.Info(
-            "[MainPage] Панель начинает закрываться. Разделитель показан мгновенно.",
-            "MainPage");
     }
 
     /// <summary>

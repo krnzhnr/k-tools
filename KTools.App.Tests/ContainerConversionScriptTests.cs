@@ -12,6 +12,8 @@ using KTools_App.Core;
 using KTools_App.Scripts;
 using KTools_App.Services.Contracts;
 using KTools_App.Infrastructure;
+using KTools_App.Tests.TestHelpers;
+
 
 namespace KTools_App.Tests;
 
@@ -101,11 +103,16 @@ public class ContainerConversionScriptTests
         _ffmpegRunnerMock.Setup(r => r.GetVideoInfoAsync(tempSourceFile)).ReturnsAsync(jsonDoc);
 
         List<string>? capturedExtraArgs = null;
+        List<string>? capturedInputArgs = null;
         _ffmpegRunnerMock.Setup(r => r.RunAsync(
-            tempSourceFile, It.IsAny<string>(), It.IsAny<List<string>>(), null, false, 120.5, It.IsAny<Action<ProgressInfo>>(), It.IsAny<CancellationToken>()
-        )).Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken>(
-            (inP, outP, extArgs, inArgs, ovr, dur, prog, ct) => capturedExtraArgs = extArgs
-        ).ReturnsAsync(true);
+            tempSourceFile, It.IsAny<string>(), It.IsAny<List<string>>(), It.IsAny<List<string>>(), false, 120.5, It.IsAny<Action<ProgressInfo>>(), It.IsAny<CancellationToken>(), It.IsAny<ProcessExecutionContext>()
+        )).Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken, ProcessExecutionContext>(
+            (inP, outP, extArgs, inArgs, ovr, dur, prog, ct, processContext) =>
+            {
+                capturedExtraArgs = extArgs;
+                capturedInputArgs = inArgs;
+            }
+        ).ReturnsAsync(MockBuilders.ProcessSucceeded());
 
         var settings = new Dictionary<string, object>
         {
@@ -123,6 +130,11 @@ public class ContainerConversionScriptTests
             capturedExtraArgs.Should().NotBeNull();
             capturedExtraArgs.Should().Contain("-c");
             capturedExtraArgs.Should().Contain("copy");
+            capturedExtraArgs.Should().Contain("-video_track_timescale");
+            capturedExtraArgs.Should().Contain("90000");
+            capturedInputArgs.Should().NotBeNull();
+            capturedInputArgs.Should().Contain("-fflags");
+            capturedInputArgs.Should().Contain("+genpts");
         }
         finally
         {
@@ -226,8 +238,8 @@ public class ContainerConversionScriptTests
 
         _ffmpegRunnerMock.Setup(r => r.GetVideoInfoAsync(tempSourceFile)).ReturnsAsync((JsonDocument?)null);
         _ffmpegRunnerMock.Setup(r => r.RunAsync(
-            tempSourceFile, It.IsAny<string>(), It.IsAny<List<string>>(), null, false, 0.0, It.IsAny<Action<ProgressInfo>>(), It.IsAny<CancellationToken>()
-        )).ReturnsAsync(true);
+            tempSourceFile, It.IsAny<string>(), It.IsAny<List<string>>(), It.IsAny<List<string>>(), false, 0.0, It.IsAny<Action<ProgressInfo>>(), It.IsAny<CancellationToken>(), It.IsAny<ProcessExecutionContext>()
+        )).ReturnsAsync(MockBuilders.ProcessSucceeded());
 
         var settings = new Dictionary<string, object>
         {
@@ -274,8 +286,8 @@ public class ContainerConversionScriptTests
 
         _ffmpegRunnerMock.Setup(r => r.GetVideoInfoAsync(tempSourceFile)).ReturnsAsync(jsonDoc);
         _ffmpegRunnerMock.Setup(r => r.RunAsync(
-            tempSourceFile, It.IsAny<string>(), It.IsAny<List<string>>(), null, false, 10.0, It.IsAny<Action<ProgressInfo>>(), It.IsAny<CancellationToken>()
-        )).ReturnsAsync(true);
+            tempSourceFile, It.IsAny<string>(), It.IsAny<List<string>>(), It.IsAny<List<string>>(), false, 10.0, It.IsAny<Action<ProgressInfo>>(), It.IsAny<CancellationToken>(), It.IsAny<ProcessExecutionContext>()
+        )).ReturnsAsync(MockBuilders.ProcessSucceeded());
 
         var settings = new Dictionary<string, object>
         {

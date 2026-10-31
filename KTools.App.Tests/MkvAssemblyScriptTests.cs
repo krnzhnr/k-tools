@@ -1,13 +1,17 @@
 // -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using FluentAssertions;
 using Moq;
 using KTools_App.Scripts;
 using KTools_App.Core;
+using KTools_App.Models;
 using KTools_App.Services.Contracts;
 using KTools_App.Infrastructure;
+using KTools_App.Tests.TestHelpers;
+
 
 namespace KTools_App.Tests;
 
@@ -54,6 +58,28 @@ public class MkvAssemblyScriptTests
     {
         _script.Category.Should().Be("Контейнеры");
         _script.IconName.Should().Be(AppConstants.ScriptIcons.MkvAssembly);
+    }
+
+    /// <summary>
+    /// Сборка MKV накапливает очередь: видео и сопутствующие дорожки добавляются по очереди,
+    /// поэтому глобальная очистка очереди при добавлении не должна применяться.
+    /// </summary>
+    [TestMethod]
+    public void KeepQueueOnAdd_MkvAssemblyScript_ReturnsTrue()
+    {
+        _script.KeepQueueOnAdd.Should().BeTrue();
+    }
+
+    /// <summary>
+    /// Проверяет, что формат контейнера по умолчанию — MKV, а не MP4.
+    /// </summary>
+    [TestMethod]
+    public void SettingsSchema_OutputContainer_DefaultsToMkv()
+    {
+        var field = _script.SettingsSchema.Single(f => f.Key == "output_container");
+
+        field.DefaultValue.Should().Be("MKV");
+        field.Options.Should().StartWith("MKV");
     }
 
     /// <summary>
@@ -105,9 +131,9 @@ public class MkvAssemblyScriptTests
                 It.IsAny<Action<double>>(),
                 It.IsAny<System.Threading.CancellationToken>()
             ))
-            .Callback<string, List<MkvInputSource>, string, List<string>, Action<double>, System.Threading.CancellationToken>(
-                (outPath, inputs, title, extraArgs, onProgress, ct) => capturedExtraArgs = extraArgs)
-            .ReturnsAsync(true);
+            .Callback<string, List<MkvInputSource>, string, List<string>, Action<double>, System.Threading.CancellationToken, ProcessExecutionContext>(
+                (outPath, inputs, title, extraArgs, onProgress, ct, processContext) =>capturedExtraArgs = extraArgs)
+            .ReturnsAsync(MockBuilders.ProcessSucceeded());
 
         // Act
         var results = await _script.ExecuteSingleAsync(
@@ -121,6 +147,10 @@ public class MkvAssemblyScriptTests
 
         // Assert
         results.Should().NotBeNull();
+        results.Status.Should().Be(ExecutionStatus.Failed,
+            "mkvmerge в тесте не создаёт выходной файл, поэтому успех без артефакта невозможен");
+        results.ErrorCode.Should().Be("output-missing");
+        results.OutputExists.Should().BeFalse("выходной файл на диске отсутствует");
         capturedExtraArgs.Should().NotBeNull();
         capturedExtraArgs.Should().Contain("--track-order");
         
@@ -178,7 +208,9 @@ public class MkvAssemblyScriptTests
                     It.IsAny<Action<Infrastructure.ProgressInfo>>(),
                     It.IsAny<System.Threading.CancellationToken>()
                 ))
-                .ReturnsAsync(true);
+                .Callback<string, string, List<string>, List<string>?, bool, double, Action<Infrastructure.ProgressInfo>?, System.Threading.CancellationToken, ProcessExecutionContext>(
+                    (_, outputPath, _, _, _, _, _, _, processContext)=> File.WriteAllText(outputPath, "mp4"))
+                .ReturnsAsync(MockBuilders.ProcessSucceeded());
 
             // Act
             var results = await _script.ExecuteSingleAsync(
@@ -195,6 +227,11 @@ public class MkvAssemblyScriptTests
             results.Should().Contain(r => r.Contains("FLAC") && r.Contains("пропущен"));
             results.Should().Contain(r => r.Contains("ASS/SSA") && r.Contains("пропущены"));
             results.Should().Contain(r => r.Contains("Собран контейнер MP4"));
+            results.Status.Should().Be(ExecutionStatus.PartiallySucceeded,
+                "пропущенные внешние входы означают частичный успех");
+            results.ErrorCode.Should().Be("external-inputs-skipped");
+            results.CleanupState.Should().Be(CleanupState.Partial);
+            results.OutputExists.Should().BeTrue();
             _ffmpegRunnerMock.Verify(f => f.RunAsync(
                 videoPath,
                 It.Is<string>(s => s.EndsWith(".mp4")),
@@ -255,9 +292,9 @@ public class MkvAssemblyScriptTests
                     It.IsAny<Action<double>>(),
                     It.IsAny<System.Threading.CancellationToken>()
                 ))
-                .Callback<string, List<MkvInputSource>, string, List<string>, Action<double>, System.Threading.CancellationToken>(
-                    (outPath, inputs, title, extraArgs, onProgress, ct) => capturedInputs = inputs)
-                .ReturnsAsync(true);
+                .Callback<string, List<MkvInputSource>, string, List<string>, Action<double>, System.Threading.CancellationToken, ProcessExecutionContext>(
+                    (outPath, inputs, title, extraArgs, onProgress, ct, processContext) =>capturedInputs = inputs)
+                .ReturnsAsync(MockBuilders.ProcessSucceeded());
 
             // Act
             var results = await _script.ExecuteSingleAsync(
@@ -271,6 +308,9 @@ public class MkvAssemblyScriptTests
 
             // Assert
             results.Should().NotBeNull();
+            results.Status.Should().Be(ExecutionStatus.Failed, "mkvmerge в тесте не создаёт выходной файл, поэтому успех без артефакта невозможен");
+            results.ErrorCode.Should().Be("output-missing");
+            results.OutputExists.Should().BeFalse("выходной файл на диске отсутствует");
             capturedInputs.Should().NotBeNull();
             // Должен быть только один вход — само видео, без сопутствующих файлов с диска
             capturedInputs!.Should().HaveCount(1);
@@ -335,9 +375,9 @@ public class MkvAssemblyScriptTests
                     It.IsAny<Action<double>>(),
                     It.IsAny<System.Threading.CancellationToken>()
                 ))
-                .Callback<string, List<MkvInputSource>, string, List<string>, Action<double>, System.Threading.CancellationToken>(
-                    (outPath, inputs, title, extraArgs, onProgress, ct) => capturedInputs = inputs)
-                .ReturnsAsync(true);
+                .Callback<string, List<MkvInputSource>, string, List<string>, Action<double>, System.Threading.CancellationToken, ProcessExecutionContext>(
+                    (outPath, inputs, title, extraArgs, onProgress, ct, processContext) =>capturedInputs = inputs)
+                .ReturnsAsync(MockBuilders.ProcessSucceeded());
 
             // Act
             var results = await _script.ExecuteSingleAsync(
@@ -351,6 +391,9 @@ public class MkvAssemblyScriptTests
 
             // Assert
             results.Should().NotBeNull();
+            results.Status.Should().Be(ExecutionStatus.Failed, "mkvmerge в тесте не создаёт выходной файл, поэтому успех без артефакта невозможен");
+            results.ErrorCode.Should().Be("output-missing");
+            results.OutputExists.Should().BeFalse("выходной файл на диске отсутствует");
             capturedInputs.Should().NotBeNull();
             // Видео + 2 аудио + 2 субтитров; чужой s01e02.mka не должен попасть в сборку.
             capturedInputs!.Should().HaveCount(5);
@@ -419,9 +462,9 @@ public class MkvAssemblyScriptTests
                     It.IsAny<Action<double>>(),
                     It.IsAny<System.Threading.CancellationToken>()
                 ))
-                .Callback<string, List<MkvInputSource>, string, List<string>, Action<double>, System.Threading.CancellationToken>(
-                    (outPath, inputs, title, extraArgs, onProgress, ct) => capturedInputs = inputs)
-                .ReturnsAsync(true);
+                .Callback<string, List<MkvInputSource>, string, List<string>, Action<double>, System.Threading.CancellationToken, ProcessExecutionContext>(
+                    (outPath, inputs, title, extraArgs, onProgress, ct, processContext) =>capturedInputs = inputs)
+                .ReturnsAsync(MockBuilders.ProcessSucceeded());
 
             // Act
             var results = await _script.ExecuteSingleAsync(
@@ -435,6 +478,9 @@ public class MkvAssemblyScriptTests
 
             // Assert
             results.Should().NotBeNull();
+            results.Status.Should().Be(ExecutionStatus.Failed, "mkvmerge в тесте не создаёт выходной файл, поэтому успех без артефакта невозможен");
+            results.ErrorCode.Should().Be("output-missing");
+            results.OutputExists.Should().BeFalse("выходной файл на диске отсутствует");
             capturedInputs.Should().NotBeNull();
             capturedInputs!.Should().HaveCount(4);
             capturedInputs[0].Path.Should().Be(videoPath);
@@ -500,9 +546,9 @@ public class MkvAssemblyScriptTests
                     It.IsAny<Action<double>>(),
                     It.IsAny<System.Threading.CancellationToken>()
                 ))
-                .Callback<string, List<MkvInputSource>, string, List<string>, Action<double>, System.Threading.CancellationToken>(
-                    (outPath, inputs, title, extraArgs, onProgress, ct) => capturedInputs = inputs)
-                .ReturnsAsync(true);
+                .Callback<string, List<MkvInputSource>, string, List<string>, Action<double>, System.Threading.CancellationToken, ProcessExecutionContext>(
+                    (outPath, inputs, title, extraArgs, onProgress, ct, processContext) =>capturedInputs = inputs)
+                .ReturnsAsync(MockBuilders.ProcessSucceeded());
 
             ScriptProgressCallback noProgress = (fIdx, total, status, progress, fps, bitrate) => { };
 
@@ -577,7 +623,7 @@ public class MkvAssemblyScriptTests
                     It.IsAny<Action<double>>(),
                     It.IsAny<System.Threading.CancellationToken>()
                 ))
-                .ReturnsAsync(true);
+                .ReturnsAsync(MockBuilders.ProcessSucceeded());
 
             // Act
             await _script.ExecuteSingleAsync(
@@ -595,6 +641,244 @@ public class MkvAssemblyScriptTests
             _settingsManagerMock.Verify(
                 s => s.SetSetting(It.IsAny<string>(), "subs_signs_title", "Надписи"),
                 Times.Once);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, true);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Проверяет наличие экспандера запроса заголовка аудио и дочерних полей в схеме настроек.
+    /// </summary>
+    [TestMethod]
+    public void SettingsSchema_ContainsAudioTitlePrompt()
+    {
+        // Act
+        var schema = _script.SettingsSchema;
+
+        // Assert
+        var prompt = schema.FirstOrDefault(f => f.Key == "audio_title_prompt");
+        prompt.Should().NotBeNull();
+        prompt!.Type.Should().Be(SettingType.Expander);
+        prompt.Group.Should().Be("Аудио");
+        prompt.DefaultValue.Should().Be(false);
+        prompt.ChildFields.Should().NotBeNull();
+
+        var defaultTitle = prompt.ChildFields.FirstOrDefault(f => f.Key == "audio_title_default");
+        defaultTitle.Should().NotBeNull();
+        defaultTitle!.Type.Should().Be(SettingType.Text);
+
+        var presets = prompt.ChildFields.FirstOrDefault(f => f.Key == "audio_title_presets");
+        presets.Should().NotBeNull();
+        presets!.Type.Should().Be(SettingType.KeywordList);
+    }
+
+    /// <summary>
+    /// Проверяет приоритет ручного заголовка из дропа над встроенным из метаданных.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_ManualAudioTitle_WinsOverEmbedded()
+    {
+        // Arrange
+        string tempDir = Path.Combine(Path.GetTempPath(), "MkvAssembly_ManualTitleTest_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            string videoPath = Path.Combine(tempDir, "s01e01.mkv");
+            string audioPath = Path.Combine(tempDir, "s01e01.mka");
+
+            File.WriteAllText(videoPath, "");
+            File.WriteAllText(audioPath, "");
+
+            _script.FilesQueue.Add(new FileQueueItem(videoPath));
+            _script.FilesQueue.Add(new FileQueueItem(audioPath));
+            _script.FilesQueue.First(f => f.FilePath == audioPath).MuxAudioTitle = "Ручной заголовок";
+
+            var withTitle = new MediaStructure { FilePath = audioPath };
+            withTitle.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "audio", Name = "Встроенный" });
+            _mediaProbeServiceMock.Setup(m => m.ProbeAsync(audioPath))
+                .ReturnsAsync(withTitle);
+
+            var settings = new Dictionary<string, object>
+            {
+                { "clean_tracks", true }
+            };
+
+            _settingsManagerMock.Setup(s => s.GetSetting("General", "OverwriteExisting", false))
+                .Returns(true);
+
+            List<MkvInputSource>? capturedInputs = null;
+            _mkvmergeRunnerMock.Setup(m => m.RunAsync(
+                    It.IsAny<string>(),
+                    It.IsAny<List<MkvInputSource>>(),
+                    It.IsAny<string>(),
+                    It.IsAny<List<string>>(),
+                    It.IsAny<Action<double>>(),
+                    It.IsAny<System.Threading.CancellationToken>()
+                ))
+                .Callback<string, List<MkvInputSource>, string, List<string>, Action<double>, System.Threading.CancellationToken, ProcessExecutionContext>(
+                    (outPath, inputs, title, extraArgs, onProgress, ct, processContext) => capturedInputs = inputs)
+                .ReturnsAsync(MockBuilders.ProcessSucceeded());
+
+            // Act
+            await _script.ExecuteSingleAsync(
+                videoPath,
+                settings,
+                null,
+                (fIdx, total, status, progress, fps, bitrate) => { },
+                0,
+                1);
+
+            // Assert
+            capturedInputs.Should().NotBeNull();
+            capturedInputs!.Should().HaveCount(2);
+            capturedInputs[1].Path.Should().Be(audioPath);
+            capturedInputs[1].Args.Should().Contain(a => a.Contains("Ручной заголовок"));
+            capturedInputs[1].Args.Should().NotContain(a => a.Contains("Встроенный"));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, true);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Проверяет применение заголовка по умолчанию при отсутствии ручного и встроенного.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_DefaultAudioTitle_AppliesWithoutManual()
+    {
+        // Arrange
+        string tempDir = Path.Combine(Path.GetTempPath(), "MkvAssembly_DefaultTitleTest_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            string videoPath = Path.Combine(tempDir, "s01e01.mkv");
+            string audioPath = Path.Combine(tempDir, "s01e01.mka");
+
+            File.WriteAllText(videoPath, "");
+            File.WriteAllText(audioPath, "");
+
+            _script.FilesQueue.Add(new FileQueueItem(videoPath));
+            _script.FilesQueue.Add(new FileQueueItem(audioPath));
+
+            var withTitle = new MediaStructure { FilePath = audioPath };
+            withTitle.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "audio", Name = "Встроенный" });
+            _mediaProbeServiceMock.Setup(m => m.ProbeAsync(audioPath))
+                .ReturnsAsync(withTitle);
+
+            var settings = new Dictionary<string, object>
+            {
+                { "clean_tracks", true },
+                { "audio_title_default", "Дефолтный заголовок" }
+            };
+
+            _settingsManagerMock.Setup(s => s.GetSetting("General", "OverwriteExisting", false))
+                .Returns(true);
+
+            List<MkvInputSource>? capturedInputs = null;
+            _mkvmergeRunnerMock.Setup(m => m.RunAsync(
+                    It.IsAny<string>(),
+                    It.IsAny<List<MkvInputSource>>(),
+                    It.IsAny<string>(),
+                    It.IsAny<List<string>>(),
+                    It.IsAny<Action<double>>(),
+                    It.IsAny<System.Threading.CancellationToken>()
+                ))
+                .Callback<string, List<MkvInputSource>, string, List<string>, Action<double>, System.Threading.CancellationToken, ProcessExecutionContext>(
+                    (outPath, inputs, title, extraArgs, onProgress, ct, processContext) => capturedInputs = inputs)
+                .ReturnsAsync(MockBuilders.ProcessSucceeded());
+
+            // Act
+            await _script.ExecuteSingleAsync(
+                videoPath,
+                settings,
+                null,
+                (fIdx, total, status, progress, fps, bitrate) => { },
+                0,
+                1);
+
+            // Assert
+            capturedInputs.Should().NotBeNull();
+            capturedInputs!.Should().HaveCount(2);
+            capturedInputs[1].Path.Should().Be(audioPath);
+            capturedInputs[1].Args.Should().Contain(a => a.Contains("Дефолтный заголовок"));
+            capturedInputs[1].Args.Should().NotContain(a => a.Contains("Встроенный"));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, true);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Проверяет вычищение кавычек из ручного заголовка перед подстановкой в аргументы.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_ManualAudioTitleWithQuotes_Sanitized()
+    {
+        // Arrange
+        string tempDir = Path.Combine(Path.GetTempPath(), "MkvAssembly_QuoteTitleTest_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            string videoPath = Path.Combine(tempDir, "s01e01.mkv");
+            string audioPath = Path.Combine(tempDir, "s01e01.mka");
+
+            File.WriteAllText(videoPath, "");
+            File.WriteAllText(audioPath, "");
+
+            _script.FilesQueue.Add(new FileQueueItem(videoPath));
+            _script.FilesQueue.Add(new FileQueueItem(audioPath));
+            _script.FilesQueue.First(f => f.FilePath == audioPath).MuxAudioTitle = "Студия \"Лучшая\"";
+
+            var settings = new Dictionary<string, object>
+            {
+                { "clean_tracks", true }
+            };
+
+            _settingsManagerMock.Setup(s => s.GetSetting("General", "OverwriteExisting", false))
+                .Returns(true);
+
+            List<MkvInputSource>? capturedInputs = null;
+            _mkvmergeRunnerMock.Setup(m => m.RunAsync(
+                    It.IsAny<string>(),
+                    It.IsAny<List<MkvInputSource>>(),
+                    It.IsAny<string>(),
+                    It.IsAny<List<string>>(),
+                    It.IsAny<Action<double>>(),
+                    It.IsAny<System.Threading.CancellationToken>()
+                ))
+                .Callback<string, List<MkvInputSource>, string, List<string>, Action<double>, System.Threading.CancellationToken, ProcessExecutionContext>(
+                    (outPath, inputs, title, extraArgs, onProgress, ct, processContext) => capturedInputs = inputs)
+                .ReturnsAsync(MockBuilders.ProcessSucceeded());
+
+            // Act
+            await _script.ExecuteSingleAsync(
+                videoPath,
+                settings,
+                null,
+                (fIdx, total, status, progress, fps, bitrate) => { },
+                0,
+                1);
+
+            // Assert
+            capturedInputs.Should().NotBeNull();
+            capturedInputs!.Should().HaveCount(2);
+            capturedInputs[1].Args.Should().Contain(a => a.Contains("Студия 'Лучшая'"));
         }
         finally
         {
@@ -653,9 +937,9 @@ public class MkvAssemblyScriptTests
                     It.IsAny<Action<double>>(),
                     It.IsAny<System.Threading.CancellationToken>()
                 ))
-                .Callback<string, List<MkvInputSource>, string, List<string>, Action<double>, System.Threading.CancellationToken>(
-                    (outPath, inputs, title, extraArgs, onProgress, ct) => capturedInputs = inputs)
-                .ReturnsAsync(true);
+                .Callback<string, List<MkvInputSource>, string, List<string>, Action<double>, System.Threading.CancellationToken, ProcessExecutionContext>(
+                    (outPath, inputs, title, extraArgs, onProgress, ct, processContext) =>capturedInputs = inputs)
+                .ReturnsAsync(MockBuilders.ProcessSucceeded());
 
             // Act
             await _script.ExecuteSingleAsync(

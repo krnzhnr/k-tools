@@ -223,4 +223,79 @@ public class SubtitlePreviewViewModelTests
             if (File.Exists(file3)) File.Delete(file3);
         }
     }
+
+    /// <summary>
+    /// Проверяет, что при ручном отключении чекбокса строки её статус немедленно
+    /// меняется на «Искл. вручную» и генерируются уведомления об изменении свойств Status и StatusBrush.
+    /// </summary>
+    [TestMethod]
+    public async Task SubtitlePreviewLine_ManualCheckToggled_UpdatesStatusAndFiresPropertyChanged()
+    {
+        // Arrange
+        string file = Path.Combine(Path.GetTempPath(), "test_preview_status_toggle.ass");
+        File.WriteAllText(file, "[Events]\nFormat: Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\nDialogue: 0:00:01.00,0:00:02.00,Default,Actor1,0,0,0,,Тестовая реплика");
+
+        var assData = new AssData();
+        assData.Dialogues.Add(new AssDialogue("0:00:01.00", "0:00:02.00", "Default", "Actor1", "", "Тестовая реплика"));
+
+        _assParserMock.Setup(p => p.Parse(file)).Returns(assData);
+        _assParserMock.Setup(p => p.StripTags(It.IsAny<string>())).Returns<string>(s => s);
+
+        var viewModel = new SubtitlePreviewViewModel(
+            _filterState,
+            "test_group",
+            _assParserMock.Object,
+            _settingsManagerMock.Object,
+            _logServiceMock.Object
+        );
+
+        try
+        {
+            await viewModel.LoadDataAsync(new[] { file });
+
+            viewModel.SubtitleLines.Should().HaveCount(1);
+            var line = viewModel.SubtitleLines[0];
+
+            line.IsChecked.Should().BeTrue();
+            line.Status.Should().Be("ОК");
+            line.StatusColor.Should().Be("#22b473");
+            line.Timing.Should().Be("0:00:01.00 ➔ 0:00:02.00", "разделитель интервала времени должен отображаться стрелочкой ➔");
+
+            var changedProperties = new List<string>();
+            line.PropertyChanged += (_, e) =>
+            {
+                if (!string.IsNullOrEmpty(e.PropertyName))
+                {
+                    changedProperties.Add(e.PropertyName);
+                }
+            };
+
+            // Act 1 — пользователь вручную снимает чекбокс строки
+            line.IsChecked = false;
+
+            // Assert 1
+            line.IsChecked.Should().BeFalse();
+            line.Status.Should().Be("Искл. вручную", "при снятии чекбокса статус должен сразу стать 'Искл. вручную'");
+            line.StatusColor.Should().Be("#e81123", "статус должен быть окрашен в красный цвет");
+            line.IsTextStrikethrough.Should().BeTrue();
+            changedProperties.Should().Contain(nameof(line.Status), "View должен получить уведомление об изменении свойства Status");
+            changedProperties.Should().Contain(nameof(line.StatusBrush), "View должен получить уведомление об изменении свойства StatusBrush");
+
+            // Act 2 — пользователь возвращает чекбокс
+            changedProperties.Clear();
+            line.IsChecked = true;
+
+            // Assert 2
+            line.IsChecked.Should().BeTrue();
+            line.Status.Should().Be("ОК", "при включении чекбокса статус возвращается в 'ОК'");
+            line.StatusColor.Should().Be("#22b473", "статус должен быть окрашен в зеленый цвет");
+            line.IsTextStrikethrough.Should().BeFalse();
+            changedProperties.Should().Contain(nameof(line.Status));
+            changedProperties.Should().Contain(nameof(line.StatusBrush));
+        }
+        finally
+        {
+            if (File.Exists(file)) File.Delete(file);
+        }
+    }
 }

@@ -1,16 +1,22 @@
-using KTools_App.Services.Contracts;
 // -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
+using System.Collections.Specialized;
+using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
 using KTools_App.Core;
-using KTools_App.Infrastructure;
+using KTools_App.Diagnostics;
 using KTools_App.Encoders;
+using KTools_App.Infrastructure;
+using KTools_App.Models;
+using KTools_App.Services.Contracts;
+using ExecutionContext = KTools_App.Models.ExecutionContext;
 
 namespace KTools_App.Scripts;
 
@@ -25,18 +31,74 @@ public sealed class VideoEncodingScript : AbstractScript
     private readonly IFFmpegRunner _ffmpegRunner;
     private readonly IMediaProbeService _mediaProbeService;
     private readonly VideoEncoderRegistry _encoderRegistry;
+    private readonly IDialogService? _dialogService;
+
+    /// <summary>
+    /// Результат многоточечного детектирования чёрных полос: признак применения,
+    /// размеры кадра после обрезки и готовый фильтр crop=W:H:X:Y.
+    /// </summary>
+    private sealed record CropDetectionResult(bool Applied, int Width, int Height, string? Filter);
+
+    /// <summary>
+    /// Запись кэша фонового детектирования кропа для превью бейджей разрешений.
+    /// </summary>
+    private sealed class CropPreviewEntry
+    {
+        public string Fingerprint { get; set; } = "";
+        public bool Applied { get; set; }
+        public int Width { get; set; }
+        public int Height { get; set; }
+        public string? Filter { get; set; }
+        public long FileSize { get; set; }
+        public DateTime LastWriteUtc { get; set; }
+    }
+
+    private const int MaxCropPreviewEntries = 300;
+    private const int PreviewDebounceMs = 400;
+    private const int PreviewInterFileDelayMs = 250;
+
+    private readonly SemaphoreSlim _previewGate = new(1, 1);
+    private readonly object _previewLock = new();
+    private CancellationTokenSource? _previewCts;
+    private readonly Dictionary<string, CropPreviewEntry> _cropPreviewCache = new(StringComparer.OrdinalIgnoreCase);
+    private string _cropPreviewFingerprint = "";
+    private volatile bool _isExecuting;
 
     public VideoEncodingScript(
-        ILogService logService, 
-        ISettingsManager settingsManager, IPathManager pathManager,
+        ILogService logService,
+        ISettingsManager settingsManager,
+        IPathManager pathManager,
         IFFmpegRunner ffmpegRunner,
         IMediaProbeService mediaProbeService,
-        VideoEncoderRegistry encoderRegistry)
+        VideoEncoderRegistry encoderRegistry,
+        IDialogService? dialogService = null)
         : base(logService, settingsManager, pathManager)
     {
         _ffmpegRunner = ffmpegRunner ?? throw new ArgumentNullException(nameof(ffmpegRunner));
         _mediaProbeService = mediaProbeService ?? throw new ArgumentNullException(nameof(mediaProbeService));
         _encoderRegistry = encoderRegistry ?? throw new ArgumentNullException(nameof(encoderRegistry));
+        _dialogService = dialogService;
+
+        // Добавление файлов в очередь запускает тихое обновление превью разрешений.
+        FilesQueue.CollectionChanged += (_, e) =>
+        {
+            if (e.Action == NotifyCollectionChangedAction.Add
+                || e.Action == NotifyCollectionChangedAction.Reset)
+            {
+                RequestPreviewRefresh();
+            }
+        };
+    }
+
+    public override void PrepareBatch(IEnumerable<string>? inputFiles = null)
+    {
+        base.PrepareBatch(inputFiles);
+        CancelPreviewCycle();
+    }
+
+    public override void NotifySettingsChanged()
+    {
+        RequestPreviewRefresh();
     }
 
     public override string Name => AppConstants.ScriptMetadata.VideoProcessorName;
@@ -56,7 +118,7 @@ public sealed class VideoEncodingScript : AbstractScript
     private List<SettingField> GetSettingsSchemaInternal(Dictionary<string, object>? currentSettings)
     {
         var availableEncoders = _encoderRegistry.GetAvailableEncoders();
-        string defaultEncoder = availableEncoders.FirstOrDefault()?.StableId ?? "x265";
+        string defaultEncoder = availableEncoders.FirstOrDefault()?.StableId ?? "cpu";
         var encoderOptions = availableEncoders.Select(e => e.DisplayName).ToList();
         var encoderValues = availableEncoders.Select(e => e.StableId).ToList();
 
@@ -93,7 +155,8 @@ public sealed class VideoEncodingScript : AbstractScript
                 colSpan: 2,
                 disableConditions: new List<SettingDisableCondition>
                 {
-                    new("nvenc_codec", "AVC / H.264")
+                    new("nvenc_codec", "AVC / H.264"),
+                    new("cpu_codec", "AVC / H.264")
                 }
             ),
 
@@ -120,7 +183,7 @@ public sealed class VideoEncodingScript : AbstractScript
                 {
                     settingField.VisibilityConditions = new List<SettingVisibilityCondition>();
                 }
-                
+
                 settingField.VisibilityConditions.Add(new SettingVisibilityCondition("encoder", new List<string> { encoder.StableId, encoder.DisplayName }));
                 fields.Add(settingField);
             }
@@ -234,6 +297,55 @@ public sealed class VideoEncodingScript : AbstractScript
                 )
             }
         ));
+        // --- Вкладка Видео: Фильтры (продолжение) — масштабирование (AutoScale, приоритет 20) ---
+        // Применяется строго третьим в цепочке -vf после субтитров и кропа.
+        // Итоговое разрешение всегда вычисляется от разрешения после кропа (если кроп применён),
+        // иначе от исходного разрешения видеодорожки: база умножается на коэффициент
+        // с сохранением пропорций (без анаморфирования) и приводится к стандартному ряду.
+        fields.Add(new SettingField(
+            "resize_enabled",
+            "Изменение разрешения",
+            SettingType.Expander,
+            false,
+            "Видео:Фильтры",
+            comment: "Масштабирует кадр на выбранный коэффициент с сохранением пропорций. Расчёт ведётся от кадра после обрезки чёрных полос, итог приводится к стандартному разрешению.",
+            headerIconGlyph: "\uE799",
+            childFields: new List<SettingField>
+            {
+                new SettingField(
+                    "resize_factor",
+                    "Коэффициент масштаба",
+                    SettingType.Combo,
+                    "0.5",
+                    "Видео:Фильтры",
+                    options: new List<string> { "0.25", "0.5", "0.75", "1.5", "2.0" },
+                    comment: "Множитель разрешения после обрезки: меньше 1 — уменьшение, больше 1 — увеличение (требует разрешения на увеличение кадра).",
+                    column: 0,
+                    colSpan: 1
+                ),
+                new SettingField(
+                    "resize_algorithm",
+                    "Алгоритм масштабирования",
+                    SettingType.Combo,
+                    "lanczos",
+                    "Видео:Фильтры",
+                    options: new List<string> { "lanczos", "bicubic", "bilinear", "spline" },
+                    comment: "Алгоритм передискретизации FFmpeg (передаётся во флаг scale :flags=).",
+                    column: 1,
+                    colSpan: 1
+                ),
+                new SettingField(
+                    "resize_allow_upscale",
+                    "Разрешить увеличение кадра",
+                    SettingType.Checkbox,
+                    false,
+                    "Видео:Фильтры",
+                    comment: "Если выключено, а целевое разрешение больше текущего после обрезки, масштабирование пропускается.",
+                    column: 0,
+                    colSpan: 2
+                )
+            }
+        ));
 
         fields.AddRange(new List<SettingField>
         {
@@ -316,6 +428,24 @@ public sealed class VideoEncodingScript : AbstractScript
                 }
             ),
             new SettingField(
+                "sub_not_found_action",
+                "Если надписи не найдены",
+                SettingType.Combo,
+                "Пропускать хардсаб",
+                "Субтитры",
+                options: new List<string>
+                {
+                    "Пропускать хардсаб",
+                    "Спрашивать"
+                },
+                column: 0,
+                colSpan: 2,
+                visibilityConditions: new List<SettingVisibilityCondition>
+                {
+                    new("burn_in_subtitles", "True")
+                }
+            ),
+            new SettingField(
                 "strip_keywords",
                 "Удалять теги оформления субтитров",
                 SettingType.KeywordList,
@@ -337,30 +467,37 @@ public sealed class VideoEncodingScript : AbstractScript
             // --- Вкладка: Общие ---
             new SettingField(
                 "overwrite_source",
-                "Заменить исходный файл после обработки",
+                "Заменить исходный файл готовым результатом после успешной проверки",
                 SettingType.Checkbox,
                 false,
                 "Общие",
                 column: 0,
-                colSpan: 2
+                colSpan: 2,
+                requiresWarning: true,
+                warningTitle: "Замена исходного файла",
+                warningText: "Исходный файл заменяется готовым результатом только после успешной проверки. До подтверждения результата исходный файл сохраняется."
             )
         });
-        
+
         return fields;
     }
 
-    public override async Task<List<string>> ExecuteSingleAsync(
+    public override async Task<ExecutionResult> ExecuteSingleAsync(
         string filePath,
         Dictionary<string, object> settings,
         string? outputPath,
         ScriptProgressCallback progressCallback,
         int fileIndex,
-        int totalCount)
+        int totalCount,
+        ExecutionContext context)
     {
-        ResetCancellation();
         var results = new List<string>();
 
-        _logService.Info($"Начало кодирования видео для файла '{Path.GetFileName(filePath)}'", "VideoEncodingScript");
+        _logService.Write("script.video_encoding.started", LogLevel.Debug, LogStatus.Running, $"Начато кодирование видео файла '{LogProps.FileName(filePath)}'", source: Name, properties: LogProps.Create("InputName", LogProps.FileName(filePath)));
+
+        // На время кодирования фоновое превью останавливается, чтобы не конкурировать за ресурсы.
+        _isExecuting = true;
+        CancelPreviewCycle();
 
         // 1. Анализируем структуру исходного файла
         MediaStructure? structure;
@@ -371,19 +508,28 @@ public sealed class VideoEncodingScript : AbstractScript
         catch (Exception ex)
         {
             string probeErr = $"❌ Ошибка анализа метаданных файла: {ex.Message}";
-            _logService.Exception(ex, $"Исключение при зондировании '{filePath}': {ex.Message}", "VideoEncodingScript");
+            _logService.Write("script.video_encoding.probe_failed", LogLevel.Warning, LogStatus.PartiallySucceeded, $"Зондирование файла '{LogProps.FileName(filePath)}' не завершено, кодирование продолжится с начальными параметрами", ex, Name, properties: LogProps.Create("ErrorCode", "PROBE_FAILED").With("InputName", LogProps.FileName(filePath)));
             progressCallback(fileIndex, totalCount, "Ошибка ffprobe", 0.0);
             results.Add(probeErr);
-            return results;
+            return ExecutionResult.FromException(
+                context,
+                ex,
+                results,
+                errorCode: "probe-failed",
+                cleanupState: CleanupState.NotStarted);
         }
 
         if (structure == null)
         {
             string err = $"❌ ОШИБКА анализа: {Path.GetFileName(filePath)}";
-            _logService.Error(err, "VideoEncodingScript");
+            _logService.Write("script.video_encoding.failed", LogLevel.Error, LogStatus.Failed, err, source: Name, properties: LogProps.Create("ErrorCode", "VIDEO_ENCODING_FAILED").With("InputName", LogProps.FileName(filePath)).With("Retryable", true));
             progressCallback(fileIndex, totalCount, "Ошибка ffprobe", 0.0);
             results.Add(err);
-            return results;
+            return ExecutionResult.Failed(
+                context,
+                results,
+                errorCode: "probe-empty",
+                retryable: true);
         }
 
         // 2. Создаем временную директорию для извлечения ресурсов (шрифты, субтитры)
@@ -394,15 +540,23 @@ public sealed class VideoEncodingScript : AbstractScript
         }
         catch (Exception ex)
         {
-            string dirErr = $"❌ Ошибка создания временной папки: {ex.Message}";
-            _logService.Exception(ex, dirErr, "VideoEncodingScript");
-            results.Add(dirErr);
-            return results;
+            _logService.Write("script.video_encoding.temp_dir_failed", LogLevel.Error, LogStatus.Failed, "Временный каталог для встраивания дорожек не создан", ex, Name, properties: LogProps.Create("ErrorCode", "TEMP_DIR_FAILED").With("CleanupState", "NotStarted"));
+            results.Add("Ошибка создания временной папки");
+            return ExecutionResult.FromException(
+                context,
+                ex,
+                results,
+                errorCode: "temporary-directory-failed",
+                cleanupState: CleanupState.NotStarted);
         }
 
         string? tempSubFile = null;
         string tempFontsDir = Path.Combine(tempDir, "fonts");
         Directory.CreateDirectory(tempFontsDir);
+        bool? resultSucceeded = null;
+        string? resultOutputFile = null;
+        bool sourceReplaced = false;
+        bool replaceSourceRequested = false;
 
         try
         {
@@ -411,37 +565,62 @@ public sealed class VideoEncodingScript : AbstractScript
             int fontCount = 0;
             if (fontAttachments.Count > 0)
             {
+                progressCallback(fileIndex, totalCount, "Извлечение шрифтов...", 0.0);
+
                 string inputExt = Path.GetExtension(filePath).ToLowerInvariant();
                 bool isMkv = inputExt.Equals(".mkv", StringComparison.OrdinalIgnoreCase) || inputExt.Equals(".mka", StringComparison.OrdinalIgnoreCase);
 
+                var fontRequests = new List<(int StreamIndex, string OutputPath)>();
                 foreach (var font in fontAttachments)
                 {
-                    if (IsCancelled) break;
-
                     int ffmpegAttachmentIndex = isMkv
                         ? structure.Tracks.Count + structure.Attachments.IndexOf(font)
                         : font.AttachmentId;
 
-                    string outFontPath = Path.Combine(tempFontsDir, font.FileName);
-                    bool fSuccess = await _ffmpegRunner.ExtractAttachmentAsync(filePath, ffmpegAttachmentIndex, outFontPath);
+                    fontRequests.Add((ffmpegAttachmentIndex, Path.Combine(tempFontsDir, font.FileName)));
+                }
+
+                var extractedSet = new HashSet<string>(
+                    await _ffmpegRunner.ExtractAttachmentsBatchAsync(filePath, fontRequests, CancellationToken),
+                    StringComparer.OrdinalIgnoreCase);
+
+                foreach (var (ffmpegAttachmentIndex, outFontPath) in fontRequests)
+                {
+                    if (IsCancelled) break;
+
+                    bool fSuccess = extractedSet.Contains(outFontPath) || (File.Exists(outFontPath) && new FileInfo(outFontPath).Length > 0);
+                    if (!fSuccess)
+                    {
+                        ProcessResult attachResult = await _ffmpegRunner.ExtractAttachmentAsync(
+                            filePath,
+                            ffmpegAttachmentIndex,
+                            outFontPath,
+                            cancellationToken: CancellationToken);
+                        fSuccess = (attachResult.IsSuccess && File.Exists(outFontPath)) || extractedSet.Contains(outFontPath);
+                    }
+
                     if (fSuccess)
                     {
                         fontCount++;
                     }
                 }
-                _logService.Info($"Извлечено встроенных шрифтов во временную папку: {fontCount}", "VideoEncodingScript");
+                _logService.Write("script.video_encoding.fonts_extracted", LogLevel.Debug, LogStatus.Succeeded, $"Встроенные шрифты извлечены во временный каталог, шрифтов: {fontCount}", source: Name, properties: LogProps.Create("Count", fontCount).With("InputName", LogProps.FileName(filePath)));
             }
 
             // 4. Поиск и извлечение субтитров для вшивания (burn-in)
             bool burnInSubtitles = GetSettingValue(settings, "burn_in_subtitles", true);
             if (burnInSubtitles)
             {
-                var subKeywords = GetSettingValue<List<Dictionary<string, object>>?>(settings, "sub_keywords", null);
-                var activeSubKeywords = subKeywords?
+                var defaultSubKeywords = new List<Dictionary<string, object>>
+                {
+                    new() { { "word", "Надписи" }, { "active", true } }
+                };
+                var subKeywords = GetSettingValue<List<Dictionary<string, object>>?>(settings, "sub_keywords", defaultSubKeywords) ?? defaultSubKeywords;
+                var activeSubKeywords = subKeywords
                     .Where(d => d.TryGetValue("active", out var act) && SafeGetBool(act))
                     .Select(d => d.TryGetValue("word", out var w) ? SafeGetString(w)?.ToLowerInvariant() : null)
                     .Where(w => w != null)
-                    .ToList() ?? new List<string?>();
+                    .ToList();
 
                 var subTracks = structure.GetSubtitleTracks();
                 MediaTrack? targetSubTrack = null;
@@ -456,16 +635,56 @@ public sealed class VideoEncodingScript : AbstractScript
                     }
                 }
 
-                // Если не найдено - ищем default/forced
+                // Если по ключевым словам подходящих дорожек не найдено,
+                // действуем строго в соответствии с выбранной настройкой sub_not_found_action
                 if (targetSubTrack == null)
                 {
-                    targetSubTrack = subTracks.FirstOrDefault(t => t.IsDefault || t.IsForced);
-                }
+                    string notFoundAction = GetSettingValue(settings, "sub_not_found_action", "Пропускать хардсаб");
+                    if (notFoundAction == "Спрашивать" && subTracks.Count > 0 && _dialogService != null)
+                    {
+                        _logService.Write(
+                            "script.video_encoding.subtitles_prompt",
+                            LogLevel.Info,
+                            LogStatus.Running,
+                            $"Надписи по ключевым словам не найдены для файла '{LogProps.FileName(filePath)}', запрашивается выбор дорожки у пользователя",
+                            source: Name,
+                            properties: LogProps.Create("InputName", LogProps.FileName(filePath)));
 
-                // Если все еще не найдено - берем первый трек субтитров
-                if (targetSubTrack == null)
-                {
-                    targetSubTrack = subTracks.FirstOrDefault();
+                        progressCallback(fileIndex, totalCount, "Ожидание выбора субтитров...", 0.0);
+
+                        targetSubTrack = await _dialogService.ChooseSubtitleTrackAsync(Path.GetFileName(filePath), subTracks);
+
+                        if (targetSubTrack != null)
+                        {
+                            _logService.Write(
+                                "script.video_encoding.subtitles_chosen",
+                                LogLevel.Info,
+                                LogStatus.Succeeded,
+                                $"Пользователь выбрал дорожку субтитров #{targetSubTrack.TrackId} для вшивания в '{LogProps.FileName(filePath)}'",
+                                source: Name,
+                                properties: LogProps.Create("Index", targetSubTrack.TrackId).With("InputName", LogProps.FileName(filePath)));
+                        }
+                        else
+                        {
+                            _logService.Write(
+                                "script.video_encoding.subtitles_prompt_skipped",
+                                LogLevel.Info,
+                                LogStatus.Skipped,
+                                $"Пользователь пропустил выбор субтитров для '{LogProps.FileName(filePath)}', хардсаб не будет применен",
+                                source: Name,
+                                properties: LogProps.Create("InputName", LogProps.FileName(filePath)));
+                        }
+                    }
+                    else
+                    {
+                        _logService.Write(
+                            "script.video_encoding.subtitles_not_found_skipped",
+                            LogLevel.Info,
+                            LogStatus.Skipped,
+                            $"Надписи по ключевым словам не найдены для файла '{LogProps.FileName(filePath)}', хардсаб пропущен",
+                            source: Name,
+                            properties: LogProps.Create("InputName", LogProps.FileName(filePath)));
+                    }
                 }
 
                 if (targetSubTrack != null)
@@ -473,8 +692,15 @@ public sealed class VideoEncodingScript : AbstractScript
                     int relSubIdx = subTracks.ToList().IndexOf(targetSubTrack);
                     tempSubFile = Path.Combine(tempDir, $"subs_{DateTime.Now.Ticks}.ass");
 
-                    _logService.Info($"Извлечение субтитров #{targetSubTrack.TrackId} (относительный индекс {relSubIdx}) во временный файл", "VideoEncodingScript");
-                    bool extSubSuccess = await _ffmpegRunner.ExtractSubtitleAsync(filePath, relSubIdx, tempSubFile, relative: true);
+                    progressCallback(fileIndex, totalCount, "Извлечение субтитров...", 0.0);
+                    _logService.Write("script.video_encoding.subtitles_extracted", LogLevel.Debug, LogStatus.Running, $"Субтитры #{targetSubTrack.TrackId} (относительный индекс {relSubIdx}) извлекаются во временный файл", source: Name, properties: LogProps.Create("Index", targetSubTrack.TrackId).With("Tool", "ffmpeg"));
+                    ProcessResult subtitleResult = await _ffmpegRunner.ExtractSubtitleAsync(
+                        filePath,
+                        relSubIdx,
+                        tempSubFile,
+                        relative: true,
+                        cancellationToken: CancellationToken);
+                    bool extSubSuccess = subtitleResult.IsSuccess;
 
                     if (extSubSuccess && File.Exists(tempSubFile))
                     {
@@ -506,14 +732,14 @@ public sealed class VideoEncodingScript : AbstractScript
                             if (removedCount > 0)
                             {
                                 File.WriteAllLines(tempSubFile, cleanLines, new System.Text.UTF8Encoding(false));
-                                _logService.Info($"Очистка субтитров: удалено {removedCount} строк оформления", "VideoEncodingScript");
+                                _logService.Write("subtitle.cleanup.applied", LogLevel.Debug, LogStatus.Succeeded, $"Очистка субтитров: удалено строк оформления {removedCount}", source: Name, properties: LogProps.Create("Count", removedCount).With("InputName", LogProps.FileName(filePath)));
                             }
                         }
                     }
                     else
                     {
                         tempSubFile = null;
-                        _logService.Warn("Не удалось извлечь субтитры для вшивания, кодирование продолжится без них", "VideoEncodingScript");
+                        _logService.Write("script.video_encoding.subtitles_skipped", LogLevel.Warning, LogStatus.PartiallySucceeded, "Субтитры для вшивания не извлечены, кодирование продолжится без них", source: Name, properties: LogProps.Create("ErrorCode", "SUBTITLES_EXTRACT_FAILED").With("InputName", LogProps.FileName(filePath)));
                     }
                 }
             }
@@ -533,7 +759,7 @@ public sealed class VideoEncodingScript : AbstractScript
             {
                 foreach (var lang in activeLangs)
                 {
-                    bestAudio = audioTracks.FirstOrDefault(t => 
+                    bestAudio = audioTracks.FirstOrDefault(t =>
                     {
                         string normTrack = AppConstants.NormalizeLanguage(t.Language);
                         string normLang = AppConstants.NormalizeLanguage(lang!);
@@ -559,7 +785,7 @@ public sealed class VideoEncodingScript : AbstractScript
             int relAudioIdx = bestAudio != null ? audioTracks.ToList().IndexOf(bestAudio) : 0;
             if (bestAudio != null)
             {
-                _logService.Info($"Выбран аудиопоток #{bestAudio.TrackId} (относительный индекс {relAudioIdx}, язык '{bestAudio.Language}')", "VideoEncodingScript");
+                _logService.Write("script.video_encoding.audio_selected", LogLevel.Debug, LogStatus.Succeeded, $"Выбрана аудиодорожка #{bestAudio.TrackId} (относительный индекс {relAudioIdx}, язык {LogRedactor.CompactSafeToken(bestAudio.Language)})", source: Name, properties: LogProps.Create("Index", bestAudio.TrackId).With("Language", LogRedactor.CompactSafeToken(bestAudio.Language)));
             }
 
             // 6. Вычисляем выходные пути
@@ -581,21 +807,33 @@ public sealed class VideoEncodingScript : AbstractScript
             if (File.Exists(finalOutputFile) && !overwrite)
             {
                 string skipExist = $"⏭ ПРОПУСК (файл существует): {Path.GetFileName(finalOutputFile)}";
-                _logService.Info(skipExist, "VideoEncodingScript");
+                _logService.Write("script.video_encoding.output_exists", LogLevel.Info, LogStatus.Skipped, skipExist, source: Name, properties: LogProps.Create("OutputName", LogProps.FileName(finalOutputFile)).With("ArtifactExists", true));
                 progressCallback(fileIndex, totalCount, $"Пропущен (существует): {Path.GetFileName(finalOutputFile)}", 100.0);
                 results.Add(skipExist);
-                return results;
+                return ExecutionResult.Skipped(
+                    context,
+                    results,
+                    errorCode: "output-exists",
+                    outputFile: finalOutputFile,
+                    outputExists: true);
             }
 
             // 7. Сборка параметров FFmpeg
             var ffmpegArgs = new List<string>();
 
             // А) Видеопараметры
-            string encoderId = GetSettingValue(settings, "encoder", "x265");
+            string encoderId = GetSettingValue(settings, "encoder", "cpu");
+            // Миграция сохранённых конфигураций времён отдельного X265Encoder:
+            // старый идентификатор молча трактуется как CPU с кодеком HEVC по умолчанию,
+            // все прежние настройки x265_* продолжают применяться без изменений.
+            if (encoderId.Equals("x265", StringComparison.OrdinalIgnoreCase))
+            {
+                encoderId = "cpu";
+            }
             bool force10Bit = GetSettingValue(settings, "force_10bit", false);
             bool lossless = GetSettingValue(settings, "lossless", false);
 
-            var encoderInstance = _encoderRegistry.GetEncoderById(encoderId) 
+            var encoderInstance = _encoderRegistry.GetEncoderById(encoderId)
                 ?? _encoderRegistry.GetAvailableEncoders().FirstOrDefault(e => e.DisplayName == encoderId);
 
             if (encoderInstance == null)
@@ -603,13 +841,14 @@ public sealed class VideoEncodingScript : AbstractScript
                 throw new InvalidOperationException($"Энкодер '{encoderId}' не найден или не поддерживается оборудованием.");
             }
 
-            var context = new KTools_App.Encoders.EncoderSharedContext(
+            var encoderContext = new KTools_App.Encoders.EncoderSharedContext(
                 IsLossless: lossless,
                 Force10Bit: force10Bit,
-                ContainerExtension: containerExt
+                ContainerExtension: containerExt,
+                CodecName: GetSettingValue(settings, "cpu_codec", string.Empty)
             );
 
-            var encoderArgs = encoderInstance.BuildEncoderArguments(settings, context);
+            var encoderArgs = encoderInstance.BuildEncoderArguments(settings, encoderContext);
             ffmpegArgs.AddRange(encoderArgs);
 
             // Б) Аудиопараметры
@@ -631,7 +870,7 @@ public sealed class VideoEncodingScript : AbstractScript
                 }
             }
 
-            // В) Видеофильтры (Hardsub приоритет 0, AutoCrop приоритет 10)
+            // В) Видеофильтры (Hardsub приоритет 0, AutoCrop приоритет 10, AutoScale приоритет 20)
             var videoFilters = new List<string>();
 
             if (burnInSubtitles && tempSubFile != null && File.Exists(tempSubFile))
@@ -641,174 +880,130 @@ public sealed class VideoEncodingScript : AbstractScript
                 videoFilters.Add($"subtitles=filename='{escapedSubPath}':fontsdir='{escapedFontsDir}'");
             }
 
+            // Исходное разрешение видеодорожки — общая база для кропа и скейла.
+            // Все варианты выходного разрешения вычисляются от кадра после кропа, иначе от исходника.
+            var videoTrackForFilters = structure.GetVideoTracks().FirstOrDefault();
+            string sourceResForFilters = videoTrackForFilters?.Resolution ?? string.Empty;
+            TryParseResolution(sourceResForFilters, out int baseSrcW, out int baseSrcH);
+            int srcW = baseSrcW;
+            int srcH = baseSrcH;
+            string sourceRes = sourceResForFilters;
+
+            // Итог кропа (приоритет 10) — база для скейла (приоритет 20).
+            int croppedW = 0;
+            int croppedH = 0;
+            bool cropApplied = false;
+
             bool autoCropEnabled = GetSettingValue(settings, "autocrop_enabled", false);
             if (autoCropEnabled)
             {
-                double cropLimit = GetSettingValue(settings, "autocrop_limit", 0.094);
-                int cropRound = GetSettingValue(settings, "autocrop_round", 16);
-                string cropMode = GetSettingValue(settings, "autocrop_mode", "black");
-                int probeFrames = GetSettingValue(settings, "autocrop_probe_frames", 25);
-                int skipFrames = GetSettingValue(settings, "autocrop_skip_frames", 2);
-                int resetFrames = GetSettingValue(settings, "autocrop_reset_frames", 0);
-                int probePoints = GetSettingValue(settings, "autocrop_probe_points", 3);
-                int tolerance = GetSettingValue(settings, "autocrop_tolerance", 16);
-
-                var videoTrack = structure.GetVideoTracks().FirstOrDefault();
-                int srcW = 0, srcH = 0;
-                string sourceRes = videoTrack?.Resolution ?? string.Empty;
-                if (!string.IsNullOrEmpty(sourceRes))
+                // Повторное зондирование не запускаем: пригодный кэш фонового превью переиспользуется,
+                // иначе детектирование выполняется общим методом и складывается в кэш для превью.
+                string cropFingerprint = BuildCropFingerprint(settings);
+                CropDetectionResult cropResult;
+                if (TryGetCachedCrop(filePath, cropFingerprint, out CropPreviewEntry? cachedCrop) && cachedCrop != null)
                 {
-                    var resParts = sourceRes.Split('x');
-                    if (resParts.Length == 2)
-                    {
-                        int.TryParse(resParts[0], out srcW);
-                        int.TryParse(resParts[1], out srcH);
-                    }
-                }
-
-                double duration = structure.Duration;
-                var probeOffsets = new List<double>();
-
-                if (duration <= 0 || duration < 5.0 || probePoints <= 1)
-                {
-                    double singleOffset = duration > 0 ? duration / 2.0 : 0.0;
-                    probeOffsets.Add(singleOffset);
+                    cropResult = new CropDetectionResult(cachedCrop.Applied, cachedCrop.Width, cachedCrop.Height, cachedCrop.Filter);
                 }
                 else
                 {
-                    for (int i = 1; i <= probePoints; i++)
-                    {
-                        probeOffsets.Add(duration * i / (probePoints + 1));
-                    }
-                }
-
-                _logService.Info($"Запуск многоточечного детектора черных полос для '{Path.GetFileName(filePath)}' (точек: {probeOffsets.Count}, limit={cropLimit:F4}, round={cropRound}, tolerance={tolerance}px, mode={cropMode})", "VideoEncodingScript");
-
-                int maxCropW = 0;
-                int maxCropH = 0;
-                int successfulProbes = 0;
-                bool fullScreenDetectedInPoint = false;
-                double fullScreenTimestamp = 0;
-
-                for (int pIdx = 0; pIdx < probeOffsets.Count; pIdx++)
-                {
-                    double seekSec = probeOffsets[pIdx];
-                    progressCallback(fileIndex, totalCount, $"Анализ черных полос (точка {pIdx + 1}/{probeOffsets.Count})...", 0.0);
-
-                    string? pointCrop = await _ffmpegRunner.DetectCropAsync(
+                    cropResult = await DetectCropMultiPointAsync(
                         filePath,
-                        skipSeconds: seekSec,
-                        probeFrames: probeFrames,
-                        limit: cropLimit,
-                        round: cropRound,
-                        skip: skipFrames,
-                        reset: resetFrames,
-                        mode: cropMode,
-                        cancellationToken: CancellationToken
-                    );
-
-                    if (!string.IsNullOrWhiteSpace(pointCrop))
-                    {
-                        var parts = pointCrop.Split(':');
-                        if (parts.Length >= 2 &&
-                            int.TryParse(parts[0], out int pW) &&
-                            int.TryParse(parts[1], out int pH))
-                        {
-                            successfulProbes++;
-                            _logService.Info($"Контрольная точка {pIdx + 1}/{probeOffsets.Count} ({seekSec:F1}s): определен кадр {pW}x{pH} (crop={pointCrop})", "VideoEncodingScript");
-
-                            if (srcW > 0 && srcH > 0 && pW >= srcW && pH >= srcH)
-                            {
-                                fullScreenDetectedInPoint = true;
-                                fullScreenTimestamp = seekSec;
-                            }
-
-                            if (pW > maxCropW) maxCropW = pW;
-                            if (pH > maxCropH) maxCropH = pH;
-                        }
-                    }
-                    else
-                    {
-                        _logService.Warn($"Контрольная точка {pIdx + 1}/{probeOffsets.Count} ({seekSec:F1}s): детектор не обнаружил область кадрирования (возможно, темная сцена)", "VideoEncodingScript");
-                    }
+                        settings,
+                        srcW,
+                        srcH,
+                        structure.Duration,
+                        progressCallback,
+                        fileIndex,
+                        totalCount,
+                        CancellationToken);
+                    StoreCropCache(filePath, cropFingerprint, cropResult);
                 }
 
-                if (successfulProbes > 0 && maxCropW > 0 && maxCropH > 0)
+                if (cropResult is { Applied: true, Filter: not null })
                 {
-                    if (fullScreenDetectedInPoint)
+                    videoFilters.Add(cropResult.Filter);
+                    croppedW = cropResult.Width;
+                    croppedH = cropResult.Height;
+                    cropApplied = true;
+
+                    string cropBadgeText = !string.IsNullOrEmpty(sourceRes)
+                        ? $"{sourceRes} ➔ {cropResult.Width}x{cropResult.Height}"
+                        : $"{cropResult.Width}x{cropResult.Height}";
+
+                    var queueItem = FilesQueue.FirstOrDefault(f =>
+                        f.FilePath.Equals(filePath, StringComparison.OrdinalIgnoreCase));
+                    if (queueItem != null)
                     {
-                        _logService.Info($"В контрольной точке {fullScreenTimestamp:F1}s обнаружен полнокадровый фрагмент (IMAX/Open Matte). Кадрирование отменено во избежание обрезки полезного видеоряда.", "VideoEncodingScript");
+                        queueItem.CropBadgeText = cropBadgeText;
+                        _logService.Write("crop.badge.updated", LogLevel.Debug, LogStatus.Changed, $"Бейдж кадрирования обновлён для '{LogProps.FileName(filePath)}': {cropBadgeText}", source: Name, properties: LogProps.Create("InputName", LogProps.FileName(filePath)));
                     }
-                    else
+                }
+            }
+
+            // В) Продолжение: масштабирование (AutoScale, приоритет 20) строго после кропа.
+            // Базой расчёта служит разрешение после кропа, иначе исходное разрешение видеодорожки.
+            // База умножается на коэффициент строго пропорционально, итог приводится к стандартному ряду.
+            bool resizeEnabled = GetSettingValue(settings, "resize_enabled", false);
+            if (resizeEnabled)
+            {
+                string resizeFactorText = GetFactorText(settings, "resize_factor", "0.5");
+                string resizeAlgorithm = GetSettingValue(settings, "resize_algorithm", "lanczos") ?? "lanczos";
+                bool allowUpscale = GetSettingValue(settings, "resize_allow_upscale", false);
+
+                if (!string.Equals(resizeAlgorithm, "lanczos", StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(resizeAlgorithm, "bicubic", StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(resizeAlgorithm, "bilinear", StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(resizeAlgorithm, "spline", StringComparison.OrdinalIgnoreCase))
+                {
+                    resizeAlgorithm = "lanczos";
+                }
+
+                int effBaseW = cropApplied ? croppedW : baseSrcW;
+                int effBaseH = cropApplied ? croppedH : baseSrcH;
+
+                bool computed = TryComputeScaleTarget(effBaseW, effBaseH, resizeFactorText, out int targetW, out int targetH, out string skipReason);
+                if (computed && !allowUpscale && (targetW > effBaseW || targetH > effBaseH))
+                {
+                    computed = false;
+                    skipReason = "UpscaleDenied";
+                }
+
+                if (computed)
+                {
+                    string scaleFilter = BuildScaleFilter(targetW, targetH, resizeAlgorithm);
+                    videoFilters.Add(scaleFilter);
+                    _logService.Write("scale.applied", LogLevel.Info, LogStatus.Succeeded, $"Масштабирование применено: {effBaseW}x{effBaseH} ➔ {targetW}x{targetH} (алгоритм {resizeAlgorithm})", source: Name, properties: LogProps.Create("Resolution", $"{targetW}x{targetH}").With("Value", scaleFilter).With("Mode", "factor"));
+
+                    var scaleQueueItem = FilesQueue.FirstOrDefault(f =>
+                        f.FilePath.Equals(filePath, StringComparison.OrdinalIgnoreCase));
+                    if (scaleQueueItem != null)
                     {
-                        // 1. Выравнивание кратности cropRound вверх
-                        if (cropRound > 1)
+                        if (cropApplied && !string.IsNullOrEmpty(scaleQueueItem.CropBadgeText))
                         {
-                            maxCropW = ((maxCropW + cropRound - 1) / cropRound) * cropRound;
-                            maxCropH = ((maxCropH + cropRound - 1) / cropRound) * cropRound;
-                        }
-
-                        // 2. Гарантия четности для кодеков YUV420p
-                        if (maxCropW % 2 != 0) maxCropW++;
-                        if (maxCropH % 2 != 0) maxCropH++;
-
-                        if (srcW > 0 && maxCropW > srcW) maxCropW = srcW;
-                        if (srcH > 0 && maxCropH > srcH) maxCropH = srcH;
-
-                        // 3. Фильтр допуска (Tolerance): отмена микрообрезки
-                        int diffW = srcW - maxCropW;
-                        if (srcW > 0 && diffW > 0 && diffW <= tolerance)
-                        {
-                            _logService.Info($"Разница по ширине ({diffW}px) меньше или равна порогу допуска ({tolerance}px). Ширина сброшена в исходные {srcW}px.", "VideoEncodingScript");
-                            maxCropW = srcW;
-                        }
-
-                        int diffH = srcH - maxCropH;
-                        if (srcH > 0 && diffH > 0 && diffH <= tolerance)
-                        {
-                            _logService.Info($"Разница по высоте ({diffH}px) меньше или равна порогу допуска ({tolerance}px). Высота сброшена в исходные {srcH}px.", "VideoEncodingScript");
-                            maxCropH = srcH;
-                        }
-
-                        bool isResolutionChanged = true;
-                        if (srcW > 0 && srcH > 0)
-                        {
-                            isResolutionChanged = maxCropW != srcW || maxCropH != srcH;
-                        }
-
-                        if (isResolutionChanged)
-                        {
-                            // 4. Симметричное центрирование координат
-                            int cropX = srcW > maxCropW ? (srcW - maxCropW) / 2 : 0;
-                            int cropY = srcH > maxCropH ? (srcH - maxCropH) / 2 : 0;
-                            cropX = (cropX / 2) * 2;
-                            cropY = (cropY / 2) * 2;
-
-                            string finalCrop = $"{maxCropW}:{maxCropH}:{cropX}:{cropY}";
-                            _logService.Info($"Итоговые параметры кадрирования: crop={finalCrop}", "VideoEncodingScript");
-                            videoFilters.Add($"crop={finalCrop}");
-
-                            string cropBadgeText = !string.IsNullOrEmpty(sourceRes)
-                                ? $"{sourceRes} ➔ {maxCropW}x{maxCropH}"
-                                : $"{maxCropW}x{maxCropH}";
-
-                            var queueItem = FilesQueue.FirstOrDefault(f =>
-                                f.FilePath.Equals(filePath, StringComparison.OrdinalIgnoreCase));
-                            if (queueItem != null)
-                            {
-                                queueItem.CropBadgeText = cropBadgeText;
-                                _logService.Info($"Установлен бейджик кадрирования для '{Path.GetFileName(filePath)}': {cropBadgeText}", "VideoEncodingScript");
-                            }
+                            scaleQueueItem.CropBadgeText += $" ➔ {targetW}x{targetH}";
                         }
                         else
                         {
-                            _logService.Info("Черные полосы не обнаружены или не требуют обрезки (разрешение сохранено)", "VideoEncodingScript");
+                            scaleQueueItem.CropBadgeText = !string.IsNullOrEmpty(sourceResForFilters)
+                                ? $"{sourceResForFilters} ➔ {targetW}x{targetH}"
+                                : $"{targetW}x{targetH}";
                         }
                     }
                 }
                 else
                 {
-                    _logService.Warn("Детектор черных полос не смог определить параметры кадрирования ни в одной контрольной точке", "VideoEncodingScript");
+                    string skipMessage = skipReason switch
+                    {
+                        "ResolutionUnknown" => "Масштабирование пропущено: не удалось определить разрешение исходного видео",
+                        "UpscaleDenied" => $"Масштабирование пропущено: целевое разрешение больше текущего {effBaseW}x{effBaseH}, а увеличение запрещено настройкой",
+                        "TargetEqualsSource" => "Масштабирование пропущено: целевое разрешение совпадает с текущим",
+                        "InvalidTarget" => "Масштабирование пропущено: задано некорректное целевое разрешение",
+                        "InvalidFactor" => "Масштабирование пропущено: задан некорректный коэффициент масштаба",
+                        _ => "Масштабирование пропущено: целевое разрешение не вычислено"
+                    };
+                    string baseResolutionText = effBaseW > 0 && effBaseH > 0 ? $"{effBaseW}x{effBaseH}" : "unknown";
+                    _logService.Write("scale.skipped", LogLevel.Debug, LogStatus.Skipped, skipMessage, source: Name, properties: LogProps.Create("Reason", skipReason).With("Resolution", baseResolutionText).With("Value", resizeFactorText));
                 }
             }
 
@@ -824,7 +1019,7 @@ public sealed class VideoEncodingScript : AbstractScript
                 "-map", $"0:a:{relAudioIdx}?"
             });
 
-            var containerTag = encoderInstance.GetContainerTag(settings, context);
+            var containerTag = encoderInstance.GetContainerTag(settings, encoderContext);
             if (!string.IsNullOrEmpty(containerTag))
             {
                 ffmpegArgs.AddRange(new[] { "-tag:v", containerTag });
@@ -843,12 +1038,12 @@ public sealed class VideoEncodingScript : AbstractScript
             var inputArgs = await encoderInstance.BuildInputArgumentsAsync(structure, CancellationToken);
 
             // 8. Запуск процесса кодирования
-            _logService.Info($"Запуск FFmpeg для кодирования видео '{Path.GetFileName(filePath)}' в '{Path.GetFileName(finalOutputFile)}'", "VideoEncodingScript");
+            _logService.Write("script.video_encoding.ffmpeg_started", LogLevel.Debug, LogStatus.Running, $"Запущен FFmpeg для кодирования видео '{LogProps.FileName(filePath)}' -> '{LogProps.FileName(finalOutputFile)}'", source: Name, properties: LogProps.Create("Tool", "ffmpeg").With("InputName", LogProps.FileName(filePath)).With("OutputName", LogProps.FileName(finalOutputFile)));
             progressCallback(fileIndex, totalCount, "Кодирование видео...", 0.0);
 
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(CancellationToken);
 
-            bool success = false;
+            ProcessResult? success = null;
             try
             {
                 success = await _ffmpegRunner.RunAsync(
@@ -874,35 +1069,44 @@ public sealed class VideoEncodingScript : AbstractScript
             finally
             {
             }
+            resultSucceeded = success?.IsSuccess == true;
+            resultOutputFile = finalOutputFile;
 
             // 9. Обработка результатов
             if (IsCancelled)
             {
-                CleanupFailedOutputFile(finalOutputFile);
+                await CleanupFailedOutputFileAsync(finalOutputFile);
                 string cancelMsg = $"⚠ Обработка отменена пользователем: {Path.GetFileName(finalOutputFile)}";
-                _logService.Info(cancelMsg, "VideoEncodingScript");
+                _logService.Write("script.video_encoding.cancelled", LogLevel.Info, LogStatus.Cancelled, cancelMsg, source: Name, properties: LogProps.Create("Reason", "UserRequested").With("CleanupState", "NotStarted"));
                 results.Add(cancelMsg);
-                return results;
+                return ExecutionResult.Cancelled(
+                    context,
+                    results,
+                    errorCode: "cancelled",
+                    outputFile: finalOutputFile,
+                    outputExists: File.Exists(finalOutputFile),
+                    cleanupState: CleanupState.Completed);
             }
 
-            if (success)
+            if (success?.IsSuccess == true && File.Exists(finalOutputFile))
             {
                 progressCallback(fileIndex, totalCount, "Завершено!", 100.0);
                 string successMsg = $"✅ ОБРАБОТАНО: {Path.GetFileName(finalOutputFile)}";
-                _logService.Info(successMsg, "VideoEncodingScript");
+                _logService.Write("script.video_encoding.completed", LogLevel.Info, LogStatus.Succeeded, successMsg, source: Name, properties: LogProps.Create("OutputName", LogProps.FileName(finalOutputFile)).With("Verified", true));
                 results.Add(successMsg);
 
                 bool overwriteSource = GetSettingValue(settings, "overwrite_source", false);
                 if (overwriteSource && string.IsNullOrEmpty(outputPath))
                 {
-                    ReplaceSourceWithResult(filePath, finalOutputFile, results);
+                    replaceSourceRequested = true;
+                    sourceReplaced = await ReplaceSourceWithResultAsync(filePath, finalOutputFile, results);
                 }
             }
             else
             {
-                CleanupFailedOutputFile(finalOutputFile);
+                await CleanupFailedOutputFileAsync(finalOutputFile);
                 string failMsg = $"❌ ОШИБКА кодирования файла: {Path.GetFileName(filePath)}";
-                _logService.Error(failMsg, "VideoEncodingScript");
+                _logService.Write("script.video_encoding.failed", LogLevel.Error, LogStatus.Failed, failMsg, source: Name, properties: LogProps.Create("ErrorCode", "VIDEO_ENCODING_FAILED").With("InputName", LogProps.FileName(filePath)).With("Retryable", true));
                 results.Add(failMsg);
             }
         }
@@ -910,14 +1114,23 @@ public sealed class VideoEncodingScript : AbstractScript
         {
             if (!string.IsNullOrEmpty(_finalOutputFileForCleanup))
             {
-                CleanupFailedOutputFile(_finalOutputFileForCleanup);
+                await CleanupFailedOutputFileAsync(_finalOutputFileForCleanup);
             }
-            string runErr = $"❌ Критическая ошибка при кодировании видео для '{Path.GetFileName(filePath)}': {ex.Message}";
-            _logService.Exception(ex, $"Исключение в процессе кодирования '{filePath}': {ex.Message}", "VideoEncodingScript");
+            string runErr = $"❌ Критическая ошибка при кодировании видео для '{Path.GetFileName(filePath)}'";
+            _logService.Write("script.video_encoding.failed", LogLevel.Error, LogStatus.Failed, $"Кодирование видео '{LogProps.FileName(filePath)}' не выполнено", ex, Name, properties: LogProps.Create("ErrorCode", "VIDEO_ENCODING_FAILED").With("InputName", LogProps.FileName(filePath)).With("Retryable", true));
             results.Add(runErr);
+            return ExecutionResult.FromException(
+                context,
+                ex,
+                results,
+                errorCode: "video-encoding-exception",
+                outputFile: _finalOutputFileForCleanup,
+                outputExists: !string.IsNullOrEmpty(_finalOutputFileForCleanup) && File.Exists(_finalOutputFileForCleanup),
+                cleanupState: CleanupState.Completed);
         }
         finally
         {
+            _isExecuting = false;
             // Очищаем временную папку
             try
             {
@@ -928,20 +1141,938 @@ public sealed class VideoEncodingScript : AbstractScript
             }
             catch (Exception ex)
             {
-                _logService.Warn($"Не удалось удалить временную папку '{tempDir}': {ex.Message}", "VideoEncodingScript");
+                _logService.Write(
+                    "video_encoding.cleanup_failed",
+                    LogLevel.Warning,
+                    LogStatus.PartiallySucceeded,
+                    "Не удалось удалить временную папку кодирования",
+                    ex,
+                    "VideoEncodingScript",
+                    properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                    {
+                        ["Stage"] = "cleanup",
+                        ["CleanupState"] = "failed"
+                    });
             }
         }
 
-        return results;
+        bool finalOverwriteSource = GetSettingValue(settings, "overwrite_source", false) && string.IsNullOrEmpty(outputPath);
+        if (sourceReplaced)
+        {
+            return ExecutionResult.Succeeded(
+                context,
+                results,
+                outputFile: filePath,
+                outputExists: File.Exists(filePath),
+                cleanupState: CleanupState.Completed);
+        }
+
+        if (replaceSourceRequested || (finalOverwriteSource && resultSucceeded == true))
+        {
+            if (resultSucceeded != true)
+            {
+                return ExecutionResult.Failed(
+                    context,
+                    results,
+                    errorCode: "output-missing",
+                    outputFile: resultOutputFile,
+                    outputExists: !string.IsNullOrEmpty(resultOutputFile) && File.Exists(resultOutputFile),
+                    cleanupState: CleanupState.Completed);
+            }
+
+            string replacementFailMsg = $"❌ Исходный файл не заменён готовым результатом кодирования: '{Path.GetFileName(filePath)}', исходник сохранён";
+            _logService.Write("script.source.replaced_failed", LogLevel.Error, LogStatus.PartiallySucceeded, replacementFailMsg, source: Name, properties: LogProps.Create("ErrorCode", "SOURCE_REPLACE_FAILED").With("InputName", LogProps.FileName(filePath)).With("CleanupState", "SourcePreserved"));
+            bool sourceIntact = File.Exists(filePath);
+            bool resultExists = !string.IsNullOrEmpty(resultOutputFile) && File.Exists(resultOutputFile);
+            return sourceIntact
+                ? ExecutionResult.PartiallySucceeded(
+                    context,
+                    results,
+                    errorCode: "source-replacement-failed",
+                    outputFile: resultOutputFile,
+                    outputExists: resultExists,
+                    cleanupState: CleanupState.Failed)
+                : ExecutionResult.Failed(
+                    context,
+                    results,
+                    errorCode: "source-replacement-failed",
+                    outputFile: resultOutputFile,
+                    outputExists: resultExists,
+                    cleanupState: CleanupState.Failed);
+        }
+
+        string outputFile = resultOutputFile ?? filePath;
+        bool outputReady = resultSucceeded == true && File.Exists(outputFile);
+        if (outputReady)
+        {
+            return ExecutionResult.Succeeded(
+                context,
+                results,
+                outputFile: outputFile,
+                outputExists: true,
+                cleanupState: CleanupState.NotRequired);
+        }
+        return ExecutionResult.Failed(
+            context,
+            results,
+            errorCode: "output-missing",
+            outputFile: outputFile,
+            outputExists: File.Exists(outputFile),
+            cleanupState: CleanupState.Completed);
+    }
+
+    /// <summary>
+    /// Разбирает строку разрешения вида «1920x1080» на ширину и высоту.
+    /// Возвращает false при отсутствии или некорректности значения.
+    /// Все комментарии выполнены исключительно на русском языке.
+    /// </summary>
+    private static bool TryParseResolution(string? resolution, out int width, out int height)
+    {
+        width = 0;
+        height = 0;
+        if (string.IsNullOrWhiteSpace(resolution))
+        {
+            return false;
+        }
+
+        var parts = resolution.Trim().ToLowerInvariant().Split('x');
+        if (parts.Length != 2)
+        {
+            return false;
+        }
+
+        return int.TryParse(parts[0].Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out width)
+            && int.TryParse(parts[1].Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out height)
+            && width > 0 && height > 0;
+    }
+
+    /// <summary>
+    /// Приводит размер стороны к чётному значению вниз (требование кодеков YUV420p).
+    /// Минимум — 2 пикселя.
+    /// </summary>
+    private static int MakeEven(int value)
+    {
+        if (value < 2)
+        {
+            return 2;
+        }
+
+        return (value / 2) * 2;
+    }
+
+    /// <summary>
+    /// Стандартный ряд высот кадра для приведения результата масштабирования.
+    /// Итоговое разрешение всегда выбирается из этого ряда с сохранением пропорций.
+    /// </summary>
+    private static readonly int[] StandardScaleHeights = { 240, 360, 480, 720, 1080, 1440, 2160, 4320 };
+
+    /// <summary>
+    /// Приводит вычисленную высоту к ближайшей стандартной из ряда.
+    /// При равном удалении выбирается меньшая высота во избежание лишнего апскейла.
+    /// </summary>
+    private static int SnapStandardHeight(int rawHeight)
+    {
+        int best = StandardScaleHeights[0];
+        int bestDiff = Math.Abs(rawHeight - best);
+        foreach (int candidate in StandardScaleHeights)
+        {
+            int diff = Math.Abs(rawHeight - candidate);
+            if (diff < bestDiff || (diff == bestDiff && candidate < best))
+            {
+                best = candidate;
+                bestDiff = diff;
+            }
+        }
+
+        return best;
+    }
+
+    /// <summary>
+    /// Вычисляет целевое разрешение масштабирования от базового (после кропа) кадра:
+    /// база умножается на коэффициент строго пропорционально (без анаморфирования),
+    /// высота приводится к ближайшей стандартной, ширина считается от неё с чётным округлением.
+    /// Возвращает false с кодом причины пропуска: ResolutionUnknown, InvalidFactor,
+    /// InvalidTarget, TargetEqualsSource.
+    /// </summary>
+    private static bool TryComputeScaleTarget(
+        int baseW,
+        int baseH,
+        string factorText,
+        out int targetW,
+        out int targetH,
+        out string skipReason)
+    {
+        targetW = 0;
+        targetH = 0;
+        skipReason = string.Empty;
+
+        if (baseW <= 0 || baseH <= 0)
+        {
+            skipReason = "ResolutionUnknown";
+            return false;
+        }
+
+        string normalized = (factorText ?? string.Empty).Trim().Replace(',', '.');
+        if (!double.TryParse(normalized, NumberStyles.Float, CultureInfo.InvariantCulture, out double coef)
+            || double.IsNaN(coef) || double.IsInfinity(coef) || coef <= 0)
+        {
+            skipReason = "InvalidFactor";
+            return false;
+        }
+
+        // Строго пропорционально: высота приводится к ближайшей стандартной,
+        // ширина вычисляется от неё по исходным пропорциям базы.
+        targetH = MakeEven(SnapStandardHeight((int)Math.Round(baseH * coef)));
+        targetW = MakeEven((int)Math.Round((double)baseW * targetH / baseH));
+
+        if (targetW < 2 || targetH < 2)
+        {
+            skipReason = "InvalidTarget";
+            return false;
+        }
+
+        if (targetW == baseW && targetH == baseH)
+        {
+            skipReason = "TargetEqualsSource";
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Строит канонический фильтр масштабирования с явным разрешением от базы после кропа.
+    /// </summary>
+    private static string BuildScaleFilter(int width, int height, string algorithm)
+    {
+        return $"scale={width}:{height}:flags={algorithm}";
+    }
+
+    /// <summary>
+    /// Выполняет многоточечное зондирование чёрных полос и вычисляет итоговую область кадрирования.
+    /// Общий метод для кодирования и фонового превью: обратный вызов прогресса необязателен.
+    /// Возвращает признак применения, размеры кадра и готовый фильтр crop=W:H:X:Y.
+    /// Все комментарии выполнены исключительно на русском языке.
+    /// </summary>
+    private async Task<CropDetectionResult> DetectCropMultiPointAsync(
+        string filePath,
+        Dictionary<string, object> settings,
+        int srcW,
+        int srcH,
+        double duration,
+        ScriptProgressCallback? progressCallback,
+        int fileIndex,
+        int totalCount,
+        CancellationToken cancellationToken)
+    {
+        double cropLimit = GetSettingValue(settings, "autocrop_limit", 0.094);
+        int cropRound = GetSettingValue(settings, "autocrop_round", 16);
+        string cropMode = GetSettingValue(settings, "autocrop_mode", "black");
+        int probeFrames = GetSettingValue(settings, "autocrop_probe_frames", 25);
+        int skipFrames = GetSettingValue(settings, "autocrop_skip_frames", 2);
+        int resetFrames = GetSettingValue(settings, "autocrop_reset_frames", 0);
+        int probePoints = GetSettingValue(settings, "autocrop_probe_points", 3);
+        int tolerance = GetSettingValue(settings, "autocrop_tolerance", 16);
+
+        var probeOffsets = new List<double>();
+
+        if (duration <= 0 || duration < 5.0 || probePoints <= 1)
+        {
+            double singleOffset = duration > 0 ? duration / 2.0 : 0.0;
+            probeOffsets.Add(singleOffset);
+        }
+        else
+        {
+            for (int i = 1; i <= probePoints; i++)
+            {
+                probeOffsets.Add(duration * i / (probePoints + 1));
+            }
+        }
+
+        _logService.Write("crop.detector.started", LogLevel.Debug, LogStatus.Running, $"Запущен многоточечный детектор чёрных полос для '{LogProps.FileName(filePath)}'", source: Name, properties: LogProps.Create("InputName", LogProps.FileName(filePath)).With("Count", probeOffsets.Count).With("Mode", LogRedactor.CompactSafeToken(cropMode)));
+
+        int maxCropW = 0;
+        int maxCropH = 0;
+        int successfulProbes = 0;
+        bool fullScreenDetectedInPoint = false;
+        double fullScreenTimestamp = 0;
+
+        for (int pIdx = 0; pIdx < probeOffsets.Count; pIdx++)
+        {
+            double seekSec = probeOffsets[pIdx];
+            progressCallback?.Invoke(fileIndex, totalCount, $"Анализ черных полос (точка {pIdx + 1}/{probeOffsets.Count})...", 0.0);
+
+            string? pointCrop = await _ffmpegRunner.DetectCropAsync(
+                filePath,
+                skipSeconds: seekSec,
+                probeFrames: probeFrames,
+                limit: cropLimit,
+                round: cropRound,
+                skip: skipFrames,
+                reset: resetFrames,
+                mode: cropMode,
+                cancellationToken: cancellationToken
+            );
+
+            if (!string.IsNullOrWhiteSpace(pointCrop))
+            {
+                var parts = pointCrop.Split(':');
+                if (parts.Length >= 2 &&
+                    int.TryParse(parts[0], out int pW) &&
+                    int.TryParse(parts[1], out int pH))
+                {
+                    successfulProbes++;
+                    _logService.Write("crop.detector.point_sampled", LogLevel.Debug, LogStatus.Succeeded, $"Контрольная точка {pIdx + 1} из {probeOffsets.Count} ({seekSec * 1000d:0.###} мс): кадр {pW} px x{pH} px определён", source: Name, properties: LogProps.Create("Index", pIdx + 1).With("Count", probeOffsets.Count).With("Resolution", $"{pW}x{pH} px"));
+
+                    if (srcW > 0 && srcH > 0 && pW >= srcW && pH >= srcH)
+                    {
+                        fullScreenDetectedInPoint = true;
+                        fullScreenTimestamp = seekSec;
+                    }
+
+                    if (pW > maxCropW) maxCropW = pW;
+                    if (pH > maxCropH) maxCropH = pH;
+                }
+            }
+            else
+            {
+                _logService.Write("crop.detector.point_empty", LogLevel.Debug, LogStatus.Skipped, $"Контрольная точка {pIdx + 1} из {probeOffsets.Count} ({seekSec * 1000d:0.###} мс): область кадрирования не обнаружена", source: Name, properties: LogProps.Create("Index", pIdx + 1).With("Count", probeOffsets.Count).With("Reason", "DarkScene"));
+            }
+        }
+
+        if (successfulProbes > 0 && maxCropW > 0 && maxCropH > 0)
+        {
+            if (fullScreenDetectedInPoint)
+            {
+                _logService.Write("crop.detector.fullscreen_detected", LogLevel.Warning, LogStatus.Skipped, $"В контрольной точке {fullScreenTimestamp:F1} с обнаружен полнокадровый фрагмент, кадрирование отменено во избежание обрезки полезного видеоряда", source: Name, properties: LogProps.Create("ErrorCode", "FULLSCREEN_CONTENT").With("InputName", LogProps.FileName(filePath)).With("DurationMs", fullScreenTimestamp * 1000d));
+                return new CropDetectionResult(false, 0, 0, null);
+            }
+
+            // 1. Выравнивание кратности cropRound вверх
+            if (cropRound > 1)
+            {
+                maxCropW = ((maxCropW + cropRound - 1) / cropRound) * cropRound;
+                maxCropH = ((maxCropH + cropRound - 1) / cropRound) * cropRound;
+            }
+
+            // 2. Гарантия четности для кодеков YUV420p
+            if (maxCropW % 2 != 0) maxCropW++;
+            if (maxCropH % 2 != 0) maxCropH++;
+
+            if (srcW > 0 && maxCropW > srcW) maxCropW = srcW;
+            if (srcH > 0 && maxCropH > srcH) maxCropH = srcH;
+
+            // 3. Фильтр допуска (Tolerance): отмена микрообрезки
+            int diffW = srcW - maxCropW;
+            if (srcW > 0 && diffW > 0 && diffW <= tolerance)
+            {
+                _logService.Write("crop.diff.dimension_reset", LogLevel.Debug, LogStatus.Changed, $"Разница по ширине {diffW} px не превышает порог допуска {tolerance} px, ширина сброшена в исходные {srcW} px", source: Name, properties: LogProps.Create("Resolution", $"{srcW} px").With("Count", tolerance));
+                maxCropW = srcW;
+            }
+
+            int diffH = srcH - maxCropH;
+            if (srcH > 0 && diffH > 0 && diffH <= tolerance)
+            {
+                _logService.Write("crop.diff.dimension_reset", LogLevel.Debug, LogStatus.Changed, $"Разница по высоте {diffH} px не превышает порог допуска {tolerance} px, высота сброшена в исходные {srcH} px", source: Name, properties: LogProps.Create("Resolution", $"{srcH} px").With("Count", tolerance));
+                maxCropH = srcH;
+            }
+
+            bool isResolutionChanged = true;
+            if (srcW > 0 && srcH > 0)
+            {
+                isResolutionChanged = maxCropW != srcW || maxCropH != srcH;
+            }
+
+            if (isResolutionChanged)
+            {
+                // 4. Симметричное центрирование координат
+                int cropX = srcW > maxCropW ? (srcW - maxCropW) / 2 : 0;
+                int cropY = srcH > maxCropH ? (srcH - maxCropH) / 2 : 0;
+                cropX = (cropX / 2) * 2;
+                cropY = (cropY / 2) * 2;
+
+                string finalCrop = $"{maxCropW}:{maxCropH}:{cropX}:{cropY}";
+                _logService.Write("crop.detector.completed", LogLevel.Info, LogStatus.Succeeded, $"Кадрирование применено, итоговые параметры: {finalCrop}", source: Name, properties: LogProps.Create("InputName", LogProps.FileName(filePath)).With("Resolution", finalCrop.ToString()).With("Verified", true));
+                return new CropDetectionResult(true, maxCropW, maxCropH, $"crop={finalCrop}");
+            }
+
+            _logService.Write("crop.detector.not_required", LogLevel.Debug, LogStatus.Skipped, "Чёрные полосы не обнаружены или не требуют обрезки, разрешение сохранено", source: Name, properties: LogProps.Create("InputName", LogProps.FileName(filePath)).With("Reason", "NoCropNeeded"));
+            return new CropDetectionResult(false, 0, 0, null);
+        }
+
+        _logService.Write("crop.detector.indeterminate", LogLevel.Warning, LogStatus.PartiallySucceeded, "Детектор чёрных полос не определил параметры кадрирования ни в одной контрольной точке, применены исходные", source: Name, properties: LogProps.Create("ErrorCode", "CROP_INDETERMINATE").With("InputName", LogProps.FileName(filePath)));
+        return new CropDetectionResult(false, 0, 0, null);
+    }
+
+    /// <summary>
+    /// Строит слепок настроек детектирования кропа для ключей кэша превью.
+    /// Любое изменение любого параметра кропа меняет слепок и сбрасывает весь кэш.
+    /// </summary>
+    private static string BuildCropFingerprint(Dictionary<string, object>? settings)
+    {
+        string[] keys =
+        {
+            "autocrop_limit", "autocrop_round", "autocrop_mode", "autocrop_probe_frames",
+            "autocrop_skip_frames", "autocrop_reset_frames", "autocrop_probe_points", "autocrop_tolerance"
+        };
+        object?[] defaults = { 0.094, 16, "black", 25, 2, 0, 3, 16 };
+
+        var builder = new StringBuilder();
+        for (int i = 0; i < keys.Length; i++)
+        {
+            object? raw = defaults[i];
+            if (settings != null && settings.TryGetValue(keys[i], out object? stored))
+            {
+                raw = stored;
+            }
+
+            builder.Append(keys[i]).Append('=').Append(NormalizeFingerprintValue(raw)).Append(';');
+        }
+
+        return builder.ToString();
+    }
+
+    /// <summary>
+    /// Нормализует значение настройки к виду, не зависящему от способа хранения
+    /// (число, строка или элемент JSON), для сравнения слепков.
+    /// </summary>
+    private static string NormalizeFingerprintValue(object? value)
+    {
+        if (value == null)
+        {
+            return "";
+        }
+
+        if (value is System.Text.Json.JsonElement element)
+        {
+            return element.ValueKind == System.Text.Json.JsonValueKind.String
+                ? element.GetString()?.Trim() ?? ""
+                : element.ToString();
+        }
+
+        if (value is double d)
+        {
+            return d.ToString(CultureInfo.InvariantCulture);
+        }
+
+        if (value is float f)
+        {
+            return ((double)f).ToString(CultureInfo.InvariantCulture);
+        }
+
+        if (value is bool b)
+        {
+            return b ? "True" : "False";
+        }
+
+        return value.ToString()?.Trim() ?? "";
+    }
+
+    /// <summary>
+    /// Безопасно читает текст коэффициента масштаба из словаря настроек.
+    /// </summary>
+    private static string GetFactorText(Dictionary<string, object>? settings, string key, string defaultValue)
+    {
+        if (settings != null && settings.TryGetValue(key, out object? raw) && raw != null)
+        {
+            if (raw is System.Text.Json.JsonElement element)
+            {
+                if (element.ValueKind == System.Text.Json.JsonValueKind.String)
+                {
+                    return element.GetString()?.Trim() is string s && s.Length > 0 ? s : defaultValue;
+                }
+
+                if (element.ValueKind == System.Text.Json.JsonValueKind.Number && element.TryGetDouble(out double num))
+                {
+                    return num.ToString(CultureInfo.InvariantCulture);
+                }
+
+                return element.ToString();
+            }
+
+            string? text = raw.ToString()?.Trim();
+            if (!string.IsNullOrEmpty(text))
+            {
+                return text;
+            }
+        }
+
+        return defaultValue;
+    }
+
+    /// <summary>
+    /// Безопасно читает логический флаг из живого словаря настроек превью.
+    /// </summary>
+    private static bool GetPreviewBool(Dictionary<string, object>? settings, string key, bool defaultValue)
+    {
+        if (settings != null && settings.TryGetValue(key, out object? raw) && raw != null)
+        {
+            if (raw is bool b)
+            {
+                return b;
+            }
+
+            return SafeGetBool(raw);
+        }
+
+        return defaultValue;
+    }
+
+    /// <summary>
+    /// Возвращает пригодную запись кэша кропа: слепок совпадает, файл на диске не изменился.
+    /// </summary>
+    private bool TryGetCachedCrop(string filePath, string fingerprint, out CropPreviewEntry? entry)
+    {
+        entry = null;
+        if (string.IsNullOrEmpty(filePath))
+        {
+            return false;
+        }
+
+        lock (_previewLock)
+        {
+            if (!_cropPreviewCache.TryGetValue(filePath, out entry))
+            {
+                return false;
+            }
+        }
+
+        if (!string.Equals(entry.Fingerprint, fingerprint, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        try
+        {
+            var info = new FileInfo(filePath);
+            if (!info.Exists || info.Length != entry.FileSize || info.LastWriteTimeUtc != entry.LastWriteUtc)
+            {
+                return false;
+            }
+        }
+        catch
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Сохраняет результат детектирования кропа в кэш превью.
+    /// </summary>
+    private void StoreCropCache(string filePath, string fingerprint, CropDetectionResult result)
+    {
+        if (string.IsNullOrEmpty(filePath))
+        {
+            return;
+        }
+
+        FileInfo info;
+        try
+        {
+            info = new FileInfo(filePath);
+            if (!info.Exists)
+            {
+                return;
+            }
+        }
+        catch
+        {
+            return;
+        }
+
+        var entry = new CropPreviewEntry
+        {
+            Fingerprint = fingerprint,
+            Applied = result.Applied,
+            Width = result.Width,
+            Height = result.Height,
+            Filter = result.Filter,
+            FileSize = info.Length,
+            LastWriteUtc = info.LastWriteTimeUtc
+        };
+
+        lock (_previewLock)
+        {
+            if (_cropPreviewCache.Count >= MaxCropPreviewEntries)
+            {
+                _cropPreviewCache.Clear();
+            }
+
+            _cropPreviewCache[filePath] = entry;
+        }
+    }
+
+    /// <summary>
+    /// Останавливает текущий цикл фонового превью без запуска нового.
+    /// </summary>
+    private void CancelPreviewCycle()
+    {
+        CancellationTokenSource? previous;
+        lock (_previewLock)
+        {
+            previous = _previewCts;
+            _previewCts = null;
+        }
+
+        if (previous != null)
+        {
+            try
+            {
+                previous.Cancel();
+            }
+            catch
+            {
+                // Игнорируем: цикл уже завершён и освобождён.
+            }
+
+            try
+            {
+                previous.Dispose();
+            }
+            catch
+            {
+                // Игнорируем: повторное освобождение источника отмены.
+            }
+        }
+    }
+
+    /// <summary>
+    /// Запрашивает тихое обновление превью разрешений с подавлением дребезга:
+    /// предыдущий цикл гасится, новый стартует после короткой паузы в фоне.
+    /// </summary>
+    private void RequestPreviewRefresh()
+    {
+        CancelPreviewCycle();
+
+        var cts = new CancellationTokenSource();
+        lock (_previewLock)
+        {
+            _previewCts = cts;
+        }
+
+        CancellationToken token = cts.Token;
+        _ = Task.Run(() => PreviewRefreshLoopAsync(token), token);
+    }
+
+    /// <summary>
+    /// Цикл фонового превью: пауза против дребезга, строго один проход за раз.
+    /// </summary>
+    private async Task PreviewRefreshLoopAsync(CancellationToken token)
+    {
+        try
+        {
+            await Task.Delay(PreviewDebounceMs, token).ConfigureAwait(false);
+            await _previewGate.WaitAsync(token).ConfigureAwait(false);
+            try
+            {
+                await RefreshPreviewsCoreAsync(token).ConfigureAwait(false);
+            }
+            finally
+            {
+                _previewGate.Release();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Штатная отмена устаревшего цикла превью.
+        }
+        catch (Exception ex)
+        {
+            _logService.Write(
+                "preview.refresh_failed",
+                LogLevel.Debug,
+                LogStatus.PartiallySucceeded,
+                "Фоновое обновление превью разрешений не выполнено",
+                ex,
+                Name,
+                properties: LogProps.Create("ErrorCode", "PREVIEW_REFRESH_FAILED"));
+        }
+    }
+
+    /// <summary>
+    /// Пересчитывает бейджи разрешений всей очереди: строго по одному файлу,
+    /// с паузой между файлами и остановкой на время кодирования.
+    /// Кроп выключен — база сразу исходник; кроп включён — тихий детект по одному файлу.
+    /// </summary>
+    private async Task RefreshPreviewsCoreAsync(CancellationToken token)
+    {
+        if (IsCancelled || IsProcessing || _isExecuting)
+        {
+            return;
+        }
+
+        List<FileQueueItem> items;
+        try
+        {
+            items = FilesQueue.ToList();
+        }
+        catch
+        {
+            return;
+        }
+
+        if (items.Count == 0)
+        {
+            return;
+        }
+
+        string group = Name;
+        try
+        {
+            string safe = _settingsManager.GetSafeGroupName(Name);
+            if (!string.IsNullOrEmpty(safe))
+            {
+                group = safe;
+            }
+        }
+        catch
+        {
+            group = Name;
+        }
+
+        Dictionary<string, object> live;
+        try
+        {
+            live = _settingsManager.GetAllSettingsInGroup(group)
+                ?? new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            live = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        bool cropOn = GetPreviewBool(live, "autocrop_enabled", false);
+        bool resizeOn = GetPreviewBool(live, "resize_enabled", false);
+
+        if (!cropOn && !resizeOn)
+        {
+            int cleared = 0;
+            foreach (var item in items)
+            {
+                if (item.CropBadgeText != null)
+                {
+                    item.CropBadgeText = null;
+                    cleared++;
+                }
+            }
+
+            LogPreviewBadgesUpdated(cleared);
+            return;
+        }
+
+        string fingerprint = BuildCropFingerprint(live);
+        lock (_previewLock)
+        {
+            if (!string.Equals(_cropPreviewFingerprint, fingerprint, StringComparison.Ordinal))
+            {
+                _cropPreviewCache.Clear();
+                _cropPreviewFingerprint = fingerprint;
+            }
+        }
+
+        int changedCount = 0;
+        foreach (var item in items)
+        {
+            token.ThrowIfCancellationRequested();
+            if (IsCancelled || IsProcessing || _isExecuting)
+            {
+                return;
+            }
+
+            string path = item.FilePath;
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                continue;
+            }
+
+            bool exists;
+            try
+            {
+                exists = File.Exists(path);
+            }
+            catch
+            {
+                continue;
+            }
+
+            if (!exists)
+            {
+                continue;
+            }
+
+            int srcW = 0;
+            int srcH = 0;
+            string srcRes = "";
+            double duration = 0;
+            MediaStructure? known = item.MediaInfo;
+            if (known != null)
+            {
+                var knownVideo = known.GetVideoTracks().FirstOrDefault();
+                if (knownVideo != null && TryParseResolution(knownVideo.Resolution, out srcW, out srcH))
+                {
+                    srcRes = knownVideo.Resolution ?? "";
+                    duration = known.Duration;
+                }
+            }
+
+            if (srcW <= 0 || srcH <= 0)
+            {
+                MediaStructure? probed = null;
+                try
+                {
+                    probed = await _mediaProbeService.ProbeAsync(path).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch
+                {
+                    continue;
+                }
+
+                var probedVideo = probed?.GetVideoTracks().FirstOrDefault();
+                if (probedVideo == null || !TryParseResolution(probedVideo.Resolution, out srcW, out srcH))
+                {
+                    continue;
+                }
+
+                srcRes = probedVideo.Resolution ?? "";
+                duration = probed?.Duration ?? 0;
+            }
+
+            int baseW = srcW;
+            int baseH = srcH;
+            string? cropPart = null;
+            if (cropOn)
+            {
+                if (!TryGetCachedCrop(path, fingerprint, out CropPreviewEntry? cached) || cached == null)
+                {
+                    CropDetectionResult detected;
+                    try
+                    {
+                        detected = await DetectCropMultiPointAsync(path, live, srcW, srcH, duration, null, 0, 0, token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        throw;
+                    }
+                    catch
+                    {
+                        continue;
+                    }
+
+                    StoreCropCache(path, fingerprint, detected);
+                    cached = new CropPreviewEntry { Applied = detected.Applied, Width = detected.Width, Height = detected.Height };
+                }
+
+                if (cached.Applied && cached.Width > 0 && cached.Height > 0)
+                {
+                    baseW = cached.Width;
+                    baseH = cached.Height;
+                    cropPart = $"{cached.Width}x{cached.Height}";
+                }
+            }
+
+            string? badge = BuildPreviewBadge(srcRes, cropPart, baseW, baseH, live, resizeOn);
+            if (!string.Equals(item.CropBadgeText, badge, StringComparison.Ordinal))
+            {
+                item.CropBadgeText = badge;
+                changedCount++;
+            }
+
+            try
+            {
+                await Task.Delay(PreviewInterFileDelayMs, token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+        }
+
+        LogPreviewBadgesUpdated(changedCount);
+    }
+
+    /// <summary>
+    /// Фиксирует обновление превью-бейджей разрешений, чтобы фоновый пересчёт был виден в журнале.
+    /// </summary>
+    private void LogPreviewBadgesUpdated(int count)
+    {
+        if (count <= 0)
+        {
+            return;
+        }
+
+        _logService.Write(
+            "preview.badges_updated",
+            LogLevel.Debug,
+            LogStatus.Changed,
+            $"Превью разрешений обновлено для файлов: {count}",
+            source: Name,
+            properties: LogProps.Create("Count", count));
+    }
+
+    /// <summary>
+    /// Строит текст бейджа превью вида «исходное ➔ после кропа ➔ новое».
+    /// Возвращает null, если показывать нечего (меньше двух звеньев цепочки).
+    /// </summary>
+    private static string? BuildPreviewBadge(
+        string sourceRes,
+        string? cropPart,
+        int baseW,
+        int baseH,
+        Dictionary<string, object>? liveSettings,
+        bool resizeOn)
+    {
+        var parts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(sourceRes))
+        {
+            parts.Add(sourceRes.Trim());
+        }
+
+        if (!string.IsNullOrWhiteSpace(cropPart))
+        {
+            parts.Add(cropPart.Trim());
+        }
+
+        if (resizeOn && baseW > 0 && baseH > 0)
+        {
+            string factorText = GetFactorText(liveSettings, "resize_factor", "0.5");
+            bool allowUpscale = GetPreviewBool(liveSettings, "resize_allow_upscale", false);
+            if (TryComputeScaleTarget(baseW, baseH, factorText, out int targetW, out int targetH, out _)
+                && (allowUpscale || (targetW <= baseW && targetH <= baseH)))
+            {
+                parts.Add($"{targetW}x{targetH}");
+            }
+        }
+
+        var deduped = new List<string>();
+        foreach (string part in parts)
+        {
+            if (deduped.Count == 0 || !string.Equals(deduped[deduped.Count - 1], part, StringComparison.OrdinalIgnoreCase))
+            {
+                deduped.Add(part);
+            }
+        }
+
+        if (deduped.Count < 2)
+        {
+            return null;
+        }
+
+        return string.Join(" ➔ ", deduped);
     }
 
     private static string EscapeFilterPath(string path)
     {
         if (string.IsNullOrEmpty(path)) return string.Empty;
-        
+
         // 1. Приводим к POSIX-разделителям
         string clean = path.Replace("\\", "/");
-        
+
         // 2. Экранирование спецсимволов для фильтров FFmpeg (порядок важен)
         clean = clean.Replace(":", "\\:");
         clean = clean.Replace("'", "'\\''");
@@ -950,7 +2081,7 @@ public sealed class VideoEncodingScript : AbstractScript
         clean = clean.Replace(",", "\\,");
         clean = clean.Replace(";", "\\;");
         clean = clean.Replace("`", "\\`");
-        
+
         return clean;
     }
 
@@ -963,7 +2094,7 @@ public sealed class VideoEncodingScript : AbstractScript
         string ffmpegPath = _pathManager.GetBinaryPath("ffmpeg");
         if (string.IsNullOrWhiteSpace(ffmpegPath) || !File.Exists(ffmpegPath))
         {
-            _logService.Warn("kt-ffmpeg не найден, определение CUVID-декодеров пропущено", "VideoEncodingScript");
+            _logService.Write("encoder.cuvid.detection_skipped", LogLevel.Warning, LogStatus.Skipped, "kt-ffmpeg не найден, определение доступных CUVID-декодеров пропущено", source: Name, properties: LogProps.Create("ErrorCode", "FFMPEG_BINARY_MISSING").With("Codec", "h264_cuvid"));
             return decoders;
         }
 
@@ -1011,7 +2142,7 @@ public sealed class VideoEncodingScript : AbstractScript
         }
         catch (Exception ex)
         {
-            _logService.Warn($"Не удалось определить доступные CUVID-декодеры: {ex.Message}", "VideoEncodingScript");
+            _logService.Write("encoder.cuvid.detection_failed", LogLevel.Warning, LogStatus.PartiallySucceeded, "Доступные CUVID-декодеры определить не удалось, будет использован режим по умолчанию", ex, Name, properties: LogProps.Create("ErrorCode", "CUVID_DETECTION_FAILED").With("Codec", "h264_cuvid"));
         }
         return decoders;
     }

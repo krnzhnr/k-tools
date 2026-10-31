@@ -69,4 +69,34 @@ public class ObservableRangeCollection<T> : ObservableCollection<T>
         OnPropertyChanged(new PropertyChangedEventArgs("Item[]"));
         OnCollectionChanged(new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Reset));
     }
+
+    /// <summary>
+    /// Удаляет указанное количество элементов с начала коллекции одним уведомлением Reset.
+    /// </summary>
+    public void RemoveRangeFront(int count)
+    {
+        if (count <= 0)
+        {
+            return;
+        }
+
+        CheckReentrancy();
+
+        int remove = Math.Min(count, Items.Count);
+        if (remove == 0)
+        {
+            return;
+        }
+
+        var kept = new List<T>(Items.Skip(remove));
+        Items.Clear();
+        foreach (var item in kept)
+        {
+            Items.Add(item);
+        }
+
+        OnPropertyChanged(new PropertyChangedEventArgs(nameof(Count)));
+        OnPropertyChanged(new PropertyChangedEventArgs("Item[]"));
+        OnCollectionChanged(new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Reset));
+    }
 }

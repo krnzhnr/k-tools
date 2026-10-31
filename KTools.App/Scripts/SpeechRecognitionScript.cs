@@ -1,13 +1,19 @@
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+
 using KTools_App.Core;
+using KTools_App.Diagnostics;
 using KTools_App.Infrastructure;
+using KTools_App.Models;
 using KTools_App.Services.Contracts;
+
+using ExecutionContext = KTools_App.Models.ExecutionContext;
+
 
 namespace KTools_App.Scripts;
 
@@ -278,29 +284,53 @@ public sealed class SpeechRecognitionScript : AbstractScript
     }
 
     /// <inheritdoc/>
-    public override async Task<List<string>> ExecuteSingleAsync(
+    public override async Task<ExecutionResult> ExecuteSingleAsync(
         string filePath,
         Dictionary<string, object> settings,
         string? outputPath,
         ScriptProgressCallback progressCallback,
         int fileIndex,
-        int totalCount)
+        int totalCount,
+        ExecutionContext context)
     {
         var resultMessages = new List<string>();
+        double lastDownloadPercent = 5.0;
+        double lastTranscribePercent = 20.0;
 
         if (!File.Exists(filePath))
         {
-            string notFoundMsg = $"Входной файл не найден: '{filePath}'";
-            _logService.Error(notFoundMsg, Name);
+            string notFoundMsg = $"Входной файл не найден: '{LogProps.FileName(filePath)}'";
+            _logService.Write(
+                "script.speech.input_missing",
+                LogLevel.Error,
+                LogStatus.Failed,
+                notFoundMsg,
+                source: Name,
+                context: context.ToLogContext(),
+                properties: LogProps
+                    .Create("ErrorCode", "INPUT_MISSING")
+                    .With("InputName", LogProps.FileName(filePath)));
             resultMessages.Add(notFoundMsg);
-            return resultMessages;
+            return ExecutionResult.Failed(
+                context,
+                resultMessages,
+                errorCode: "input-missing");
         }
 
         // 1. Получаем выбранную модель
         string modelKey = GetSettingValue(settings, "whisper_model", "large-v3-turbo");
         if (!_modelManager.IsModelDownloaded(modelKey))
         {
-            _logService.Warn($"Выбранная модель Whisper '{modelKey}' не найдена на диске. Инициализация загрузки...", Name);
+            _logService.Write(
+                "script.speech.model_missing",
+                LogLevel.Info,
+                LogStatus.Running,
+                $"Модель Whisper '{modelKey}' отсутствует на диске, начинается загрузка",
+                source: Name,
+                context: context.ToLogContext(),
+                properties: LogProps
+                    .Create("Key", LogRedactor.CompactSafeToken(modelKey))
+                    .With("Stage", "model-download"));
             progressCallback(fileIndex, totalCount, $"Загрузка модели Whisper ({modelKey})...", 5);
 
             var modelInfo = _modelManager.GetModelInfo(modelKey);
@@ -313,26 +343,45 @@ public sealed class SpeechRecognitionScript : AbstractScript
             {
                 string cancelMsg = $"Операция отменена: модель '{modelKey}' не загружена.";
                 resultMessages.Add(cancelMsg);
-                return resultMessages;
+                return ExecutionResult.Cancelled(
+                    context,
+                    resultMessages,
+                    errorCode: "model-download-cancelled",
+                    cleanupState: CleanupState.NotStarted);
             }
 
             var downloadProgress = new Progress<int>(p =>
             {
-                progressCallback(fileIndex, totalCount, $"Скачивание модели '{modelKey}': {p}%", p * 0.25);
+                lastDownloadPercent = Math.Clamp(p * 0.25, 0.0, 25.0);
+                progressCallback(fileIndex, totalCount, $"Скачивание модели '{modelKey}': {p}%", lastDownloadPercent);
             });
 
             var speedProgress = new Progress<string>(s =>
             {
-                progressCallback(fileIndex, totalCount, $"Скачивание модели '{modelKey}' ({s})...", null);
+                progressCallback(fileIndex, totalCount, $"Скачивание модели '{modelKey}' ({s})...", lastDownloadPercent);
             });
 
             bool downloaded = await _modelManager.DownloadModelAsync(modelKey, downloadProgress, speedProgress, CancellationToken);
             if (!downloaded || !_modelManager.IsModelDownloaded(modelKey))
             {
                 string failMsg = $"Не удалось загрузить модель Whisper '{modelKey}'. Проверьте сетевое подключение.";
-                _logService.Error(failMsg, Name);
+                _logService.Write(
+                    "script.speech.model_download_failed",
+                    LogLevel.Error,
+                    LogStatus.Failed,
+                    failMsg,
+                    source: Name,
+                    context: context.ToLogContext(),
+                    properties: LogProps
+                        .Create("ErrorCode", "MODEL_DOWNLOAD_FAILED")
+                        .With("Key", LogRedactor.CompactSafeToken(modelKey))
+                        .With("Retryable", true));
                 resultMessages.Add(failMsg);
-                return resultMessages;
+                return ExecutionResult.Failed(
+                    context,
+                    resultMessages,
+                    errorCode: "model-download-failed",
+                    retryable: true);
             }
         }
 
@@ -354,40 +403,92 @@ public sealed class SpeechRecognitionScript : AbstractScript
         string depKey = WhisperBackendDetector.GetDependencyKey(effectiveBackend);
         if (!_dependencyManager.IsInstalled(depKey))
         {
-            _logService.Info($"Рантайм Whisper '{depKey}' отсутствует на диске. Инициируется фоновая установка...", Name);
+            _logService.Write(
+                "script.speech.runtime_missing",
+                LogLevel.Info,
+                LogStatus.Running,
+                $"Рантайм Whisper '{depKey}' отсутствует на диске, начинается фоновая установка",
+                source: Name,
+                context: context.ToLogContext(),
+                properties: LogProps
+                    .Create("Key", LogRedactor.CompactSafeToken(depKey))
+                    .With("Stage", "runtime-install"));
             progressCallback(fileIndex, totalCount, $"Установка рантайма Whisper ({depKey})...", 10);
             await _dependencyManager.InstallDependencyAsync(depKey);
 
             if (!_dependencyManager.IsInstalled(depKey))
             {
                 string depFail = $"Не удалось установить зависимость '{depKey}'. Транскрибация невозможна.";
-                _logService.Error(depFail, Name);
+                _logService.Write(
+                    "script.speech.runtime_install_failed",
+                    LogLevel.Error,
+                    LogStatus.Failed,
+                    depFail,
+                    source: Name,
+                    context: context.ToLogContext(),
+                    properties: LogProps
+                        .Create("ErrorCode", "MISSING_DEPENDENCY")
+                        .With("Key", LogRedactor.CompactSafeToken(depKey))
+                        .With("Retryable", true));
                 resultMessages.Add(depFail);
-                return resultMessages;
+                return ExecutionResult.Failed(
+                    context,
+                    resultMessages,
+                    errorCode: "missing-dependency",
+                    retryable: true);
             }
         }
 
         // 3. Подготавливаем временный WAV-файл (16kHz Mono 16-bit PCM) через FFmpeg
         string tempWavPath = Path.Combine(Path.GetTempPath(), $"ktools_whisper_{Guid.NewGuid():N}.wav");
+        Exception? terminalException = null;
+        bool terminalCancelled = false;
         try
         {
             progressCallback(fileIndex, totalCount, "Извлечение аудиопотока в 16-кГц WAV...", 15);
-            _logService.Info($"Конвертация аудиодорожки из '{Path.GetFileName(filePath)}' во временный WAV: '{tempWavPath}'", Name);
+            _logService.Write(
+                "script.speech.audio_extraction_started",
+                LogLevel.Debug,
+                LogStatus.Running,
+                $"Аудиодорожка извлекается во временный WAV-файл 16 кГц для '{LogProps.FileName(filePath)}'",
+                source: Name,
+                context: context.ToLogContext(),
+                properties: LogProps
+                    .Create("InputName", LogProps.FileName(filePath))
+                    .With("Tool", "ffmpeg")
+                    .With("SampleRate", "16000 Hz")
+                    .With("AudioChannels", 1));
 
             var extraFfmpegArgs = new List<string> { "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1" };
-            bool ffmpegOk = await _ffmpegRunner.RunAsync(
+            ProcessResult ffmpegResult = await _ffmpegRunner.RunAsync(
                 inputPath: filePath,
                 outputPath: tempWavPath,
                 extraArgs: extraFfmpegArgs,
                 overwrite: true,
-                cancellationToken: CancellationToken);
+                cancellationToken: CancellationToken,
+                context: ProcessExecutionContext.FromOperation(context.OperationId, "ffmpeg", context.ItemId));
 
-            if (!ffmpegOk || !File.Exists(tempWavPath))
+            if (!ffmpegResult.IsSuccess || !File.Exists(tempWavPath))
             {
                 string ffmpegFail = "Ошибка извлечения аудиопотока через FFmpeg: процесс завершился с ошибкой.";
-                _logService.Error(ffmpegFail, Name);
+                _logService.Write(
+                    "script.speech.audio_extraction_failed",
+                    LogLevel.Error,
+                    LogStatus.Failed,
+                    ffmpegFail,
+                    source: Name,
+                    context: context.ToLogContext(),
+                    properties: LogProps
+                        .Create("ErrorCode", "AUDIO_EXTRACTION_FAILED")
+                        .With("InputName", LogProps.FileName(filePath))
+                        .With("Tool", "ffmpeg")
+                        .With("Retryable", true));
                 resultMessages.Add(ffmpegFail);
-                return resultMessages;
+                return ExecutionResult.Failed(
+                    context,
+                    resultMessages,
+                    errorCode: "audio-extraction-failed",
+                    retryable: true);
             }
 
             // 4. Формируем выходной базовый путь
@@ -451,38 +552,115 @@ public sealed class SpeechRecognitionScript : AbstractScript
                 onProgress: percent =>
                 {
                     // Масштабируем прогресс инференса от 20% до 98%
-                    double overallPercent = 20.0 + (percent * 0.78);
+                    double overallPercent = 20.0 + (Math.Clamp(percent, 0, 100) * 0.78);
+                    lastTranscribePercent = overallPercent;
                     progressCallback(fileIndex, totalCount, $"Распознавание речи: {percent}%", overallPercent);
                 },
-                onSegment: segmentText =>
+                onSegment: _ =>
                 {
-                    _logService.Info(segmentText, Name);
+                    progressCallback(
+                        fileIndex,
+                        totalCount,
+                        $"Распознавание речи продолжается ({lastTranscribePercent:F0}%)",
+                        lastTranscribePercent);
                 },
                 cancellationToken: CancellationToken);
 
             if (!whisperResult.IsSuccess)
             {
                 string whisperFail = $"Ошибка транскрибации Whisper: {whisperResult.Message}";
-                _logService.Error(whisperFail, Name);
+                _logService.Write(
+                    "script.speech.transcription_failed",
+                    LogLevel.Error,
+                    LogStatus.Failed,
+                    whisperFail,
+                    source: Name,
+                    context: context.ToLogContext(),
+                    properties: LogProps
+                        .Create("ErrorCode", "TRANSCRIPTION_FAILED")
+                        .With("InputName", LogProps.FileName(filePath))
+                        .With("Tool", "whisper")
+                        .With("Retryable", true));
                 resultMessages.Add(whisperFail);
-                return resultMessages;
+                return ExecutionResult.Failed(
+                    context,
+                    resultMessages,
+                    errorCode: "transcription-failed",
+                    retryable: true);
             }
 
             progressCallback(fileIndex, totalCount, "Распознавание речи успешно завершено!", 100);
-            string successMsg = $"Файлы субтитров/текста успешно созданы в папке: '{outputDir}'";
-            _logService.Info(successMsg, Name);
+            string successMsg = $"Файлы субтитров и текста созданы рядом с исходным файлом '{LogProps.FileName(filePath)}'";
+            _logService.Write(
+                "script.speech.transcription_succeeded",
+                LogLevel.Info,
+                LogStatus.Succeeded,
+                successMsg,
+                source: Name,
+                context: context.ToLogContext(),
+                properties: LogProps
+                    .Create("InputName", LogProps.FileName(filePath))
+                    .With("Tool", "whisper"));
             resultMessages.Add(successMsg);
+            string? producedOutput =
+                (outSrt && File.Exists(outputBasePath + ".srt") ? outputBasePath + ".srt" : null) ??
+                (outVtt && File.Exists(outputBasePath + ".vtt") ? outputBasePath + ".vtt" : null) ??
+                (outTxt && File.Exists(outputBasePath + ".txt") ? outputBasePath + ".txt" : null) ??
+                (outLrc && File.Exists(outputBasePath + ".lrc") ? outputBasePath + ".lrc" : null) ??
+                (outJson && File.Exists(outputBasePath + ".json") ? outputBasePath + ".json" : null);
+            if (producedOutput is null)
+            {
+                resultMessages.Add("Выходные файлы распознавания не найдены");
+                return ExecutionResult.Failed(
+                    context,
+                    resultMessages,
+                    errorCode: "output-missing",
+                    outputFile: outputBasePath,
+                    outputExists: false,
+                    retryable: true,
+                    cleanupState: CleanupState.Completed);
+            }
+            return ExecutionResult.Succeeded(
+                context,
+                resultMessages,
+                outputFile: producedOutput,
+                outputExists: true,
+                cleanupState: CleanupState.Completed);
         }
         catch (OperationCanceledException)
         {
             string cancelMsg = "Распознавание речи отменено пользователем.";
-            _logService.Warn(cancelMsg, Name);
+            _logService.Write(
+                "speech.cancelled",
+                LogLevel.Info,
+                LogStatus.Cancelled,
+                cancelMsg,
+                null,
+                Name,
+                context: context.ToLogContext(),
+                properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["ErrorCode"] = "cancelled"
+                });
             resultMessages.Add(cancelMsg);
+            terminalCancelled = true;
         }
         catch (Exception ex)
         {
-            _logService.Exception(ex, $"Критический сбой при распознавании речи: {ex.Message}", Name);
-            resultMessages.Add($"Ошибка: {ex.Message}");
+            _logService.Write(
+                "speech.critical_failure",
+                LogLevel.Error,
+                LogStatus.Failed,
+                "Критический сбой при распознавании речи",
+                ex,
+                Name,
+                context: context.ToLogContext(),
+                properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["ErrorCode"] = "speech-exception"
+                });
+            resultMessages.Add("Ошибка распознавания речи");
+            terminalException = ex;
         }
         finally
         {
@@ -493,6 +671,28 @@ public sealed class SpeechRecognitionScript : AbstractScript
             }
         }
 
-        return resultMessages;
+        if (terminalException is not null)
+        {
+            return ExecutionResult.FromException(
+                context,
+                terminalException,
+                resultMessages,
+                errorCode: "speech-exception",
+                cleanupState: CleanupState.Completed);
+        }
+        if (terminalCancelled)
+        {
+            return ExecutionResult.Cancelled(
+                context,
+                resultMessages,
+                errorCode: "cancelled",
+                cleanupState: CleanupState.Completed);
+        }
+
+        return ExecutionResult.Failed(
+            context,
+            resultMessages,
+            errorCode: "transcription-ended",
+            cleanupState: CleanupState.Completed);
     }
 }

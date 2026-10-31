@@ -1,10 +1,13 @@
 // -*- coding: utf-8 -*-
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
+
+using KTools_App.Diagnostics;
 using KTools_App.Infrastructure;
 using KTools_App.Services.Contracts;
 
@@ -18,6 +21,7 @@ namespace KTools_App.Core;
 /// </summary>
 public sealed class MediaProbeService : IMediaProbeService
 {
+    private const string SourceName = nameof(MediaProbeService);
     private readonly ILogService _logService;
     private readonly IMkvmergeRunner _mkvmergeRunner;
     private readonly IFFmpegRunner _ffmpegRunner;
@@ -26,6 +30,12 @@ public sealed class MediaProbeService : IMediaProbeService
     private readonly object _semaphoreLock = new();
     private System.Threading.SemaphoreSlim? _probeSemaphore;
     private int _currentMaxParallel = -1;
+    private readonly ConcurrentDictionary<string, (DateTime LastWriteUtc, long Length, MediaStructure Structure)> _probeCache = new();
+
+    /// <summary>
+    /// Ограничение числа одновременных анализов файлов (следует настройке параллельной обработки).
+    /// </summary>
+    private const int MaxProbeCacheEntries = 512;
 
     /// <summary>
     /// Инициализирует новый экземпляр класса MediaProbeService с внедрением зависимостей.
@@ -42,6 +52,10 @@ public sealed class MediaProbeService : IMediaProbeService
         _settingsManager = settingsManager;
     }
 
+    /// <summary>
+    /// Возвращает ограничитель параллелизма, соответствующий текущим настройкам.
+    /// Старый экземпляр намеренно не освобождается: на нём могут ожидать запущенные проверки.
+    /// </summary>
     private System.Threading.SemaphoreSlim GetProbeSemaphore()
     {
         int targetParallel = 1;
@@ -54,10 +68,10 @@ public sealed class MediaProbeService : IMediaProbeService
         {
             if (_probeSemaphore == null || _currentMaxParallel != targetParallel)
             {
-                var newSemaphore = new System.Threading.SemaphoreSlim(targetParallel, targetParallel);
-                System.Threading.Interlocked.Exchange(ref _probeSemaphore, newSemaphore);
+                _probeSemaphore = new System.Threading.SemaphoreSlim(targetParallel, targetParallel);
                 _currentMaxParallel = targetParallel;
             }
+
             return _probeSemaphore;
         }
     }
@@ -72,7 +86,105 @@ public sealed class MediaProbeService : IMediaProbeService
     {
         if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
         {
-            _logService.Error($"Файл не существует или путь пуст: '{filePath}'", "MediaProbeService");
+            _logService.Write(
+                "media_probe.input_missing",
+                LogLevel.Error,
+                LogStatus.Failed,
+                "Файл для анализа не найден или путь пуст",
+                null,
+                "MediaProbeService",
+                properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["ErrorCode"] = "input-missing",
+                    ["InputName"] = SafeFileName(filePath)
+                });
+            return null;
+        }
+
+        string cacheKey = Path.GetFullPath(filePath);
+        try
+        {
+            var lastWriteUtc = File.GetLastWriteTimeUtc(cacheKey);
+            long length = new FileInfo(cacheKey).Length;
+
+            if (_probeCache.TryGetValue(cacheKey, out var cachedEntry) &&
+                cachedEntry.LastWriteUtc == lastWriteUtc &&
+                cachedEntry.Length == length)
+            {
+                return cachedEntry.Structure;
+            }
+
+            // Если файл исчез, освобождаем кэш, чтобы структуры удаленных файлов не накапливались.
+            if (!File.Exists(cacheKey))
+            {
+                _probeCache.TryRemove(cacheKey, out _);
+                return null;
+            }
+
+            var fresh = await ProbeInternalAsync(cacheKey);
+
+            // Кэшируем только если файл не изменился во время анализа,
+            // иначе результат соответствовал бы устаревшей версии файла.
+            if (fresh != null)
+            {
+                var postWriteUtc = File.GetLastWriteTimeUtc(cacheKey);
+                long postLength = new FileInfo(cacheKey).Length;
+                if (postWriteUtc == lastWriteUtc && postLength == length)
+                {
+                    if (_probeCache.Count >= MaxProbeCacheEntries)
+                    {
+                        foreach (var key in _probeCache.Keys.Take(MaxProbeCacheEntries / 2))
+                        {
+                            _probeCache.TryRemove(key, out _);
+                        }
+                    }
+
+                    _probeCache[cacheKey] = (lastWriteUtc, length, fresh);
+                }
+            }
+
+            return fresh;
+        }
+        catch (System.IO.IOException ex)
+        {
+            _logService.Write(
+                "media_probe.io_failed",
+                LogLevel.Error,
+                LogStatus.Failed,
+                "Ошибка доступа к файлу при анализе структуры",
+                ex,
+                "MediaProbeService",
+                properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["ErrorCode"] = "io-failed",
+                    ["InputName"] = SafeFileName(filePath)
+                });
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Асинхронно анализирует медиафайл и возвращает его полную структуру.
+    /// Автоматически выбирает оптимальную стратегию в зависимости от контейнера.
+    /// </summary>
+    /// <param name="filePath">Абсолютный путь к файлу.</param>
+    /// <returns>Объект MediaStructure с дорожками и вложениями, или null при сбоях.</returns>
+    private async Task<MediaStructure?> ProbeInternalAsync(string filePath)
+    {
+        if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
+        {
+            _logService.Write(
+                "media_probe.input_missing",
+                LogLevel.Error,
+                LogStatus.Failed,
+                "Файл для анализа не найден или путь пуст",
+                null,
+                "MediaProbeService",
+                properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["ErrorCode"] = "input-missing",
+                    ["InputName"] = SafeFileName(filePath)
+                });
             return null;
         }
 
@@ -82,7 +194,7 @@ public sealed class MediaProbeService : IMediaProbeService
         try
         {
             string extension = Path.GetExtension(filePath).ToLowerInvariant();
-            _logService.Info($"Начало фонового анализа структуры файла: '{Path.GetFileName(filePath)}'", "MediaProbeService");
+            _logService.Write("media.probe.started", LogLevel.Debug, LogStatus.Running, $"Начат фоновый анализ структуры файла '{LogProps.FileName(filePath)}'", source: SourceName, properties: LogProps.Create("InputName", LogProps.FileName(filePath)));
 
             // Определяем, является ли файл MKV-контейнером
             bool isMkv = extension == ".mkv" || extension == ".mka";
@@ -101,7 +213,7 @@ public sealed class MediaProbeService : IMediaProbeService
                 if (altResult != null && altResult.Duration > 0)
                 {
                     result.Duration = altResult.Duration;
-                    _logService.Info($"Длительность для '{Path.GetFileName(filePath)}' дообогащена через альтернативный зонд: {result.Duration:F2} сек.", "MediaProbeService");
+                    _logService.Write("media.duration.alternate_probe", LogLevel.Debug, LogStatus.Succeeded, $"Длительность для '{LogProps.FileName(filePath)}' уточнена альтернативным зондом", source: SourceName, properties: LogProps.Create("InputName", LogProps.FileName(filePath)).With("DurationMs", result.Duration * 1000d).With("Tool", "ffprobe"));
                 }
             }
 
@@ -113,7 +225,7 @@ public sealed class MediaProbeService : IMediaProbeService
                 if (ffmpegHeaderDuration > 0)
                 {
                     result.Duration = ffmpegHeaderDuration;
-                    _logService.Info($"Длительность для '{Path.GetFileName(filePath)}' определена через заголовочный зонд FFmpeg: {result.Duration:F2} сек.", "MediaProbeService");
+                    _logService.Write("media.duration.header_probe", LogLevel.Debug, LogStatus.Succeeded, $"Длительность для '{LogProps.FileName(filePath)}' определена заголовочным зондом FFmpeg", source: SourceName, properties: LogProps.Create("InputName", LogProps.FileName(filePath)).With("DurationMs", result.Duration * 1000d).With("Tool", "ffmpeg"));
                 }
             }
 
@@ -121,7 +233,18 @@ public sealed class MediaProbeService : IMediaProbeService
         }
         catch (Exception ex)
         {
-            _logService.Exception(ex, $"Непредвиденная ошибка при зондировании файла '{filePath}'", "MediaProbeService");
+            _logService.Write(
+                "media_probe.unexpected_failure",
+                LogLevel.Error,
+                LogStatus.Failed,
+                "Непредвиденная ошибка при зондировании структуры файла",
+                ex,
+                "MediaProbeService",
+                properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["ErrorCode"] = "probe-failed",
+                    ["InputName"] = SafeFileName(filePath)
+                });
             return null;
         }
         finally
@@ -138,7 +261,18 @@ public sealed class MediaProbeService : IMediaProbeService
         using var jsonDoc = await _mkvmergeRunner.IdentifyAsync(filePath);
         if (jsonDoc == null)
         {
-            _logService.Error($"Не удалось выполнить mkvmerge --identify для '{filePath}'", "MediaProbeService");
+            _logService.Write(
+                "media_probe.mkv_identify_failed",
+                LogLevel.Error,
+                LogStatus.Failed,
+                "Не удалось выполнить mkvmerge --identify для файла",
+                null,
+                "MediaProbeService",
+                properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["ErrorCode"] = "identify-failed",
+                    ["InputName"] = SafeFileName(filePath)
+                });
             return null;
         }
 
@@ -199,7 +333,7 @@ public sealed class MediaProbeService : IMediaProbeService
             foreach (var rawTrack in tracksProp.EnumerateArray())
             {
                 var track = new MediaTrack();
-                
+
                 if (rawTrack.TryGetProperty("id", out var idProp))
                 {
                     track.TrackId = idProp.GetInt32();
@@ -315,7 +449,19 @@ public sealed class MediaProbeService : IMediaProbeService
             }
         }
 
-        _logService.Info($"Анализ MKV завершен: '{Path.GetFileName(filePath)}' (Дорожек: {structure.Tracks.Count}, Вложений: {structure.Attachments.Count})", "MediaProbeService");
+        _logService.Write(
+            "media_probe.mkv_completed",
+            LogLevel.Info,
+            LogStatus.Succeeded,
+            $"Анализ MKV завершен: '{Path.GetFileName(filePath)}'",
+            null,
+            "MediaProbeService",
+            properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["Count"] = structure.Tracks.Count,
+                ["Total"] = structure.Attachments.Count,
+                ["InputName"] = Path.GetFileName(filePath)
+            });
         return structure;
     }
 
@@ -327,7 +473,18 @@ public sealed class MediaProbeService : IMediaProbeService
         using var jsonDoc = await _ffmpegRunner.GetVideoInfoAsync(filePath);
         if (jsonDoc == null)
         {
-            _logService.Error($"Не удалось выполнить ffprobe для '{filePath}'", "MediaProbeService");
+            _logService.Write(
+                "media_probe.ffprobe_failed",
+                LogLevel.Error,
+                LogStatus.Failed,
+                "Не удалось выполнить ffprobe для файла",
+                null,
+                "MediaProbeService",
+                properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["ErrorCode"] = "ffprobe-failed",
+                    ["InputName"] = SafeFileName(filePath)
+                });
             return null;
         }
 
@@ -522,7 +679,19 @@ public sealed class MediaProbeService : IMediaProbeService
             }
         }
 
-        _logService.Info($"Анализ ffprobe завершен: '{Path.GetFileName(filePath)}' (Дорожек: {structure.Tracks.Count}, Вложений: {structure.Attachments.Count})", "MediaProbeService");
+        _logService.Write(
+            "media_probe.ffprobe_completed",
+            LogLevel.Info,
+            LogStatus.Succeeded,
+            $"Анализ ffprobe завершен: '{Path.GetFileName(filePath)}'",
+            null,
+            "MediaProbeService",
+            properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["Count"] = structure.Tracks.Count,
+                ["Total"] = structure.Attachments.Count,
+                ["InputName"] = Path.GetFileName(filePath)
+            });
         return structure;
     }
 
@@ -571,7 +740,7 @@ public sealed class MediaProbeService : IMediaProbeService
                 if (string.IsNullOrWhiteSpace(mkvAudio[i].Name) && !string.IsNullOrWhiteSpace(probeAudio[i]))
                 {
                     mkvAudio[i].Name = probeAudio[i];
-                    _logService.DebugLog($"Дорожка аудио #{mkvAudio[i].TrackId} обогащена заголовком: '{probeAudio[i]}'", "MediaProbeService");
+                    _logService.Write("media.track.title_enriched", LogLevel.Debug, LogStatus.Changed, $"Дорожка аудио #{mkvAudio[i].TrackId} дополнена заголовком из ffprobe", source: SourceName, properties: LogProps.Create("Index", mkvAudio[i].TrackId).With("Tool", "ffprobe").With("Stage", "audio"));
                 }
             }
 
@@ -581,7 +750,7 @@ public sealed class MediaProbeService : IMediaProbeService
                 if (string.IsNullOrWhiteSpace(mkvSubs[i].Name) && !string.IsNullOrWhiteSpace(probeSubs[i]))
                 {
                     mkvSubs[i].Name = probeSubs[i];
-                    _logService.DebugLog($"Дорожка субтитров #{mkvSubs[i].TrackId} обогащена заголовком: '{probeSubs[i]}'", "MediaProbeService");
+                    _logService.Write("media.track.title_enriched", LogLevel.Debug, LogStatus.Changed, $"Дорожка субтитров #{mkvSubs[i].TrackId} дополнена заголовком из ffprobe", source: SourceName, properties: LogProps.Create("Index", mkvSubs[i].TrackId).With("Tool", "ffprobe").With("Stage", "subtitles"));
                 }
             }
 
@@ -591,13 +760,42 @@ public sealed class MediaProbeService : IMediaProbeService
                 if (string.IsNullOrWhiteSpace(mkvVideo[i].Name) && !string.IsNullOrWhiteSpace(probeVideo[i]))
                 {
                     mkvVideo[i].Name = probeVideo[i];
-                    _logService.DebugLog($"Дорожка видео #{mkvVideo[i].TrackId} обогащена заголовком: '{probeVideo[i]}'", "MediaProbeService");
+                    _logService.Write("media.track.title_enriched", LogLevel.Debug, LogStatus.Changed, $"Дорожка видео #{mkvVideo[i].TrackId} дополнена заголовком из ffprobe", source: SourceName, properties: LogProps.Create("Index", mkvVideo[i].TrackId).With("Tool", "ffprobe").With("Stage", "video"));
                 }
             }
         }
         catch (Exception ex)
         {
-            _logService.Exception(ex, "Ошибка обогащения заголовков дорожек через ffprobe", "MediaProbeService");
+            _logService.Write(
+                "media_probe.enrichment_failed",
+                LogLevel.Warning,
+                LogStatus.PartiallySucceeded,
+                "Не удалось обогатить пустые заголовки дорожек через ffprobe",
+                ex,
+                "MediaProbeService",
+                properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["Stage"] = "enrich_titles",
+                    ["ErrorCode"] = "enrichment-failed"
+                });
+        }
+    }
+
+    private static string SafeFileName(string? filePath)
+    {
+        if (string.IsNullOrWhiteSpace(filePath))
+        {
+            return "unknown";
+        }
+
+        try
+        {
+            string name = Path.GetFileName(filePath.Trim());
+            return string.IsNullOrEmpty(name) ? "unknown" : name;
+        }
+        catch (Exception)
+        {
+            return "unknown";
         }
     }
 }

@@ -1,9 +1,10 @@
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+
 using KTools_App.Core;
 
 namespace KTools_App.Services.Contracts;

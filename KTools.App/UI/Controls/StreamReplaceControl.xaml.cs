@@ -1,6 +1,5 @@
 // -*- coding: utf-8 -*-
 using System;
-using KTools_App.Services.Contracts;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
@@ -8,17 +7,21 @@ using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
-using Microsoft.UI.Xaml;
-using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Media;
-using Microsoft.UI.Xaml.Hosting;
-using Microsoft.UI.Text;
-using Windows.Storage;
-using Windows.ApplicationModel.DataTransfer;
 
 using KTools_App.Core;
+using KTools_App.Diagnostics;
 using KTools_App.Scripts;
+using KTools_App.Services.Contracts;
+
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.UI.Text;
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Hosting;
+using Microsoft.UI.Xaml.Media;
+
+using Windows.ApplicationModel.DataTransfer;
+using Windows.Storage;
 
 namespace KTools_App.UI.Controls;
 
@@ -83,15 +86,18 @@ public sealed class ReplacementFileItem
 /// </summary>
 public sealed partial class StreamReplaceControl : UserControl
 {
+    private const string SourceName = nameof(StreamReplaceControl);
+
     private readonly ILogService _logService;
     private readonly IMediaProbeService _mediaProbeService;
 
-    private readonly Microsoft.UI.Dispatching.DispatcherQueue _dispatcherQueue = 
+    private readonly Microsoft.UI.Dispatching.DispatcherQueue _dispatcherQueue =
         Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
 
     private ObservableCollection<FileQueueItem>? _files;
     private readonly ObservableCollection<ReplacementFileItem> _replacementFiles = new();
     private AbstractScript? _activeScript;
+    private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _rebuildUITimer;
 
     // Хранение: track_id оригинального файла -> ComboBox в UI
     private readonly Dictionary<int, ComboBox> _combos = new();
@@ -119,11 +125,27 @@ public sealed partial class StreamReplaceControl : UserControl
         ReplacementFilesListView.ItemsSource = _replacementFiles;
         _replacementFiles.CollectionChanged += OnReplacementFilesChanged;
         Loaded += StreamReplaceControl_Loaded;
+
+        _rebuildUITimer = _dispatcherQueue.CreateTimer();
+        _rebuildUITimer.Interval = TimeSpan.FromMilliseconds(100);
+        _rebuildUITimer.IsRepeating = false;
+        _rebuildUITimer.Tick += (s, e) => RebuildUI();
+
+        Unloaded += (s, e) =>
+        {
+            // Пока контрол отсоединен от дерева, отложенная перестройка не нужна:
+            // подписки и интерфейс восстанавливаются в обработчике Loaded.
+            _rebuildUITimer.Stop();
+            if (_files != null)
+            {
+                _files.CollectionChanged -= OnFilesCollectionChanged;
+            }
+        };
     }
 
     private void StreamReplaceControl_Loaded(object sender, RoutedEventArgs e)
     {
-        _logService.Info("Загрузка виджета подмены дорожек StreamReplaceControl", "StreamReplaceControl");
+        _logService.Write("ui.stream_replace.loaded", LogLevel.Debug, LogStatus.Succeeded, "Панель подмены дорожек загружена", source: SourceName);
         if (_files != null)
         {
             _files.CollectionChanged -= OnFilesCollectionChanged;
@@ -139,7 +161,7 @@ public sealed partial class StreamReplaceControl : UserControl
     /// </summary>
     public void Populate(ObservableCollection<FileQueueItem> files)
     {
-        _logService.Info("Инициализация очереди файлов в виджете подмены дорожек", "StreamReplaceControl");
+        _logService.Write("ui.stream_replace.queue_bound", LogLevel.Debug, LogStatus.Changed, "Панель подмены дорожек привязана к очереди файлов", source: SourceName);
         if (_files != null)
         {
             _files.CollectionChanged -= OnFilesCollectionChanged;
@@ -167,7 +189,7 @@ public sealed partial class StreamReplaceControl : UserControl
 
         try
         {
-            _logService.Info("Сбор назначенных замен из ComboBox", "StreamReplaceControl");
+            _logService.Write("ui.stream_replace.collect_started", LogLevel.Debug, LogStatus.Running, "Собираются назначенные замены дорожек", source: SourceName);
             foreach (var kvp in _combos)
             {
                 int comboKey = kvp.Key;
@@ -197,11 +219,11 @@ public sealed partial class StreamReplaceControl : UserControl
                     }
                 }
             }
-            _logService.Info($"Сбор замен завершен. Файлов с заменами: {replacements.Count}", "StreamReplaceControl");
+            _logService.Write("ui.stream_replace.collected", LogLevel.Debug, LogStatus.Succeeded, $"Назначенные замены собраны, файлов с заменами: {replacements.Count}", source: SourceName, properties: LogProps.Create("Count", replacements.Count));
         }
         catch (Exception ex)
         {
-            _logService.Exception(ex, "Ошибка при сборе назначенных замен", "StreamReplaceControl");
+            _logService.Write("ui.stream_replace.collect_failed", LogLevel.Error, LogStatus.Failed, "Назначенные замены дорожек не собраны", ex, SourceName, properties: LogProps.Create("ErrorCode", "REPLACEMENT_COLLECT_FAILED"));
         }
     }
 
@@ -229,7 +251,8 @@ public sealed partial class StreamReplaceControl : UserControl
         _dispatcherQueue.TryEnqueue(() =>
         {
             SubscribeToItems();
-            RebuildUI();
+            _rebuildUITimer.Stop();
+            _rebuildUITimer.Start();
         });
     }
 
@@ -239,8 +262,9 @@ public sealed partial class StreamReplaceControl : UserControl
         {
             _dispatcherQueue.TryEnqueue(() =>
             {
-                _logService.Info("Завершен фоновый анализ исходного файла, перестраиваем интерфейс", "StreamReplaceControl");
-                RebuildUI();
+                _logService.Write("ui.stream_replace.analysis_completed", LogLevel.Debug, LogStatus.Changed, "Фоновый анализ исходного файла завершён, интерфейс панели перестраивается", source: SourceName);
+                _rebuildUITimer.Stop();
+                _rebuildUITimer.Start();
             });
         }
     }
@@ -334,7 +358,7 @@ public sealed partial class StreamReplaceControl : UserControl
                 var structure = fileItem.MediaInfo;
 
                 // Выводим только видео, аудио и субтитры (без вложений)
-                var tracks = structure.Tracks.Where(t => 
+                var tracks = structure.Tracks.Where(t =>
                     t.TrackType.Equals("video", StringComparison.OrdinalIgnoreCase) ||
                     t.TrackType.Equals("audio", StringComparison.OrdinalIgnoreCase) ||
                     t.TrackType.Equals("subtitles", StringComparison.OrdinalIgnoreCase)).ToList();
@@ -354,7 +378,7 @@ public sealed partial class StreamReplaceControl : UserControl
 
                     string typeLabel = track.TypeLabel;
                     string langStr = !string.IsNullOrEmpty(track.Language) && track.Language != "und" ? track.Language.ToUpperInvariant() : "UND";
-                    
+
                     string descText = $"{typeLabel} #{track.TrackId} • {track.Codec.ToUpperInvariant()}";
                     if (track.TrackType.Equals("audio", StringComparison.OrdinalIgnoreCase))
                     {
@@ -441,7 +465,7 @@ public sealed partial class StreamReplaceControl : UserControl
         }
         catch (Exception ex)
         {
-            _logService.Exception(ex, "Критическая ошибка при перестроении UI подмены", "StreamReplaceControl");
+            _logService.Write("ui.stream_replace.rebuild_failed", LogLevel.Error, LogStatus.Failed, "Интерфейс панели подмены дорожек не перестроен", ex, SourceName, properties: LogProps.Create("ErrorCode", "STREAM_REPLACE_UI_REBUILD_FAILED"));
         }
     }
 
@@ -477,11 +501,11 @@ public sealed partial class StreamReplaceControl : UserControl
                 foreach (var repFile in _replacementFiles)
                 {
                     string ext = Path.GetExtension(repFile.FilePath).ToLowerInvariant();
-                    
+
                     // Если это контейнер с метаданными (MKV, MP4)
                     if (repFile.MediaInfo != null)
                     {
-                        var compatibleTracks = repFile.MediaInfo.Tracks.Where(t => 
+                        var compatibleTracks = repFile.MediaInfo.Tracks.Where(t =>
                             t.TrackType.Equals(originalTrack.TrackType, StringComparison.OrdinalIgnoreCase)).ToList();
 
                         foreach (var subTrack in compatibleTracks)
@@ -526,8 +550,8 @@ public sealed partial class StreamReplaceControl : UserControl
                 // Восстанавливаем выбор, если он все еще доступен
                 if (currentSelected != null && !string.IsNullOrEmpty(currentSelected.FilePath))
                 {
-                    var found = combo.Items.Cast<ReplacementOption>().FirstOrDefault(o => 
-                        o.FilePath.Equals(currentSelected.FilePath, StringComparison.OrdinalIgnoreCase) && 
+                    var found = combo.Items.Cast<ReplacementOption>().FirstOrDefault(o =>
+                        o.FilePath.Equals(currentSelected.FilePath, StringComparison.OrdinalIgnoreCase) &&
                         o.SourceTrackId == currentSelected.SourceTrackId);
 
                     if (found != null)
@@ -542,7 +566,7 @@ public sealed partial class StreamReplaceControl : UserControl
         }
         catch (Exception ex)
         {
-            _logService.Exception(ex, "Ошибка при обновлении опций ComboBox", "StreamReplaceControl");
+            _logService.Write("ui.stream_replace.options_failed", LogLevel.Warning, LogStatus.Failed, "Список доступных замен дорожек не обновлён", ex, SourceName, properties: LogProps.Create("ErrorCode", "STREAM_REPLACE_OPTIONS_FAILED"));
         }
     }
 
@@ -571,7 +595,7 @@ public sealed partial class StreamReplaceControl : UserControl
     /// </summary>
     private async void AddReplacementButton_Click(object sender, RoutedEventArgs e)
     {
-        _logService.Info("Открытие диалога выбора файлов-замен", "StreamReplaceControl");
+        _logService.Write("ui.file_picker.opening", LogLevel.Debug, LogStatus.Running, "Открывается системный диалог выбора файлов-замен", source: SourceName, properties: LogProps.Create("Control", "ReplacementPicker"));
         try
         {
             var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(App.CurrentMainWindow);
@@ -601,7 +625,7 @@ public sealed partial class StreamReplaceControl : UserControl
         }
         catch (Exception ex)
         {
-            _logService.Exception(ex, "Ошибка при выборе файлов-замен", "StreamReplaceControl");
+            _logService.Write("ui.file_picker.failed", LogLevel.Warning, LogStatus.Failed, "Файлы-замены не выбраны", ex, SourceName, properties: LogProps.Create("ErrorCode", "REPLACEMENT_PICKER_FAILED").With("Control", "ReplacementPicker"));
         }
     }
 
@@ -636,7 +660,7 @@ public sealed partial class StreamReplaceControl : UserControl
 
         if (addedCount > 0)
         {
-            _logService.Info($"Добавлено внешних файлов-замен: {addedCount}", "StreamReplaceControl");
+            _logService.Write("ui.stream_replace.files_added", LogLevel.Debug, LogStatus.Succeeded, $"Добавлено внешних файлов-замен: {addedCount}", source: SourceName, properties: LogProps.Create("Count", addedCount));
         }
     }
 
@@ -657,7 +681,7 @@ public sealed partial class StreamReplaceControl : UserControl
             }
             catch (Exception ex)
             {
-                _logService.Exception(ex, $"Ошибка при анализе исходного файла '{item.FileName}'", "StreamReplaceControl");
+                _logService.Write("media.probe.failed", LogLevel.Warning, LogStatus.Failed, $"Анализ исходного файла '{item.FileName}' не выполнен", ex, SourceName, properties: LogProps.Create("ErrorCode", "SOURCE_PROBE_FAILED").With("FileName", item.FileName));
             }
         });
     }
@@ -714,7 +738,7 @@ public sealed partial class StreamReplaceControl : UserControl
             }
             catch (Exception ex)
             {
-                _logService.Exception(ex, $"Ошибка при анализе файла-замены '{item.FileName}'", "StreamReplaceControl");
+                _logService.Write("media.probe.failed", LogLevel.Warning, LogStatus.Failed, $"Анализ файла-замены '{item.FileName}' не выполнен", ex, SourceName, properties: LogProps.Create("ErrorCode", "REPLACEMENT_PROBE_FAILED").With("FileName", item.FileName));
                 _dispatcherQueue.TryEnqueue(() =>
                 {
                     item.InfoText = "Ошибка анализа";
@@ -766,7 +790,7 @@ public sealed partial class StreamReplaceControl : UserControl
             e.DragUIOverride.IsContentVisible = true;
             e.DragUIOverride.IsGlyphVisible = true;
             e.Handled = true;
-            
+
             SetDropTargetHighlight(true);
         }
         else
@@ -813,7 +837,7 @@ public sealed partial class StreamReplaceControl : UserControl
             }
             catch (Exception ex)
             {
-                _logService.Exception(ex, "Ошибка при обработке перетаскивания файлов для подмены", "StreamReplaceControl");
+                _logService.Write("ui.stream_replace.drop_failed", LogLevel.Warning, LogStatus.Failed, "Обработка перетащенных файлов-замен не выполнена", ex, SourceName, properties: LogProps.Create("ErrorCode", "STREAM_REPLACE_DROP_FAILED"));
             }
             finally
             {
@@ -899,12 +923,12 @@ public sealed partial class StreamReplaceControl : UserControl
                             StartFileAnalysis(item);
                         }
                     }
-                    _logService.Info($"Добавлено исходных файлов через Drag & Drop карточки назначений: {paths.Count}", "StreamReplaceControl");
+                    _logService.Write("ui.files.dropped", LogLevel.Debug, LogStatus.Succeeded, $"Перетаскиванием добавлено исходных файлов: {paths.Count}", source: SourceName, properties: LogProps.Create("Count", paths.Count));
                 }
             }
             catch (Exception ex)
             {
-                _logService.Exception(ex, "Ошибка при обработке перетаскивания исходных файлов", "StreamReplaceControl");
+                _logService.Write("ui.files.drop_failed", LogLevel.Warning, LogStatus.Failed, "Обработка перетащенных исходных файлов не выполнена", ex, SourceName, properties: LogProps.Create("ErrorCode", "SOURCE_DROP_FAILED"));
             }
             finally
             {

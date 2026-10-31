@@ -1,5 +1,6 @@
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
 using System.Collections.Generic;
+
 using KTools_App.Core;
 
 namespace KTools_App.Encoders.Capabilities;
@@ -17,6 +18,12 @@ public class NvencAv1Capabilities : BaseNvencCapabilities
     public override string FfmpegCodecName => "av1_nvenc";
     public override bool Supports10Bit => true;
 
+    /// <summary>
+    /// AV1 NVENC не поддерживает tune lossless: реальный FFmpeg отклоняет такую команду
+    /// (ошибка инициализации -542398533). Проверено совместимостными тестами RequiresFfmpeg.
+    /// </summary>
+    public override bool SupportsLossless => false;
+
     protected override List<SettingField> GetCodecSpecificSettings(Dictionary<string, object>? currentSettings)
     {
         return new List<SettingField>
@@ -30,13 +37,19 @@ public class NvencAv1Capabilities : BaseNvencCapabilities
                 options: BRefOptions,
                 comment: BRefComment,
                 column: 1,
-                colSpan: 1
+                colSpan: 1,
+                disableConditions: new List<SettingDisableCondition>
+                {
+                    new("lossless", "True")
+                }
             )
         };
     }
 
     protected override void AppendCodecSpecificArguments(Dictionary<string, object> settings, EncoderSharedContext context, List<string> args)
     {
+        // Ветка lossless недостижима: у AV1 SupportsLossless = false, поэтому
+        // BuildCodecArguments выбрасывает исключение раньше вызова этого метода.
         string bRefMode = GetSettingValue(settings, "nv_b_ref_mode", "middle");
         if (bRefMode.Equals("each", System.StringComparison.OrdinalIgnoreCase))
         {

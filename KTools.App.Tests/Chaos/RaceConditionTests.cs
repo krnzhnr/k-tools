@@ -13,6 +13,8 @@ using KTools_App.ViewModels;
 using KTools_App.Services.Contracts;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using KTools_App.Tests.TestHelpers;
+using KTools_App.Models;
+using ExecutionContext = KTools_App.Models.ExecutionContext;
 
 namespace KTools_App.Tests.Chaos;
 
@@ -68,7 +70,7 @@ public sealed class RaceConditionTests : IsolatedMessengerTestBase
     }
 
     private StubScript CreateScript(
-        Func<string, Dictionary<string, object>, Task<List<string>>>? handler = null,
+        Func<string, Dictionary<string, object>, ExecutionContext, Task<ExecutionResult>>? handler = null,
         bool supportsParallel = false)
     {
         var script = new StubScript(
@@ -100,10 +102,10 @@ public sealed class RaceConditionTests : IsolatedMessengerTestBase
         string file = tempDir.CreateFile("video.mkv", "data");
         int executions = 0;
 
-        var script = CreateScript((_, _) =>
+        var script = CreateScript((_, _, context) =>
         {
             Interlocked.Increment(ref executions);
-            return Task.FromResult(new List<string> { "✅ Готово" });
+            return Task.FromResult(ExecutionResult.Succeeded(context, "Готово"));
         });
 
         var vm = CreateViewModel();
@@ -124,33 +126,22 @@ public sealed class RaceConditionTests : IsolatedMessengerTestBase
     }
 
     /// <summary>
-    /// Хаос (желаемое поведение, СЕЙЧАС НЕ ВЫПОЛНЯЕТСЯ — известный баг):
-    /// повторный клик до завершения первого выполнения должен блокироваться
-    /// гвардией IsProcessing. Фактически гвардия читает VM-свойство IsProcessing,
-    /// которое обновляется только асинхронно через DispatcherQueue
-    /// (WorkPanelViewModel.OnScriptStateChanged), — между запуском и обработкой
-    /// события существует окно гонки, в которое второй запуск проходит
-    /// (WorkPanelViewModel.cs:301 — проверка устаревшего состояния;
-    /// PrepareExecutionState устанавливает ActiveScript.IsProcessing синхронно,
-    /// но гвардия проверяет свойство VM, а не скрипта).
+    /// Хаос: повторный клик до завершения первого выполнения блокируется
+    /// гвардией IsProcessing, которую PrepareExecutionState устанавливает синхронно
+    /// до запуска фоновой очереди.
     /// </summary>
     [TestMethod]
-    [Ignore("Известный баг приложения: гвардия двойного запуска использует "
-        + "VM.IsProcessing, обновляемый асинхронно через DispatcherQueue — "
-        + "состояние гонки позволяет второе выполнение. Тест активировать после "
-        + "добавления синхронного флага исполнения (например, volatile bool "
-        + "_isExecuting в WorkPanelViewModel).")]
     public async Task StartExecution_DoubleConcurrentClick_ShouldExecuteOnlyOnce()
     {
         using var tempDir = new TempDirectoryScope();
         string file = tempDir.CreateFile("video.mkv", "data");
         int executions = 0;
 
-        var script = CreateScript(async (_, _) =>
+        var script = CreateScript(async (_, _, context) =>
         {
             Interlocked.Increment(ref executions);
             await Task.Delay(300);
-            return new List<string> { "✅ Готово" };
+            return ExecutionResult.Succeeded(context, "Готово");
         });
 
         var vm = CreateViewModel();
@@ -182,14 +173,16 @@ public sealed class RaceConditionTests : IsolatedMessengerTestBase
         using var startedGate = new ManualResetEventSlim(false);
 
         StubScript? captured = null;
-        captured = CreateScript(async (_, _) =>
+        captured = CreateScript(async (_, _, context) =>
         {
             startedGate.Set();
             // Ждём команду отмены с защитным таймаутом
             bool cancelled = await TestAsyncHelpers.WaitForAsync(
                 () => captured!.IsCancelled,
                 TimeSpan.FromSeconds(8));
-            return new List<string> { cancelled ? "Прервано" : "✅ Готово" };
+            return cancelled
+                ? ExecutionResult.Cancelled(context, "Прервано")
+                : ExecutionResult.Succeeded(context, "Готово");
         });
 
         var vm = CreateViewModel();
@@ -204,11 +197,11 @@ public sealed class RaceConditionTests : IsolatedMessengerTestBase
         captured!.Cancel();
         await execution;
 
-        // Assert — статус скрипта отражает отмену
-        captured.SavedStatusText.Should().Be("Обработка отменена",
-            "отмена во время выполнения должна отражаться в статусе скрипта");
-        captured.SavedLogText.Should().Contain("прервана",
-            "журнал должен содержать отметку о прерывании пользователем");
+        // Assert — статус скрипта отражает отмену с явным количеством элементов
+        captured.SavedStatusText.Should().Be("Обработка отменена: 1 из 1",
+            "отмена во время выполнения должна отражаться в статусе скрипта с количеством");
+        captured.SavedLogText.Should().Contain("отменена",
+            "журнал должен содержать отметку об отмене обработки");
     }
 
     /// <summary>
@@ -229,7 +222,7 @@ public sealed class RaceConditionTests : IsolatedMessengerTestBase
         int concurrentPeak = 0;
         int concurrentCurrent = 0;
 
-        var script = CreateScript(async (_, _) =>
+        var script = CreateScript(async (_, _, context) =>
         {
             int current = Interlocked.Increment(ref concurrentCurrent);
             try
@@ -246,7 +239,7 @@ public sealed class RaceConditionTests : IsolatedMessengerTestBase
                 while (Interlocked.CompareExchange(ref concurrentPeak, current, observed) != observed);
 
                 await Task.Delay(100);
-                return new List<string> { "✅ Готово" };
+                return ExecutionResult.Succeeded(context, "Готово");
             }
             finally
             {
@@ -265,7 +258,7 @@ public sealed class RaceConditionTests : IsolatedMessengerTestBase
         await vm.StartExecutionCommand.ExecuteAsync(null);
 
         // Assert — на уровне скрипта (диспетчер-независимые поля)
-        script.SavedStatusText.Should().Be("Обработка завершена");
+        script.SavedStatusText.Should().Be("Все файлы успешно обработаны");
         script.SavedGlobalProgress.Should().Be(100,
             "все 8 файлов должны быть учтены в интегральном прогрессе");
         concurrentPeak.Should().BeLessThanOrEqualTo(4,
@@ -273,15 +266,13 @@ public sealed class RaceConditionTests : IsolatedMessengerTestBase
     }
 
     /// <summary>
-    /// Хаос (characterization, найденный баг): переключение скрипта во время
-    /// выполнения финализирует НОВЫЙ скрипт, а не выполняющийся. FinalizeExecution
-    /// (WorkPanelViewModel.cs:531) читает текущее свойство ActiveScript вместо
-    /// захваченного экземпляра — старый скрипт остаётся IsProcessing=true навсегда
-    /// (утечка состояния), новый получает статус "Обработка завершена" и прогресс
-    /// выполнения чужой очереди.
+    /// Хаос: переключение скрипта во время выполнения финализирует именно
+    /// выполнявшийся скрипт. ProcessQueueAsync/HandleBatchException работают
+    /// с захваченным экземпляром скрипта, поэтому новый активный скрипт
+    /// не получает статус и прогресс чужой очереди.
     /// </summary>
     [TestMethod]
-    public async Task Initialize_SwitchingScriptDuringExecution_FinalizesNewScriptInstead()
+    public async Task Initialize_SwitchingScriptDuringExecution_FinalizesExecutedScriptOnly()
     {
         // Arrange
         using var tempDir = new TempDirectoryScope();
@@ -289,10 +280,10 @@ public sealed class RaceConditionTests : IsolatedMessengerTestBase
         string fileB = tempDir.CreateFile("b.mkv", "data");
         using var release = new SemaphoreSlim(0, 1);
 
-        var slowScript = CreateScript(async (_, _) =>
+        var slowScript = CreateScript(async (_, _, context) =>
         {
             await release.WaitAsync(TimeSpan.FromSeconds(10));
-            return new List<string> { "✅ Готово" };
+            return ExecutionResult.Succeeded(context, "Готово");
         });
         var fastScript = CreateScript();
 
@@ -308,59 +299,71 @@ public sealed class RaceConditionTests : IsolatedMessengerTestBase
 
         release.Release();
         await execution;
-        await Task.Delay(200); // даём финализации завершиться
 
-        // Assert — текущее (ошибочное) поведение зафиксировано:
-        // финализация применена к новому скрипту
-        fastScript.SavedStatusText.Should().Be("Обработка завершена",
-            "баг: FinalizeExecution финализирует текущий ActiveScript, а не выполнявшийся");
-        fastScript.SavedGlobalProgress.Should().Be(100);
-        slowScript.IsProcessing.Should().BeTrue(
-            "баг: исходный скрипт зависает в IsProcessing=true — состояние никогда не сбрасывается");
+        // Assert
+        slowScript.IsProcessing.Should().BeFalse(
+            "исходный скрипт обязан корректно финализироваться");
+        slowScript.SavedStatusText.Should().Be("Все файлы успешно обработаны");
+        slowScript.SavedGlobalProgress.Should().Be(100);
+        fastScript.SavedStatusText.Should().NotBe("Все файлы успешно обработаны",
+            "новый скрипт не должен получать финализацию чужой очереди");
+        fastScript.SavedGlobalProgress.Should().Be(0);
     }
 
     /// <summary>
-    /// Хаос (желаемое поведение, СЕЙЧАС НЕ ВЫПОЛНЯЕТСЯ — известный баг):
-    /// переключение скрипта во время выполнения должно корректно
-    /// финализировать именно выполнявшийся скрипт.
+    /// Хаос: отмена параллельной очереди не запускает новые элементы после команды отмены,
+    /// а все элементы очереди получают ровно по одному терминальному результату.
     /// </summary>
     [TestMethod]
-    [Ignore("Известный баг приложения: WorkPanelViewModel.FinalizeExecution (строка ~531) "
-        + "обращается к свойству ActiveScript на момент завершения, а не к захваченному "
-        + "экземпляру выполнявшегося скрипта — при переключении вкладок во время обработки "
-        + "статус и прогресс применяются к новому скрипту, старый зависает в IsProcessing. "
-        + "Тест активировать после захвата ссылки на выполняемый скрипт в ProcessQueueAsync.")]
-    public async Task Initialize_SwitchingScriptDuringExecution_ShouldFinalizeOldScript()
+    public async Task StartExecution_ParallelQueueCancel_DoesNotStartNewItemsAfterCancel()
     {
         using var tempDir = new TempDirectoryScope();
-        string fileA = tempDir.CreateFile("a.mkv", "data");
-        string fileB = tempDir.CreateFile("b.mkv", "data");
-        using var release = new SemaphoreSlim(0, 1);
-
-        var slowScript = CreateScript(async (_, _) =>
+        var files = new ObservableCollection<FileQueueItem>();
+        for (int i = 0; i < 6; i++)
         {
-            await release.WaitAsync(TimeSpan.FromSeconds(10));
-            return new List<string> { "✅ Готово" };
-        });
-        var fastScript = CreateScript();
+            files.Add(new FileQueueItem(tempDir.CreateFile($"c{i}.mkv", "data")));
+        }
+
+        using var started = new CountdownEvent(2);
+        var executed = new System.Collections.Concurrent.ConcurrentBag<string>();
+        int startedCount = 0;
+        StubScript? captured = null;
+        captured = CreateScript(async (file, _, context) =>
+        {
+            if (Interlocked.Increment(ref startedCount) <= 2)
+            {
+                started.Signal();
+            }
+
+            executed.Add(file);
+            await Task.Delay(40);
+            return captured!.IsCancelled
+                ? ExecutionResult.Cancelled(context, "Прервано")
+                : ExecutionResult.Succeeded(context, "Готово");
+        }, supportsParallel: true);
+
+        _settingsMock.Object.EnableParallel = true;
+        _settingsMock.Object.MaxParallelTasks = 2;
 
         var vm = CreateViewModel();
-        var filesA = new ObservableCollection<FileQueueItem> { new(fileA) };
-        var filesB = new ObservableCollection<FileQueueItem> { new(fileB) };
-        vm.Initialize(slowScript, filesA);
+        vm.Initialize(captured, files);
         MessengerIsolation.Track(vm);
 
         var execution = vm.StartExecutionCommand.ExecuteAsync(null);
-        vm.Initialize(fastScript, filesB);
-
-        release.Release();
+        started.Wait(TimeSpan.FromSeconds(5)).Should().BeTrue();
+        captured!.Cancel();
         await execution;
 
-        slowScript.IsProcessing.Should().BeFalse(
-            "исходный скрипт обязан корректно финализироваться");
-        slowScript.SavedStatusText.Should().Be("Обработка завершена");
-        fastScript.SavedStatusText.Should().NotBe("Обработка завершена",
-            "новый скрипт не должен получать финализацию чужой очереди");
+        executed.Count.Should().BeLessThan(files.Count,
+            "после отмены очередь не должна запускать новые элементы");
+
+        int terminalEvents = vm.TypedItemResults.Count;
+        terminalEvents.Should().Be(files.Count,
+            "каждый элемент очереди обязан получить ровно один терминальный результат");
+        vm.CancelledCount.Should().BeGreaterThan(0);
+        captured.SavedStatusText.Should().StartWith("Обработка отменена");
+        files.Should().OnlyContain(item => item.State != FileProcessingState.Processing,
+            "после отмены ни один элемент не должен оставаться в состоянии обработки");
     }
 
     /// <summary>

@@ -1,14 +1,17 @@
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
 using System;
 using System.Windows.Input;
-using Microsoft.UI;
-using Microsoft.UI.Xaml;
-using Microsoft.UI.Xaml.Media;
-using Microsoft.UI.Dispatching;
+
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+
 using KTools_App.Core;
 using KTools_App.Services.Contracts;
+
+using Microsoft.UI;
+using Microsoft.UI.Dispatching;
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Media;
 
 namespace KTools_App.Models;
 
@@ -114,13 +117,13 @@ public partial class DependencyVM : ObservableObject
     public bool IsExtracting => Status == DependencyStatus.Extracting;
 
     /// <summary>Определяет видимость прогресс-бара.</summary>
-    public Visibility ProgressVisibility => 
-        (Status == DependencyStatus.Downloading || Status == DependencyStatus.Extracting) 
+    public Visibility ProgressVisibility =>
+        (Status == DependencyStatus.Downloading || Status == DependencyStatus.Extracting)
         ? Visibility.Visible : Visibility.Collapsed;
 
     /// <summary>Определяет видимость дополнительного текстового блока скорости/ошибки.</summary>
-    public Visibility SubStatusVisibility => 
-        (Status == DependencyStatus.Downloading || Status == DependencyStatus.Error) 
+    public Visibility SubStatusVisibility =>
+        (Status == DependencyStatus.Downloading || Status == DependencyStatus.Error)
         ? Visibility.Visible : Visibility.Collapsed;
 
     /// <summary>Дополнительный текст состояния (скорость загрузки или сообщение об ошибке).</summary>
@@ -132,28 +135,28 @@ public partial class DependencyVM : ObservableObject
     };
 
     /// <summary>Определяет видимость кнопки установки.</summary>
-    public Visibility InstallButtonVisibility => 
-        (Status == DependencyStatus.NotInstalled || Status == DependencyStatus.Error) 
+    public Visibility InstallButtonVisibility =>
+        (Status == DependencyStatus.NotInstalled || Status == DependencyStatus.Error)
         ? Visibility.Visible : Visibility.Collapsed;
 
     /// <summary>Определяет видимость кнопки обновления.</summary>
-    public Visibility UpdateButtonVisibility => 
-        (Status == DependencyStatus.Installed && IsUpdateAvailable) 
+    public Visibility UpdateButtonVisibility =>
+        (Status == DependencyStatus.Installed && IsUpdateAvailable)
         ? Visibility.Visible : Visibility.Collapsed;
 
     /// <summary>Определяет видимость кнопки отмены.</summary>
-    public Visibility CancelButtonVisibility => 
-        (Status == DependencyStatus.Downloading || Status == DependencyStatus.Extracting) 
+    public Visibility CancelButtonVisibility =>
+        (Status == DependencyStatus.Downloading || Status == DependencyStatus.Extracting)
         ? Visibility.Visible : Visibility.Collapsed;
 
     /// <summary>Определяет видимость стандартной большой кнопки удаления.</summary>
-    public Visibility NormalDeleteButtonVisibility => 
-        (Status == DependencyStatus.Installed && !IsUpdateAvailable) 
+    public Visibility NormalDeleteButtonVisibility =>
+        (Status == DependencyStatus.Installed && !IsUpdateAvailable)
         ? Visibility.Visible : Visibility.Collapsed;
 
     /// <summary>Определяет видимость маленькой квадратной кнопки удаления рядом с Обновить.</summary>
-    public Visibility SmallDeleteButtonVisibility => 
-        (Status == DependencyStatus.Installed && IsUpdateAvailable) 
+    public Visibility SmallDeleteButtonVisibility =>
+        (Status == DependencyStatus.Installed && IsUpdateAvailable)
         ? Visibility.Visible : Visibility.Collapsed;
 
     /// <summary>Команда установки данной зависимости.</summary>
@@ -186,17 +189,17 @@ public partial class DependencyVM : ObservableObject
         _progress = _dependencyManager.GetDownloadProgress(info.Key);
         _speed = _dependencyManager.GetDownloadSpeed(info.Key);
 
-        InstallCommand = new AsyncRelayCommand(async () => 
+        InstallCommand = new AsyncRelayCommand(async () =>
             await _dependencyManager.InstallDependencyAsync(Info.Key));
 
-        UpdateCommand = new AsyncRelayCommand(async () => 
+        UpdateCommand = new AsyncRelayCommand(async () =>
             await _dependencyManager.InstallDependencyAsync(Info.Key));
 
-        CancelCommand = new RelayCommand(() => 
+        CancelCommand = new RelayCommand(() =>
             _dependencyManager.CancelInstallation(Info.Key));
 
-        RemoveCommand = new RelayCommand(() => 
-            _dependencyManager.RemoveDependency(Info.Key));
+        RemoveCommand = new AsyncRelayCommand(async () =>
+            await _dependencyManager.RemoveDependencyAsync(Info.Key));
 
         LoadVersionAsync();
     }
@@ -208,9 +211,9 @@ public partial class DependencyVM : ObservableObject
     {
         if (Status != DependencyStatus.Installed) return;
 
-        Task.Run(() =>
+        _ = Task.Run(async () =>
         {
-            string ver = _dependencyManager.GetInstalledVersion(Info.Key);
+            string ver = await _dependencyManager.GetInstalledVersionAsync(Info.Key);
             if (!string.IsNullOrEmpty(ver))
             {
                 if (_dispatcherQueue != null)

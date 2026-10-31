@@ -1,10 +1,13 @@
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 
+using KTools_App.Core;
+using KTools_App.Diagnostics;
 using KTools_App.Services.Contracts;
+
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Graphics.Canvas;
 using Microsoft.Graphics.Canvas.Geometry;
@@ -12,6 +15,7 @@ using Microsoft.Graphics.Canvas.UI.Xaml;
 using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Input;
+
 using Windows.Storage.Pickers;
 using Windows.UI;
 
@@ -60,7 +64,18 @@ public sealed partial class BitrateViewerWindow : Window
         }
         catch (Exception ex)
         {
-            App.Services.GetRequiredService<ILogService>().Error($"Не удалось применить тему к окну анализа битрейта: {ex.Message}", "BitrateViewerWindow");
+            App.Services.GetRequiredService<ILogService>().Write(
+                "bitrate_viewer.theme_failed",
+                LogLevel.Warning,
+                LogStatus.PartiallySucceeded,
+                "Не удалось применить тему к окну анализа битрейта, применена тема по умолчанию",
+                ex,
+                "BitrateViewerWindow",
+                properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["Stage"] = "theme",
+                    ["ErrorCode"] = "theme-apply-failed"
+                });
         }
 
         try
@@ -77,7 +92,18 @@ public sealed partial class BitrateViewerWindow : Window
         }
         catch (Exception ex)
         {
-            App.Services.GetRequiredService<ILogService>().Error($"Не удалось применить эффект фона к окну анализа битрейта: {ex.Message}", "BitrateViewerWindow");
+            App.Services.GetRequiredService<ILogService>().Write(
+                "bitrate_viewer.backdrop_failed",
+                LogLevel.Warning,
+                LogStatus.PartiallySucceeded,
+                "Не удалось применить эффект фона к окну анализа битрейта",
+                ex,
+                "BitrateViewerWindow",
+                properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["Stage"] = "backdrop",
+                    ["ErrorCode"] = "backdrop-apply-failed"
+                });
         }
     }
 
@@ -87,7 +113,7 @@ public sealed partial class BitrateViewerWindow : Window
 
         TitleTextBlock.Text = Path.GetFileName(data.FilePath);
         SubtitleTextBlock.Text = $"Кодек: {data.CodecName.ToUpperInvariant()} | Кадров: {data.TotalFrames} | Длительность: {FormatTime(data.DurationSeconds)}";
-        
+
         MeanTextBlock.Text = $"{data.MeanMbps:F2} Mbps";
         MaxTextBlock.Text = $"{data.MaxMbps:F2} Mbps";
         MinTextBlock.Text = $"{data.MinMbps:F2} Mbps";
@@ -469,7 +495,7 @@ public sealed partial class BitrateViewerWindow : Window
             var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
             var windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(hwnd);
             var picker = new Microsoft.Windows.Storage.Pickers.FileSavePicker(windowId);
-            
+
             picker.SuggestedStartLocation = Microsoft.Windows.Storage.Pickers.PickerLocationId.PicturesLibrary;
             picker.FileTypeChoices.Add("PNG График", new List<string> { ".png" });
             picker.SuggestedFileName = $"{Path.GetFileNameWithoutExtension(_data.FilePath)}_bitrate.png";
@@ -503,7 +529,7 @@ public sealed partial class BitrateViewerWindow : Window
     private static string FormatTime(double seconds)
     {
         TimeSpan ts = TimeSpan.FromSeconds(Math.Max(0, seconds));
-        return ts.Hours > 0 
+        return ts.Hours > 0
             ? $"{ts.Hours:D2}:{ts.Minutes:D2}:{ts.Seconds:D2}"
             : $"{ts.Minutes:D2}:{ts.Seconds:D2}";
     }

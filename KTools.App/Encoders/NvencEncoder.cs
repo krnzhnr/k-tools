@@ -1,8 +1,9 @@
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+
 using KTools_App.Core;
 using KTools_App.Encoders.Capabilities;
 using KTools_App.Models;
@@ -76,7 +77,7 @@ public class NvencEncoder : IVideoEncoder
     {
         if (settings != null && settings.TryGetValue("nvenc_codec", out object? codecObj) && codecObj != null)
         {
-            string codecStr = codecObj.ToString() ?? "";
+            string codecStr = KTools_App.Core.SettingValue.AsString(codecObj, "");
             if (_capabilitiesMap.TryGetValue(codecStr, out var cap))
             {
                 return cap;

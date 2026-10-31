@@ -1,4 +1,4 @@
-﻿// -*- coding: utf-8 -*-
+// -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -6,12 +6,14 @@ using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using Moq;
 using Moq.Protected;
 using KTools_App.Core;
+using KTools_App.Diagnostics;
 using KTools_App.Services.Contracts;
 using KTools_App.Services.Implementations;
 using KTools_App.Tests.TestHelpers;
@@ -168,11 +170,20 @@ public class ServicesIntegrationTests
         // Act
         Func<Task> act = () => service.CheckForUpdatesAsync(includePreReleases: false);
 
-        // Assert — сервис логирует исключение и пробрасывает его (документированное поведение)
+        // Assert — сервис фиксирует сбой структурированным событием и пробрасывает его
         await ServicesIntegrationTestsExtensions.ThrowAsyncAsync(act);
         logMock.Verify(
-            l => l.Exception(It.IsAny<Exception>(), It.Is<string>(s => s.Contains("GitHub", StringComparison.Ordinal)), It.IsAny<string>()),
-            Times.Once);
+            l => l.Write(
+                "app.update.check_failed",
+                LogLevel.Warning,
+                LogStatus.Failed,
+                It.Is<string>(s => !s.Contains("Exception", StringComparison.Ordinal)),
+                It.IsAny<Exception>(),
+                "UpdateService",
+                It.IsAny<LogContext?>(),
+                It.IsAny<IReadOnlyDictionary<string, object?>>()),
+            Times.Once,
+            "некорректный ответ GitHub API фиксируется структурированным событием с исключением в отдельном параметре");
     }
 
     [TestMethod]
@@ -198,11 +209,20 @@ public class ServicesIntegrationTests
         // Act
         Func<Task> act = () => service.CheckForUpdatesAsync(includePreReleases: false);
 
-        // Assert — сервис не глотает исключение молча: логирует и пробрасывает
+        // Assert — сервис не глотает исключение молча: фиксирует и пробрасывает
         await ServicesIntegrationTestsExtensions.ThrowAsyncAsync(act);
         logMock.Verify(
-            l => l.Exception(It.IsAny<Exception>(), It.IsAny<string>(), It.IsAny<string>()),
-            Times.Once);
+            l => l.Write(
+                "app.update.check_failed",
+                LogLevel.Warning,
+                LogStatus.Failed,
+                It.Is<string>(s => !s.Contains("Exception", StringComparison.Ordinal)),
+                It.IsAny<Exception>(),
+                "UpdateService",
+                It.IsAny<LogContext?>(),
+                It.IsAny<IReadOnlyDictionary<string, object?>>()),
+            Times.Once,
+            "сетевой сбой фиксируется структурированным событием и пробрасывается вызывающему");
     }
 
     [TestMethod]
@@ -395,12 +415,22 @@ public class ServicesIntegrationTests
         // Act
         logService.InitializeLogFile(customDir);
         logService.Info("запись в кастомную директорию", "Test");
+        logService.Flush(TimeSpan.FromSeconds(10)).Should().BeTrue("буфер журнала должен быть сброшен на диск");
 
         // Assert
         Directory.Exists(customDir).Should().BeTrue();
-        string[] logFiles = Directory.GetFiles(customDir, "ktools_*.log");
+        logService.CurrentLogFile.Should().NotBeNullOrWhiteSpace("файл сеанса создаётся в запрошенном каталоге");
+        string[] logFiles = Directory.GetFiles(customDir, LogFilePolicy.FileSearchPattern);
         logFiles.Should().ContainSingle();
-        File.ReadAllText(logFiles[0]).Should().Contain("запись в кастомную директорию");
+        string content;
+        using (FileStream stream = new(logFiles[0], FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+        using (StreamReader reader = new(stream))
+        {
+            content = reader.ReadToEnd();
+        }
+        content.Should().Contain("запись в кастомную директорию");
+        logService.EffectiveLogDirectory.Should().Be(customDir,
+            "фактически применённый каталог журнала обязан совпадать с запрошенным");
     }
 
     [TestMethod]
@@ -521,66 +551,35 @@ public class ServicesIntegrationTests
     {
         // Arrange
         using var scope = new TempDirectoryScope();
-        var pathManager = new PathManager(MockBuilders.CreateLogServiceMock().Object);
-        string mkvDir = Path.Combine(AppContext.BaseDirectory, "bin", "mkvtoolnix");
+        var pathManager = new PathManager(MockBuilders.CreateLogServiceMock().Object, scope.RootPath);
+        string mkvDir = Path.Combine(scope.RootPath, "bin", "mkvtoolnix");
         string mkvExe = Path.Combine(mkvDir, "mkvmerge.exe");
-        bool dirCreated = Directory.Exists(mkvDir);
-        bool exeCreated = File.Exists(mkvExe);
         Directory.CreateDirectory(mkvDir);
         File.WriteAllText(mkvExe, "stub");
 
-        try
-        {
-            // Act
-            string path = pathManager.GetBinaryPath("mkvmerge");
+        // Act
+        string path = pathManager.GetBinaryPath("mkvmerge");
 
-            // Assert — маппинг подпапок: mkvmerge лежит в bin/mkvtoolnix/
-            path.Should().Be(mkvExe);
-        }
-        finally
-        {
-            if (!exeCreated)
-            {
-                File.Delete(mkvExe);
-            }
-            if (!dirCreated)
-            {
-                Directory.Delete(mkvDir);
-            }
-        }
+        // Assert — маппинг подпапок: mkvmerge лежит в bin/mkvtoolnix/
+        path.Should().Be(mkvExe);
     }
 
     [TestMethod]
     public void PathManager_GetBinaryPath_FindsFileInBinRoot()
     {
         // Arrange
-        var pathManager = new PathManager(MockBuilders.CreateLogServiceMock().Object);
-        string binDir = Path.Combine(AppContext.BaseDirectory, "bin");
-        bool dirCreated = Directory.Exists(binDir);
+        using var scope = new TempDirectoryScope();
+        var pathManager = new PathManager(MockBuilders.CreateLogServiceMock().Object, scope.RootPath);
+        string binDir = Path.Combine(scope.RootPath, "bin");
         Directory.CreateDirectory(binDir);
         string eacPath = Path.Combine(binDir, "eac3to.exe");
-        bool fileCreated = File.Exists(eacPath);
         File.WriteAllText(eacPath, "stub");
 
-        try
-        {
-            // Act
-            string path = pathManager.GetBinaryPath("eac3to");
+        // Act
+        string path = pathManager.GetBinaryPath("eac3to");
 
-            // Assert
-            path.Should().Be(eacPath);
-        }
-        finally
-        {
-            if (!fileCreated)
-            {
-                File.Delete(eacPath);
-            }
-            if (!dirCreated)
-            {
-                Directory.Delete(binDir);
-            }
-        }
+        // Assert
+        path.Should().Be(eacPath);
     }
 
     [TestMethod]

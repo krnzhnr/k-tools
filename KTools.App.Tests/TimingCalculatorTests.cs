@@ -26,12 +26,15 @@ public class TimingCalculatorTests
     }
 
     [TestMethod]
-    [DataRow(0L, "0:00:00.000")]
-    [DataRow(1000L, "0:00:01.000")]
-    [DataRow(50L, "0:00:00.050")]
-    [DataRow(5025678L, "1:23:45.678")]
-    [DataRow(164200L, "0:02:44.200")]
-    [DataRow(-164200L, "0:02:44.200")] // Абсолютное значение
+    [DataRow(0L, "0:00:00.00")]
+    [DataRow(1000L, "0:00:01.00")]
+    [DataRow(50L, "0:00:00.05")]
+    [DataRow(5025678L, "1:23:45.67")]
+    [DataRow(164200L, "0:02:44.20")]
+    [DataRow(-164200L, "0:02:44.20")] // Абсолютное значение
+    [DataRow(999L, "0:00:00.99")] // Усечение до сотых (не округление)
+    [DataRow(1234L, "0:00:01.23")]
+    [DataRow(1999L, "0:00:01.99")]
     public void FormatMsToAegisub_WithMs_ReturnsExpectedFormat(long ms, string expectedStr)
     {
         string actualStr = TimingCalculatorPage.FormatMsToAegisub(ms);

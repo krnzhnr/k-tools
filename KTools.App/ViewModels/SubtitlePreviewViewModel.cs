@@ -1,22 +1,27 @@
 // -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
-using Microsoft.Extensions.DependencyInjection;
-using KTools_App.Services.Contracts;
-using KTools_App.Core;
-using KTools_App.Infrastructure;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+
+using CommunityToolkit.Mvvm.ComponentModel;
+
+using KTools_App.Core;
+using KTools_App.Diagnostics;
+using KTools_App.Infrastructure;
+using KTools_App.Models;
+using KTools_App.Services.Contracts;
+
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Media;
+
 using Windows.UI;
 using Windows.UI.Text;
-using CommunityToolkit.Mvvm.ComponentModel;
-using KTools_App.Models;
 
 namespace KTools_App.ViewModels;
 
@@ -60,6 +65,7 @@ public sealed class PatternItemViewModel : ObservableObject
     private bool _active = true;
     private int _deleteModeIndex = 0; // 0 = Удалять совпадения (only_part = true), 1 = Удалять строки с совпадениями (only_part = false)
     private string _sampleText = string.Empty;
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _sampleTextDebounceTimer;
 
     public string Word
     {
@@ -68,7 +74,7 @@ public sealed class PatternItemViewModel : ObservableObject
         {
             if (SetProperty(ref _word, value))
             {
-                UpdateSampleText();
+                ScheduleUpdateSampleText();
             }
         }
     }
@@ -111,6 +117,39 @@ public sealed class PatternItemViewModel : ObservableObject
         UpdateSampleText();
     }
 
+    private void ScheduleUpdateSampleText()
+    {
+        if (string.IsNullOrWhiteSpace(_word))
+        {
+            if (_sampleTextDebounceTimer != null)
+            {
+                _sampleTextDebounceTimer.Stop();
+            }
+            UpdateSampleText();
+            return;
+        }
+
+        if (_sampleTextDebounceTimer == null)
+        {
+            try
+            {
+                _sampleTextDebounceTimer = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread().CreateTimer();
+                _sampleTextDebounceTimer.Interval = TimeSpan.FromMilliseconds(300);
+                _sampleTextDebounceTimer.IsRepeating = false;
+                _sampleTextDebounceTimer.Tick += (s, e) => UpdateSampleText();
+            }
+            catch
+            {
+                _sampleTextDebounceTimer = null;
+                UpdateSampleText();
+                return;
+            }
+        }
+
+        _sampleTextDebounceTimer.Stop();
+        _sampleTextDebounceTimer.Start();
+    }
+
     private void UpdateSampleText()
     {
         if (string.IsNullOrWhiteSpace(_word))
@@ -134,7 +173,7 @@ public sealed class PatternItemViewModel : ObservableObject
             string farePattern = EscapeFareSpecialChars(_word);
             var xeger = new Fare.Xeger(farePattern);
             string generated = xeger.Generate();
-            
+
             if (string.IsNullOrEmpty(generated))
             {
                 SampleText = "Пример: (пустая строка)";
@@ -450,7 +489,7 @@ public sealed class SubtitlePreviewLine : ObservableObject
     /// <summary>
     /// Отформатированный интервал времени реплики.
     /// </summary>
-    public string Timing => $"{Start} --> {End}";
+    public string Timing => $"{Start} ➔ {End}";
 
     /// <summary>
     /// Значение перечисления TextDecorations для привязки к текстовому блоку.
@@ -464,6 +503,10 @@ public sealed class SubtitlePreviewLine : ObservableObject
     public Brush TextBrush =>
         (Brush)Application.Current.Resources[IsTextStrikethrough ? "TextFillColorTertiaryBrush" : "TextFillColorPrimaryBrush"];
 
+    private static readonly Dictionary<string, SolidColorBrush> StatusBrushCache =
+        new(StringComparer.OrdinalIgnoreCase);
+    private static readonly object StatusBrushCacheLock = new();
+
     /// <summary>
     /// Кисть для цвета статуса реплики.
     /// </summary>
@@ -471,43 +514,58 @@ public sealed class SubtitlePreviewLine : ObservableObject
     {
         get
         {
-            try
-            {
-                if (string.IsNullOrEmpty(StatusColor))
-                {
-                    return (Brush)Application.Current.Resources["TextFillColorPrimaryBrush"];
-                }
-
-                string hex = StatusColor.Replace("#", "");
-                if (hex.Length == 6)
-                {
-                    byte r = byte.Parse(hex.Substring(0, 2), System.Globalization.NumberStyles.HexNumber);
-                    byte g = byte.Parse(hex.Substring(2, 2), System.Globalization.NumberStyles.HexNumber);
-                    byte b = byte.Parse(hex.Substring(4, 2), System.Globalization.NumberStyles.HexNumber);
-                    return new SolidColorBrush(Color.FromArgb(255, r, g, b));
-                }
-                else if (hex.Length == 8)
-                {
-                    byte a = byte.Parse(hex.Substring(0, 2), System.Globalization.NumberStyles.HexNumber);
-                    byte r = byte.Parse(hex.Substring(2, 2), System.Globalization.NumberStyles.HexNumber);
-                    byte g = byte.Parse(hex.Substring(4, 2), System.Globalization.NumberStyles.HexNumber);
-                    byte b = byte.Parse(hex.Substring(6, 2), System.Globalization.NumberStyles.HexNumber);
-                    return new SolidColorBrush(Color.FromArgb(a, r, g, b));
-                }
-
-                return (Brush)Application.Current.Resources["TextFillColorPrimaryBrush"];
-            }
-            catch
+            string? statusColor = StatusColor;
+            if (string.IsNullOrEmpty(statusColor))
             {
                 return (Brush)Application.Current.Resources["TextFillColorPrimaryBrush"];
             }
+
+            lock (StatusBrushCacheLock)
+            {
+                if (StatusBrushCache.TryGetValue(statusColor, out var cached))
+                {
+                    return cached;
+                }
+
+                try
+                {
+                    string hex = statusColor.Replace("#", "");
+                    SolidColorBrush? brush = null;
+                    if (hex.Length == 6)
+                    {
+                        byte r = byte.Parse(hex.Substring(0, 2), System.Globalization.NumberStyles.HexNumber);
+                        byte g = byte.Parse(hex.Substring(2, 2), System.Globalization.NumberStyles.HexNumber);
+                        byte b = byte.Parse(hex.Substring(4, 2), System.Globalization.NumberStyles.HexNumber);
+                        brush = new SolidColorBrush(Color.FromArgb(255, r, g, b));
+                    }
+                    else if (hex.Length == 8)
+                    {
+                        byte a = byte.Parse(hex.Substring(0, 2), System.Globalization.NumberStyles.HexNumber);
+                        byte r = byte.Parse(hex.Substring(2, 2), System.Globalization.NumberStyles.HexNumber);
+                        byte g = byte.Parse(hex.Substring(4, 2), System.Globalization.NumberStyles.HexNumber);
+                        byte b = byte.Parse(hex.Substring(6, 2), System.Globalization.NumberStyles.HexNumber);
+                        brush = new SolidColorBrush(Color.FromArgb(a, r, g, b));
+                    }
+
+                    if (brush != null)
+                    {
+                        StatusBrushCache[statusColor] = brush;
+                        return brush;
+                    }
+                }
+                catch
+                {
+                }
+            }
+
+            return (Brush)Application.Current.Resources["TextFillColorPrimaryBrush"];
         }
     }
 
     /// <summary>
     /// Обновить визуальное состояние строки на основе текущих фильтров.
     /// </summary>
-    public void UpdateState(bool notify = true)
+    public void UpdateState(bool notify = true, List<(System.Text.RegularExpressions.Regex Regex, bool OnlyPart)>? compiledPatterns = null)
     {
         if (IsOriginallyEmpty)
         {
@@ -534,32 +592,45 @@ public sealed class SubtitlePreviewLine : ObservableObject
         string textAfterFilters = OriginalText;
 
         // Последовательно применяем активные regex-паттерны
-        bool isDeletedByRegex = false;
-        foreach (var patternDict in _filterState.TextPatterns)
+        List<(System.Text.RegularExpressions.Regex Regex, bool OnlyPart)> activeRegexes;
+        if (compiledPatterns != null)
         {
-            if (patternDict.TryGetValue("active", out var act) && SafeGetBool(act) &&
-                patternDict.TryGetValue("word", out var p) && p?.ToString() is string pattern && !string.IsNullOrEmpty(pattern))
+            activeRegexes = compiledPatterns;
+        }
+        else
+        {
+            activeRegexes = new List<(System.Text.RegularExpressions.Regex, bool)>();
+            foreach (var patternDict in _filterState.TextPatterns)
             {
-                bool onlyPart = patternDict.TryGetValue("only_part", out var op) && SafeGetBool(op);
-                try
+                if (patternDict.TryGetValue("active", out var act) && SafeGetBool(act) &&
+                    patternDict.TryGetValue("word", out var p) && p?.ToString() is string pattern && !string.IsNullOrEmpty(pattern))
                 {
-                    var regex = new System.Text.RegularExpressions.Regex(pattern);
-                    if (regex.IsMatch(textAfterFilters))
+                    bool onlyPart = patternDict.TryGetValue("only_part", out var op) && SafeGetBool(op);
+                    try
                     {
-                        if (onlyPart)
-                        {
-                            textAfterFilters = regex.Replace(textAfterFilters, string.Empty);
-                        }
-                        else
-                        {
-                            isDeletedByRegex = true;
-                            break;
-                        }
+                        activeRegexes.Add((new System.Text.RegularExpressions.Regex(pattern), onlyPart));
+                    }
+                    catch
+                    {
+                        // Игнорируем некорректные regex в превью
                     }
                 }
-                catch
+            }
+        }
+
+        bool isDeletedByRegex = false;
+        foreach (var (regex, onlyPart) in activeRegexes)
+        {
+            if (regex.IsMatch(textAfterFilters))
+            {
+                if (onlyPart)
                 {
-                    // Игнорируем некорректные regex в превью
+                    textAfterFilters = regex.Replace(textAfterFilters, string.Empty);
+                }
+                else
+                {
+                    isDeletedByRegex = true;
+                    break;
                 }
             }
         }
@@ -753,6 +824,8 @@ public sealed class SubtitlePreviewLine : ObservableObject
 /// </summary>
 public sealed partial class SubtitlePreviewViewModel : ThreadSafeViewModel
 {
+    private const string SourceName = nameof(SubtitlePreviewViewModel);
+
     private readonly IAssParser _assParser;
     private readonly ISettingsManager _settingsManager;
     private readonly ILogService _logService;
@@ -763,6 +836,8 @@ public sealed partial class SubtitlePreviewViewModel : ThreadSafeViewModel
     private readonly List<FilterItemViewModel> _allActors = new();
     private readonly List<FilterItemViewModel> _allStyles = new();
     private readonly List<FilterItemViewModel> _allEffects = new();
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _searchDebounceTimer;
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _fileCardsDebounceTimer;
 
     /// <summary>
     /// Полный список строк субтитров.
@@ -852,7 +927,7 @@ public sealed partial class SubtitlePreviewViewModel : ThreadSafeViewModel
     /// Инициализирует новый экземпляр SubtitlePreviewViewModel с поддержкой DI.
     /// </summary>
     public SubtitlePreviewViewModel(
-        SubtitleFilterState filterState, 
+        SubtitleFilterState filterState,
         string? settingsGroupName = null,
         IAssParser? assParser = null,
         ISettingsManager? settingsManager = null,
@@ -896,7 +971,25 @@ public sealed partial class SubtitlePreviewViewModel : ThreadSafeViewModel
     /// </summary>
     partial void OnSearchTextChanged(string value)
     {
-        UpdateFilteredLines();
+        if (_searchDebounceTimer == null)
+        {
+            try
+            {
+                _searchDebounceTimer = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread().CreateTimer();
+                _searchDebounceTimer.Interval = TimeSpan.FromMilliseconds(250);
+                _searchDebounceTimer.IsRepeating = false;
+                _searchDebounceTimer.Tick += (s, e) => UpdateFilteredLines();
+            }
+            catch
+            {
+                _searchDebounceTimer = null;
+                UpdateFilteredLines();
+                return;
+            }
+        }
+
+        _searchDebounceTimer.Stop();
+        _searchDebounceTimer.Start();
     }
 
     partial void OnActorsSearchTextChanged(string value)
@@ -969,7 +1062,30 @@ public sealed partial class SubtitlePreviewViewModel : ThreadSafeViewModel
         if (e.PropertyName == nameof(SubtitlePreviewLine.IsChecked))
         {
             OnPropertyChanged(nameof(SubtitleLines));
-            UpdateFileCards();
+            if (_fileCardsDebounceTimer == null)
+            {
+                try
+                {
+                    _fileCardsDebounceTimer = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread().CreateTimer();
+                    _fileCardsDebounceTimer.Interval = TimeSpan.FromMilliseconds(100);
+                    _fileCardsDebounceTimer.IsRepeating = false;
+                    _fileCardsDebounceTimer.Tick += (s, e2) => UpdateFileCards();
+                }
+                catch
+                {
+                    _fileCardsDebounceTimer = null;
+                }
+            }
+
+            if (_fileCardsDebounceTimer != null)
+            {
+                _fileCardsDebounceTimer.Stop();
+                _fileCardsDebounceTimer.Start();
+            }
+            else
+            {
+                UpdateFileCards();
+            }
         }
     }
 
@@ -1012,10 +1128,16 @@ public sealed partial class SubtitlePreviewViewModel : ThreadSafeViewModel
                 }
                 catch (Exception ex)
                 {
-                    _logService.Exception(
+                    _logService.Write(
+                        "ui.subtitle_preview.parse_failed",
+                        LogLevel.Warning,
+                        LogStatus.Failed,
+                        $"Файл не разобран при подготовке предпросмотра: '{LogProps.FileName(path)}'",
                         ex,
-                        $"Ошибка парсинга файла при подготовке предпросмотра: '{path}'",
-                        "SubtitlePreviewViewModel");
+                        SourceName,
+                        properties: LogProps
+                            .Create("FileName", LogProps.FileName(path))
+                            .With("ErrorCode", "SUBTITLE_PARSE_FAILED"));
                 }
             }
         });
@@ -1033,7 +1155,8 @@ public sealed partial class SubtitlePreviewViewModel : ThreadSafeViewModel
         {
             var isExcluded = _filterState.ExcludedActors.Contains(actor);
             var item = new FilterItemViewModel(actor, !isExcluded);
-            item.PropertyChanged += (s, e) => {
+            item.PropertyChanged += (s, e) =>
+            {
                 if (e.PropertyName == nameof(FilterItemViewModel.IsChecked))
                 {
                     if (!_isBulkUpdating)
@@ -1051,7 +1174,8 @@ public sealed partial class SubtitlePreviewViewModel : ThreadSafeViewModel
         {
             var isExcluded = _filterState.ExcludedStyles.Contains(style);
             var item = new FilterItemViewModel(style, !isExcluded);
-            item.PropertyChanged += (s, e) => {
+            item.PropertyChanged += (s, e) =>
+            {
                 if (e.PropertyName == nameof(FilterItemViewModel.IsChecked))
                 {
                     if (!_isBulkUpdating)
@@ -1069,7 +1193,8 @@ public sealed partial class SubtitlePreviewViewModel : ThreadSafeViewModel
         {
             var isExcluded = _filterState.ExcludedEffects.Contains(effect);
             var item = new FilterItemViewModel(effect, !isExcluded);
-            item.PropertyChanged += (s, e) => {
+            item.PropertyChanged += (s, e) =>
+            {
                 if (e.PropertyName == nameof(FilterItemViewModel.IsChecked))
                 {
                     if (!_isBulkUpdating)
@@ -1286,9 +1411,27 @@ public sealed partial class SubtitlePreviewViewModel : ThreadSafeViewModel
             _filterState.StripFormatting = StripFormatting;
             _filterState.StripCaps = StripCaps;
 
+            var compiledPatterns = new List<(System.Text.RegularExpressions.Regex Regex, bool OnlyPart)>();
+            foreach (var patternDict in _filterState.TextPatterns)
+            {
+                if (patternDict.TryGetValue("active", out var act) && SafeGetBool(act) &&
+                    patternDict.TryGetValue("word", out var p) && p?.ToString() is string pattern && !string.IsNullOrEmpty(pattern))
+                {
+                    bool onlyPart = patternDict.TryGetValue("only_part", out var op) && SafeGetBool(op);
+                    try
+                    {
+                        compiledPatterns.Add((new System.Text.RegularExpressions.Regex(pattern), onlyPart));
+                    }
+                    catch
+                    {
+                        // Игнорируем некорректные regex в превью
+                    }
+                }
+            }
+
             foreach (var line in SubtitleLines)
             {
-                line.UpdateState(true);
+                line.UpdateState(true, compiledPatterns);
             }
         }
         finally

@@ -101,7 +101,7 @@
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate x:DataType="viewmodels:SubtitleFileCardItem">
                                             <community:SettingsCard
-                                                Header="{x:Bind FileName}"
+                                                Header="{x:Bind FileName, Mode=OneWay}"
                                                 Description="{x:Bind DescriptionText, Mode=OneWay}"
                                                 IsClickEnabled="True"
                                                 Click="FileCard_Click"
@@ -231,7 +231,7 @@
                                             CornerRadius="4">
                                         <StackPanel Orientation="Horizontal" Spacing="8">
                                             <SymbolIcon Symbol="Page2" Foreground="{ThemeResource SystemControlForegroundAccentBrush}" />
-                                            <TextBlock Text="{x:Bind FileName}" FontWeight="SemiBold" FontSize="13" />
+                                            <TextBlock Text="{x:Bind FileName, Mode=OneWay}" FontWeight="SemiBold" FontSize="13" />
                                         </StackPanel>
                                     </Border>
 
@@ -252,21 +252,21 @@
                                             <CheckBox Grid.Column="0" 
                                                       IsChecked="{x:Bind IsChecked, Mode=OneWay}"
                                                       Click="SubtitleCheckBox_Click"
-                                                      IsEnabled="{x:Bind IsOriginallyEmpty, Converter={StaticResource InverseBoolConverter}}"
+                                                      IsEnabled="{x:Bind IsOriginallyEmpty, Mode=OneWay, Converter={StaticResource InverseBoolConverter}}"
                                                       MinWidth="0"
                                                       HorizontalAlignment="Left"
                                                       VerticalAlignment="Center" />
 
                                             <!-- Тайминг -->
                                             <TextBlock Grid.Column="1" 
-                                                       Text="{x:Bind Timing}" 
+                                                       Text="{x:Bind Timing, Mode=OneWay}" 
                                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" 
                                                        FontSize="12"
                                                        VerticalAlignment="Center" />
 
                                             <!-- Статус -->
                                             <TextBlock Grid.Column="2" 
-                                                       Text="{x:Bind Status}" 
+                                                       Text="{x:Bind Status, Mode=OneWay}" 
                                                        Foreground="{x:Bind StatusBrush, Mode=OneWay}" 
                                                        FontWeight="SemiBold"
                                                        FontSize="12"
@@ -274,7 +274,7 @@
 
                                             <!-- Актёр / Стиль -->
                                             <TextBlock Grid.Column="3" 
-                                                       Text="{x:Bind ActorAndStyle}" 
+                                                       Text="{x:Bind ActorAndStyle, Mode=OneWay}" 
                                                        Foreground="{ThemeResource TextFillColorTertiaryBrush}" 
                                                        FontSize="12"
                                                        TextTrimming="CharacterEllipsis"

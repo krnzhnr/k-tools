@@ -1,8 +1,10 @@
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+
+using KTools_App.Diagnostics;
 using KTools_App.Services.Contracts;
 
 namespace KTools_App.Core;
@@ -14,6 +16,7 @@ namespace KTools_App.Core;
 /// </summary>
 public static class FileLockDetector
 {
+    private const string SourceName = nameof(FileLockDetector);
     [StructLayout(LayoutKind.Sequential)]
     private struct RM_UNIQUE_PROCESS
     {
@@ -78,7 +81,14 @@ public static class FileLockDetector
             int res = RmStartSession(out uint handle, 0, sessionKey);
             if (res != 0)
             {
-                logService.Warn($"Не удалось запустить сессию Restart Manager. Код ошибки: {res}", "FileLockDetector");
+                logService.Write(
+                    "filelock.session.start.failed",
+                    LogLevel.Debug,
+                    LogStatus.Skipped,
+                    $"Сессия Restart Manager не запущена (код {res}), определение блокирующих процессов недоступно",
+                    source: SourceName,
+                    properties: LogProps
+                        .Create("ErrorCode", "LOCK_SESSION_START_FAILED"));
                 return string.Empty;
             }
 
@@ -88,7 +98,15 @@ public static class FileLockDetector
                 res = RmRegisterResources(handle, (uint)resources.Length, resources, 0, null, 0, null);
                 if (res != 0)
                 {
-                    logService.Warn($"Не удалось зарегистрировать ресурс '{filePath}' в Restart Manager. Код ошибки: {res}", "FileLockDetector");
+                    logService.Write(
+                    "filelock.register.failed",
+                    LogLevel.Debug,
+                    LogStatus.Skipped,
+                    $"Файл не зарегистрирован в Restart Manager (код {res}), определение блокирующих процессов недоступно",
+                    source: SourceName,
+                    properties: LogProps
+                        .Create("FileName", LogProps.FileName(filePath))
+                        .With("ErrorCode", "LOCK_REGISTER_FAILED"));
                     return string.Empty;
                 }
 
@@ -138,7 +156,16 @@ public static class FileLockDetector
         }
         catch (Exception ex)
         {
-            logService.Exception(ex, $"Непредвиденная ошибка при определении блокирующего процесса для '{filePath}': {ex.Message}", "FileLockDetector");
+            logService.Write(
+                "filelock.query.failed",
+                LogLevel.Debug,
+                LogStatus.Skipped,
+                "Блокирующий процесс для файла определить не удалось",
+                ex,
+                SourceName,
+                properties: LogProps
+                    .Create("FileName", LogProps.FileName(filePath))
+                    .With("ErrorCode", "LOCK_QUERY_FAILED"));
         }
 
         return string.Empty;

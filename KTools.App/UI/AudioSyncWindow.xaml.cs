@@ -1,14 +1,17 @@
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
 using System;
 using System.Numerics;
 using System.Threading;
 using System.Threading.Tasks;
+
 using KTools_App.Services.Contracts;
+
 using Microsoft.Graphics.Canvas.UI.Xaml;
 using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
+
 using Windows.UI;
 
 namespace KTools_App.UI;
@@ -251,7 +254,7 @@ public sealed partial class AudioSyncWindow : Window
             ds.DrawLine(x, 0, x, height, ColorHelper.FromArgb(25, 255, 255, 255), 1.0f);
 
             TimeSpan ts = TimeSpan.FromSeconds(Math.Abs(t));
-            string timeStr = t >= 0 
+            string timeStr = t >= 0
                 ? $"{ts.Minutes:D2}:{ts.Seconds:D2}.{ts.Milliseconds:D3}"
                 : $"-{ts.Minutes:D2}:{ts.Seconds:D2}.{ts.Milliseconds:D3}";
 

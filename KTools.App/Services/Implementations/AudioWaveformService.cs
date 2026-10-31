@@ -1,4 +1,4 @@
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
 using System;
 using System.Diagnostics;
 using System.IO;
@@ -6,6 +6,9 @@ using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
+
+using KTools_App.Core;
+using KTools_App.Diagnostics;
 using KTools_App.Services.Contracts;
 
 namespace KTools_App.Services.Implementations;
@@ -16,6 +19,8 @@ namespace KTools_App.Services.Implementations;
 /// </summary>
 public sealed class AudioWaveformService : IAudioWaveformService
 {
+    private const string SourceName = nameof(AudioWaveformService);
+
     private readonly ILogService _logService;
     private readonly IDependencyManager _dependencyManager;
     private readonly IPathManager _pathManager;
@@ -43,12 +48,33 @@ public sealed class AudioWaveformService : IAudioWaveformService
         }
 
         string originalName = Path.GetFileName(mediaFilePath);
-        _logService.Info($"Начало сверхточной генерации осциллограммы Audition-уровня для файла '{originalName}', дорожка: a:{audioTrackIndex}", "AudioWaveformService");
+        _logService.Write(
+            "waveform.generation_started",
+            LogLevel.Debug,
+            LogStatus.Running,
+            $"Начинается построение детализированной осциллограммы для '{originalName}', аудиодорожка a:{audioTrackIndex}",
+            source: SourceName,
+            properties: LogProps
+                .Create("InputName", originalName)
+                .With("Index", audioTrackIndex)
+                .With("Channel", "a:" + audioTrackIndex.ToString(System.Globalization.CultureInfo.InvariantCulture)));
 
         string ffmpegPath = _pathManager.GetBinaryPath("ffmpeg");
         if (string.IsNullOrWhiteSpace(ffmpegPath) || !File.Exists(ffmpegPath))
         {
-            _logService.Warn("kt-ffmpeg не найден, построение осциллограммы невозможно", "AudioWaveformService");
+            _logService.Write(
+                "waveform.dependency_missing",
+                LogLevel.Warning,
+                LogStatus.Skipped,
+                "Внешний декодер не найден, построение осциллограммы невозможно",
+                null,
+                SourceName,
+                properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["Stage"] = "decode",
+                    ["ErrorCode"] = "dependency-missing",
+                    ["InputName"] = originalName
+                });
             return new WaveformLevelData
             {
                 SampleRate = 44100,
@@ -121,14 +147,37 @@ public sealed class AudioWaveformService : IAudioWaveformService
 
             var waveformData = await Task.Run(() => ComputePeaksFromWavFile(tempWavPath, progressCallback, cancellationToken), cancellationToken);
 
-            _logService.Info($"Осциллограмма сверхвысокой детализации для '{originalName}' сгенерирована. Длительность: {waveformData.TotalDurationSeconds:F2} сек.", "AudioWaveformService");
+            _logService.Write(
+                "waveform.generation_completed",
+                LogLevel.Info,
+                LogStatus.Succeeded,
+                string.Format(
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    "Осциллограмма высокой детализации для '{0}' построена, длительность {1:F2} с",
+                    originalName,
+                    waveformData.TotalDurationSeconds),
+                source: SourceName,
+                properties: LogProps
+                    .Create("InputName", originalName)
+                    .With("DurationMs", waveformData.TotalDurationSeconds * 1000d));
             progressCallback?.Invoke(100.0, "Готово");
 
             return waveformData;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _logService.Exception(ex, $"Ошибка генерации осциллограммы для файла '{originalName}': {ex.Message}", "AudioWaveformService");
+            _logService.Write(
+                "waveform.generation_failed",
+                LogLevel.Error,
+                LogStatus.Failed,
+                $"Ошибка генерации осциллограммы для файла '{originalName}'",
+                ex,
+                SourceName,
+                properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["ErrorCode"] = "waveform-failed",
+                    ["InputName"] = originalName
+                });
             throw;
         }
         finally
@@ -141,7 +190,18 @@ public sealed class AudioWaveformService : IAudioWaveformService
                 }
                 catch (Exception ex)
                 {
-                    _logService.DebugLog($"Не удалось удалить временный файл осциллограммы '{tempWavPath}': {ex.Message}", "AudioWaveformService");
+                    _logService.Write(
+                        "waveform.cleanup_failed",
+                        LogLevel.Warning,
+                        LogStatus.PartiallySucceeded,
+                        "Не удалось удалить временный файл осциллограммы",
+                        ex,
+                        SourceName,
+                        properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                        {
+                            ["Stage"] = "cleanup",
+                            ["CleanupState"] = "failed"
+                        });
                 }
             }
         }
@@ -157,6 +217,7 @@ public sealed class AudioWaveformService : IAudioWaveformService
     {
         const int sampleRate = 44100;
         const int wavHeaderSize = 44;
+        const int bytesPerSample = 2;
 
         using var fileStream = new FileStream(wavPath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 65536, useAsync: false);
         if (fileStream.Length <= wavHeaderSize)
@@ -175,7 +236,7 @@ public sealed class AudioWaveformService : IAudioWaveformService
 
         fileStream.Seek(wavHeaderSize, SeekOrigin.Begin);
         long pcmBytesLength = fileStream.Length - wavHeaderSize;
-        long totalSamples = pcmBytesLength / 2; // 16-бит mono
+        long totalSamples = pcmBytesLength / bytesPerSample; // 16-бит mono
 
         double duration = (double)totalSamples / sampleRate;
 
@@ -185,8 +246,9 @@ public sealed class AudioWaveformService : IAudioWaveformService
 
         var peaks1000Hz = new WaveformPeak[count1000Hz];
 
-        byte[] rawBuffer = new byte[samplesPerPeak1000Hz * 2];
-        short[] sampleBuffer = new short[samplesPerPeak1000Hz];
+        // Буфер ~2 МБ, сбалансированный до целого числа пиков, чтобы пики не разрывались между чтениями
+        int chunkSamples = (int)(2 * 1024L * 1024L / bytesPerSample / samplesPerPeak1000Hz) * samplesPerPeak1000Hz;
+        byte[] rawBuffer = new byte[chunkSamples * bytesPerSample];
 
         long currentSampleIndex = 0;
         int peakIndex = 0;
@@ -195,68 +257,76 @@ public sealed class AudioWaveformService : IAudioWaveformService
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            int bytesToRead = (int)Math.Min(rawBuffer.Length, (totalSamples - currentSampleIndex) * 2);
-            int bytesRead = fileStream.Read(rawBuffer, 0, bytesToRead);
-            if (bytesRead <= 0) break;
-
-            int samplesRead = bytesRead / 2;
-
-            MemoryMarshal.Cast<byte, short>(rawBuffer.AsSpan(0, bytesRead)).CopyTo(sampleBuffer);
-
-            short min = short.MaxValue;
-            short max = short.MinValue;
-
-            int i = 0;
-            if (Vector.IsHardwareAccelerated && samplesRead >= Vector<short>.Count)
+            int bytesRead = 0;
+            while (bytesRead < rawBuffer.Length)
             {
-                var minVec = new Vector<short>(short.MaxValue);
-                var maxVec = new Vector<short>(short.MinValue);
+                int read = fileStream.Read(rawBuffer, bytesRead, rawBuffer.Length - bytesRead);
+                if (read <= 0) break;
+                bytesRead += read;
+            }
+            if (bytesRead == 0) break;
 
-                int vectorSize = Vector<short>.Count;
-                int limit = samplesRead - vectorSize;
+            int samplesRead = bytesRead / bytesPerSample;
+            var peeks = MemoryMarshal.Cast<byte, short>(rawBuffer.AsSpan(0, samplesRead * bytesPerSample));
 
-                for (; i <= limit; i += vectorSize)
+            for (int p = 0; p < samplesRead; p += samplesPerPeak1000Hz)
+            {
+                int segCount = Math.Min(samplesPerPeak1000Hz, samplesRead - p);
+                var seg = peeks.Slice(p, segCount);
+
+                short min = short.MaxValue;
+                short max = short.MinValue;
+
+                int i = 0;
+                if (Vector.IsHardwareAccelerated && segCount >= Vector<short>.Count)
                 {
-                    var vec = new Vector<short>(sampleBuffer, i);
-                    minVec = Vector.Min(minVec, vec);
-                    maxVec = Vector.Max(maxVec, vec);
+                    var minVec = new Vector<short>(short.MaxValue);
+                    var maxVec = new Vector<short>(short.MinValue);
+
+                    int vectorSize = Vector<short>.Count;
+                    int limit = segCount - vectorSize;
+
+                    for (; i <= limit; i += vectorSize)
+                    {
+                        var vec = new Vector<short>(seg.Slice(i, vectorSize));
+                        minVec = Vector.Min(minVec, vec);
+                        maxVec = Vector.Max(maxVec, vec);
+                    }
+
+                    for (int v = 0; v < vectorSize; v++)
+                    {
+                        if (minVec[v] < min) min = minVec[v];
+                        if (maxVec[v] > max) max = maxVec[v];
+                    }
                 }
 
-                for (int v = 0; v < vectorSize; v++)
+                for (; i < segCount; i++)
                 {
-                    if (minVec[v] < min) min = minVec[v];
-                    if (maxVec[v] > max) max = maxVec[v];
+                    short val = seg[i];
+                    if (val < min) min = val;
+                    if (val > max) max = val;
+                }
+
+                if (min > max)
+                {
+                    min = 0;
+                    max = 0;
+                }
+
+                float minNorm = min / 32768.0f;
+                float maxNorm = max / 32768.0f;
+
+                if (peakIndex < count1000Hz)
+                {
+                    peaks1000Hz[peakIndex++] = new WaveformPeak(minNorm, maxNorm);
                 }
             }
 
-            for (; i < samplesRead; i++)
-            {
-                short val = sampleBuffer[i];
-                if (val < min) min = val;
-                if (val > max) max = val;
-            }
+            int samplesConsumed = Math.Min(samplesRead, (int)(totalSamples - currentSampleIndex));
+            currentSampleIndex += samplesConsumed;
 
-            if (min > max)
-            {
-                min = 0;
-                max = 0;
-            }
-
-            float minNorm = min / 32768.0f;
-            float maxNorm = max / 32768.0f;
-
-            if (peakIndex < count1000Hz)
-            {
-                peaks1000Hz[peakIndex++] = new WaveformPeak(minNorm, maxNorm);
-            }
-
-            currentSampleIndex += samplesRead;
-
-            if (peakIndex % 2000 == 0)
-            {
-                double progressPct = 40.0 + (50.0 * currentSampleIndex / totalSamples);
-                progressCallback?.Invoke(progressPct, "Расчет миллисекундных пиков (1000 Гц)...");
-            }
+            double progressPct = 40.0 + (50.0 * currentSampleIndex / totalSamples);
+            progressCallback?.Invoke(progressPct, "Расчет миллисекундных пиков (1000 Гц)...");
         }
 
         // Пирамида понижения разрешения для масштабов (200Гц, 50Гц, 10Гц, 1Гц)

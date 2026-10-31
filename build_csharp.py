@@ -30,6 +30,7 @@ SRC_DIR = BASE_DIR
 PROJECT_FILE = SRC_DIR / "KTools.App" / "KTools.App.csproj"
 VERSION_FILE = BASE_DIR / "version.txt"
 CHANGELOG_FILE = BASE_DIR / "CHANGELOG.md"
+RELEASE_NOTES_FILE = SRC_DIR / "KTools.App" / "Assets" / "WhatsNew" / "release-notes.md"
 ICON_SRC = SRC_DIR / "KTools.App" / "Assets" / "AppIcon.ico"
 EXE_BASE_NAME = "KTools.App"  # Имя оригинального exe-файла после dotnet publish
 
@@ -59,6 +60,107 @@ def extract_version_from_changelog() -> str:
 
     version = match.group(1).strip()
     return version
+
+
+def extract_release_notes_section() -> str:
+    """Извлечь верхнюю секцию CHANGELOG.md (заголовок версии + тело до следующего '# ')."""
+    content = CHANGELOG_FILE.read_text(encoding="utf-8")
+    match = re.search(r"^#\s*([\d\.\-\w]+)", content, re.MULTILINE)
+    if not match:
+        raise ValueError("Не удалось найти версию в CHANGELOG.md")
+
+    header = match.group(0)
+    start = content.find(header) + len(header)
+    rest = content[start:]
+    next_match = re.search(r"^#\s+[^#]", rest, re.MULTILINE)
+    section = rest[:next_match.start()] if next_match else rest
+    return (header + "\n" + section).strip() + "\n"
+
+
+def is_preview_version(version: str) -> bool:
+    """Является ли версия пререлизной (вид 2.2.0-preview.171)."""
+    return bool(re.search(r"-preview\.\d+", version or ""))
+
+
+def normalize_note_item(line: str) -> str:
+    """Нормализовать пункт заметок для сравнения: срезать нумерацию и маркеры списка."""
+    text = line.strip()
+    text = re.sub(r"^\d+[.)]\s*", "", text)
+    text = re.sub(r"^[-*+]\s*", "", text)
+    return text.strip()
+
+
+def split_notes_body(body: str) -> list:
+    """Разбить тело заметок на подсекции: список пар (заголовок, строки пунктов)."""
+    sections = []
+    current_title = None
+    current_items: list = []
+    for raw_line in (body or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith("### "):
+            if current_title is not None and current_items:
+                sections.append((current_title, list(current_items)))
+            current_title = line[4:].strip()
+            current_items = []
+            continue
+        if line.startswith("#"):
+            continue
+        if current_title is None:
+            current_title = "Добавлено"
+        current_items.append(raw_line.rstrip())
+    if current_title is not None and current_items:
+        sections.append((current_title, list(current_items)))
+    return sections
+
+
+def compute_preview_delta(current_body: str, prev_body: str) -> str:
+    """Вычислить дельту пунктов текущего пререлиза относительно прошлого.
+
+    Сравнение идёт по тексту пунктов без ведущих номеров, поэтому вставка
+    в середину со сдвигом нумерации ложных срабатываний не даёт.
+    Переформулированные и сжатые пункты попадают в дельту как новые.
+    Пустой результат означает отсутствие изменений для окна «Что нового».
+    """
+    prev_known: dict = {}
+    for title, items in split_notes_body(prev_body):
+        prev_known.setdefault(title, set()).update(
+            normalize_note_item(i) for i in items)
+    delta_parts: list = []
+    for title, items in split_notes_body(current_body):
+        known = prev_known.get(title, set())
+        new_items = [i for i in items if normalize_note_item(i) not in known]
+        if new_items:
+            delta_parts.append("### " + title)
+            delta_parts.extend(new_items)
+    return ("\n".join(delta_parts).strip() + "\n") if delta_parts else ""
+
+
+def bake_release_notes(version: str | None = None, prev_body: str | None = None) -> None:
+    """Запечь снапшот изменений текущей версии для окна «Что нового».
+
+    В заголовок подставляется полная версия сборки (включая -preview.N),
+    чтобы окно показывалось один раз на каждый пререлиз.
+    Для пререлиза запекается только дельта относительно прошлого
+    опубликованного пререлиза; для стабильного релиза — полная секция.
+    Пустая дельта означает пропуск автопоказа через гейт версий.
+    Файл кладётся рядом с GIF-сценами и пакуется в установщик как Content.
+    Ошибка не роняет сборку: без файла окно просто не показывается.
+    """
+    try:
+        section = extract_release_notes_section()
+        header, _, body = section.partition("\n")
+        if not version:
+            version = header.lstrip("#").strip()
+        if is_preview_version(version) and (prev_body or "").strip():
+            body = compute_preview_delta(body, prev_body or "")
+        text = f"# {version}\n\n{body.strip()}\n" if body.strip() else f"# {version}\n"
+        RELEASE_NOTES_FILE.parent.mkdir(parents=True, exist_ok=True)
+        RELEASE_NOTES_FILE.write_text(text, encoding="utf-8")
+        print(f"[✓] Снапшот изменений версии записан: {RELEASE_NOTES_FILE.name}")
+    except Exception as e:
+        print(f"[!] Не удалось запечь изменения версии: {e}")
 
 
 def prompt_version_update() -> str:
@@ -123,7 +225,15 @@ def build_csharp_app(version: str) -> Path:
         "-r", "win-x64",
         "--self-contained", "true",
         "-p:PublishSingleFile=false",
-        "-p:PublishReadyToRun=false",
+        # PERF-07: явное true — релизный шип ставится пользователю с ReadyToRun,
+        # как декларирует csproj для Release (PublishReadyToRun=True); молчаливое
+        # расхождение устранено. Замер A/B на этом SSD-стенде (Measure-Startup,
+        # Runs 3): тёплый старт в шуме, регресса нет; цена — publish +~54 МБ
+        # (+24%), установщик +~11 МБ (+18%), что приемлемо. Холод на HDD-стенде
+        # здесь неизмерим (дисков HDD нет, перезагрузка недоступна): добрать на
+        # целевом железе; если там регресс — вернуть false, решение держать тут.
+        # Триминг/single-file осознанно выключены (MSIX/COM), не трогать.
+        "-p:PublishReadyToRun=true",
         "-p:Platform=x64",
         f"-p:Version={version}",
         f"-p:InformationalVersion={version}",
@@ -173,28 +283,20 @@ def generate_inno_script(version: str, publish_dir: Path) -> Path:
     iss_file = BASE_DIR / "KTools_CSharp.iss"
     output_dir = BASE_DIR / "setup_output"
     icon_file = SRC_DIR / "KTools.App" / "Assets" / "AppIcon.ico"
-    decoders_exe = BASE_DIR / "bin" / "eac3to_decoders" / "eac3to Decoder Pack 1.4.exe"
-    # Флаг временного включения/отключения упаковывания декодеров eac3to в инсталлятор
-    include_decoders = False and decoders_exe.exists()
-
-    components_section = """[Components]
-Name: "main"; Description: "Основные файлы KTools"; Types: full compact custom; Flags: fixed"""
-    if include_decoders:
-        components_section += '\nName: "decoders"; Description: "Декодеры eac3to (опционально, для работы с DTS/DTS-HD)"; Types: custom; Flags: dontinheritcheck'
-
-    files_decoders_line = f'Source: "{decoders_exe}"; DestDir: "{{tmp}}"; Flags: deleteafterinstall; Components: decoders' if include_decoders else ''
-
-    run_decoders_line = f"""Filename: "{{tmp}}\\eac3to Decoder Pack 1.4.exe"; \\
-Parameters: "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART"; \\
-StatusMsg: "Установка декодеров для eac3to..."; \\
-Flags: runascurrentuser; Components: decoders""" if include_decoders else ''
 
     iss_content = f"""; === АВТОМАТИЧЕСКИ СГЕНЕРИРОВАННЫЙ СКРИПТ INNO SETUP ===
 [Setup]
+; AppId зафиксирован навсегда: смена AppId плодит параллельные установки.
+; Миграция старых идентификаторов выполняется кодом ниже (PrepareToInstall).
 AppId=krnzhnr.ktools
 AppName=KTools
 AppVersion={version}
 DefaultDirName={{autopf}}\\KTools
+UsePreviousAppDir=yes
+; Не восстанавливать выбор задач из реестра при обновлении: иначе задача
+; desktopicon, отмеченная при первой установке, молча включается снова
+; (см. ишью #60) и удалённый пользователем ярлык пересоздаётся.
+UsePreviousTasks=no
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 DefaultGroupName=KTools
@@ -206,24 +308,21 @@ SolidCompression=yes
 LZMADictionarySize=65536
 ArchitecturesInstallIn64BitMode=x64compatible
 
-{components_section}
-
 [Tasks]
 Name: "desktopicon"; Description: "{{cm:CreateDesktopIcon}}"; \\
-GroupDescription: "{{cm:AdditionalIcons}}"; Flags: unchecked
+GroupDescription: "{{cm:AdditionalIcons}}"; Flags: unchecked dontinheritcheck
 
 [Files]
 ; Основная папка публикации .NET self-contained
 Source: "{publish_dir}\\*"; DestDir: "{{app}}"; \\
 Flags: ignoreversion recursesubdirs createallsubdirs
-{files_decoders_line}
 
 [Icons]
 Name: "{{group}}\\KTools"; \\
 Filename: "{{app}}\\KTools.App.exe"
 Name: "{{autodesktop}}\\KTools"; \\
 Filename: "{{app}}\\KTools.App.exe"; \\
-Tasks: desktopicon
+Tasks: desktopicon; Check: ShouldCreateDesktopIcon
 
 [Run]
 Filename: "{{app}}\\KTools.App.exe"; \\
@@ -231,7 +330,6 @@ Description: "{{cm:LaunchProgram,KTools}}"; \\
 Flags: nowait postinstall skipifsilent runasoriginaluser
 Filename: "{{app}}\\KTools.App.exe"; \\
 Flags: nowait runasoriginaluser; Check: IsSilentUpdate
-{run_decoders_line}
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{{app}}\\bin"
@@ -270,27 +368,204 @@ begin
   Result := sUnInstallString;
 end;
 
-procedure RemoveOldVersion(const AppIdStr: String);
-var
-  sUnInstallString: String;
-  sInstallDir: String;
-  iResultCode: Integer;
+function IsAppInstalled: Boolean;
 begin
-  sInstallDir := GetInstallDir(AppIdStr);
-  sUnInstallString := GetUninstallString(AppIdStr);
-  if sUnInstallString <> '' then
+  Result := (GetUninstallString('krnzhnr.ktools') <> '') or (GetInstallDir('krnzhnr.ktools') <> '');
+end;
+
+function DesktopIconExists: Boolean;
+begin
+  Result := FileExists(ExpandConstant('{{autodesktop}}\\KTools.lnk')) or
+            FileExists(ExpandConstant('{{userdesktop}}\\KTools.lnk')) or
+            FileExists(ExpandConstant('{{commondesktop}}\\KTools.lnk'));
+end;
+
+function ShouldCreateDesktopIcon: Boolean;
+begin
+  // Если установка выполняется в тихом режиме (автоматическое обновление из программы):
+  if IsSilentUpdate and not DesktopIconExists then
   begin
-    if sInstallDir = '' then
+    // В тихом режиме ярлык ни при каких обстоятельствах не создается, если он уже отсутствует на рабочем столе
+    Result := False;
+    Exit;
+  end;
+
+  Result := True;
+end;
+
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  if CurPageID = wpSelectTasks then
+  begin
+    // При интерактивном обновлении поверх уже установленной версии:
+    // Автоматически синхронизируем выбор задачи desktopicon с реальным наличием ярлыка.
+    // Если ярлык на рабочем столе отсутствует (пользователь его удалил), снимаем отметку,
+    // чтобы ярлык не пересоздавался повторно при обычном нажатии "Далее".
+    if IsAppInstalled then
     begin
-      sInstallDir := ExtractFilePath(RemoveQuotes(sUnInstallString));
+      if DesktopIconExists then
+        WizardSelectTasks('desktopicon')
+      else
+        WizardSelectTasks('!desktopicon');
     end;
-    sUnInstallString := RemoveQuotes(sUnInstallString);
-    Exec(sUnInstallString, '/VERYSILENT /NORESTART /SUPPRESSMSGBOXES /_?="' + sInstallDir + '"', '', SW_HIDE, ewWaitUntilTerminated, iResultCode);
-    // Принудительно удаляем оставшуюся папку со старыми файлами Python версии
-    if (sInstallDir <> '') and DirExists(sInstallDir) then
-    begin
-      DelTree(sInstallDir, True, True, True);
-    end;
+  end;
+end;
+
+// === Миграция старых версий: на ПК допускается только одна установка KTools ===
+// Старая установка per-machine (HKLM, Program Files) не может быть удалена
+// из непривилегированного процесса: для неё запрашивается повышение прав (runas).
+// Если удалить не удалось, PrepareToInstall блокирует установку вместо
+// тихой параллельной копии.
+
+function IsUninstallEntryPresent(const AppIdStr: String): Boolean;
+begin
+  Result := GetUninstallString(AppIdStr) <> '';
+end;
+
+function IsPerMachineEntryPresent(const AppIdStr: String): Boolean;
+var
+  sValue: String;
+begin
+  Result := RegQueryStringValue(HKLM,
+    'Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\' + AppIdStr + '_is1',
+    'UninstallString', sValue) and (sValue <> '');
+end;
+
+function NeedsElevationForMigration: Boolean;
+begin
+  Result := (not IsAdminInstallMode) and (
+    IsPerMachineEntryPresent('krnzhnr.ktools.v1') or
+    IsPerMachineEntryPresent('krnzhnr.ktools.csharp.v2') or
+    IsPerMachineEntryPresent('krnzhnr.ktools.v2') or
+    IsPerMachineEntryPresent('krnzhnr.ktools'));
+end;
+
+function RemoveUninstallEntry(const AppIdStr: String; RootKey: Integer): Boolean;
+var
+  sUnKey, sUnInstallString, sInstallDir, sLogFile, sParams, sExecState: String;
+  iResultCode, iExecError: Integer;
+  bExecOk: Boolean;
+begin
+  Result := True;
+  sUnKey := 'Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\' + AppIdStr + '_is1';
+  if (not RegQueryStringValue(RootKey, sUnKey, 'UninstallString', sUnInstallString))
+    or (sUnInstallString = '') then
+  begin
+    Log('Миграция: запись ' + AppIdStr + ' отсутствует, пропуск');
+    Exit;
+  end;
+  if (not RegQueryStringValue(RootKey, sUnKey, 'InstallLocation', sInstallDir))
+    or (sInstallDir = '') then
+    sInstallDir := ExtractFilePath(RemoveQuotes(sUnInstallString));
+  sUnInstallString := RemoveQuotes(sUnInstallString);
+  sLogFile := ExpandConstant('{{tmp}}\\uninstall-' + AppIdStr + '.log');
+  sParams := '/VERYSILENT /NORESTART /SUPPRESSMSGBOXES /LOG="' + sLogFile + '"';
+  if sInstallDir <> '' then
+    sParams := sParams + ' /_?="' + sInstallDir + '"';
+  Log('Миграция: удаление ' + AppIdStr + ', команда: ' + sUnInstallString + ' ' + sParams);
+  bExecOk := Exec(sUnInstallString, sParams, '', SW_HIDE, ewWaitUntilTerminated, iResultCode);
+  if bExecOk then sExecState := 'True' else sExecState := 'False';
+  Log('Миграция: Exec(' + AppIdStr + ') ok=' + sExecState + ' код=' + IntToStr(iResultCode));
+  if ((not bExecOk) or (iResultCode <> 0)) and (RootKey = HKLM) then
+  begin
+    Log('Миграция: прямой запуск не удался, повтор с повышением прав (runas)');
+    if ShellExec('runas', sUnInstallString, sParams, '', SW_HIDE, ewWaitUntilTerminated, iExecError) then
+      Log('Миграция: запуск с повышением выполнен, код=' + IntToStr(iExecError))
+    else
+      Log('Миграция: запуск с повышением отклонён, код=' + IntToStr(iExecError));
+  end;
+  if (sInstallDir <> '') and DirExists(sInstallDir) then
+  begin
+    Log('Миграция: удаление остатков каталога ' + sInstallDir);
+    if DelTree(sInstallDir, True, True, True) then
+      Log('Миграция: каталог удалён ' + sInstallDir)
+    else
+      Log('Миграция: DelTree не смог удалить ' + sInstallDir);
+  end;
+  if RegQueryStringValue(RootKey, sUnKey, 'UninstallString', sUnInstallString)
+    and (sUnInstallString <> '') then
+  begin
+    Log('Миграция: запись ' + AppIdStr + ' осталась в реестре');
+    Result := False;
+    Exit;
+  end;
+  if (sInstallDir <> '') and DirExists(sInstallDir) then
+  begin
+    Log('Миграция: каталог ' + sInstallDir + ' остался на диске (возможно, старая версия запущена)');
+    Result := False;
+    Exit;
+  end;
+  Log('Миграция: ' + AppIdStr + ' удалён');
+end;
+
+function RemoveOldVersion(const AppIdStr: String): Boolean;
+begin
+  Result := True;
+  if not RemoveUninstallEntry(AppIdStr, HKLM) then Result := False;
+  if not RemoveUninstallEntry(AppIdStr, HKCU) then Result := False;
+end;
+
+function RemoveAppIdEverywhere(const AppIdStr: String): Boolean;
+var
+  i: Integer;
+begin
+  Result := True;
+  for i := 1 to 3 do
+  begin
+    if not IsUninstallEntryPresent(AppIdStr) then Exit;
+    if not RemoveOldVersion(AppIdStr) then Result := False;
+  end;
+  if IsUninstallEntryPresent(AppIdStr) then Result := False;
+end;
+
+function InitializeSetup: Boolean;
+begin
+  Result := True;
+  if NeedsElevationForMigration and (not WizardSilent) then
+    MsgBox('Обнаружена старая версия KTools, установленная для всех пользователей. '
+      + 'Для её удаления будут запрошены права администратора. '
+      + 'Без удаления старая версия установка новой будет заблокирована, '
+      + 'чтобы не плодить две копии программы.',
+      mbInformation, MB_OK);
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  sLeftovers, sCurrentModeCopy: String;
+begin
+  Result := '';
+  NeedsRestart := False;
+  sCurrentModeCopy := '';
+  RemoveAppIdEverywhere('krnzhnr.ktools.v1');
+  RemoveAppIdEverywhere('krnzhnr.ktools.csharp.v2');
+  RemoveAppIdEverywhere('krnzhnr.ktools.v2');
+  if IsAdminInstallMode then
+  begin
+    if not RemoveUninstallEntry('krnzhnr.ktools', HKCU) then
+      sCurrentModeCopy := 'копия продукта в режиме для текущего пользователя';
+  end
+  else
+  begin
+    if not RemoveUninstallEntry('krnzhnr.ktools', HKLM) then
+      sCurrentModeCopy := 'копия продукта в режиме для всех пользователей';
+  end;
+  sLeftovers := '';
+  if IsUninstallEntryPresent('krnzhnr.ktools.v1') then
+    sLeftovers := sLeftovers + #13#10 + '- старая версия 1.x: ' + GetInstallDir('krnzhnr.ktools.v1');
+  if IsUninstallEntryPresent('krnzhnr.ktools.csharp.v2') then
+    sLeftovers := sLeftovers + #13#10 + '- промежуточная версия: ' + GetInstallDir('krnzhnr.ktools.csharp.v2');
+  if IsUninstallEntryPresent('krnzhnr.ktools.v2') then
+    sLeftovers := sLeftovers + #13#10 + '- промежуточная версия: ' + GetInstallDir('krnzhnr.ktools.v2');
+  if sCurrentModeCopy <> '' then
+    sLeftovers := sLeftovers + #13#10 + '- ' + sCurrentModeCopy;
+  if sLeftovers <> '' then
+  begin
+    Log('Миграция: остались неудалённые версии:' + sLeftovers);
+    Result := 'На компьютере осталась старая версия KTools, удалить её автоматически не удалось.'
+      + ' Установка заблокирована, чтобы не плодить две копии программы.' + #13#10 + #13#10
+      + 'Закройте работающую старую версию, затем запустите установщик от имени администратора '
+      + 'или удалите старую версию вручную через «Программы и компоненты».'
+      + ' Остатки:' + sLeftovers;
   end;
 end;
 
@@ -298,11 +573,8 @@ procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssInstall then
   begin
-    // Бесшумное удаление всех старых промежуточных версий
-    RemoveOldVersion('krnzhnr.ktools.v1');
-    RemoveOldVersion('krnzhnr.ktools.csharp.v2');
-    RemoveOldVersion('krnzhnr.ktools.v2');
-    // Удаление устаревших ярлыков с дефисом
+    // Удаление старых версий выполняется в PrepareToInstall до старта установки.
+    // Здесь только чистка устаревших ярлыков с дефисом.
     DeleteFile(ExpandConstant('{{autodesktop}}\\K-Tools.lnk'));
     DeleteFile(ExpandConstant('{{userdesktop}}\\K-Tools.lnk'));
   end;
@@ -311,6 +583,26 @@ end;
     iss_file.write_text(iss_content, encoding="utf-8")
     print(f"[✓] Скрипт установки {iss_file.name} успешно сгенерирован.")
     return iss_file
+
+
+def verify_publish_content(publish_dir: Path) -> None:
+    """Проверить, что контент окна «Что нового» доехал до публикации.
+
+    Ловит рассинхрон CopyToOutputDirectory/CopyToPublishDirectory:
+    без этого окно молча показывает заглушки в установленном приложении.
+    """
+    missing = []
+    notes = publish_dir / "Assets" / "WhatsNew" / "release-notes.md"
+    if not notes.exists():
+        missing.append("release-notes.md")
+    art_dir = publish_dir / "Assets" / "WhatsNew" / "art"
+    gifs = list(art_dir.glob("*.gif")) if art_dir.exists() else []
+    if not gifs:
+        missing.append("art/*.gif")
+    if missing:
+        print(f"[!] Ошибка: в публикации отсутствует контент «Что нового»: {', '.join(missing)}")
+        sys.exit(1)
+    print(f"[✓] Контент «Что нового» на месте: заметки + {len(gifs)} GIF.")
 
 
 def build_inno_installer(version: str, publish_dir: Path):
@@ -365,7 +657,16 @@ def main():
     version = prompt_version_update()
     print(f"[*] Сборка версии: {version}")
 
+    prev_body = None
+    prev_file = os.environ.get("PREV_RELEASE_NOTES_FILE", "")
+    if prev_file and Path(prev_file).exists():
+        prev_body = Path(prev_file).read_text(encoding="utf-8-sig")
+
+    bake_release_notes(version, prev_body)
+
     publish_dir = build_csharp_app(version)
+
+    verify_publish_content(publish_dir)
 
     build_inno_installer(version, publish_dir)
 

@@ -6,6 +6,7 @@ using System.Linq;
 using FluentAssertions;
 using Moq;
 using KTools_App.Core;
+using KTools_App.Diagnostics;
 using KTools_App.Services.Contracts;
 using KTools_App.Tests.TestHelpers;
 using KTools_App.UI.Controls;
@@ -436,7 +437,8 @@ public class TrackSelectionViewModelTests
     }
 
     /// <summary>
-    /// Проверяет, что CollectDynamicOptions пишет Info-лог об успешном сборе.
+    /// Проверяет, что CollectDynamicOptions фиксирует структурированное событие
+    /// ui.track_filter.options_refreshed об успешном сборе.
     /// </summary>
     [TestMethod]
     public void CollectDynamicOptions_Success_LogsInfoMessage()
@@ -449,7 +451,15 @@ public class TrackSelectionViewModelTests
 
         // Assert
         _logServiceMock.Verify(
-            l => l.Info(It.Is<string>(s => s.Contains("Сбор уникальных свойств")), It.IsAny<string>()),
+            l => l.Write(
+                "ui.track_filter.options_refreshed",
+                LogLevel.Debug,
+                LogStatus.Succeeded,
+                It.IsAny<string>(),
+                It.IsAny<Exception>(),
+                "TrackSelectionViewModel",
+                It.IsAny<LogContext?>(),
+                It.IsAny<IReadOnlyDictionary<string, object?>>()),
             Times.Once);
     }
 

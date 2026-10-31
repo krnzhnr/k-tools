@@ -1,0 +1,7 @@
+GIF-сцены шапки окна «Что нового» записаны с анимаций коллекции ascii.rest.
+ascii.rest — Part of ascii.rest by @bas3line (https://github.com/bas3line),
+MIT licensed. Полный текст лицензии: https://github.com/bas3line/ascii/blob/main/LICENSE.
+
+Требования к новым файлам: имя <сцена>.gif или ascii-rest-<сцена>.gif
+(сцена — из списка WhatsNewArtCatalog), формат 1280x640, цикл 5 секунд.
+Пропорции и период зашиты в коде константами.

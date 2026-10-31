@@ -245,17 +245,14 @@ public sealed class CancellationTests
     }
 
     /// <summary>
-    /// Хаос (characterization, КРИТИЧЕСКИЙ НАЙДЕННЫЙ БАГ):
-    /// ReplaceSourceWithResultAsync при отсутствии файла результата
-    /// УДАЛЯЕТ исходник и лишь затем падает в File.Move. Порядок операций
-    /// (сначала File.Delete(source), затем File.Move(result, source) —
-    /// AbstractScript.cs:683-687) приводит к невосстановимой потере
-    /// исходного файла: на повторных попытках File.Move снова бросает
-    /// FileNotFoundException, и после 5 ретраев метод возвращает false,
-    /// а оригинал уже уничтожен. Тест фиксирует потерю данных.
+    /// Хаос: ReplaceSourceWithResultAsync при отсутствии файла результата
+    /// НЕ удаляет исходник: порядок операций в AbstractScript.ReplaceSourceWithResultAsync
+    /// сначала проверяет наличие результата, затем подменяет исходник
+    /// (File.Replace либо «резервная копия → перенос результата» с восстановлением),
+    /// поэтому неудачная подмена оставляет оригинал нетронутым.
     /// </summary>
     [TestMethod]
-    public async Task ReplaceSourceWithResultAsync_MissingResultFile_Characterization_DataLoss()
+    public async Task ReplaceSourceWithResultAsync_MissingResultFile_ReportsFailureAndKeepsSource()
     {
         // Arrange
         using var tempDir = new TempDirectoryScope();
@@ -267,38 +264,62 @@ public sealed class CancellationTests
         // Act
         bool replaced = await script.CallReplaceSourceWithResultAsync(source, missingResult, results);
 
-        // Assert — БАГ: исходник уничтожен, хотя подмена не состоялась
+        // Assert
         replaced.Should().BeFalse("подмена несуществующего результата обязана провалиться");
-        File.Exists(source).Should().BeFalse(
-            "БАГ: исходный файл удалён ДО перемещения результата — потеря данных при неудачной подмене");
+        File.Exists(source).Should().BeTrue(
+            "исходный файл обязан остаться: он не удаляется до гарантированной подмены");
+        File.ReadAllText(source).Should().Be("оригинал",
+            "содержимое исходника обязано сохраниться без изменений");
         results.Should().ContainSingle()
-            .Which.Should().StartWith("❌",
-                "неудачная подмена должна содержать маркер ошибки");
+            .Which.Should().StartWith("❌")
+                .And.Contain("исходник сохранён",
+            "неудачная подмена обязана явно сообщать о сохранении исходника");
     }
 
     /// <summary>
-    /// Хаос (желаемое поведение, СЕЙЧАС НЕ ВЫПОЛНЯЕТСЯ — известный баг):
-    /// при неудачной подмене исходный файл обязан оставаться на месте.
+    /// Хаос: неудачная подмена не оставляет временных резервных копий рядом с исходником.
     /// </summary>
     [TestMethod]
-    [Ignore("Критический баг приложения: AbstractScript.ReplaceSourceWithResultAsync "
-        + "удаляет исходник ДО File.Move(result, source). При отсутствии/недоступности файла "
-        + "результата повторные попытки File.Move обречены, и оригинальный файл теряется "
-        + "безвозвратно. Исправление: сначала проверить File.Exists(resultPath), затем "
-        + "File.Move/Delete в безопасном порядке (или File.Replace). Тест активировать "
-        + "после исправления порядка операций.")]
-    public async Task ReplaceSourceWithResultAsync_MissingResultFile_ShouldKeepSource()
+    public async Task ReplaceSourceWithResultAsync_Failure_LeavesNoBackupArtifacts()
     {
+        // Arrange
         using var tempDir = new TempDirectoryScope();
         string source = tempDir.CreateFile("original.mkv", "оригинал");
         string missingResult = tempDir.GetFullPath("ghost.mkv");
         var script = CreateScript();
         var results = new List<string>();
 
+        // Act
         bool replaced = await script.CallReplaceSourceWithResultAsync(source, missingResult, results);
 
+        // Assert
         replaced.Should().BeFalse();
-        File.Exists(source).Should().BeTrue(
-            "исходник обязан оставаться нетронутым при неудачной подмене");
+        Directory.GetFiles(tempDir.RootPath, "*.bak")
+            .Should().BeEmpty("временные резервные копии не должны оставаться на диске");
+        Directory.GetFiles(tempDir.RootPath, "*")
+            .Should().ContainSingle("остаётся только исходный файл");
+    }
+
+    /// <summary>
+    /// Хаос: успешная подмена удаляет резервную копию и не оставляет мусора на диске.
+    /// </summary>
+    [TestMethod]
+    public async Task ReplaceSourceWithResultAsync_Success_LeavesNoBackupArtifacts()
+    {
+        // Arrange
+        using var tempDir = new TempDirectoryScope();
+        string source = tempDir.CreateFile("original.mkv", "оригинал");
+        string result = tempDir.GetFullPath("result.mkv");
+        File.WriteAllText(result, "новое содержимое");
+        var script = CreateScript();
+        var results = new List<string>();
+
+        // Act
+        bool replaced = await script.CallReplaceSourceWithResultAsync(source, result, results);
+
+        // Assert
+        replaced.Should().BeTrue();
+        Directory.GetFiles(tempDir.RootPath, "*.bak")
+            .Should().BeEmpty("резервная копия обязана удаляться после успешной подмены");
     }
 }

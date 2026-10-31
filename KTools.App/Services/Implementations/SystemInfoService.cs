@@ -1,11 +1,17 @@
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
-using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+
+using KTools_App.Core;
+using KTools_App.Diagnostics;
 using KTools_App.Services.Contracts;
+
 using Microsoft.Win32;
 
 namespace KTools_App.Services.Implementations;
@@ -20,6 +26,14 @@ public sealed class SystemInfoService : ISystemInfoService
     private readonly ILogService _logService;
     private readonly IDiskTypeDetectorService? _diskTypeDetector;
     private const string LogCategory = "SystemInfo";
+
+    // Общий бюджет фонового опроса дисков: после его исчерпания оставшиеся диски
+    // пропускаются, чтобы зависший сетевой накопитель не держал фоновую задачу бесконечно.
+    private static readonly TimeSpan DrivesOverallTimeout = TimeSpan.FromSeconds(30);
+
+    // Бюджет опроса одного диска: спящий HDD успевает раскрутиться и ответить,
+    // зависший отвечает таймаутом, остальные диски опрашиваются дальше.
+    private static readonly TimeSpan DriveSingleTimeout = TimeSpan.FromSeconds(10);
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
     private struct MEMORYSTATUSEX
@@ -62,23 +76,95 @@ public sealed class SystemInfoService : ISystemInfoService
     /// <inheritdoc/>
     public void LogSystemCharacteristics()
     {
+        // Обёртка совместимости: быстрая часть выполняется синхронно на вызывающем
+        // потоке, тяжёлая дожимается фоном, поэтому прямой вызов не блокирует UI
+        // даже при спящем диске. Набор событий system.* в журнале сохраняется,
+        // меняется только поток и время их появления.
+        LogEssentialCharacteristics();
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await LogExtendedCharacteristicsAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logService.Write(
+                    "system.snapshot.failed",
+                    LogLevel.Error,
+                    LogStatus.Failed,
+                    "Не удалось собрать сведения о системе и оборудовании",
+                    ex,
+                    LogCategory,
+                    properties: LogProps.Create("ErrorCode", "SYSTEM_SNAPSHOT_FAILED"));
+            }
+        }, CancellationToken.None);
+    }
+
+    /// <inheritdoc/>
+    public void LogEssentialCharacteristics()
+    {
         try
         {
-            _logService.Info("=== Характеристики системы и оборудования ===", LogCategory);
-
             LogOperatingSystem();
             LogRuntimeAndProcess();
             LogProcessor();
             LogMemory();
-            LogGraphicsAdapters();
-            LogDrives();
             LogCultureAndEncodings();
-
-            _logService.Info("===============================================", LogCategory);
         }
         catch (Exception ex)
         {
-            _logService.Error($"Непредвиденное исключение при общем сборе характеристик системы: {ex.Message}", LogCategory);
+            _logService.Write(
+                "system.snapshot.failed",
+                LogLevel.Error,
+                LogStatus.Failed,
+                "Не удалось собрать сведения о системе и оборудовании",
+                ex,
+                LogCategory,
+                properties: LogProps.Create("ErrorCode", "SYSTEM_SNAPSHOT_FAILED"));
+        }
+    }
+
+    /// <inheritdoc/>
+    public async Task LogExtendedCharacteristicsAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            await Task.Run(LogGraphicsAdapters, cancellationToken).ConfigureAwait(false);
+            await LogDrivesAsync(cancellationToken).ConfigureAwait(false);
+
+            _logService.Write(
+                "system.snapshot.completed",
+                LogLevel.Info,
+                LogStatus.Succeeded,
+                "Сведения о системе и оборудовании собраны",
+                source: LogCategory,
+                properties: LogProps.Create("Schema", "system.snapshot.v1"));
+        }
+        catch (OperationCanceledException ex)
+        {
+            _logService.Write(
+                "system.snapshot.failed",
+                LogLevel.Debug,
+                LogStatus.Cancelled,
+                "Сбор сведений о системе и оборудовании отменён",
+                ex,
+                LogCategory,
+                properties: LogProps.Create("ErrorCode", "SYSTEM_SNAPSHOT_CANCELLED"));
+        }
+        catch (Exception ex)
+        {
+            _logService.Write(
+                "system.snapshot.failed",
+                LogLevel.Error,
+                LogStatus.Failed,
+                "Не удалось собрать сведения о системе и оборудовании",
+                ex,
+                LogCategory,
+                properties: LogProps.Create("ErrorCode", "SYSTEM_SNAPSHOT_FAILED"));
         }
     }
 
@@ -105,27 +191,40 @@ public sealed class SystemInfoService : ISystemInfoService
                 }
                 catch (Exception regEx)
                 {
-                    _logService.DebugLog($"Не удалось прочитать версию Windows из реестра: {regEx.Message}", LogCategory);
+                    _logService.Write(
+                        "system.os.registry_read_failed",
+                        LogLevel.Debug,
+                        LogStatus.Skipped,
+                        "Сведения о версии Windows из реестра недоступны",
+                        regEx,
+                        LogCategory,
+                        properties: LogProps
+                            .Create("Group", "OperatingSystem")
+                            .With("ErrorCode", "OS_REGISTRY_UNAVAILABLE"));
                 }
             }
 
-            var sb = new StringBuilder();
-            sb.Append($"ОС: {osDescription} ({osArchitecture}) [Сборка: {build}");
-            if (!string.IsNullOrWhiteSpace(displayVersion))
-            {
-                sb.Append($", Версия: {displayVersion}");
-            }
-            if (!string.IsNullOrWhiteSpace(productName))
-            {
-                sb.Append($", Продукт: {productName}");
-            }
-            sb.Append(']');
-
-            _logService.Info(sb.ToString(), LogCategory);
+            _logService.Write(
+                "system.os.detected",
+                LogLevel.Info,
+                LogStatus.Succeeded,
+                $"Параметры ОС определены: {osDescription} ({osArchitecture}), сборка {build}, версия {Present(displayVersion)}, продукт {Present(productName)}",
+                source: LogCategory,
+                properties: LogProps
+                    .Create("Platform", "Windows")
+                    .With("Architecture", osArchitecture)
+                    .With("Version", LogRedactor.ReadableMachineValue(osDescription)));
         }
         catch (Exception ex)
         {
-            _logService.Warn($"Не удалось определить параметры операционной системы: {ex.Message}", LogCategory);
+            _logService.Write(
+                "system.os.detect_failed",
+                LogLevel.Warning,
+                LogStatus.Skipped,
+                "Не удалось определить параметры операционной системы",
+                ex,
+                LogCategory,
+                properties: LogProps.Create("ErrorCode", "OS_DETECT_FAILED"));
         }
     }
 
@@ -138,13 +237,27 @@ public sealed class SystemInfoService : ISystemInfoService
             bool is64BitProcess = Environment.Is64BitProcess;
             bool is64BitOperatingSystem = Environment.Is64BitOperatingSystem;
 
-            _logService.Info(
-                $"Среда выполнения: {framework} | Архитектура процесса: {processArch} (64-бит: {is64BitProcess}) | 64-бит ОС: {is64BitOperatingSystem}",
-                LogCategory);
+            _logService.Write(
+                "system.runtime.detected",
+                LogLevel.Info,
+                LogStatus.Succeeded,
+                $"Среда выполнения определена: {framework}, архитектура процесса {processArch}, 64-битный процесс: {is64BitProcess}, 64-битная ОС: {is64BitOperatingSystem}",
+                source: LogCategory,
+                properties: LogProps
+                    .Create("Version", LogRedactor.ReadableMachineValue(framework))
+                    .With("Architecture", processArch)
+                    .With("Platform", is64BitOperatingSystem ? "x64-os" : "x86-os"));
         }
         catch (Exception ex)
         {
-            _logService.Warn($"Не удалось определить параметры среды выполнения: {ex.Message}", LogCategory);
+            _logService.Write(
+                "system.runtime.detect_failed",
+                LogLevel.Warning,
+                LogStatus.Skipped,
+                "Не удалось определить параметры среды выполнения",
+                ex,
+                LogCategory,
+                properties: LogProps.Create("ErrorCode", "RUNTIME_DETECT_FAILED"));
         }
     }
 
@@ -165,17 +278,41 @@ public sealed class SystemInfoService : ISystemInfoService
                 }
                 catch (Exception regEx)
                 {
-                    _logService.DebugLog($"Не удалось прочитать наименование ЦП из реестра: {regEx.Message}", LogCategory);
+                    _logService.Write(
+                        "system.processor.registry_read_failed",
+                        LogLevel.Debug,
+                        LogStatus.Skipped,
+                        "Наименование процессора из реестра недоступно",
+                        regEx,
+                        LogCategory,
+                        properties: LogProps
+                            .Create("Group", "Processor")
+                            .With("ErrorCode", "PROCESSOR_REGISTRY_UNAVAILABLE"));
                 }
             }
 
             int logicalCores = Environment.ProcessorCount;
-            string cpuDisplay = string.IsNullOrWhiteSpace(cpuName) ? "Неизвестный процессор" : cpuName;
-            _logService.Info($"Процессор: {cpuDisplay} | Логических ядер/потоков: {logicalCores}", LogCategory);
+
+            _logService.Write(
+                "system.processor.detected",
+                LogLevel.Info,
+                LogStatus.Succeeded,
+                $"Процессор определён: {Present(cpuName)}, логических ядер: {logicalCores}",
+                source: LogCategory,
+                properties: LogProps
+                    .Create("Count", logicalCores)
+                    .With("Version", LogRedactor.ReadableMachineValue(cpuName)));
         }
         catch (Exception ex)
         {
-            _logService.Warn($"Не удалось определить параметры процессора: {ex.Message}", LogCategory);
+            _logService.Write(
+                "system.processor.detect_failed",
+                LogLevel.Warning,
+                LogStatus.Skipped,
+                "Не удалось определить параметры процессора",
+                ex,
+                LogCategory,
+                properties: LogProps.Create("ErrorCode", "PROCESSOR_DETECT_FAILED"));
         }
     }
 
@@ -190,23 +327,46 @@ public sealed class SystemInfoService : ISystemInfoService
                 {
                     double totalGb = memStatus.ullTotalPhys / (1024.0 * 1024.0 * 1024.0);
                     double availGb = memStatus.ullAvailPhys / (1024.0 * 1024.0 * 1024.0);
-                    _logService.Info(
+                    _logService.Write(
+                        "system.memory.detected",
+                        LogLevel.Info,
+                        LogStatus.Succeeded,
                         string.Format(
                             CultureInfo.InvariantCulture,
-                            "ОЗУ: Всего {0:F1} ГБ | Доступно {1:F1} ГБ | Загрузка памяти: {2}%",
+                            "Оперативная память: всего {0:F1} ГБ, доступно {1:F1} ГБ, загрузка {2}%",
                             totalGb,
                             availGb,
                             memStatus.dwMemoryLoad),
-                        LogCategory);
+                        source: LogCategory,
+                        properties: LogProps
+                            .Create("Percent", (int)memStatus.dwMemoryLoad)
+                            .With("TotalBytes", (long)memStatus.ullTotalPhys));
                     return;
                 }
             }
 
-            _logService.Info($"ОЗУ: Выделено памяти текущим процессором: {Environment.WorkingSet / (1024 * 1024)} МБ", LogCategory);
+            long workingSet = Environment.WorkingSet;
+            _logService.Write(
+                "system.memory.fallback",
+                LogLevel.Debug,
+                LogStatus.Skipped,
+                string.Format(
+                    CultureInfo.InvariantCulture,
+                    "Глобальная статистика памяти недоступна, используется рабочее множество текущего процесса: {0} МБ",
+                    workingSet / (1024 * 1024)),
+                source: LogCategory,
+                properties: LogProps.Create("TotalBytes", workingSet));
         }
         catch (Exception ex)
         {
-            _logService.Warn($"Не удалось определить объем оперативной памяти: {ex.Message}", LogCategory);
+            _logService.Write(
+                "system.memory.detect_failed",
+                LogLevel.Warning,
+                LogStatus.Skipped,
+                "Не удалось определить объём оперативной памяти",
+                ex,
+                LogCategory,
+                properties: LogProps.Create("ErrorCode", "MEMORY_DETECT_FAILED"));
         }
     }
 
@@ -214,9 +374,12 @@ public sealed class SystemInfoService : ISystemInfoService
     {
         try
         {
-            if (!OperatingSystem.IsWindows()) return;
+            if (!OperatingSystem.IsWindows())
+            {
+                return;
+            }
 
-            var gpus = new List<string>();
+            List<string> gpus = new();
             try
             {
                 const string videoClassKey = @"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}";
@@ -234,10 +397,9 @@ public sealed class SystemInfoService : ISystemInfoService
                                 if (!string.IsNullOrWhiteSpace(driverDesc))
                                 {
                                     string driverVer = subKey.GetValue("DriverVersion")?.ToString() ?? string.Empty;
-                                    string info = string.IsNullOrWhiteSpace(driverVer)
+                                    gpus.Add(string.IsNullOrWhiteSpace(driverVer)
                                         ? driverDesc
-                                        : $"{driverDesc} (Драйвер: {driverVer})";
-                                    gpus.Add(info);
+                                        : $"{driverDesc} (драйвер {driverVer})");
                                 }
                             }
                         }
@@ -246,79 +408,185 @@ public sealed class SystemInfoService : ISystemInfoService
             }
             catch (Exception regEx)
             {
-                _logService.DebugLog($"Не удалось прочитать видеоадаптеры из реестра: {regEx.Message}", LogCategory);
+                _logService.Write(
+                    "system.graphics.registry_read_failed",
+                    LogLevel.Debug,
+                    LogStatus.Skipped,
+                    "Список видеоадаптеров из реестра недоступен",
+                    regEx,
+                    LogCategory,
+                    properties: LogProps
+                        .Create("Group", "Graphics")
+                        .With("ErrorCode", "GRAPHICS_REGISTRY_UNAVAILABLE"));
             }
 
             if (gpus.Count > 0)
             {
-                for (int i = 0; i < gpus.Count; i++)
-                {
-                    _logService.Info($"Видеоадаптер [{i + 1}]: {gpus[i]}", LogCategory);
-                }
+                _logService.Write(
+                    "system.graphics.detected",
+                    LogLevel.Info,
+                    LogStatus.Succeeded,
+                    $"Видеоадаптеры определены: {gpus.Count}, первый: {gpus[0]}",
+                    source: LogCategory,
+                    properties: LogProps
+                        .Create("Count", gpus.Count)
+                        .With("Version", LogRedactor.ReadableMachineValue(gpus[0])));
             }
             else
             {
-                _logService.Info("Видеоадаптер: Не удалось обнаружить графические адаптеры в реестре", LogCategory);
+                _logService.Write(
+                    "system.graphics.empty",
+                    LogLevel.Info,
+                    LogStatus.Skipped,
+                    "Видеоадаптеры в реестре не обнаружены",
+                    source: LogCategory,
+                    properties: LogProps.Create("Count", 0));
             }
         }
         catch (Exception ex)
         {
-            _logService.Warn($"Не удалось опросить видеоадаптеры: {ex.Message}", LogCategory);
+            _logService.Write(
+                "system.graphics.detect_failed",
+                LogLevel.Warning,
+                LogStatus.Skipped,
+                "Не удалось опросить видеоадаптеры",
+                ex,
+                LogCategory,
+                properties: LogProps.Create("ErrorCode", "GRAPHICS_DETECT_FAILED"));
         }
     }
 
-    private void LogDrives()
+    private async Task LogDrivesAsync(CancellationToken cancellationToken)
     {
+        DriveInfo[] drives;
         try
         {
-            DriveInfo[] drives = DriveInfo.GetDrives();
-            foreach (var drive in drives)
-            {
-                try
-                {
-                    if (!drive.IsReady) continue;
-
-                    double totalGb = drive.TotalSize / (1024.0 * 1024.0 * 1024.0);
-                    double freeGb = drive.AvailableFreeSpace / (1024.0 * 1024.0 * 1024.0);
-
-                    string mediaTypeStr = string.Empty;
-                    if (_diskTypeDetector != null)
-                    {
-                        try
-                        {
-                            var mediaType = _diskTypeDetector.GetDriveTypeForPath(drive.RootDirectory.FullName);
-                            if (mediaType != DriveMediaType.Unknown)
-                            {
-                                mediaTypeStr = $", {mediaType}";
-                            }
-                        }
-                        catch (Exception mediaEx)
-                        {
-                            _logService.DebugLog($"Не удалось определить физический тип носителя для '{drive.Name}': {mediaEx.Message}", LogCategory);
-                        }
-                    }
-
-                    _logService.Info(
-                        string.Format(
-                            CultureInfo.InvariantCulture,
-                            "Диск {0} ({1}{2}, {3}): Свободно {4:F1} ГБ из {5:F1} ГБ",
-                            drive.Name,
-                            drive.DriveType,
-                            mediaTypeStr,
-                            drive.DriveFormat,
-                            freeGb,
-                            totalGb),
-                        LogCategory);
-                }
-                catch (Exception driveEx)
-                {
-                    _logService.DebugLog($"Не удалось получить детальную информацию для диска '{drive.Name}': {driveEx.Message}", LogCategory);
-                }
-            }
+            drives = await Task.Run(DriveInfo.GetDrives, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
-            _logService.Warn($"Не удалось опросить дисковые накопители: {ex.Message}", LogCategory);
+            _logService.Write(
+                "system.drive.enumeration_failed",
+                LogLevel.Warning,
+                LogStatus.Skipped,
+                "Не удалось опросить дисковые накопители",
+                ex,
+                LogCategory,
+                properties: LogProps.Create("ErrorCode", "DRIVE_ENUMERATION_FAILED"));
+            return;
+        }
+
+        Stopwatch budget = Stopwatch.StartNew();
+        foreach (DriveInfo drive in drives)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (budget.Elapsed > DrivesOverallTimeout)
+            {
+                break;
+            }
+
+            try
+            {
+                await Task.Run(() => LogSingleDrive(drive), cancellationToken)
+                    .WaitAsync(DriveSingleTimeout, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (TimeoutException timeEx)
+            {
+                string root = LogProps.RootName(drive.RootDirectory.FullName);
+                _logService.Write(
+                    "system.drive.detail_failed",
+                    LogLevel.Debug,
+                    LogStatus.Skipped,
+                    $"Детальные сведения о накопителе {drive.Name} недоступны",
+                    timeEx,
+                    LogCategory,
+                    properties: LogProps
+                        .Create("FileName", root)
+                        .With("ErrorCode", "DRIVE_DETAIL_UNAVAILABLE"));
+            }
+        }
+    }
+
+    private void LogSingleDrive(DriveInfo drive)
+    {
+        string root = LogProps.RootName(drive.RootDirectory.FullName);
+        try
+        {
+            if (!drive.IsReady)
+            {
+                return;
+            }
+
+            double totalGb = drive.TotalSize / (1024.0 * 1024.0 * 1024.0);
+            double freeGb = drive.AvailableFreeSpace / (1024.0 * 1024.0 * 1024.0);
+
+            string mediaTypeStr = string.Empty;
+            if (_diskTypeDetector != null)
+            {
+                try
+                {
+                    var mediaType = _diskTypeDetector.GetDriveTypeForPath(drive.RootDirectory.FullName);
+                    if (mediaType != DriveMediaType.Unknown)
+                    {
+                        mediaTypeStr = $", {mediaType}";
+                    }
+                }
+                catch (Exception mediaEx)
+                {
+                    _logService.Write(
+                        "system.drive.media_type_failed",
+                        LogLevel.Debug,
+                        LogStatus.Skipped,
+                        $"Физический тип носителя {drive.Name} не определён",
+                        mediaEx,
+                        LogCategory,
+                        properties: LogProps
+                            .Create("FileName", root)
+                            .With("ErrorCode", "MEDIA_TYPE_UNAVAILABLE"));
+                }
+            }
+
+            _logService.Write(
+                "system.drive.detected",
+                LogLevel.Info,
+                LogStatus.Succeeded,
+                string.Format(
+                    CultureInfo.InvariantCulture,
+                    "Накопитель {0} ({1}{2}, {3}): свободно {4:F1} ГБ из {5:F1} ГБ",
+                    drive.Name,
+                    drive.DriveType,
+                    mediaTypeStr,
+                    drive.DriveFormat,
+                    freeGb,
+                    totalGb),
+                source: LogCategory,
+                properties: LogProps
+                    .Create("FileName", root)
+                    .With("TotalBytes", drive.TotalSize)
+                    .With("Container", drive.DriveFormat));
+        }
+        catch (Exception driveEx)
+        {
+            _logService.Write(
+                "system.drive.detail_failed",
+                LogLevel.Debug,
+                LogStatus.Skipped,
+                $"Детальные сведения о накопителе {drive.Name} недоступны",
+                driveEx,
+                LogCategory,
+                properties: LogProps
+                    .Create("FileName", root)
+                    .With("ErrorCode", "DRIVE_DETAIL_UNAVAILABLE"));
         }
     }
 
@@ -326,8 +594,8 @@ public sealed class SystemInfoService : ISystemInfoService
     {
         try
         {
-            var currentCulture = CultureInfo.CurrentCulture.Name;
-            var currentUiCulture = CultureInfo.CurrentUICulture.Name;
+            string currentCulture = CultureInfo.CurrentCulture.Name;
+            string currentUiCulture = CultureInfo.CurrentUICulture.Name;
             uint acp = 0;
             uint oemcp = 0;
 
@@ -340,17 +608,44 @@ public sealed class SystemInfoService : ISystemInfoService
                 }
                 catch (Exception cpEx)
                 {
-                    _logService.DebugLog($"Не удалось получить системные кодовые страницы Win32: {cpEx.Message}", LogCategory);
+                    _logService.Write(
+                        "system.encoding.win32_read_failed",
+                        LogLevel.Debug,
+                        LogStatus.Skipped,
+                        "Системные кодовые страницы Win32 недоступны",
+                        cpEx,
+                        LogCategory,
+                        properties: LogProps
+                            .Create("Group", "Encoding")
+                            .With("ErrorCode", "CODEPAGE_UNAVAILABLE"));
                 }
             }
 
-            _logService.Info(
-                $"Региональные настройки: Культура: {currentCulture} | UI-культура: {currentUiCulture} | ANSI кодовая страница (ACP): {acp} | OEM кодовая страница: {oemcp}",
-                LogCategory);
+            _logService.Write(
+                "system.encoding.detected",
+                LogLevel.Info,
+                LogStatus.Succeeded,
+                $"Региональные настройки определены: культура {currentCulture}, UI-культура {currentUiCulture}, ANSI-кодовая страница {acp}, OEM-кодовая страница {oemcp}",
+                source: LogCategory,
+                properties: LogProps
+                    .Create("Language", LogRedactor.ReadableMachineValue(currentCulture))
+                    .With("Platform", LogRedactor.ReadableMachineValue(currentUiCulture))
+                    .With("Count", (int)acp)
+                    .With("Container", oemcp.ToString(CultureInfo.InvariantCulture)));
         }
         catch (Exception ex)
         {
-            _logService.Warn($"Не удалось определить региональные настройки и кодовые страницы: {ex.Message}", LogCategory);
+            _logService.Write(
+                "system.encoding.detect_failed",
+                LogLevel.Warning,
+                LogStatus.Skipped,
+                "Не удалось определить региональные настройки и кодовые страницы",
+                ex,
+                LogCategory,
+                properties: LogProps.Create("ErrorCode", "LOCALE_DETECT_FAILED"));
         }
     }
+
+    private static string Present(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? "не определено" : value;
 }

@@ -9,6 +9,8 @@ using KTools_App.Services.Contracts;
 using KTools_App.Tests.TestHelpers;
 using KTools_App.UI.Pages;
 using KTools_App.ViewModels;
+using KTools_App.Models;
+using ExecutionContext = KTools_App.Models.ExecutionContext;
 
 namespace KTools_App.Tests.ViewModels;
 
@@ -267,15 +269,16 @@ public class HomeViewModelTests
         public override string IconName => "TestIcon";
         public override string[] FileExtensions => new[] { ".mkv", ".mp4" };
 
-        public override Task<List<string>> ExecuteSingleAsync(
+        public override Task<ExecutionResult> ExecuteSingleAsync(
             string filePath,
             Dictionary<string, object> settings,
             string? outputPath,
             ScriptProgressCallback progressCallback,
             int fileIndex,
-            int totalCount)
+            int totalCount,
+            ExecutionContext context)
         {
-            return Task.FromResult(new List<string> { $"✅ Готово: {filePath}" });
+            return Task.FromResult(ExecutionResult.Succeeded(context, $"Готово: {filePath}"));
         }
     }
 }

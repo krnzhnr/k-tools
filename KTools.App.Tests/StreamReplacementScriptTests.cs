@@ -1,13 +1,17 @@
 // -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Threading.Tasks;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using FluentAssertions;
 using Moq;
 using KTools_App.Scripts;
 using KTools_App.Core;
+using KTools_App.Models;
 using KTools_App.Services.Contracts;
 using KTools_App.Infrastructure;
+using KTools_App.Tests.TestHelpers;
 
 namespace KTools_App.Tests;
 
@@ -70,8 +74,149 @@ public class StreamReplacementScriptTests
         var results = await _script.ExecuteSingleAsync(testFile, settings, null, (f, t, m, p, fps, b) => { }, 0, 1);
 
         // Assert
-        results.Should().ContainSingle();
+        results.Status.Should().Be(ExecutionStatus.Failed);
+        results.ErrorCode.Should().Be("no-replacements");
+        results.OutputExists.Should().BeFalse();
+        results.Messages.Should().ContainSingle();
         results[0].Should().Contain("❌ Ошибка: не назначено ни одной замены");
+    }
+
+    /// <summary>
+    /// Проверяет, что неудачная подмена оригинала не сообщается как успех:
+    /// результат частичный с кодом source-replacement-failed, исходник сохраняется.
+    /// </summary>
+    [TestMethod]
+    public async System.Threading.Tasks.Task ExecuteSingleAsync_SourceReplacementFails_ReportsPartialAndKeepsSource()
+    {
+        // Arrange
+        using var scope = new TempDirectoryScope();
+        string testFile = scope.CreateFile("replaced.mkv", "оригинал");
+        SetupStructure(testFile);
+
+        _settingsManagerMock.Setup(s => s.GetSetting("General", "OverwriteExisting", false)).Returns(true);
+        _mkvmergeRunnerMock.Setup(m => m.RunAsync(
+                It.IsAny<string>(),
+                It.IsAny<List<MkvInputSource>>(),
+                It.IsAny<string>(),
+                It.IsAny<List<string>>(),
+                It.IsAny<Action<double>>(),
+                It.IsAny<System.Threading.CancellationToken>()))
+            .ReturnsAsync(MockBuilders.ProcessSucceeded());
+
+        // Act — mkvmerge «успешен», но файл результата не создан
+        ExecutionResult result = await _script.ExecuteSingleAsync(
+            testFile,
+            BuildSettings(testFile, true),
+            outputPath: null,
+            progressCallback: (f, t, m, p, fps, b) => { },
+            fileIndex: 0,
+            totalCount: 1);
+
+        // Assert
+        result.Status.Should().Be(ExecutionStatus.PartiallySucceeded,
+            "неудачная подмена оригинала не является полным успехом");
+        result.ErrorCode.Should().Be("source-replacement-failed");
+        result.OutputExists.Should().BeFalse("выходной файл не создан");
+        result.CleanupState.Should().Be(CleanupState.Failed);
+        File.Exists(testFile).Should().BeTrue("исходный файл обязан сохраниться");
+        File.ReadAllText(testFile).Should().Be("оригинал");
+    }
+
+    /// <summary>
+    /// Проверяет, что неудачная подмена не оставляет временных артефактов на диске.
+    /// </summary>
+    [TestMethod]
+    public async System.Threading.Tasks.Task ExecuteSingleAsync_SourceReplacementFails_LeavesNoArtifacts()
+    {
+        // Arrange
+        using var scope = new TempDirectoryScope();
+        string testFile = scope.CreateFile("artifacts.mkv", "оригинал");
+        SetupStructure(testFile);
+
+        _settingsManagerMock.Setup(s => s.GetSetting("General", "OverwriteExisting", false)).Returns(true);
+        _mkvmergeRunnerMock.Setup(m => m.RunAsync(
+                It.IsAny<string>(),
+                It.IsAny<List<MkvInputSource>>(),
+                It.IsAny<string>(),
+                It.IsAny<List<string>>(),
+                It.IsAny<Action<double>>(),
+                It.IsAny<System.Threading.CancellationToken>()))
+            .ReturnsAsync(MockBuilders.ProcessSucceeded());
+
+        // Act
+        await _script.ExecuteSingleAsync(
+            testFile,
+            BuildSettings(testFile, true),
+            outputPath: null,
+            progressCallback: (f, t, m, p, fps, b) => { },
+            fileIndex: 0,
+            totalCount: 1);
+
+        // Assert
+        Directory.GetFiles(scope.RootPath).Should().ContainSingle("на диске остаётся только исходный файл");
+    }
+
+    /// <summary>
+    /// Проверяет успешную подмену оригинала: результат оказывается по пути исходника.
+    /// </summary>
+    [TestMethod]
+    public async System.Threading.Tasks.Task ExecuteSingleAsync_SourceReplacementSucceeds_ReturnsSucceeded()
+    {
+        // Arrange
+        using var scope = new TempDirectoryScope();
+        string testFile = scope.CreateFile("good.mkv", "оригинал");
+        SetupStructure(testFile);
+
+        _settingsManagerMock.Setup(s => s.GetSetting("General", "OverwriteExisting", false)).Returns(true);
+        _mkvmergeRunnerMock.Setup(m => m.RunAsync(
+                It.IsAny<string>(),
+                It.IsAny<List<MkvInputSource>>(),
+                It.IsAny<string>(),
+                It.IsAny<List<string>>(),
+                It.IsAny<Action<double>>(),
+                It.IsAny<System.Threading.CancellationToken>()))
+            .ReturnsAsync((string outputPath, List<MkvInputSource> inputs, string title, List<string> extraArgs, Action<double> onProgress, System.Threading.CancellationToken token, ProcessExecutionContext? processContext) =>
+            {
+                File.WriteAllText(outputPath, "собрано");
+                return MockBuilders.ProcessSucceeded();
+            });
+
+        // Act
+        ExecutionResult result = await _script.ExecuteSingleAsync(
+            testFile,
+            BuildSettings(testFile, true),
+            outputPath: null,
+            progressCallback: (f, t, m, p, fps, b) => { },
+            fileIndex: 0,
+            totalCount: 1);
+
+        // Assert
+        result.Status.Should().Be(ExecutionStatus.Succeeded);
+        result.OutputFile.Should().Be(testFile);
+        result.OutputExists.Should().BeTrue();
+        File.ReadAllText(testFile).Should().Be("собрано");
+    }
+
+    private void SetupStructure(string path)
+    {
+        MediaStructure structure = new() { FilePath = path, Duration = 100 };
+        structure.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "video" });
+        structure.Tracks.Add(new MediaTrack { TrackId = 1, TrackType = "audio" });
+        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(path)).ReturnsAsync(structure);
+    }
+
+    private static Dictionary<string, object> BuildSettings(string source, bool overwriteSource)
+    {
+        Dictionary<string, object> fileReplacements = new()
+        {
+            ["1"] = new Dictionary<string, object> { ["path"] = "C:\\test\\replacement.aac", ["src_id"] = 0 }
+        };
+
+        return new Dictionary<string, object>
+        {
+            ["overwrite_source"] = overwriteSource,
+            ["replacements"] = new Dictionary<string, object> { [source] = fileReplacements }
+        };
     }
 
     /// <summary>
@@ -103,7 +248,10 @@ public class StreamReplacementScriptTests
         var results = await _script.ExecuteSingleAsync(testFile, settings, null, (f, t, m, p, fps, b) => { }, 0, 1);
 
         // Assert
-        results.Should().ContainSingle();
+        results.Status.Should().Be(ExecutionStatus.Failed);
+        results.ErrorCode.Should().Be("no-effective-replacements");
+        results.OutputExists.Should().BeFalse();
+        results.Messages.Should().ContainSingle();
         results[0].Should().Contain("❌ Ошибка: ни одна из назначенных замен не была передана в финальную команду");
         _ffmpegRunnerMock.Verify(r => r.RunAsync(
             It.IsAny<string>(),

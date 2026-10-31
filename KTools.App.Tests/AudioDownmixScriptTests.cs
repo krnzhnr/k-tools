@@ -6,8 +6,11 @@ using FluentAssertions;
 using Moq;
 using KTools_App.Scripts;
 using KTools_App.Core;
+using KTools_App.Models;
 using KTools_App.Services.Contracts;
 using KTools_App.Infrastructure;
+using KTools_App.Tests.TestHelpers;
+
 
 namespace KTools_App.Tests;
 
@@ -103,8 +106,8 @@ public class AudioDownmixScriptTests
                     200.0,
                     It.IsAny<Action<ProgressInfo>>(),
                     It.IsAny<System.Threading.CancellationToken>()))
-                .Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, System.Threading.CancellationToken>(
-                    (input, output, extra, inputArgs, overwrite, duration, onProgress, token) =>
+                .Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, System.Threading.CancellationToken, ProcessExecutionContext>(
+                    (input, output, extra, inputArgs, overwrite, duration, onProgress, token, processContext) =>
                     {
                         // Имитируем передачу распарсенного прогресса даунмикса от FFmpeg
                         var progressInfo = new ProgressInfo(100.0, 50.0, Fps: null, Bitrate: "256kbits/s", Speed: 5.0, Eta: "00:20");
@@ -113,7 +116,7 @@ public class AudioDownmixScriptTests
                         // Имитируем создание выходного файла
                         System.IO.File.WriteAllText(output, "output data");
                     })
-                .ReturnsAsync(true);
+                .ReturnsAsync(MockBuilders.ProcessSucceeded());
 
             var reportedCallbacks = new List<(int FileIdx, int Total, string Msg, double? Pct)>();
 
@@ -141,8 +144,63 @@ public class AudioDownmixScriptTests
                 It.IsAny<Action<ProgressInfo>>(),
                 It.IsAny<System.Threading.CancellationToken>()), Times.Once);
 
-            reportedCallbacks.Should().Contain(c => c.Msg.Contains("Даунмикс | 50.0%") || c.Msg.Contains("Даунмикс | 50,0%"));
-            results.Should().Contain(r => r.Contains("✅ Даунмикс выполнен"));
+            reportedCallbacks.Should().Contain(c => c.Msg.Contains("Сведение в стерео | 50.0%") || c.Msg.Contains("Сведение в стерео | 50,0%"));
+            results.Should().Contain(r => r.Contains("✅ Сведение в стерео выполнено"));
+            results.Status.Should().Be(ExecutionStatus.Succeeded);
+            results.OutputExists.Should().BeTrue();
+        }
+        finally
+        {
+            if (System.IO.Directory.Exists(tempDir))
+            {
+                System.IO.Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Проверяет типизированный контракт отсутствующей зависимости DEE:
+    /// код ошибки обязан быть missing-dependency, а не unsupported-format.
+    /// </summary>
+    [TestMethod]
+    public async System.Threading.Tasks.Task ExecuteSingleAsync_DeepModeWithoutDee_ReturnsMissingDependency()
+    {
+        // Arrange
+        string tempDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"downmix_dee_{Guid.NewGuid():N}");
+        System.IO.Directory.CreateDirectory(tempDir);
+        string tempSourceFile = System.IO.Path.Combine(tempDir, "input.mkv");
+        System.IO.File.WriteAllText(tempSourceFile, "test data");
+
+        _dependencyManagerMock.Setup(d => d.IsInstalled("dee")).Returns(false);
+
+        var settings = new Dictionary<string, object>
+        {
+            { "DownmixMode", "Dolby Encoding Engine (DEE)" },
+            { "OutputFormat", "E-AC3" },
+            { "Bitrate", "256" },
+            { "Suffix", "_stereo" },
+            { "DeleteOriginal", false }
+        };
+
+        try
+        {
+            // Act
+            ExecutionResult result = await _script.ExecuteSingleAsync(
+                tempSourceFile,
+                settings,
+                outputPath: null,
+                progressCallback: (fileIdx, total, msg, pct, fps, bitrate) => { },
+                fileIndex: 0,
+                totalCount: 1);
+
+            // Assert
+            result.Status.Should().Be(ExecutionStatus.Failed);
+            result.ErrorCode.Should().Be("missing-dependency");
+            result.Retryable.Should().BeTrue();
+            result.OutputExists.Should().BeFalse();
+            result.OutputFile.Should().BeNull();
+            result.CleanupState.Should().Be(CleanupState.NotRequired);
+            result.Messages.Should().Contain(m => m.Contains("'dee'"));
         }
         finally
         {

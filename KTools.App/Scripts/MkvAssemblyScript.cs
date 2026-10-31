@@ -1,4 +1,3 @@
-using KTools_App.Services.Contracts;
 // -*- coding: utf-8 -*-
 using System.Collections.Generic;
 using System.IO;
@@ -7,7 +6,12 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using KTools_App.Core;
+using KTools_App.Diagnostics;
 using KTools_App.Infrastructure;
+using KTools_App.Models;
+using KTools_App.Services.Contracts;
+
+using ExecutionContext = KTools_App.Models.ExecutionContext;
 
 namespace KTools_App.Scripts;
 
@@ -53,12 +57,18 @@ public sealed class MkvAssemblyScript(
     /// Поддерживаемые расширения медиафайлов для добавления в очередь.
     /// Включает видео-контейнеры, аудио-потоки и файлы субтитров.
     /// </summary>
-    public override string[] FileExtensions => [..AppConstants.VideoContainers, ..AppConstants.AudioContainers, ..AppConstants.AudioStreams, ..AppConstants.SubtitleExtensions];
+    public override string[] FileExtensions => [.. AppConstants.VideoContainers, .. AppConstants.AudioContainers, .. AppConstants.AudioStreams, .. AppConstants.SubtitleExtensions];
 
     /// <summary>
     /// Обязательные бинарные зависимости скрипта.
     /// </summary>
     public override string[] RequiredDependencies => ["mkvtoolnix", "ffmpeg"];
+
+    /// <summary>
+    /// Очередь накапливается: видео и сопутствующие дорожки добавляются последовательно,
+    /// поэтому сброс очереди при добавлении новых файлов здесь недопустим.
+    /// </summary>
+    public override bool KeepQueueOnAdd => true;
 
     /// <summary>
     /// Декларативная схема настроек скрипта.
@@ -102,6 +112,33 @@ public sealed class MkvAssemblyScript(
             "Сборка",
             visibleIfKey: "clean_tracks",
             visibleIfValues: ["False"]
+        ),
+        new SettingField(
+            "audio_title_prompt",
+            "Спрашивать заголовок аудио",
+            SettingType.Expander,
+            false,
+            "Аудио",
+            comment: "При добавлении аудиофайлов спрашивать общий заголовок дорожек, заготовки хранятся ниже",
+            childFields:
+            [
+                new SettingField(
+                    "audio_title_default",
+                    "Заголовок по умолчанию",
+                    SettingType.Text,
+                    string.Empty,
+                    "Аудио",
+                    comment: "Подставляется в диалог и применяется без спроса, если он выключен"
+                ),
+                new SettingField(
+                    "audio_title_presets",
+                    "Заготовленные заголовки",
+                    SettingType.KeywordList,
+                    new List<Dictionary<string, object>>(),
+                    "Аудио",
+                    comment: "Включённые строки показываются в диалоге для мгновенного применения"
+                )
+            ]
         )
     ];
 
@@ -121,15 +158,15 @@ public sealed class MkvAssemblyScript(
     /// Если переданный файл не является видеофайлом (например, аудио или субтитры), он пропускается,
     /// так как его обработка происходит совместно с соответствующим видеофайлом.
     /// </summary>
-    public override async Task<List<string>> ExecuteSingleAsync(
+    public override async Task<ExecutionResult> ExecuteSingleAsync(
         string filePath,
         Dictionary<string, object> settings,
         string? outputPath,
         ScriptProgressCallback progressCallback,
         int fileIndex,
-        int totalCount)
+        int totalCount,
+        ExecutionContext context)
     {
-        ResetCancellation();
         List<string> results = [];
 
         string ext = Path.GetExtension(filePath).ToLowerInvariant();
@@ -139,17 +176,19 @@ public sealed class MkvAssemblyScript(
         if (!AppConstants.VideoContainers.Contains(ext))
         {
             string skipMsg = $"[Сборка MKV] Пропуск сопутствующего файла (обрабатывается вместе с видео): '{Path.GetFileName(filePath)}'";
-            _logService.Info(skipMsg, "MkvAssemblyScript");
+            _logService.Write("script.mkv_assembly.skipped", LogLevel.Info, LogStatus.Skipped, skipMsg, source: Name, properties: LogProps.Create("InputName", LogProps.FileName(filePath)));
             progressCallback(fileIndex, totalCount, $"Пропуск (сопутствующий файл): {Path.GetFileName(filePath)}", 100.0);
             results.Add($"⏭ ПРОПУСК (сопутствующий файл): {Path.GetFileName(filePath)}");
-            return results;
+            return ExecutionResult.Skipped(
+                context,
+                results,
+                errorCode: "companion-file");
         }
 
         string stem = Path.GetFileNameWithoutExtension(filePath);
         string directory = Path.GetDirectoryName(filePath) ?? string.Empty;
 
-        _logService.Info($"Начало сборки MKV-контейнера для видеофайла '{Path.GetFileName(filePath)}'", "MkvAssemblyScript");
-
+        _logService.Write("script.mkv_assembly.started", LogLevel.Debug, LogStatus.Running, $"Начата сборка контейнера MKV для видеофайла '{LogProps.FileName(filePath)}'", source: Name, properties: LogProps.Create("InputName", LogProps.FileName(filePath)));
         // 2. Извлекаем пользовательские настройки
         string subsFullTitle = GetSettingValue(settings, "subs_full_title", "Субтитры");
         string subsSignsTitle = GetSettingValue(settings, "subs_signs_title", "Надписи");
@@ -167,7 +206,7 @@ public sealed class MkvAssemblyScript(
         // Ручная привязка через дроп-зону (MuxPinnedStem) имеет приоритет над автосопоставлением.
         // Роль субтитров (полные/надписи/прочие) определяется суффиксом через MuxTrackTyper.
         // Основная аудиодорожка — явно помеченная (зона "RU Аудио (Осн.)") или первая по имени.
-        List<(string Path, bool ExplicitMain)> audioCandidates = [];
+        List<(string Path, bool ExplicitMain, string? ManualTitle)> audioCandidates = [];
         List<(string Path, MuxSubsRole Role)> subsTracks = [];
 
         foreach (var queueItem in FilesQueue)
@@ -189,7 +228,7 @@ public sealed class MkvAssemblyScript(
             {
                 if (!audioCandidates.Any(c => string.Equals(c.Path, queueItem.FilePath, StringComparison.OrdinalIgnoreCase)))
                 {
-                    audioCandidates.Add((queueItem.FilePath, queueItem.MuxAudioMain));
+                    audioCandidates.Add((queueItem.FilePath, queueItem.MuxAudioMain, queueItem.MuxAudioTitle));
                 }
             }
             else if (AppConstants.SubtitleExtensions.Contains(qExt))
@@ -217,15 +256,14 @@ public sealed class MkvAssemblyScript(
 
         foreach (string found in audioPaths)
         {
-            _logService.Info($"Найден сопутствующий аудиофайл в очереди: '{Path.GetFileName(found)}'", "MkvAssemblyScript");
+            _logService.Write("script.mkv_assembly.audio_detected", LogLevel.Debug, LogStatus.Succeeded, "Сопутствующий аудиофайл найден в очереди", source: Name, properties: LogProps.Create("InputName", LogProps.FileName(found)).With("Stage", "audio"));
         }
         foreach (var (subsPath, role) in subsTracks)
         {
-            _logService.Info($"Найден сопутствующий файл субтитров в очереди ({MuxTrackTyper.GetRoleLabel(role)}): '{Path.GetFileName(subsPath)}'", "MkvAssemblyScript");
+            _logService.Write("script.mkv_assembly.subtitles_detected", LogLevel.Debug, LogStatus.Succeeded, $"Сопутствующий файл субтитров найден в очереди ({MuxTrackTyper.GetRoleLabel(role)})", source: Name, properties: LogProps.Create("InputName", LogProps.FileName(subsPath)).With("Stage", "subtitles"));
         }
 
-        _logService.Info($"Режим сборки: cleanTracks={cleanTracks} (False — встроенные дорожки сохраняются), внешних аудио: {audioPaths.Count}, субтитров: {subsPaths.Count}", "MkvAssemblyScript");
-
+        _logService.Write("script.mkv_assembly.mode_resolved", LogLevel.Debug, LogStatus.Succeeded, $"Режим сборки определён: {(cleanTracks ? "только выбранные дорожки" : "встроенные дорожки сохраняются")}, внешних аудио: {audioPaths.Count}, субтитров: {subsPaths.Count}", source: Name, properties: LogProps.Create("Count", audioPaths.Count).With("Total", subsPaths.Count).With("Stage", "mode"));
         // 4. Формирование путей назначения
         string containerChoice = GetSettingValue(settings, "output_container", "MKV");
         bool isMp4 = containerChoice.Equals("MP4", StringComparison.OrdinalIgnoreCase);
@@ -243,15 +281,21 @@ public sealed class MkvAssemblyScript(
         if (File.Exists(finalOutputFile) && !overwrite)
         {
             string skipExist = $"⏭ ПРОПУСК (файл существует): {Path.GetFileName(finalOutputFile)}";
-            _logService.Info(skipExist, "MkvAssemblyScript");
+            _logService.Write("script.mkv_assembly.output_exists", LogLevel.Info, LogStatus.Skipped, skipExist, source: Name, properties: LogProps.Create("OutputName", LogProps.FileName(filePath)).With("ArtifactExists", true));
             progressCallback(fileIndex, totalCount, $"Пропуск (существует): {Path.GetFileName(finalOutputFile)}", 100.0);
             results.Add(skipExist);
-            return results;
+            return ExecutionResult.Skipped(
+                context,
+                results,
+                errorCode: "output-exists",
+                outputFile: finalOutputFile,
+                outputExists: true);
         }
 
         // 5a. Обработка сборки контейнера MP4 (несколько внешних дорожек)
         if (isMp4)
         {
+            int skippedExternal = 0;
             List<string> mp4AudioPaths = [];
             foreach (string candidate in audioPaths)
             {
@@ -259,8 +303,9 @@ public sealed class MkvAssemblyScript(
                 if (aExt == ".flac" || aExt == ".thd" || aExt == ".truehd" || aExt == ".dts" || aExt == ".dtshd")
                 {
                     string warnAudio = $"⚠ [Сборка MP4] Внешний аудиофайл '{Path.GetFileName(candidate)}' имеет формат {aExt.TrimStart('.').ToUpperInvariant()}, который не поддерживается контейнером MP4, и будет пропущен.";
-                    _logService.Info(warnAudio, "MkvAssemblyScript");
+                    _logService.Write("script.mkv_assembly.audio_warning", LogLevel.Warning, LogStatus.PartiallySucceeded, warnAudio, source: Name, properties: LogProps.Create("ErrorCode", "MUX_AUDIO_WARNING").With("InputName", LogProps.FileName(filePath)));
                     results.Add(warnAudio);
+                    skippedExternal++;
                     continue;
                 }
                 mp4AudioPaths.Add(candidate);
@@ -273,8 +318,9 @@ public sealed class MkvAssemblyScript(
                 if (sExt == ".ass" || sExt == ".ssa")
                 {
                     string warnSub = $"⚠ [Сборка MP4] Субтитры формата ASS/SSA ({Path.GetFileName(candidate)}) не поддерживаются контейнером MP4 и будут пропущены.";
-                    _logService.Info(warnSub, "MkvAssemblyScript");
+                    _logService.Write("script.mkv_assembly.subtitles_warning", LogLevel.Warning, LogStatus.PartiallySucceeded, warnSub, source: Name, properties: LogProps.Create("ErrorCode", "MUX_SUBTITLES_WARNING").With("InputName", LogProps.FileName(filePath)));
                     results.Add(warnSub);
+                    skippedExternal++;
                     continue;
                 }
                 mp4SubsPaths.Add(candidate);
@@ -282,20 +328,9 @@ public sealed class MkvAssemblyScript(
 
             progressCallback(fileIndex, totalCount, $"Сборка MP4: {stem}...", 0.0);
 
-            using var ctsMp4 = new CancellationTokenSource();
-            var cancelTaskMp4 = Task.Run(async () =>
-            {
-                while (!IsCancelled && !ctsMp4.IsCancellationRequested)
-                {
-                    await Task.Delay(100);
-                }
-                if (IsCancelled)
-                {
-                    ctsMp4.Cancel();
-                }
-            });
+            using var ctsMp4 = CancellationTokenSource.CreateLinkedTokenSource(CancellationToken);
 
-            bool mp4Success = false;
+            ProcessResult? mp4Success = null;
             try
             {
                 // Внешние входы перечисляются после входа 0 (видео) в порядке: аудио, затем субтитры.
@@ -358,40 +393,64 @@ public sealed class MkvAssemblyScript(
             catch (System.Exception ex)
             {
                 string runErr = $"❌ Ошибка при сборке MP4 для '{stem}': {ex.Message}";
-                _logService.Exception(ex, runErr, "MkvAssemblyScript");
+                _logService.Write("script.mkv_assembly.mp4_failed", LogLevel.Error, LogStatus.Failed, $"Сборка контейнера MP4 для '{stem}' не выполнена", ex, Name, properties: LogProps.Create("ErrorCode", "MP4_ASSEMBLY_FAILED").With("Container", "mp4").With("Retryable", true));
                 results.Add(runErr);
-            }
-            finally
-            {
-                ctsMp4.Cancel();
-                await cancelTaskMp4;
             }
 
             if (IsCancelled)
             {
                 CleanupIfCancelled(finalOutputFile);
                 string cancelMsg = $"⚠ Сборка отменена пользователем: {Path.GetFileName(finalOutputFile)}";
-                _logService.Info(cancelMsg, "MkvAssemblyScript");
+                _logService.Write("script.mkv_assembly.cancelled", LogLevel.Info, LogStatus.Cancelled, cancelMsg, source: Name, properties: LogProps.Create("Reason", "UserRequested").With("CleanupState", "NotStarted"));
                 results.Add(cancelMsg);
-                return results;
+                return ExecutionResult.Cancelled(
+                    context,
+                    results,
+                    errorCode: "cancelled",
+                    outputFile: finalOutputFile,
+                    outputExists: File.Exists(finalOutputFile),
+                    cleanupState: CleanupState.Completed);
             }
 
-            if (mp4Success)
+            bool mp4OutputReady = mp4Success?.IsSuccess == true && File.Exists(finalOutputFile);
+            if (mp4OutputReady)
             {
                 progressCallback(fileIndex, totalCount, "Сборка завершена!", 100.0);
                 string successMsg = $"✅ Собран контейнер MP4: {Path.GetFileName(finalOutputFile)}";
-                _logService.Info(successMsg, "MkvAssemblyScript");
+                _logService.Write("script.mkv_assembly.completed", LogLevel.Info, LogStatus.Succeeded, successMsg, source: Name, properties: LogProps.Create("OutputName", LogProps.FileName(filePath)).With("Verified", true));
                 results.Add(successMsg);
             }
             else
             {
-                CleanupFailedOutputFile(finalOutputFile);
+                await CleanupFailedOutputFileAsync(finalOutputFile);
                 string failMsg = $"❌ Ошибка сборки MP4-файла: {Path.GetFileName(finalOutputFile)}";
-                _logService.Error(failMsg, "MkvAssemblyScript");
+                _logService.Write("script.mkv_assembly.failed", LogLevel.Error, LogStatus.Failed, failMsg, source: Name, properties: LogProps.Create("ErrorCode", "MKV_ASSEMBLY_FAILED").With("InputName", LogProps.FileName(filePath)).With("Retryable", true));
                 results.Add(failMsg);
             }
 
-            return results;
+            if (mp4OutputReady)
+            {
+                return skippedExternal > 0
+                    ? ExecutionResult.PartiallySucceeded(
+                        context,
+                        results,
+                        errorCode: "external-inputs-skipped",
+                        outputFile: finalOutputFile,
+                        outputExists: true,
+                        cleanupState: CleanupState.Partial)
+                    : ExecutionResult.Succeeded(
+                        context,
+                        results,
+                        outputFile: finalOutputFile,
+                        outputExists: true);
+            }
+            return ExecutionResult.Failed(
+                context,
+                results,
+                errorCode: "output-missing",
+                outputFile: finalOutputFile,
+                outputExists: File.Exists(finalOutputFile),
+                cleanupState: CleanupState.Completed);
         }
 
         // 6. Формирование аргументов входных файлов для mkvmerge
@@ -417,16 +476,27 @@ public sealed class MkvAssemblyScript(
         // Настройка внешних аудио-источников (если найдены).
         // Первая дорожка — основная (зона "RU Аудио (Осн.)" или первая по имени):
         // флаги default/forced. Язык всех внешних дорожек — русский.
-        // Дополнительные различаются заголовком: сначала заголовок из метаданных
-        // файла (MediaInfo Title), при его отсутствии — из различающейся части имени файла.
+        // Приоритет заголовка: ручной из диалога дропа, затем заголовок по умолчанию
+        // из настроек, затем заголовок из метаданных файла, затем различающаяся часть имени.
+        string defaultAudioTitle = SanitizeTrackTitle(GetSettingValue(settings, "audio_title_default", string.Empty));
         for (int i = 0; i < audioPaths.Count; i++)
         {
             bool isMain = i == 0;
             string audioStem = Path.GetFileNameWithoutExtension(audioPaths[i]);
+            string manualTitle = SanitizeTrackTitle(audioCandidates[i].ManualTitle);
             string embeddedTitle = await GetEmbeddedAudioTitleAsync(audioPaths[i]);
-            string audioTitle = !string.IsNullOrWhiteSpace(embeddedTitle)
-                ? embeddedTitle
-                : MuxTrackTyper.InferTrackTitle(stem, audioStem);
+            string audioTitle = !string.IsNullOrWhiteSpace(manualTitle)
+                ? manualTitle
+                : !string.IsNullOrWhiteSpace(defaultAudioTitle)
+                    ? defaultAudioTitle
+                    : !string.IsNullOrWhiteSpace(embeddedTitle)
+                        ? embeddedTitle
+                        : MuxTrackTyper.InferTrackTitle(stem, audioStem);
+            if (!string.IsNullOrWhiteSpace(manualTitle) || !string.IsNullOrWhiteSpace(defaultAudioTitle))
+            {
+                _logService.Write("script.mkv_assembly.audio_title_applied", LogLevel.Debug, LogStatus.Succeeded, $"Заголовок аудиодорожки задан вручную: '{LogProps.FileName(audioPaths[i])}'", source: Name, properties: LogProps.Create("InputName", LogProps.FileName(audioPaths[i])).With("Value", audioTitle));
+            }
+
             var audioArgs = new List<string>
             {
                 "--audio-tracks", "0",
@@ -531,32 +601,21 @@ public sealed class MkvAssemblyScript(
                         "--track-order",
                         string.Join(",", orderParts)
                     ];
-                    _logService.Info($"Сформирован кастомный порядок дорожек (--track-order): {string.Join(",", orderParts)}", "MkvAssemblyScript");
+                    _logService.Write("script.mkv_assembly.track_order", LogLevel.Debug, LogStatus.Succeeded, "Сформирован пользовательский порядок дорожек для сборки", source: Name, properties: LogProps.Create("Count", orderParts.Count).With("ArgumentCount", orderParts.Count));
                 }
             }
             catch (System.Exception ex)
             {
-                _logService.Exception(ex, $"Не удалось построить порядок дорожек: {ex.Message}. Будет использован порядок по умолчанию.", "MkvAssemblyScript");
+                _logService.Write("script.mkv_assembly.track_order_failed", LogLevel.Warning, LogStatus.PartiallySucceeded, "Порядок дорожек для сборки не построен, применён порядок по умолчанию", ex, Name, properties: LogProps.Create("ErrorCode", "TRACK_ORDER_FAILED"));
             }
         }
 
         // 7. Запуск процесса сборки через MkvmergeRunner с мониторингом отмены
         progressCallback(fileIndex, totalCount, $"Сборка MKV: {stem}...", 0.0);
 
-        using var cts = new CancellationTokenSource();
-        var cancelMonitorTask = Task.Run(async () =>
-        {
-            while (!IsCancelled && !cts.IsCancellationRequested)
-            {
-                await Task.Delay(100);
-            }
-            if (IsCancelled)
-            {
-                cts.Cancel();
-            }
-        });
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(CancellationToken);
 
-        bool success = false;
+        ProcessResult? success = null;
         try
         {
             success = await _mkvmergeRunner.RunAsync(
@@ -574,13 +633,8 @@ public sealed class MkvAssemblyScript(
         catch (System.Exception ex)
         {
             string runErr = $"❌ Критическая ошибка при сборке MKV для '{stem}': {ex.Message}";
-            _logService.Exception(ex, runErr, "MkvAssemblyScript");
+            _logService.Write("script.mkv_assembly.mkv_failed", LogLevel.Error, LogStatus.Failed, $"Сборка контейнера MKV для '{stem}' не выполнена", ex, Name, properties: LogProps.Create("ErrorCode", "MKV_ASSEMBLY_FAILED").With("Container", "mkv").With("Retryable", true));
             results.Add(runErr);
-        }
-        finally
-        {
-            cts.Cancel();
-            await cancelMonitorTask;
         }
 
         // 8. Обработка завершения и отмены операции
@@ -588,37 +642,66 @@ public sealed class MkvAssemblyScript(
         {
             CleanupIfCancelled(finalOutputFile);
             string cancelMsg = $"⚠ Сборка отменена пользователем: {Path.GetFileName(finalOutputFile)}";
-            _logService.Info(cancelMsg, "MkvAssemblyScript");
+            _logService.Write("script.mkv_assembly.cancelled", LogLevel.Info, LogStatus.Cancelled, cancelMsg, source: Name, properties: LogProps.Create("Reason", "UserRequested").With("CleanupState", "NotStarted"));
             results.Add(cancelMsg);
-            return results;
+            return ExecutionResult.Cancelled(
+                context,
+                results,
+                errorCode: "cancelled",
+                outputFile: finalOutputFile,
+                outputExists: File.Exists(finalOutputFile),
+                cleanupState: CleanupState.Completed);
         }
 
+        bool mkvOutputReady = success?.IsSuccess == true && File.Exists(finalOutputFile);
         try
         {
-            if (success)
+            if (mkvOutputReady)
             {
                 progressCallback(fileIndex, totalCount, "Сборка завершена!", 100.0);
                 string successMsg = $"✅ Собран контейнер MKV: {Path.GetFileName(finalOutputFile)}";
-                _logService.Info(successMsg, "MkvAssemblyScript");
+                _logService.Write("script.mkv_assembly.completed", LogLevel.Info, LogStatus.Succeeded, successMsg, source: Name, properties: LogProps.Create("OutputName", LogProps.FileName(filePath)).With("Verified", true));
                 results.Add(successMsg);
             }
             else
             {
-                CleanupFailedOutputFile(finalOutputFile);
+                await CleanupFailedOutputFileAsync(finalOutputFile);
                 string failMsg = $"❌ Ошибка сборки MKV-файла: {Path.GetFileName(finalOutputFile)}";
-                _logService.Error(failMsg, "MkvAssemblyScript");
+                _logService.Write("script.mkv_assembly.failed", LogLevel.Error, LogStatus.Failed, failMsg, source: Name, properties: LogProps.Create("ErrorCode", "MKV_ASSEMBLY_FAILED").With("InputName", LogProps.FileName(filePath)).With("Retryable", true));
                 results.Add(failMsg);
             }
         }
         catch (System.Exception ex)
         {
-            CleanupFailedOutputFile(finalOutputFile);
-            string errorMsg = $"❌ Ошибка выполнения скрипта для {Path.GetFileName(filePath)}: {ex.Message}";
+            await CleanupFailedOutputFileAsync(finalOutputFile);
+            string errorMsg = $"❌ Ошибка выполнения скрипта для {Path.GetFileName(filePath)}";
             results.Add(errorMsg);
-            _logService.Exception(ex, $"Ошибка при выполнении сборки MKV для '{stem}': {ex.Message}", "MkvAssemblyScript");
+            _logService.Write("script.mkv_assembly.failed", LogLevel.Error, LogStatus.Failed, $"Сборка контейнера MKV для '{stem}' не выполнена", ex, Name, properties: LogProps.Create("ErrorCode", "MKV_ASSEMBLY_FAILED").With("Retryable", true));
+            return ExecutionResult.FromException(
+                context,
+                ex,
+                results,
+                errorCode: "assembly-exception",
+                outputFile: finalOutputFile,
+                outputExists: File.Exists(finalOutputFile),
+                cleanupState: CleanupState.Completed);
         }
 
-        return results;
+        if (mkvOutputReady)
+        {
+            return ExecutionResult.Succeeded(
+                context,
+                results,
+                outputFile: finalOutputFile,
+                outputExists: true);
+        }
+        return ExecutionResult.Failed(
+            context,
+            results,
+            errorCode: "output-missing",
+            outputFile: finalOutputFile,
+            outputExists: File.Exists(finalOutputFile),
+            cleanupState: CleanupState.Completed);
     }
 
     /// <summary>
@@ -639,10 +722,25 @@ public sealed class MkvAssemblyScript(
         }
         catch (System.Exception ex)
         {
-            _logService.Exception(ex, $"Не удалось мигрировать настройку '{key}', использовано значение по умолчанию", "MkvAssemblyScript");
+            _logService.Write("script.mkv_assembly.setting_migration_failed", LogLevel.Warning, LogStatus.PartiallySucceeded, $"Настройка '{LogRedactor.CompactSafeToken(key)}' не перенесена, применено значение по умолчанию", ex, Name, properties: LogProps.Create("ErrorCode", "SETTING_MIGRATION_FAILED").With("Key", LogRedactor.CompactSafeToken(key)));
         }
 
         return newDefault;
+    }
+
+    /// <summary>
+    /// Чистит ручной заголовок дорожки: обрезка пробелов и замена кавычек,
+    /// так как заголовок подставляется в кавычках в аргументы mkvmerge.
+    /// Пустой вход даёт пустую строку.
+    /// </summary>
+    private static string SanitizeTrackTitle(string? title)
+    {
+        if (string.IsNullOrWhiteSpace(title))
+        {
+            return string.Empty;
+        }
+
+        return title.Trim().Replace("\"", "'", StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -662,7 +760,7 @@ public sealed class MkvAssemblyScript(
         }
         catch (System.Exception ex)
         {
-            _logService.Exception(ex, $"Не удалось прочитать заголовок дорожки из '{Path.GetFileName(audioPath)}', будет использован заголовок из имени файла", "MkvAssemblyScript");
+            _logService.Write("script.mkv_assembly.title_probe_failed", LogLevel.Debug, LogStatus.Skipped, $"Заголовок дорожки не прочитан, используется имя файла '{LogProps.FileName(audioPath)}'", ex, Name, properties: LogProps.Create("ErrorCode", "TRACK_TITLE_PROBE_FAILED").With("InputName", LogProps.FileName(audioPath)));
             return string.Empty;
         }
     }

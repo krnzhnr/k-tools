@@ -1,12 +1,19 @@
 // -*- coding: utf-8 -*-
 using System;
+using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using FluentAssertions;
 using Moq;
 using KTools_App.Core;
+using KTools_App.Diagnostics;
 using KTools_App.Services.Contracts;
 
 namespace KTools_App.Tests;
@@ -243,6 +250,147 @@ public class DependencyManagerTests
     }
 
     /// <summary>
+    /// Проверяет, что повторная проверка обновлений в пределах 24 часов не выполняет сетевых запросов.
+    /// </summary>
+    [TestMethod]
+    public async Task CheckAllDependencyUpdates_RespectsThrottle()
+    {
+        // Arrange: все метки проверок свежие, сеть должна молчать.
+        string nowStamp = DateTime.UtcNow.ToString("o");
+        _settingsManagerMock
+            .Setup(s => s.GetSetting(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
+            .Returns((string group, string key, string defaultValue) => nowStamp);
+
+        var countingHandler = new CountingFakeHttpMessageHandler("{}");
+        _httpClientFactoryMock
+            .Setup(f => f.CreateClient(It.IsAny<string>()))
+            .Returns(new HttpClient(countingHandler));
+
+        var manager = new DependencyManager(_logServiceMock.Object, _pathManagerMock.Object, _httpClientFactoryMock.Object, _settingsManagerMock.Object, _hardwareCacheMock.Object);
+
+        // Act
+        await manager.CheckAllDependencyUpdatesAsync(force: false);
+
+        // Assert: ноль HTTP-запросов, в журнале отметка о пропуске по троттлингу.
+        countingHandler.CallCount.Should().Be(0, "повторная проверка в пределах 24 часов не должна ходить в сеть");
+        _logServiceMock.Verify(
+            l => l.Write(
+                It.Is<string>(eventId => eventId != null && eventId.Contains("throttled")),
+                It.IsAny<LogLevel>(),
+                It.IsAny<LogStatus>(),
+                It.IsAny<string>(),
+                It.IsAny<Exception?>(),
+                It.IsAny<string>(),
+                It.IsAny<LogContext?>(),
+                It.IsAny<IReadOnlyDictionary<string, object?>?>()),
+            Times.AtLeastOnce,
+            "пропуск проверки должен фиксироваться в журнале как throttled");
+    }
+
+    /// <summary>
+    /// Проверяет, что при устаревшей общей метке, но свежих компонентных метках
+    /// внутренние проверки yt-dlp и Whisper не ходят в сеть (уважается их 24-часовой троттлинг).
+    /// </summary>
+    [TestMethod]
+    public async Task CheckAllDependencyUpdates_InnerThrottleRespected_SkipsComponentHttpCalls()
+    {
+        // Arrange: общая метка устарела, компонентные свежие; обе утилиты установлены.
+        string staleStamp = DateTime.UtcNow.AddDays(-2).ToString("o");
+        string freshStamp = DateTime.UtcNow.ToString("o");
+        _settingsManagerMock
+            .Setup(s => s.GetSetting(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
+            .Returns((string group, string key, string defaultValue) => key switch
+            {
+                "LastDepsCheckTime" => staleStamp,
+                "LastYtDlpCheckTime" => freshStamp,
+                "LastWhisperCheckTime" => freshStamp,
+                _ => defaultValue
+            });
+
+        string ytdlpFolder = Path.Combine(_tempBinDir, "yt-dlp");
+        Directory.CreateDirectory(ytdlpFolder);
+        File.WriteAllText(Path.Combine(ytdlpFolder, "yt-dlp.exe"), "фиктивный бинарник");
+
+        string whisperFolder = Path.Combine(_tempBinDir, "whisper-cpu");
+        Directory.CreateDirectory(whisperFolder);
+        File.WriteAllText(Path.Combine(whisperFolder, "whisper-cli.exe"), "фиктивный бинарник");
+
+        var countingHandler = new CountingFakeHttpMessageHandler("{}");
+        _httpClientFactoryMock
+            .Setup(f => f.CreateClient(It.IsAny<string>()))
+            .Returns(new HttpClient(countingHandler));
+
+        var manager = new DependencyManager(_logServiceMock.Object, _pathManagerMock.Object, _httpClientFactoryMock.Object, _settingsManagerMock.Object, _hardwareCacheMock.Object);
+        manager.IsInstalled("yt-dlp").Should().BeTrue();
+        manager.IsInstalled("whisper_cpu").Should().BeTrue();
+
+        // Act
+        await manager.CheckAllDependencyUpdatesAsync(force: false);
+
+        // Assert: только один запрос (сводный релиз deps-v1), компонентные проверки пропущены по троттлингу.
+        countingHandler.CallCount.Should().Be(1, "внутренние force-проверки yt-dlp и Whisper должны уважать 24-часовой троттлинг");
+        _logServiceMock.Verify(
+            l => l.Write(
+                It.Is<string>(eventId => eventId != null && eventId.Contains("throttled")),
+                It.IsAny<LogLevel>(),
+                It.IsAny<LogStatus>(),
+                It.IsAny<string>(),
+                It.IsAny<Exception?>(),
+                It.IsAny<string>(),
+                It.IsAny<LogContext?>(),
+                It.IsAny<IReadOnlyDictionary<string, object?>?>()),
+            Times.AtLeastOnce,
+            "пропуск компонентных проверок должен фиксироваться в журнале как throttled");
+    }
+
+    /// <summary>
+    /// Проверяет, что версия из персистентного кэша возвращается без запуска процессов,
+    /// повторный запрос берётся из памяти, а смена бинарника инвалидирует запись.
+    /// </summary>
+    [TestMethod]
+    public async Task GetInstalledVersion_UsesCache_NoProcessSpawn()
+    {
+        // Arrange: файл-бинарник лежит там, куда указывает мок PathManager.
+        string binaryPath = Path.Combine(_tempBinDir, "kt-ffmpeg.exe");
+        File.WriteAllText(binaryPath, "фиктивный бинарник");
+        var info = new FileInfo(binaryPath);
+        const string seededVersion = "7.1.0-test";
+        string cacheRecord = seededVersion + "|" +
+            info.Length.ToString(CultureInfo.InvariantCulture) + "|" +
+            info.LastWriteTimeUtc.Ticks.ToString(CultureInfo.InvariantCulture);
+
+        _settingsManagerMock
+            .Setup(s => s.GetSetting("DependencyVersions", "ffmpeg", It.IsAny<string>()))
+            .Returns(cacheRecord);
+
+        var manager = new DependencyManager(_logServiceMock.Object, _pathManagerMock.Object, _httpClientFactoryMock.Object, _settingsManagerMock.Object, _hardwareCacheMock.Object);
+
+        // Act: первый запрос берёт версию из персистентного кэша без запуска процесса
+        // (прямой запуск фиктивного файла завершился бы значением «Установлено»).
+        string first = await manager.GetInstalledVersionAsync("ffmpeg");
+
+        // Assert
+        first.Should().Be(seededVersion, "версия из валидного кэша возвращается без запуска процесса");
+
+        // Act: повторный запрос не перезапрашивает даже персистентный кэш.
+        _settingsManagerMock
+            .Setup(s => s.GetSetting("DependencyVersions", "ffmpeg", It.IsAny<string>()))
+            .Returns("0.0.0-changed|0|0");
+        string second = await manager.GetInstalledVersionAsync("ffmpeg");
+
+        // Assert
+        second.Should().Be(seededVersion, "уже закэшированная версия не перезапрашивается");
+
+        // Act: после смены бинарника новый экземпляр не должен отдавать устаревшую запись.
+        File.AppendAllText(binaryPath, "изменение размера бинарника");
+        var coldManager = new DependencyManager(_logServiceMock.Object, _pathManagerMock.Object, _httpClientFactoryMock.Object, _settingsManagerMock.Object, _hardwareCacheMock.Object);
+        string afterChange = await coldManager.GetInstalledVersionAsync("ffmpeg");
+
+        // Assert
+        afterChange.Should().NotBe(seededVersion, "смена бинарника инвалидирует запись персистентного кэша");
+    }
+
+    /// <summary>
     /// Фейковый обработчик сообщений HTTP для HttpClient, чтобы избежать реальных сетевых вызовов в юнит-тестах.
     /// </summary>
     private class FakeHttpMessageHandler : HttpMessageHandler
@@ -252,6 +400,33 @@ public class DependencyManagerTests
             System.Threading.CancellationToken cancellationToken)
         {
             return System.Threading.Tasks.Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK));
+        }
+    }
+
+    /// <summary>
+    /// Считающий обработчик HTTP: фиксирует число реальных попыток сетевых запросов.
+    /// </summary>
+    private sealed class CountingFakeHttpMessageHandler : HttpMessageHandler
+    {
+        private readonly string _responseContent;
+
+        public int CallCount;
+
+        public CountingFakeHttpMessageHandler(string responseContent)
+        {
+            _responseContent = responseContent;
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref CallCount);
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(_responseContent, Encoding.UTF8, "application/json")
+            };
+            return Task.FromResult(response);
         }
     }
 

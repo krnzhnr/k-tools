@@ -2,10 +2,14 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Globalization;
 using System.IO;
 using System.Linq;
+
 using CommunityToolkit.Mvvm.ComponentModel;
+
 using KTools_App.Core;
+using KTools_App.Diagnostics;
 using KTools_App.Services.Contracts;
 using KTools_App.UI.Controls;
 
@@ -17,6 +21,7 @@ namespace KTools_App.ViewModels;
 /// </summary>
 public sealed partial class TrackSelectionViewModel : ThreadSafeViewModel
 {
+    private const string SourceName = nameof(TrackSelectionViewModel);
     private readonly ILogService _logService;
 
     [ObservableProperty]
@@ -40,18 +45,18 @@ public sealed partial class TrackSelectionViewModel : ThreadSafeViewModel
     // Структуры для хранения уникальных технических параметров (опций) для фильтрации
     public Dictionary<string, Dictionary<string, HashSet<string>>> DynamicOptions { get; } = new()
     {
-        { "video", new() { { "language", new() }, { "codec", new() }, { "resolution", new() }, { "name", new() } } },
-        { "audio", new() { { "language", new() }, { "codec", new() }, { "channels", new() }, { "name", new() } } },
-        { "subtitles", new() { { "language", new() }, { "codec", new() }, { "name", new() } } },
+        { "video", new() { { "id", new() }, { "language", new() }, { "codec", new() }, { "resolution", new() }, { "name", new() } } },
+        { "audio", new() { { "id", new() }, { "language", new() }, { "codec", new() }, { "channels", new() }, { "name", new() } } },
+        { "subtitles", new() { { "id", new() }, { "language", new() }, { "codec", new() }, { "name", new() } } },
         { "attachments", new() { { "extension", new() }, { "name", new() } } }
     };
 
     // Выбранные в данный момент правила фильтрации по категориям и свойствам
     public Dictionary<string, Dictionary<string, HashSet<string>>> ActiveRules { get; } = new()
     {
-        { "video", new() { { "language", new() }, { "codec", new() }, { "resolution", new() }, { "name", new() } } },
-        { "audio", new() { { "language", new() }, { "codec", new() }, { "channels", new() }, { "name", new() } } },
-        { "subtitles", new() { { "language", new() }, { "codec", new() }, { "name", new() } } },
+        { "video", new() { { "id", new() }, { "language", new() }, { "codec", new() }, { "resolution", new() }, { "name", new() } } },
+        { "audio", new() { { "id", new() }, { "language", new() }, { "codec", new() }, { "channels", new() }, { "name", new() } } },
+        { "subtitles", new() { { "id", new() }, { "language", new() }, { "codec", new() }, { "name", new() } } },
         { "attachments", new() { { "extension", new() }, { "name", new() } } }
     };
 
@@ -91,7 +96,8 @@ public sealed partial class TrackSelectionViewModel : ThreadSafeViewModel
                 {
                     string lang = !string.IsNullOrEmpty(track.Language) && track.Language != "und" ? track.Language.ToUpperInvariant() : "Неизвестный";
                     string codec = !string.IsNullOrEmpty(track.Codec) ? track.Codec.ToUpperInvariant() : "Неизвестный";
-                    
+
+                    DynamicOptions["video"]["id"].Add(track.TrackId.ToString(CultureInfo.InvariantCulture));
                     DynamicOptions["video"]["language"].Add(lang);
                     DynamicOptions["video"]["codec"].Add(codec);
                     if (!string.IsNullOrEmpty(track.Resolution))
@@ -111,6 +117,7 @@ public sealed partial class TrackSelectionViewModel : ThreadSafeViewModel
                     string codec = !string.IsNullOrEmpty(track.Codec) ? track.Codec.ToUpperInvariant() : "Неизвестный";
                     string ch = track.Channels > 0 ? $"{track.Channels} ch" : "Неизвестно";
 
+                    DynamicOptions["audio"]["id"].Add(track.TrackId.ToString(CultureInfo.InvariantCulture));
                     DynamicOptions["audio"]["language"].Add(lang);
                     DynamicOptions["audio"]["codec"].Add(codec);
                     DynamicOptions["audio"]["channels"].Add(ch);
@@ -126,6 +133,7 @@ public sealed partial class TrackSelectionViewModel : ThreadSafeViewModel
                     string lang = !string.IsNullOrEmpty(track.Language) && track.Language != "und" ? track.Language.ToUpperInvariant() : "Неизвестный";
                     string codec = !string.IsNullOrEmpty(track.Codec) ? track.Codec.ToUpperInvariant() : "Неизвестный";
 
+                    DynamicOptions["subtitles"]["id"].Add(track.TrackId.ToString(CultureInfo.InvariantCulture));
                     DynamicOptions["subtitles"]["language"].Add(lang);
                     DynamicOptions["subtitles"]["codec"].Add(codec);
                     if (!string.IsNullOrEmpty(track.Name))
@@ -151,11 +159,28 @@ public sealed partial class TrackSelectionViewModel : ThreadSafeViewModel
             // Автоматически очищаем устаревшие правила фильтров, которых нет в новом наборе файлов
             PruneObsoleteRules();
 
-            _logService.Info("Сбор уникальных свойств медиадорожек для фильтрации успешно завершен во ViewModel", "TrackSelectionViewModel");
+            _logService.Write(
+                "ui.track_filter.options_refreshed",
+                LogLevel.Debug,
+                LogStatus.Succeeded,
+                "Набор доступных свойств дорожек для фильтрации обновлён",
+                source: SourceName,
+                properties: LogProps
+                    .Create("Count", DynamicOptions.Count)
+                    .With("Group", "TrackFilter"));
         }
         catch (Exception ex)
         {
-            _logService.Exception(ex, "Ошибка при сборе уникальных свойств дорожек для фильтрации во ViewModel", "TrackSelectionViewModel");
+            _logService.Write(
+                "ui.track_filter.options_failed",
+                LogLevel.Warning,
+                LogStatus.Failed,
+                "Набор доступных свойств дорожек для фильтрации не обновлён",
+                ex,
+                SourceName,
+                properties: LogProps
+                    .Create("Group", "TrackFilter")
+                    .With("ErrorCode", "TRACK_FILTER_OPTIONS_FAILED"));
         }
     }
 
@@ -260,7 +285,12 @@ public sealed partial class TrackSelectionViewModel : ThreadSafeViewModel
             string trackVal = string.Empty;
             if (item.IsFont && item.Attachment != null)
             {
-                if (propKey == "extension")
+                if (propKey == "id")
+                {
+                    // Фильтр по идентификатору для вложений отключён: совпадение невозможно.
+                    continue;
+                }
+                else if (propKey == "extension")
                 {
                     trackVal = Path.GetExtension(item.Attachment.FileName).ToLowerInvariant();
                 }
@@ -272,7 +302,11 @@ public sealed partial class TrackSelectionViewModel : ThreadSafeViewModel
             else if (item.Track != null)
             {
                 var t = item.Track;
-                if (propKey == "language")
+                if (propKey == "id")
+                {
+                    trackVal = t.TrackId.ToString(CultureInfo.InvariantCulture);
+                }
+                else if (propKey == "language")
                 {
                     trackVal = !string.IsNullOrEmpty(t.Language) && t.Language != "und" ? t.Language.ToUpperInvariant() : "Неизвестный";
                 }

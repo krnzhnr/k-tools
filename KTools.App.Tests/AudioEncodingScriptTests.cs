@@ -8,6 +8,8 @@ using KTools_App.Scripts;
 using KTools_App.Core;
 using KTools_App.Services.Contracts;
 using KTools_App.Infrastructure;
+using KTools_App.Tests.TestHelpers;
+
 
 namespace KTools_App.Tests;
 
@@ -135,9 +137,9 @@ public class AudioEncodingScriptTests
                 It.IsAny<double>(),
                 It.IsAny<Action<KTools_App.Infrastructure.ProgressInfo>?>(),
                 It.IsAny<System.Threading.CancellationToken>()))
-            .Callback<string, string?, List<string>?, List<string>?, bool, double, Action<KTools_App.Infrastructure.ProgressInfo>?, System.Threading.CancellationToken>(
-                (inPath, outPath, args, inArgs, ow, dur, cb, ct) => capturedExtraArgs = args)
-            .ReturnsAsync(true);
+            .Callback<string, string?, List<string>?, List<string>?, bool, double, Action<KTools_App.Infrastructure.ProgressInfo>?, System.Threading.CancellationToken, ProcessExecutionContext>(
+                (inPath, outPath, args, inArgs, ow, dur, cb, ct, processContext)=> capturedExtraArgs = args)
+            .ReturnsAsync(MockBuilders.ProcessSucceeded());
 
         var settings = new Dictionary<string, object>
         {
@@ -194,13 +196,13 @@ public class AudioEncodingScriptTests
                 It.IsAny<double>(),
                 It.IsAny<Action<ProgressInfo>?>(),
                 It.IsAny<System.Threading.CancellationToken>()))
-            .Callback<string, string?, List<string>?, List<string>?, bool, double, Action<ProgressInfo>?, System.Threading.CancellationToken>(
-                (inPath, outPath, args, inArgs, ow, dur, cb, ct) =>
+            .Callback<string, string?, List<string>?, List<string>?, bool, double, Action<ProgressInfo>?, System.Threading.CancellationToken, ProcessExecutionContext>(
+                (inPath, outPath, args, inArgs, ow, dur, cb, ct, processContext)=>
                 {
                     capturedTotalDuration = dur;
                     capturedProgress = cb;
                 })
-            .ReturnsAsync(true);
+            .ReturnsAsync(MockBuilders.ProcessSucceeded());
 
         var settings = new Dictionary<string, object>
         {

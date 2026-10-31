@@ -101,6 +101,27 @@
                                 Padding="0,2"
                                 SizeChanged="FilterButtonsStackPanel_SizeChanged">
                         <!-- Кнопки-фильтры -->
+                        <Button x:Name="IdFilterButton"
+                                Visibility="Collapsed"
+                                Height="32"
+                                AutomationProperties.Name="Фильтр по идентификатору"
+                                ToolTipService.ToolTip="Фильтр по идентификатору дорожки">
+                            <Button.Content>
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <FontIcon Glyph="&#xE8EC;" FontSize="14" />
+                                    <TextBlock x:Name="IdFilterText" Text="ID ▼" VerticalAlignment="Center" />
+                                    <InfoBadge x:Name="IdInfoBadge" Style="{StaticResource InformationalValueInfoBadgeStyle}" Margin="4,0,0,0" Visibility="Collapsed" />
+                                </StackPanel>
+                            </Button.Content>
+                            <Button.Flyout>
+                                <Flyout>
+                                    <ScrollViewer MaxHeight="300" MinWidth="160" VerticalScrollBarVisibility="Auto">
+                                        <StackPanel x:Name="IdFilterContainer" Spacing="6" Padding="4" />
+                                    </ScrollViewer>
+                                </Flyout>
+                            </Button.Flyout>
+                        </Button>
+
                         <Button x:Name="LanguageFilterButton" Visibility="Collapsed" Height="32">
                             <Button.Content>
                                 <StackPanel Orientation="Horizontal" Spacing="6">

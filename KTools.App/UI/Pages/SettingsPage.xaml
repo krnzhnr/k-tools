@@ -43,7 +43,7 @@
                 <!-- Очищать ли очередь при добавлении -->
                 <community:SettingsCard
                     Padding="16,12,16,12"
-                    Description="Автоматически сбрасывать предыдущую очередь файлов при добавлении новых"
+                    Description="Автоматически сбрасывать предыдущую очередь файлов при добавлении новых. Не действует для скриптов с накапливаемой очередью (сборка MKV)"
                     Header="Очищать очередь при добавлении">
                     <ToggleSwitch
                         x:Name="ClearListToggle"
@@ -326,7 +326,7 @@
                 <!-- Эффект прозрачности (Backdrop) -->
                 <community:SettingsCard
                     Padding="16,12,16,12"
-                    Description="Выберите эффект оформления фона окон приложения (Mica или Acrylic)"
+                    Description="Выберите эффект оформления фона окон приложения (Mica, Acrylic или Обычный без эффектов)"
                     Header="Эффект фона окон">
                     <ComboBox
                         x:Name="BackdropComboBox"
@@ -338,6 +338,9 @@
                         <ComboBoxItem
                             Tag="Acrylic"
                             Content="Acrylic" />
+                        <ComboBoxItem
+                            Tag="None"
+                            Content="Обычный" />
                     </ComboBox>
                 </community:SettingsCard>
             </StackPanel>
@@ -418,6 +421,18 @@
                         OffContent="Выкл"
                         OnContent="Вкл"
                         IsOn="{x:Bind ViewModel.IncludePreReleases, Mode=TwoWay}" />
+                </community:SettingsCard>
+
+                <!-- Окно «Что нового» после обновления -->
+                <community:SettingsCard
+                    Padding="16,12,16,12"
+                    Description="Один раз показывать окно списка изменений после обновления версии"
+                    Header="Окно «Что нового» после обновления">
+                    <ToggleSwitch
+                        x:Name="ShowWhatsNewToggle"
+                        OffContent="Выкл"
+                        OnContent="Вкл"
+                        IsOn="{x:Bind ViewModel.ShowWhatsNewAfterUpdate, Mode=TwoWay}" />
                 </community:SettingsCard>
 
                 <!-- Ручная проверка обновлений (скрывается, если найдено обновление) -->
@@ -524,6 +539,12 @@
                     Padding="4,2,4,2" />
 
                 <community:SettingsExpander.Items>
+                    <community:SettingsCard Header="Что нового в этой версии" Description="Открыть окно списка изменений установленной версии">
+                        <Button
+                            x:Name="ShowWhatsNewButton"
+                            Command="{x:Bind ViewModel.ShowWhatsNewCommand}"
+                            Content="Что нового" />
+                    </community:SettingsCard>
                     <community:SettingsCard>
                         <community:SettingsCard.Header>
                             <HyperlinkButton
@@ -582,6 +603,13 @@
                             OffContent="Выкл"
                             OnContent="Вкл"
                             IsOn="{x:Bind ViewModel.DebugDisableUpdateAction, Mode=TwoWay}" />
+                    </community:SettingsCard>
+
+                    <community:SettingsCard Header="Окно «Что нового»" Description="Открыть окно списка изменений с демонстрационными данными и случайной анимацией шапки">
+                        <Button
+                            x:Name="PreviewWhatsNewButton"
+                            Command="{x:Bind ViewModel.ShowWhatsNewDebugCommand}"
+                            Content="Показать «Что нового»" />
                     </community:SettingsCard>
                 </community:SettingsExpander.Items>
             </community:SettingsExpander>

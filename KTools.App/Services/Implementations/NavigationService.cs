@@ -1,7 +1,9 @@
-// -*- coding: utf-8 -*-
+﻿// -*- coding: utf-8 -*-
 using System;
-using Microsoft.UI.Xaml.Controls;
+
 using KTools_App.Services.Contracts;
+
+using Microsoft.UI.Xaml.Controls;
 
 namespace KTools_App.Services.Implementations;
 

@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Moq;
 using KTools_App.Core;
+using KTools_App.Infrastructure;
 using KTools_App.Services.Contracts;
 
 namespace KTools_App.Tests.TestHelpers;
@@ -59,6 +60,7 @@ public static class MockBuilders
             .Returns<string>(name => name);
         mock.Setup(m => m.GetAllSettingsInGroup(It.IsAny<string>()))
             .Returns<string>(_ => new Dictionary<string, object>());
+        SetupPersistenceDefaults(mock);
         mock.SetupProperty(m => m.EnableParallel, false);
         mock.SetupProperty(m => m.MaxParallelTasks, 1);
         mock.SetupProperty(m => m.UseAutoSubfolder, false);
@@ -73,6 +75,73 @@ public static class MockBuilders
         mock.SetupProperty(m => m.AutoCheckUpdates, false);
         mock.SetupProperty(m => m.IncludePreReleases, false);
         return mock;
+    }
+
+    /// <summary>
+    /// Настраивает типизированные результаты persistence-операций на «успешно сохранено»,
+    /// чтобы loose-мок никогда не возвращал null и не создавал ложный провал.
+    /// </summary>
+    /// <param name="mock">Мок менеджера настроек.</param>
+    public static void SetupPersistenceDefaults(Mock<ISettingsManager> mock)
+    {
+        ArgumentNullException.ThrowIfNull(mock);
+
+        mock.Setup(m => m.SaveSettings())
+            .Returns(() => PersistenceResult.Succeeded());
+        mock.Setup(m => m.InitializeDefaults(It.IsAny<List<AbstractScript>>()))
+            .Returns(() => PersistenceResult.Succeeded());
+        mock.Setup(m => m.ResetToDefaults(
+                It.IsAny<List<AbstractScript>>(),
+                It.IsAny<IReadOnlyList<KeyValuePair<string, object?>>?>()))
+            .Returns(() => PersistenceResult.Succeeded());
+        mock.Setup(m => m.SetLogDirectory(It.IsAny<string>()))
+            .Returns<string>(path => PersistenceResult.Succeeded(new[] { "Logging/LogDir" }));
+        mock.Setup(m => m.SetSetting(
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<object>()))
+            .Returns<string, string, object>((group, key, value) => CreateSetResult(group, key));
+        mock.Setup(m => m.SetSetting(
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<string>()))
+            .Returns<string, string, string>((group, key, value) => CreateSetResult(group, key));
+        mock.Setup(m => m.SetSetting(
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<bool>()))
+            .Returns<string, string, bool>((group, key, value) => CreateSetResult(group, key));
+        mock.Setup(m => m.SetSetting(
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<int>()))
+            .Returns<string, string, int>((group, key, value) => CreateSetResult(group, key));
+        mock.Setup(m => m.SetSetting(
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<double>()))
+            .Returns<string, string, double>((group, key, value) => CreateSetResult(group, key));
+        mock.Setup(m => m.SetSetting(
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<float>()))
+            .Returns<string, string, float>((group, key, value) => CreateSetResult(group, key));
+        mock.Setup(m => m.SetSetting(
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<List<TemplateItem>>()))
+            .Returns<string, string, List<TemplateItem>>((group, key, value) => CreateSetResult(group, key));
+        mock.Setup(m => m.SetSetting(
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<List<Dictionary<string, object>>>()))
+            .Returns<string, string, List<Dictionary<string, object>>>(
+                (group, key, value) => CreateSetResult(group, key));
+    }
+
+    private static PersistenceResult CreateSetResult(string group, string key)
+    {
+        return PersistenceResult.Succeeded(new[] { group + "/" + key });
     }
 
     /// <summary>
@@ -104,6 +173,10 @@ public static class MockBuilders
                 It.IsAny<string>(),
                 It.IsAny<string>()))
             .ReturnsAsync(true);
+        mock.Setup(d => d.ChooseSubtitleTrackAsync(
+                It.IsAny<string>(),
+                It.IsAny<System.Collections.Generic.IReadOnlyList<KTools_App.Core.MediaTrack>>()))
+            .ReturnsAsync((string _, System.Collections.Generic.IReadOnlyList<KTools_App.Core.MediaTrack> tracks) => tracks.Count > 0 ? tracks[0] : null);
         return mock;
     }
 
@@ -181,6 +254,60 @@ public static class MockBuilders
                 It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
         return mock;
+    }
+
+    /// <summary>
+    /// Типизированный результат успешного выполнения внешнего процесса для моков.
+    /// </summary>
+    public static ProcessResult ProcessSucceeded(string? expectedArtifact = null)
+    {
+        ProcessExecutionContext context = ProcessExecutionContext.Create("test-tool");
+        return ProcessResult.Succeeded(
+            context,
+            processId: ProcessExecutionContext.CreateProcessId(),
+            pid: 4242,
+            exitCode: 0,
+            outputExists: expectedArtifact is null ? null : true);
+    }
+
+    /// <summary>
+    /// Типизированный результат неуспешного выполнения внешнего процесса для моков.
+    /// </summary>
+    public static ProcessResult ProcessFailed(
+        string errorCode = "process-failed",
+        string message = "Внешний процесс завершился с ошибкой",
+        int exitCode = 1)
+    {
+        ProcessExecutionContext context = ProcessExecutionContext.Create("test-tool");
+        return ProcessResult.Failed(
+            context,
+            errorCode,
+            message,
+            processId: ProcessExecutionContext.CreateProcessId(),
+            pid: 4242,
+            exitCode: exitCode);
+    }
+
+    /// <summary>
+    /// Типизированный результат отменённого выполнения внешнего процесса для моков.
+    /// </summary>
+    public static ProcessResult ProcessCancelled()
+    {
+        ProcessExecutionContext context = ProcessExecutionContext.Create("test-tool");
+        return ProcessResult.Cancelled(
+            context,
+            ProcessResult.MessageCancelled,
+            processId: ProcessExecutionContext.CreateProcessId(),
+            pid: 4242);
+    }
+
+    /// <summary>
+    /// Преобразовать булев результат старого контракта в типизированный результат процесса.
+    /// Используется в лямбда-обработчиках моков, которые создают выходные файлы перед возвратом.
+    /// </summary>
+    public static ProcessResult ProcessFromBool(bool success, string? expectedArtifact = null)
+    {
+        return success ? ProcessSucceeded(expectedArtifact) : ProcessFailed();
     }
 
     /// <summary>

@@ -1,4 +1,7 @@
 ﻿// -*- coding: utf-8 -*-
+using System.Threading;
+using System.Threading.Tasks;
+
 namespace KTools_App.Services.Contracts;
 
 /// <summary>
@@ -11,4 +14,18 @@ public interface ISystemInfoService
     /// Гарантированно перехватывает все исключения и не приводит к аварийному завершению приложения.
     /// </summary>
     void LogSystemCharacteristics();
+
+    /// <summary>
+    /// Синхронно собирает и записывает дешёвую часть характеристик (ОС, среда выполнения, процессор, память, локали).
+    /// Не обращается к дискам и реестру видеоадаптеров, поэтому безопасна для вызова из UI-потока.
+    /// </summary>
+    void LogEssentialCharacteristics();
+
+    /// <summary>
+    /// Собирает и записывает дорогую часть характеристик (видеоадаптеры, диски с типами носителей).
+    /// Предназначена для вызова из фона: опрос каждого диска изолирован, сбой одного диска не роняет остальные,
+    /// вся операция ограничена общим таймаутом.
+    /// </summary>
+    /// <param name="cancellationToken">Токен отмены фоновой операции.</param>
+    Task LogExtendedCharacteristicsAsync(CancellationToken cancellationToken);
 }

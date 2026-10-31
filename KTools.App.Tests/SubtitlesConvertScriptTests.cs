@@ -12,6 +12,8 @@ using KTools_App.Core;
 using KTools_App.Scripts;
 using KTools_App.Services.Contracts;
 using KTools_App.Infrastructure;
+using KTools_App.Tests.TestHelpers;
+
 
 namespace KTools_App.Tests;
 
@@ -92,7 +94,7 @@ public class SubtitlesConvertScriptTests
         string tempOutputDir = Path.GetTempPath();
 
         _ffmpegRunnerMock.Setup(r => r.RunAsync(tempSourceFile, It.IsAny<string>(), null, null, false, 0.0, null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(true);
+            .ReturnsAsync(MockBuilders.ProcessSucceeded());
 
         var settings = new Dictionary<string, object>
         {
@@ -159,15 +161,15 @@ Dialogue: 0:01:21.00,0:01:23.00,Style1,Actor1,,0,0,,SHOUTING TEXT";
 
         string? tempAssContent = null;
         _ffmpegRunnerMock.Setup(r => r.RunAsync(It.IsAny<string>(), It.IsAny<string>(), null, null, false, 0.0, null, It.IsAny<CancellationToken>()))
-            .Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken>(
-                (inP, outP, extArgs, inArgs, ovr, dur, prog, ct) => {
+            .Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken, ProcessExecutionContext>(
+                (inP, outP, extArgs, inArgs, ovr, dur, prog, ct, processContext) =>{
                     if (File.Exists(inP))
                     {
                         tempAssContent = File.ReadAllText(inP);
                     }
                 }
             )
-            .ReturnsAsync(true);
+            .ReturnsAsync(MockBuilders.ProcessSucceeded());
 
         var settings = new Dictionary<string, object>
         {
@@ -236,7 +238,7 @@ Dialogue: 0:01:21.00,0:01:23.00,Style1,Actor1,,0,0,,SHOUTING TEXT";
 
         string tempOutputDir = Path.GetTempPath();
         _ffmpegRunnerMock.Setup(r => r.RunAsync(It.IsAny<string>(), It.IsAny<string>(), null, null, false, 0.0, null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(true);
+            .ReturnsAsync(MockBuilders.ProcessSucceeded());
 
         var settings = new Dictionary<string, object>
         {
@@ -284,15 +286,15 @@ Dialogue: 0:01:06.00,0:01:08.00,Style1,Actor1,,0,0,,[смех] Удалить э
 
         string? tempAssContent = null;
         _ffmpegRunnerMock.Setup(r => r.RunAsync(It.IsAny<string>(), It.IsAny<string>(), null, null, false, 0.0, null, It.IsAny<CancellationToken>()))
-            .Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken>(
-                (inP, outP, extArgs, inArgs, ovr, dur, prog, ct) => {
+            .Callback<string, string, List<string>, List<string>, bool, double, Action<ProgressInfo>, CancellationToken, ProcessExecutionContext>(
+                (inP, outP, extArgs, inArgs, ovr, dur, prog, ct, processContext) =>{
                     if (File.Exists(inP))
                     {
                         tempAssContent = File.ReadAllText(inP);
                     }
                 }
             )
-            .ReturnsAsync(true);
+            .ReturnsAsync(MockBuilders.ProcessSucceeded());
 
         var settings = new Dictionary<string, object>
         {
@@ -336,4 +338,105 @@ Dialogue: 0:01:06.00,0:01:08.00,Style1,Actor1,,0,0,,[смех] Удалить э
             if (File.Exists(expectedDest)) File.Delete(expectedDest);
         }
     }
+
+    /// <summary>
+    /// Проверяет, что входной файл формата WebVTT (.vtt) успешно парсится и передаётся в FFmpeg на конвертацию.
+    /// Тест использует Mock&lt;IVttParser&gt; для инъекции в AssParser, чтобы изолировать тест от деталей реального VttParser.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_VttInputFile_SuccessfullyParsesAndConverts()
+    {
+        // Arrange — создаём временный файл, чтобы AssParser мог его «найти» на диске
+        string tempSourceFile = Path.Combine(Path.GetTempPath(), "test_input.vtt");
+        File.WriteAllText(tempSourceFile, "WEBVTT\r\n\r\nФиктивный контент — данные придут из мока");
+        string tempOutputDir = Path.GetTempPath();
+
+        // Формируем предсказуемые диалоги через мок IVttParser
+        var expectedData = new AssData();
+        expectedData.Dialogues.Add(new AssDialogue(
+            start: "0:00:01.00",
+            end: "0:00:03.50",
+            style: "Default",
+            actor: "Спикер",
+            effect: string.Empty,
+            text: "Привет из WebVTT!"));
+        expectedData.Dialogues.Add(new AssDialogue(
+            start: "0:00:04.00",
+            end: "0:00:06.00",
+            style: "Default",
+            actor: string.Empty,
+            effect: string.Empty,
+            text: "Вторая реплика WebVTT"));
+
+        var vttParserMock = new Mock<IVttParser>();
+        vttParserMock.Setup(p => p.Parse(tempSourceFile)).Returns(expectedData);
+        // Мок StripVttTags должен возвращать строку без изменений — иначе AssParser.StripTags получит null и упадёт
+        vttParserMock.Setup(p => p.StripVttTags(It.IsAny<string>())).Returns<string>(s => s);
+
+        // Создаём AssParser с инъецированным VttParser-моком и пересобираем скрипт
+        var assParserWithVttMock = new AssParser(vttParserMock.Object);
+        var script = new SubtitlesConvertScript(
+            _logServiceMock.Object,
+            _settingsManagerMock.Object,
+            _pathManagerMock.Object,
+            _ffmpegRunnerMock.Object,
+            assParserWithVttMock);
+
+        string? tempAssContent = null;
+        _ffmpegRunnerMock.Setup(r => r.RunAsync(
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<List<string>?>(),
+                It.IsAny<List<string>?>(),
+                It.IsAny<bool>(),
+                It.IsAny<double>(),
+                It.IsAny<Action<ProgressInfo>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<ProcessExecutionContext?>()))
+            .Callback<string, string?, List<string>?, List<string>?, bool, double, Action<ProgressInfo>?, CancellationToken, ProcessExecutionContext?>((input, output, extArgs, inArgs, ovr, dur, prog, ct, ctx) =>
+            {
+                // Читаем содержимое временного ASS-файла только если путь заканчивается на .ass
+                if (input.EndsWith(".ass", StringComparison.OrdinalIgnoreCase) && File.Exists(input))
+                {
+                    tempAssContent = File.ReadAllText(input);
+                }
+            })
+            .ReturnsAsync(MockBuilders.ProcessSucceeded());
+
+
+        var settings = new Dictionary<string, object>
+        {
+            { "target_format", "SRT" },
+            { "strip_formatting", true },
+            { "keep_styles", false },
+            { "strip_caps", false },
+            { "delete_original", false }
+        };
+
+        try
+        {
+            // Act
+            var results = await script.ExecuteSingleAsync(
+                tempSourceFile,
+                settings,
+                tempOutputDir,
+                (idx, total, status, pct, fps, bit) => { },
+                0,
+                1);
+
+            // Assert
+            results.Should().Contain(s => s.Contains("✅ Конвертирован"));
+            tempAssContent.Should().NotBeNull();
+            tempAssContent.Should().Contain("Привет из WebVTT!");
+            tempAssContent.Should().Contain("Вторая реплика WebVTT");
+            tempAssContent.Should().Contain("Спикер");
+        }
+        finally
+        {
+            if (File.Exists(tempSourceFile)) File.Delete(tempSourceFile);
+            string expectedDest = Path.Combine(tempOutputDir, "test_input.srt");
+            if (File.Exists(expectedDest)) File.Delete(expectedDest);
+        }
+    }
 }
+
