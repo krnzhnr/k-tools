@@ -191,4 +191,41 @@ public class LogServiceTextFormatTests
         logText.Should().Contain("INFO");
         logText.Should().Contain("Первое тестовое сообщение");
     }
+
+    [TestMethod]
+    public void ResolveApplicationVersion_ReturnsNormalizedVersionWithoutBuildMetadata()
+    {
+        string version = LogService.ResolveApplicationVersion();
+
+        version.Should().NotBeNullOrWhiteSpace();
+        version.Should().NotContain("+", "суффикс сборки с хэшем коммита не входит в короткую версию");
+    }
+
+    [TestMethod]
+    public void Write_AppStartedWithVersion_RendersVersionInTextLine()
+    {
+        using var scope = new TempDirectoryScope();
+        using LogService service = CreateService(scope);
+
+        string version = LogService.ResolveApplicationVersion();
+        service.Write(new LogEvent
+        {
+            EventId = "app.started",
+            Level = LogLevel.Info,
+            Status = LogStatus.Running,
+            Message = "Запуск приложения начат",
+            Source = "App",
+            Properties = LogProps.Create("IsAdmin", false)
+                .With("Platform", "x64")
+                .With("Version", version)
+        });
+
+        service.Flush(TimeSpan.FromSeconds(10)).Should().BeTrue();
+
+        string[] lines = ReadLinesShared(service.CurrentLogFile!);
+        lines.Should().ContainSingle();
+
+        lines[0].Should().Contain("app.started");
+        lines[0].Should().Contain("Version=" + version);
+    }
 }

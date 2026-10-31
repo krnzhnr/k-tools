@@ -848,7 +848,12 @@ public sealed class LogService : ILogService, IDisposable
 
     private bool IsAccepting() => Volatile.Read(ref _lifecycleState) == LifecycleAccepting;
 
-    private static string ResolveApplicationVersion()
+    /// <summary>
+    /// Возвращает нормализованную версию приложения (часть AssemblyInformationalVersion до '+').
+    /// Единый источник версии для журнала и стартового события app.started.
+    /// </summary>
+    /// <returns>Версия приложения или 0.0.0 при недоступности.</returns>
+    public static string ResolveApplicationVersion()
     {
         try
         {

@@ -917,7 +917,8 @@ public partial class App : Application
                 new Dictionary<string, object?>(StringComparer.Ordinal)
                 {
                     ["IsAdmin"] = isAdmin,
-                    ["Platform"] = Environment.Is64BitProcess ? "x64" : "x86"
+                    ["Platform"] = Environment.Is64BitProcess ? "x64" : "x86",
+                    ["Version"] = LogService.ResolveApplicationVersion()
                 });
 
             // Характеристики системы собираются в фоне после window.Activate()
