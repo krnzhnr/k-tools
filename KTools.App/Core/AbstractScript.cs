@@ -425,11 +425,17 @@ public abstract class AbstractScript
     /// Применяет правила переименования PowerRename (локальные для скрипта или глобальные) к имени файла (без расширения).
     /// </summary>
     /// <param name="stem">Имя файла без расширения.</param>
-    /// <param name="fileNum">Порядковый номер файла в очереди пакетной обработки.</param>
+    /// <param name="fileNum">Порядковый номер файла в очереди пакетной обработки, нумерация с 1.</param>
     /// <param name="settings">Словарь переопределенных настроек (опционально).</param>
     /// <returns>Преобразованное имя файла без расширения.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">Номер файла меньше 1.</exception>
     public string ApplyPowerRename(string stem, int fileNum, Dictionary<string, object>? settings = null)
     {
+        if (fileNum <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(fileNum), fileNum, "Порядковый номер файла в пакетной обработке начинается с 1.");
+        }
+
         if (string.IsNullOrEmpty(stem)) return stem;
 
         bool renameEnabled = false;
@@ -725,8 +731,15 @@ public abstract class AbstractScript
         replacement = replacement.Replace("${mm}", time.ToString("mm"), StringComparison.OrdinalIgnoreCase);
         replacement = replacement.Replace("${ss}", time.ToString("ss"), StringComparison.OrdinalIgnoreCase);
 
-        // Автонумерация ${num} и ${num:N}
+        // Автонумерация ${num}, ${num:N} и ${num:PAD:START} (нумерация файлов с 1, старт по умолчанию 1)
         replacement = System.Text.RegularExpressions.Regex.Replace(replacement, @"\$\{num\}", fileNum.ToString(), System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        replacement = System.Text.RegularExpressions.Regex.Replace(replacement, @"\$\{num:(-?\d+):(-?\d+)\}", m =>
+        {
+            // Невалидный паддинг игнорируется (без дополнения нулями), невалидный старт откатывается на 1.
+            int pad = int.TryParse(m.Groups[1].Value, out int parsedPad) && parsedPad > 0 ? parsedPad : 0;
+            int start = int.TryParse(m.Groups[2].Value, out int parsedStart) && parsedStart > 0 ? parsedStart : 1;
+            return (start + fileNum - 1).ToString().PadLeft(pad, '0');
+        }, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
         replacement = System.Text.RegularExpressions.Regex.Replace(replacement, @"\$\{num:(\d+)\}", m =>
         {
             if (int.TryParse(m.Groups[1].Value, out int pad))
