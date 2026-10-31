@@ -209,4 +209,29 @@ public class CpuEncoderTests
         // Assert: UI показывает ultrafast — команда обязана нести ultrafast, а не дефолт medium
         args.Should().ContainInOrder("-preset", "ultrafast");
     }
+
+    [TestMethod]
+    public void GetPixelFormat_H264With10Bit_Returns8BitFormat()
+    {
+        var context = new EncoderSharedContext(IsLossless: false, Force10Bit: true, ContainerExtension: ".mkv", CodecName: "AVC / H.264");
+
+        _encoder.GetPixelFormat(context).Should().Be("yuv420p");
+    }
+
+    [TestMethod]
+    public void GetPixelFormat_HevcWith10Bit_Returns10BitFormat()
+    {
+        var context = new EncoderSharedContext(IsLossless: false, Force10Bit: true, ContainerExtension: ".mkv", CodecName: "HEVC / H.265");
+
+        _encoder.GetPixelFormat(context).Should().Be("yuv420p10le");
+    }
+
+    [TestMethod]
+    public void GetPixelFormat_EmptyCodec_DefaultsToHevc()
+    {
+        // Старые конфигурации без ключа cpu_codec резолвятся в HEVC-дефолт.
+        var context = new EncoderSharedContext(IsLossless: false, Force10Bit: true, ContainerExtension: ".mkv");
+
+        _encoder.GetPixelFormat(context).Should().Be("yuv420p10le");
+    }
 }

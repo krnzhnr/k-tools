@@ -844,7 +844,8 @@ public sealed class VideoEncodingScript : AbstractScript
             var encoderContext = new KTools_App.Encoders.EncoderSharedContext(
                 IsLossless: lossless,
                 Force10Bit: force10Bit,
-                ContainerExtension: containerExt
+                ContainerExtension: containerExt,
+                CodecName: GetSettingValue(settings, "cpu_codec", string.Empty)
             );
 
             var encoderArgs = encoderInstance.BuildEncoderArguments(settings, encoderContext);

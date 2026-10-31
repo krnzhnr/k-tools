@@ -60,7 +60,12 @@ public class CpuEncoder : IVideoEncoder
 
     public string GetPixelFormat(EncoderSharedContext context)
     {
-        var cap = GetCapabilityProvider(null);
+        // Кодек резолвится из контекста тем же правилом, что и остальные методы:
+        // пустое имя даёт дефолт HEVC для старых конфигураций без ключа cpu_codec.
+        Dictionary<string, object>? settings = string.IsNullOrEmpty(context.CodecName)
+            ? null
+            : new Dictionary<string, object> { { CodecSettingKey, context.CodecName } };
+        var cap = GetCapabilityProvider(settings);
         return cap.GetPixelFormat(context.Force10Bit);
     }
 

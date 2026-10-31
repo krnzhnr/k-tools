@@ -10,5 +10,6 @@ namespace KTools_App.Encoders;
 public record EncoderSharedContext(
     bool IsLossless,
     bool Force10Bit,
-    string ContainerExtension
+    string ContainerExtension,
+    string CodecName = ""
 );
