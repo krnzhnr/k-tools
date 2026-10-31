@@ -20,6 +20,8 @@
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <Grid Grid.Column="0" VerticalAlignment="Center">
                     <Grid.ColumnDefinitions>
@@ -99,6 +101,15 @@
                 </Grid>
                 <TextBlock
                     Grid.Column="1"
+                    Text="Осн."
+                    Margin="8,0,0,0"
+                    VerticalAlignment="Center"
+                    Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
+                    FontWeight="SemiBold"
+                    Style="{ThemeResource CaptionTextBlockStyle}"
+                    Visibility="{x:Bind IsMainTrack, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
+                <TextBlock
+                    Grid.Column="2"
                     Text="• вручную"
                     Margin="8,0,0,0"
                     VerticalAlignment="Center"
@@ -106,7 +117,7 @@
                     Style="{ThemeResource CaptionTextBlockStyle}"
                     Visibility="{x:Bind IsPinned, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
                 <ComboBox
-                    Grid.Column="2"
+                    Grid.Column="3"
                     SelectedIndex="{x:Bind RoleOptionIndex, Mode=OneWay}"
                     SelectionChanged="TrackRole_SelectionChanged"
                     FontSize="12"
@@ -123,7 +134,7 @@
                     <ComboBoxItem Content="Другие" />
                 </ComboBox>
                 <Button
-                    Grid.Column="3"
+                    Grid.Column="4"
                     Content="Открепить"
                     Click="UnpinMuxTrack_Click"
                     Padding="6,2,6,2"
@@ -134,6 +145,21 @@
                     VerticalAlignment="Center"
                     ToolTipService.ToolTip="Вернуть автосопоставление по имени файла"
                     Visibility="{x:Bind IsPinned, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
+                <Button
+                    Grid.Column="5"
+                    Click="RemoveMuxTrack_Click"
+                    Background="Transparent"
+                    BorderThickness="0"
+                    Padding="0"
+                    Width="28"
+                    Height="28"
+                    MinWidth="0"
+                    MinHeight="0"
+                    Margin="4,0,0,0"
+                    VerticalAlignment="Center"
+                    ToolTipService.ToolTip="Убрать дорожку из очереди">
+                    <FontIcon FontSize="14" Glyph="&#xE711;" FontFamily="{ThemeResource SymbolThemeFontFamily}" />
+                </Button>
             </Grid>
         </DataTemplate>
     </UserControl.Resources>

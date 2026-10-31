@@ -603,9 +603,9 @@ public sealed partial class TimingCalculatorPage
         long hours = absMs / 3600000L;
         long minutes = (absMs % 3600000L) / 60000L;
         long seconds = (absMs % 60000L) / 1000L;
-        long hundredths = (absMs % 1000L) / 10L;
+        long centis = (absMs % 1000L) / 10L;
 
-        return $"{hours}:{minutes:D2}:{seconds:D2}.{hundredths:D2}";
+        return $"{hours}:{minutes:D2}:{seconds:D2}.{centis:D2}";
     }
 
     /// <summary>
@@ -623,7 +623,7 @@ public sealed partial class TimingCalculatorPage
 
         long diffMs = afterMs - beforeMs;
 
-        // Вывод абсолютного значения сдвига с 3 знаками миллисекунд
+        // Вывод абсолютного значения сдвига в сотых долях секунды (усечение, не округление)
         if (ResultTimeBlock != null)
         {
             ResultTimeBlock.Text = FormatMsToAegisub(diffMs);

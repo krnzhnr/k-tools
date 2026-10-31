@@ -1,4 +1,4 @@
-﻿// -*- coding: utf-8 -*-
+// -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -152,6 +152,7 @@ public sealed class AudioTransplantScript : AbstractScript
         // 3. Предварительное прямоточное извлечение сырого аудиопотока через FFmpeg
         // eac3to не поддерживает контейнеры MP4/M4A и кодеки Opus/Vorbis,
         // поэтому для неподдерживаемых кодеков сдвиг выполняется через FFmpeg с перекодированием.
+        // eac3to требует сырой элементарный поток (AAC/AC3/DTS и т.д.).
         string rawExt = "ac3";
         string sourceCodec = string.Empty;
         try
