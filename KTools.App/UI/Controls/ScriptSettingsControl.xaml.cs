@@ -116,6 +116,10 @@ public sealed partial class ScriptSettingsControl : UserControl
         {
             _activeScript.FilesQueue.CollectionChanged -= OnFilesQueueCollectionChanged;
             _activeScript.FilesQueue.CollectionChanged += OnFilesQueueCollectionChanged;
+            // Вкладка могла быть закрыта в момент замены файлов: подписки молчали
+            // и панель осталась со старым содержимым. Обновляем принудительно
+            // по текущему составу очереди.
+            UpdatePreview();
         }
 
         if (_whisperModelManager != null)
