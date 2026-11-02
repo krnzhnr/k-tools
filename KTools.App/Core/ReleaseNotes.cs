@@ -187,6 +187,29 @@ public static class WhatsNewArtCatalog
     }
 
     /// <summary>
+    /// Возвращает предыдущую сцену по кругу списка.
+    /// Неизвестное имя даёт конец списка.
+    /// </summary>
+    /// <param name="current">Текущая сцена (может быть пустой).</param>
+    public static string PickPrevious(string? current)
+    {
+        if (Pieces.Length == 0)
+        {
+            return DefaultPiece;
+        }
+
+        int index = Array.FindIndex(
+            Pieces,
+            p => p.Equals(current?.Trim(), StringComparison.OrdinalIgnoreCase));
+        if (index < 0)
+        {
+            return Pieces[^1];
+        }
+
+        return Pieces[(index - 1 + Pieces.Length) % Pieces.Length];
+    }
+
+    /// <summary>
     /// Возвращает следующие <paramref name="count"/> сцен по кругу списка,
     /// начиная со следующей после <paramref name="current"/>.
     /// </summary>

@@ -122,6 +122,30 @@ public class ReleaseNotesTests
     }
 
     [TestMethod]
+    public void PickPrevious_ReturnsPreviousInOrderAndWrapsAround()
+    {
+        // Act
+        string prev = WhatsNewArtCatalog.PickPrevious("amer-fort");
+        string wrapped = WhatsNewArtCatalog.PickPrevious("alpine-dawn");
+        string fromUnknown = WhatsNewArtCatalog.PickPrevious("donut");
+
+        // Assert
+        prev.Should().Be("alpine-dawn");
+        wrapped.Should().Be("volcano-night");
+        fromUnknown.Should().Be("volcano-night");
+    }
+
+    [TestMethod]
+    public void PickPrevious_NextRoundtrip_ReturnsStartPiece()
+    {
+        // Act
+        string back = WhatsNewArtCatalog.PickPrevious(WhatsNewArtCatalog.PickNext("night-coast"));
+
+        // Assert
+        back.Should().Be("night-coast");
+    }
+
+    [TestMethod]
     public void PickNextSequence_ReturnsFollowingItemsInOrder()
     {
         // Act

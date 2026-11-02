@@ -1,10 +1,12 @@
 <?xml version="1.0" encoding="utf-8" ?>
 <Page
     x:Class="KTools_App.UI.Pages.TimingCalculatorPage"
+    x:DataType="pages:TimingCalculatorPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:pages="using:KTools_App.UI.Pages"
     mc:Ignorable="d"
     IsTabStop="True"
     SizeChanged="Page_SizeChanged">
@@ -173,6 +175,123 @@
                             </StackPanel>
                         </StackPanel>
 
+                    </StackPanel>
+                </Border>
+
+                <!-- История последних расчётов -->
+                <Border CornerRadius="8"
+                        Padding="24"
+                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1"
+                        HorizontalAlignment="Stretch">
+                    <StackPanel Spacing="12" HorizontalAlignment="Stretch">
+                        <TextBlock Text="История расчётов"
+                                   FontSize="16"
+                                   FontWeight="SemiBold"
+                                   HorizontalAlignment="Center"
+                                   Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+                        <TextBlock x:Name="EmptyHistoryText"
+                                   Text="История пуста"
+                                   FontSize="13"
+                                   HorizontalAlignment="Center"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <ItemsControl x:Name="HistoryList"
+                                      ItemsSource="{x:Bind HistoryItems, Mode=OneWay}"
+                                      AutomationProperties.Name="История расчётов">
+                            <ItemsControl.ItemContainerStyle>
+                                <Style TargetType="ContentPresenter">
+                                    <Setter Property="HorizontalAlignment" Value="Stretch" />
+                                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                </Style>
+                            </ItemsControl.ItemContainerStyle>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="pages:TimingHistoryEntry">
+                                    <Grid Margin="0,0,0,8">
+                                        <Button Click="HistoryCard_Click"
+                                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
+                                                Padding="12,8,12,8"
+                                                CornerRadius="8"
+                                                ToolTipService.ToolTip="Подставить значения в поля ввода"
+                                                AutomationProperties.Name="Подставить значения из истории"
+                                                Style="{ThemeResource DefaultButtonStyle}">
+                                            <Grid ColumnSpacing="12" RowSpacing="2" VerticalAlignment="Center">
+                                                <Grid.RowDefinitions>
+                                                    <RowDefinition Height="Auto" />
+                                                    <RowDefinition Height="Auto" />
+                                                </Grid.RowDefinitions>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <StackPanel Grid.Row="0" Grid.Column="0" Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                                                <TextBlock Text="{x:Bind ShiftAegisub, Mode=OneTime}"
+                                                           FontFamily="Consolas, Courier New, monospace"
+                                                           FontSize="20"
+                                                           FontWeight="Bold"
+                                                           Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
+                                                           VerticalAlignment="Center" />
+                                                <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                                                    <FontIcon Glyph="&#xE72A;" FontSize="16"
+                                                              Foreground="{ThemeResource SystemFillColorSuccessBrush}"
+                                                              Visibility="{x:Bind IsForward, Mode=OneTime, Converter={StaticResource BoolToVisibilityConverter}}" />
+                                                    <FontIcon Glyph="&#xE72B;" FontSize="16"
+                                                              Foreground="{ThemeResource SystemFillColorCautionBrush}"
+                                                              Visibility="{x:Bind IsBackward, Mode=OneTime, Converter={StaticResource BoolToVisibilityConverter}}" />
+                                                    <FontIcon Glyph="&#xE73E;" FontSize="16"
+                                                              Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                              Visibility="{x:Bind IsMatch, Mode=OneTime, Converter={StaticResource BoolToVisibilityConverter}}" />
+                                                    <TextBlock Text="{x:Bind Direction, Mode=OneTime}"
+                                                               FontSize="14"
+                                                               FontWeight="SemiBold"
+                                                               Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+                                                               VerticalAlignment="Center" />
+                                                </StackPanel>
+                                                </StackPanel>
+                                                <TextBlock Grid.Row="1" Grid.Column="0" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center">
+                                                    <Run Text="{x:Bind Before, Mode=OneTime}" /><Run Text=" → " /><Run Text="{x:Bind After, Mode=OneTime}" /><Run Text=" · " /><Run Text="{x:Bind ShiftMsText, Mode=OneTime}" />
+                                                </TextBlock>
+                                                <Button Grid.Row="0" Grid.RowSpan="2" Grid.Column="1" Click="DeleteHistoryEntry_Click"
+                                                        VerticalAlignment="Center"
+                                                        Width="36"
+                                                        Height="32"
+                                                        Padding="0"
+                                                        ToolTipService.ToolTip="Удалить запись"
+                                                        AutomationProperties.Name="Удалить запись из истории"
+                                                        AutomationProperties.AutomationId="DeleteHistoryEntryButton"
+                                                        Style="{ThemeResource DefaultButtonStyle}">
+                                                    <FontIcon Glyph="&#xE74D;" FontSize="14" />
+                                                </Button>
+                                                <Button Grid.Row="0" Grid.RowSpan="2" Grid.Column="2" Click="CopyHistoryEntry_Click"
+                                                        VerticalAlignment="Center"
+                                                        Width="36"
+                                                        Height="32"
+                                                        Padding="0"
+                                                        ToolTipService.ToolTip="Скопировать сдвиг"
+                                                        AutomationProperties.Name="Скопировать сдвиг из истории"
+                                                        AutomationProperties.AutomationId="CopyHistoryEntryButton"
+                                                        Style="{ThemeResource DefaultButtonStyle}">
+                                                    <FontIcon Glyph="&#xE8C8;" FontSize="14" />
+                                                </Button>
+                                                <FontIcon Grid.Row="0" Grid.RowSpan="2" Grid.Column="3" Glyph="&#xE76C;" FontSize="12"
+                                                          Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                          VerticalAlignment="Center"
+                                                          AutomationProperties.AccessibilityView="Raw" />
+                                            </Grid>
+                                        </Button>
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <Button x:Name="ClearHistoryButton"
+                                Content="Очистить историю"
+                                Click="ClearHistory_Click"
+                                Style="{ThemeResource DefaultButtonStyle}"
+                                HorizontalAlignment="Center"
+                                AutomationProperties.Name="Очистить историю расчётов"
+                                AutomationProperties.AutomationId="ClearHistoryButton" />
                     </StackPanel>
                 </Border>
 

@@ -1,8 +1,10 @@
 // -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
+using System.Text.Json.Serialization;
 
 using KTools_App.Core;
 using KTools_App.Diagnostics;
@@ -19,13 +21,67 @@ using Windows.ApplicationModel.DataTransfer;
 namespace KTools_App.UI.Pages;
 
 /// <summary>
+/// Одна запись истории расчётов сдвига тайминга.
+/// Сериализуется в настройки через <see cref="ISettingsManager"/> (System.Text.Json),
+/// поэтому все хранимые свойства публичные с геттером и сеттером.
+/// </summary>
+public sealed class TimingHistoryEntry
+{
+    /// <summary>Исходное время («до»).</summary>
+    public string Before { get; set; } = string.Empty;
+
+    /// <summary>Целевое время («после»).</summary>
+    public string After { get; set; } = string.Empty;
+
+    /// <summary>Сдвиг в формате Aegisub (Ч:ММ:СС.сс).</summary>
+    public string ShiftAegisub { get; set; } = string.Empty;
+
+    /// <summary>Сдвиг в миллисекундах (знак задаёт направление).</summary>
+    public long ShiftMs { get; set; }
+
+    /// <summary>Направление сдвига: «Вперёд», «Назад» или «Совпадает».</summary>
+    public string Direction { get; set; } = string.Empty;
+
+    /// <summary>Строка сдвига в миллисекундах для отображения.</summary>
+    public string ShiftMsText => $"{ShiftMs} ms";
+
+    /// <summary>Признак сдвига вперёд (для показа зелёной стрелки).</summary>
+    [JsonIgnore]
+    public bool IsForward => Direction == "Вперёд";
+
+    /// <summary>Признак сдвига назад (для показа жёлтой стрелки).</summary>
+    [JsonIgnore]
+    public bool IsBackward => Direction == "Назад";
+
+    /// <summary>Признак совпадения (для показа нейтральной галки).</summary>
+    [JsonIgnore]
+    public bool IsMatch => !IsForward && !IsBackward;
+}
+
+/// <summary>
 /// Страница «Калькулятор сдвига таймингов» с поддержкой маскированного ввода времени в стиле Aegisub.
 /// </summary>
 public sealed partial class TimingCalculatorPage
 {
     private const string SourceName = nameof(TimingCalculatorPage);
     private readonly ILogService _logService;
+    private readonly ISettingsManager _settingsManager;
     private bool _isUpdatingText = false;
+    private bool _isRestoringHistory;
+
+    /// <summary>Максимальное число записей истории (старейшие вытесняются первыми).</summary>
+    public const int MaxHistoryCount = 20;
+
+    /// <summary>Группа настроек для хранения истории расчётов.</summary>
+    public const string HistorySettingsGroup = "TimingCalculator";
+
+    /// <summary>Ключ настроек для хранения истории расчётов.</summary>
+    public const string HistorySettingsKey = "History";
+
+    /// <summary>
+    /// История расчётов для привязки списка (новейшие первыми).
+    /// </summary>
+    public ObservableCollection<TimingHistoryEntry> HistoryItems { get; } = new();
 
     // Маска: 0:00:00.000
     // Индексы разделителей: 1 (':'), 4 (':'), 7 ('.')
@@ -37,6 +93,7 @@ public sealed partial class TimingCalculatorPage
     {
         InitializeComponent();
         _logService = App.Services.GetRequiredService<ILogService>();
+        _settingsManager = App.Services.GetRequiredService<ISettingsManager>();
 
         // Сброс фокуса при клике на свободную область страницы.
         // Используем Tapped вместо PointerPressed, чтобы сброс фокуса выполнялся ПОСЛЕ
@@ -53,8 +110,19 @@ public sealed partial class TimingCalculatorPage
             }
         }), true);
 
-        // Начальный расчет
-        UpdateCalculation();
+        // Восстановление истории до первого расчёта, чтобы стартовое нулевое
+        // состояние не попадало в историю без действий пользователя.
+        RestoreHistory();
+        _isRestoringHistory = true;
+        try
+        {
+            // Начальный расчет
+            UpdateCalculation();
+        }
+        finally
+        {
+            _isRestoringHistory = false;
+        }
     }
 
     private void Page_SizeChanged(object sender, SizeChangedEventArgs e)
@@ -283,6 +351,8 @@ public sealed partial class TimingCalculatorPage
             var package = new DataPackage();
             package.SetText(textToCopy);
             Clipboard.SetContent(package);
+            // Запись в историю только по явному копированию результата.
+            RecordHistory(TimeBeforeBox?.Text ?? DefaultTime, TimeAfterBox?.Text ?? DefaultTime);
             _logService.Write(
                 "ui.clipboard.copied",
                 LogLevel.Debug,
@@ -311,6 +381,8 @@ public sealed partial class TimingCalculatorPage
             var package = new DataPackage();
             package.SetText(cleanMs);
             Clipboard.SetContent(package);
+            // Запись в историю только по явному копированию результата.
+            RecordHistory(TimeBeforeBox?.Text ?? DefaultTime, TimeAfterBox?.Text ?? DefaultTime);
             _logService.Write(
                 "ui.clipboard.copied",
                 LogLevel.Debug,
@@ -609,6 +681,103 @@ public sealed partial class TimingCalculatorPage
     }
 
     /// <summary>
+    /// Возвращает подпись направления сдвига для истории.
+    /// </summary>
+    public static string GetDirectionLabel(long diffMs)
+    {
+        if (diffMs > 0) return "Вперёд";
+        if (diffMs < 0) return "Назад";
+        return "Совпадает";
+    }
+
+    /// <summary>
+    /// Строит запись истории по паре времён «до» и «после».
+    /// </summary>
+    public static TimingHistoryEntry BuildHistoryEntry(string before, string after)
+    {
+        ArgumentNullException.ThrowIfNull(before);
+        ArgumentNullException.ThrowIfNull(after);
+
+        long diffMs = ParseTimeToMs(after) - ParseTimeToMs(before);
+        return new TimingHistoryEntry
+        {
+            Before = before,
+            After = after,
+            ShiftAegisub = FormatMsToAegisub(diffMs),
+            ShiftMs = diffMs,
+            Direction = GetDirectionLabel(diffMs),
+        };
+    }
+
+    /// <summary>
+    /// Проверяет запись истории перед хранением или показом.
+    /// </summary>
+    public static bool IsValidHistoryEntry(TimingHistoryEntry? entry)
+    {
+        return entry is not null
+            && !string.IsNullOrWhiteSpace(entry.Before)
+            && !string.IsNullOrWhiteSpace(entry.After);
+    }
+
+    /// <summary>
+    /// Возвращает новый список истории с записью первой (новейшие первыми),
+    /// без подряд идущих повторов и не длиннее <see cref="MaxHistoryCount"/>.
+    /// </summary>
+    public static List<TimingHistoryEntry> PushHistoryEntry(List<TimingHistoryEntry>? current, TimingHistoryEntry entry)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+
+        var cleaned = new List<TimingHistoryEntry>(MaxHistoryCount);
+        if (current is not null)
+        {
+            foreach (TimingHistoryEntry? existing in current)
+            {
+                if (cleaned.Count >= MaxHistoryCount) break;
+                if (IsValidHistoryEntry(existing)) cleaned.Add(existing!);
+            }
+        }
+
+        // Подряд идущий повтор не плодит записи.
+        if (cleaned.Count > 0 && cleaned[0].Before == entry.Before && cleaned[0].After == entry.After)
+        {
+            return cleaned;
+        }
+
+        var result = new List<TimingHistoryEntry>(MaxHistoryCount) { entry };
+        foreach (TimingHistoryEntry existing in cleaned)
+        {
+            if (result.Count >= MaxHistoryCount) break;
+            result.Add(existing);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Загружает историю расчётов из настроек (новейшие первыми, срез до лимита).
+    /// </summary>
+    public static List<TimingHistoryEntry> LoadHistory(ISettingsManager settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+
+        List<TimingHistoryEntry>? stored = settings.GetSetting<List<TimingHistoryEntry>?>(HistorySettingsGroup, HistorySettingsKey, null);
+        if (stored is null) return new List<TimingHistoryEntry>();
+
+        return stored.Where(IsValidHistoryEntry).Take(MaxHistoryCount).ToList();
+    }
+
+    /// <summary>
+    /// Сохраняет историю расчётов в настройки (срез до лимита).
+    /// </summary>
+    public static void SaveHistory(ISettingsManager settings, List<TimingHistoryEntry>? history)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+
+        List<TimingHistoryEntry> trimmed = (history ?? new List<TimingHistoryEntry>()).Where(IsValidHistoryEntry).Take(MaxHistoryCount).ToList();
+        settings.SetSetting(HistorySettingsGroup, HistorySettingsKey, trimmed);
+    }
+
+    /// <summary>
     /// Производит расчет разницы и обновляет отображение результатов в UI.
     /// </summary>
     private void UpdateCalculation()
@@ -660,5 +829,176 @@ public sealed partial class TimingCalculatorPage
                 DirectionTextBlock.Text = "Сдвиг отсутствует";
             }
         }
+
+    }
+
+    /// <summary>
+    /// Загружает сохранённую историю в список без записи стартового расчёта.
+    /// </summary>
+    private void RestoreHistory()
+    {
+        _isRestoringHistory = true;
+        try
+        {
+            List<TimingHistoryEntry> stored = LoadHistory(_settingsManager);
+            HistoryItems.Clear();
+            foreach (TimingHistoryEntry entry in stored)
+            {
+                HistoryItems.Add(entry);
+            }
+            UpdateHistoryVisibility();
+            _logService.Write(
+                "ui.timing_calculator.history_loaded",
+                LogLevel.Debug,
+                LogStatus.Succeeded,
+                "История расчётов сдвига загружена",
+                source: SourceName,
+                properties: LogProps.Create("Count", HistoryItems.Count));
+        }
+        finally
+        {
+            _isRestoringHistory = false;
+        }
+    }
+
+    /// <summary>
+    /// Добавляет расчёт в историю и сохраняет её между запусками.
+    /// </summary>
+    private void RecordHistory(string before, string after)
+    {
+        if (_isRestoringHistory) return;
+        if (HistoryItems.Count > 0 && HistoryItems[0].Before == before && HistoryItems[0].After == after) return;
+
+        List<TimingHistoryEntry> updated = PushHistoryEntry(HistoryItems.ToList(), BuildHistoryEntry(before, after));
+        HistoryItems.Clear();
+        foreach (TimingHistoryEntry entry in updated)
+        {
+            HistoryItems.Add(entry);
+        }
+        SaveHistory(_settingsManager, updated);
+        UpdateHistoryVisibility();
+        _logService.Write(
+            "ui.timing_calculator.history_added",
+            LogLevel.Debug,
+            LogStatus.Changed,
+            "Расчёт сдвига добавлен в историю",
+            source: SourceName,
+            properties: LogProps.Create("Count", updated.Count));
+    }
+
+    /// <summary>
+    /// Переключает видимость списка истории и доступность очистки.
+    /// </summary>
+    private void UpdateHistoryVisibility()
+    {
+        bool hasHistory = HistoryItems.Count > 0;
+        if (HistoryList is not null)
+        {
+            HistoryList.Visibility = hasHistory ? Visibility.Visible : Visibility.Collapsed;
+        }
+        if (EmptyHistoryText is not null)
+        {
+            EmptyHistoryText.Visibility = hasHistory ? Visibility.Collapsed : Visibility.Visible;
+        }
+        if (ClearHistoryButton is not null)
+        {
+            ClearHistoryButton.IsEnabled = hasHistory;
+        }
+    }
+
+    /// <summary>
+    /// Подставляет значения записи истории обратно в поля ввода по клику на карточку.
+    /// Клик по кнопке копирования внутри карточки игнорируется.
+    /// </summary>
+    private void HistoryCard_Click(object sender, RoutedEventArgs e)
+    {
+        // Клик по кнопке копирования внутри карточки только копирует (не подставляет).
+        // Обход останавливается на самой карточке: она тоже Button, но это отправитель, а не цель поиска.
+        for (DependencyObject? current = e.OriginalSource as DependencyObject;
+            current != null && !ReferenceEquals(current, sender);
+            current = VisualTreeHelper.GetParent(current))
+        {
+            if (current is Button) return;
+        }
+
+        if (sender is not FrameworkElement element || element.DataContext is not TimingHistoryEntry entry) return;
+
+        _isRestoringHistory = true;
+        try
+        {
+            _isUpdatingText = true;
+            TimeBeforeBox.Text = entry.Before;
+            TimeAfterBox.Text = entry.After;
+            _isUpdatingText = false;
+            UpdateCalculation();
+        }
+        finally
+        {
+            _isRestoringHistory = false;
+        }
+
+        _logService.Write(
+            "ui.timing_calculator.history_restored",
+            LogLevel.Debug,
+            LogStatus.Changed,
+            "Значения из истории расчётов подставлены в поля ввода",
+            source: SourceName,
+            properties: LogProps.Create("Changed", true));
+    }
+
+    /// <summary>
+    /// Копирует сдвиг записи истории в буфер обмена.
+    /// </summary>
+    private void CopyHistoryEntry_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button button || button.DataContext is not TimingHistoryEntry entry) return;
+        if (string.IsNullOrEmpty(entry.ShiftAegisub)) return;
+
+        var package = new DataPackage();
+        package.SetText(entry.ShiftAegisub);
+        Clipboard.SetContent(package);
+        _logService.Write(
+            "ui.clipboard.copied",
+            LogLevel.Debug,
+            LogStatus.Succeeded,
+            "Запись истории расчёта сдвига скопирована в буфер обмена",
+            source: SourceName,
+            properties: LogProps.Create("Count", entry.ShiftAegisub.Length));
+    }
+
+    /// <summary>
+    /// Удаляет одну запись из истории расчётов.
+    /// </summary>
+    private void DeleteHistoryEntry_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button button || button.DataContext is not TimingHistoryEntry entry) return;
+        if (!HistoryItems.Remove(entry)) return;
+
+        SaveHistory(_settingsManager, HistoryItems.ToList());
+        UpdateHistoryVisibility();
+        _logService.Write(
+            "ui.timing_calculator.history_deleted",
+            LogLevel.Debug,
+            LogStatus.Changed,
+            "Запись удалена из истории расчётов сдвига",
+            source: SourceName,
+            properties: LogProps.Create("Count", HistoryItems.Count));
+    }
+
+    /// <summary>
+    /// Очищает историю расчётов.
+    /// </summary>
+    private void ClearHistory_Click(object sender, RoutedEventArgs e)
+    {
+        HistoryItems.Clear();
+        SaveHistory(_settingsManager, new List<TimingHistoryEntry>());
+        UpdateHistoryVisibility();
+        _logService.Write(
+            "ui.timing_calculator.history_cleared",
+            LogLevel.Debug,
+            LogStatus.Changed,
+            "История расчётов сдвига очищена",
+            source: SourceName,
+            properties: LogProps.Create("Count", 0));
     }
 }

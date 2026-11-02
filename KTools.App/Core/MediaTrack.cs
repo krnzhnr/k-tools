@@ -78,6 +78,22 @@ public sealed class MediaTrack
     public bool IsVisualImpaired { get; set; }
 
     /// <summary>
+    /// Средняя частота кадров видеодорожки в кадрах в секунду (avg_frame_rate).
+    /// Null — данные отсутствуют, ничего не выводить и не выдумывать.
+    /// </summary>
+    public double? FrameRate { get; set; }
+
+    /// <summary>
+    /// Признак переменной частоты кадров: true — VFR, false — CFR, null — неизвестно.
+    /// </summary>
+    public bool? IsVariableFrameRate { get; set; }
+
+    /// <summary>
+    /// Число кадров видеодорожки (nb_frames) для эвристики VFR. Null — неизвестно.
+    /// </summary>
+    public long? FrameCount { get; set; }
+
+    /// <summary>
     /// Возвращает локализованное на русский язык название типа дорожки.
     /// </summary>
     public string TypeLabel
