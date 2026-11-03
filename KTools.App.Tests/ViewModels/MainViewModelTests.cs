@@ -333,9 +333,9 @@ public class MainViewModelTests : IsolatedMessengerTestBase
         vm.InitializeCommand.Execute(null);
 
         // Assert — ждём завершения fire-and-forget CheckUpdatesSilentlyAsync (поллинг до 2 сек)
-        bool bannerShown = await PollUntilAsync(() => vm.IsUpdateBannerVisible, TimeSpan.FromSeconds(2));
+        bool pillShown = await PollUntilAsync(() => vm.IsUpdatePillVisible, TimeSpan.FromSeconds(2));
 
-        bannerShown.Should().BeTrue("баннер обновлений должен появиться после фоновой проверки");
+        pillShown.Should().BeTrue("пилюля обновлений должна появиться после фоновой проверки");
         vm.UpdateStatusText.Should().Contain("9.9.9", "текст статуса должен содержать версию");
         vm.NewUpdateInfo.Should().NotBeNull();
         vm.NewUpdateInfo!.Version.Should().Be("9.9.9");
@@ -343,11 +343,11 @@ public class MainViewModelTests : IsolatedMessengerTestBase
     }
 
     /// <summary>
-    /// Проверяет, что CloseUpdateBannerCommand скрывает баннер обновлений
-    /// и не порождает шумных записей журнала (чистое изменение состояния UI).
+    /// Проверяет, что GoToUpdateCommand скрывает пилюлю обновлений
+    /// и переходит на страницу настроек с запуском установки.
     /// </summary>
     [TestMethod]
-    public async Task CloseUpdateBannerCommand_BannerVisible_HidesBanner()
+    public async Task GoToUpdateCommand_PillVisible_HidesPillAndNavigatesToSettings()
     {
         // Arrange
         _settingsManagerMock.Object.AutoCheckUpdates = true;
@@ -355,16 +355,15 @@ public class MainViewModelTests : IsolatedMessengerTestBase
         _updateServiceMock = MockBuilders.CreateUpdateMock(update);
         var vm = CreateViewModel();
         vm.InitializeCommand.Execute(null);
-        await PollUntilAsync(() => vm.IsUpdateBannerVisible, TimeSpan.FromSeconds(2));
-        vm.IsUpdateBannerVisible.Should().BeTrue();
-        _logServiceMock.Invocations.Clear();
+        await PollUntilAsync(() => vm.IsUpdatePillVisible, TimeSpan.FromSeconds(2));
+        vm.IsUpdatePillVisible.Should().BeTrue();
 
         // Act
-        vm.CloseUpdateBannerCommand.Execute(null);
+        vm.GoToUpdateCommand.Execute(null);
 
         // Assert
-        vm.IsUpdateBannerVisible.Should().BeFalse();
-        _logServiceMock.VerifyNoEvents();
+        vm.IsUpdatePillVisible.Should().BeFalse();
+        _navigationMock.Verify(n => n.NavigateTo(typeof(SettingsPage), "scroll_to_updates"), Times.Once);
     }
 
     /// <summary>

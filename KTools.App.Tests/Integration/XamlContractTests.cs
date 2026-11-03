@@ -390,6 +390,7 @@ public class XamlContractTests
             "DragOver", "DragLeave", "Drop", "SizeChanged",
             "DataContextChanged", "PreviewKeyDown", "LostFocus",
             "PaneOpened", "PaneClosed", "PaneOpening", "PaneClosing",
+            "BackRequested", "PaneToggleRequested",
             "CloseButtonClick", "CreateResources", "Draw", "QuerySubmitted"
         ];
 
@@ -493,5 +494,58 @@ public class XamlContractTests
         var scriptTagsOnly = scriptTags.Where(t => t.StartsWith("script:")).ToList();
         scriptTagsOnly.Should().BeEquivalentTo(expectedLegacyTags,
             "каждый script-тег XAML должен иметь legacy-маппинг в MainViewModel.InitializeScripts");
+    }
+
+    // ====================================================================
+    // 7. Контракт пилюли обновления (#37): баннер удалён, пилюля в TitleBar
+    // ====================================================================
+
+    [TestMethod]
+    public void MainPage_UpdateBanner_RemovedFromXaml()
+    {
+        // Arrange — баннер заменён пилюлей в TitleBar (#37)
+        string mainPageXaml = File.ReadAllText(Path.Combine(AppRoot, "MainPage.xaml"));
+
+        // Act / Assert — от баннера не должно остаться ни разметки, ни привязок, ни обработчиков
+        mainPageXaml.Should().NotContain("MainUpdateInfoBar",
+            "баннер обновлений удалён из MainPage.xaml, его роль выполняет пилюля в TitleBar");
+        mainPageXaml.Should().NotContain("IsUpdateBannerVisible",
+            "состояние видимости баннера больше не читается из MainPage.xaml");
+        mainPageXaml.Should().NotContain("CloseUpdateBannerCommand",
+            "команда закрытия баннера удалена вместе с баннером");
+        mainPageXaml.Should().NotContain("MainUpdateInfoBar_CloseButtonClick",
+            "обработчик закрытия баннера удалён из code-behind MainPage");
+    }
+
+    [TestMethod]
+    public void MainWindow_UpdatePill_ExistsAndWiredToHandler()
+    {
+        // Arrange — пилюля обновления живёт в TitleBar главного окна (#37)
+        string mainWindowXaml = File.ReadAllText(Path.Combine(AppRoot, "MainWindow.xaml"));
+
+        // Act / Assert — разметка: кнопка с обработчиком клика и доступным именем
+        mainWindowXaml.Should().Contain("UpdatePillButton",
+            "пилюля обновления обязана присутствовать в TitleBar главного окна");
+        mainWindowXaml.Should().Contain("UpdatePillButton_Click",
+            "клик по пилюле обязан обрабатываться в code-behind главного окна");
+        mainWindowXaml.Should().Contain("AutomationProperties.Name",
+            "интерактивная пилюля обязана иметь доступное имя по стандарту доступности");
+        mainWindowXaml.Should().Contain("Style=\"{ThemeResource DefaultButtonStyle}\"",
+            "пилюля — обычная кнопка без кастомного хрома, как карточки истории в калькуляторе");
+        mainWindowXaml.Should().NotContain("AccentButtonBackgroundPointerOver",
+            "без костылей лёгкой стилизации: состояния берутся из штатного стиля кнопки");
+        mainWindowXaml.Should().NotContain("InfoBarSuccessSeverityBackgroundBrush",
+            "без тонированного фона: нейтральный хром кнопки плюс зелёная иконка");
+        int solidSuccessUses = Regex.Matches(mainWindowXaml, "SystemFillColorSuccessBrush").Count;
+        solidSuccessUses.Should().Be(1,
+            "зелёная кисть только у иконки пилюли, как у иконок истории расчётов");
+
+        // Обработчик обязан существовать в типе MainWindow
+        Type? mainWindowType = AppAssembly.GetType("KTools_App.MainWindow");
+        mainWindowType.Should().NotBeNull("тип KTools_App.MainWindow обязан существовать");
+        mainWindowType!.GetMethod(
+                "UpdatePillButton_Click",
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+            .Should().NotBeNull("обработчик UpdatePillButton_Click обязан существовать в MainWindow");
     }
 }

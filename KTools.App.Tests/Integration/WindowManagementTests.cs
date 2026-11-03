@@ -148,11 +148,12 @@ public class WindowManagementTests
             typeof(Services.Contracts.ISettingsManager),
             typeof(Services.Contracts.IDependencyManager),
             typeof(Services.Contracts.IDialogService),
-            typeof(Services.Contracts.IScriptRegistry)
+            typeof(Services.Contracts.IScriptRegistry),
+            typeof(Services.Contracts.INavigationService)
         });
 
         // Assert
-        ctor.Should().NotBeNull("MainWindow обязан принимать (ILogService, ISettingsManager, IDependencyManager, IDialogService, IScriptRegistry) через DI");
+        ctor.Should().NotBeNull("MainWindow обязан принимать (ILogService, ISettingsManager, IDependencyManager, IDialogService, IScriptRegistry, INavigationService) через DI");
     }
 
     [TestMethod]

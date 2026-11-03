@@ -851,26 +851,13 @@ public sealed class LogService : ILogService, IDisposable
     /// <summary>
     /// Возвращает нормализованную версию приложения (часть AssemblyInformationalVersion до '+').
     /// Единый источник версии для журнала и стартового события app.started.
+    /// Делегирует чтение в <see cref="AppVersion"/>: класс находится в том же
+    /// пространстве имён Core, дополнительный using не требуется.
     /// </summary>
     /// <returns>Версия приложения или 0.0.0 при недоступности.</returns>
     public static string ResolveApplicationVersion()
     {
-        try
-        {
-            Assembly assembly = typeof(LogService).Assembly;
-            string? informational = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
-            if (!string.IsNullOrEmpty(informational))
-            {
-                int plus = informational.IndexOf('+', StringComparison.Ordinal);
-                return plus > 0 ? informational[..plus] : informational;
-            }
-
-            return assembly.GetName().Version?.ToString() ?? "0.0.0";
-        }
-        catch (Exception)
-        {
-            return "0.0.0";
-        }
+        return AppVersion.Resolve();
     }
 
     private void WriteLegacyFallback(LogLevel level, LogStatus status, string message, string source)

@@ -1,6 +1,5 @@
 // -*- coding: utf-8 -*-
 using System;
-using System.Reflection;
 
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -331,7 +330,7 @@ public partial class SettingsViewModel : ThreadSafeViewModel
         RenameRegexSearch = string.Empty;
         RenameRegexReplace = string.Empty;
 
-        CurrentVersionText = $"Версия {GetAppVersion()} (WinAppSDK / WinUI 3)";
+        CurrentVersionText = $"Версия {AppVersion.Resolve()} (WinAppSDK / WinUI 3)";
         DefaultLogDir = System.IO.Path.Combine(_pathManager.GetSettingsDirectory(), "logs");
 
         MaxParallelLimit = Environment.ProcessorCount;
@@ -959,25 +958,12 @@ public partial class SettingsViewModel : ThreadSafeViewModel
     }
 
     /// <summary>
-    /// Возвращает информационную версию текущей сборки приложения из метаданных сборки.
+    /// Возвращает информационную версию текущей сборки приложения.
+    /// Делегирует чтение единому источнику <see cref="AppVersion"/>.
     /// </summary>
-    private string GetAppVersion()
+    private static string GetAppVersion()
     {
-        try
-        {
-            var assembly = Assembly.GetExecutingAssembly();
-            var infoVersion = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
-            if (!string.IsNullOrEmpty(infoVersion))
-            {
-                int plusIdx = infoVersion.IndexOf('+');
-                return plusIdx > 0 ? infoVersion.Substring(0, plusIdx) : infoVersion;
-            }
-            return assembly.GetName().Version?.ToString() ?? "2.0.0";
-        }
-        catch
-        {
-            return "2.0.0";
-        }
+        return AppVersion.Resolve();
     }
 
     /// <summary>
