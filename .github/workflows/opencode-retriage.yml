@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     concurrency:
       group: retriage-issue-${{ github.event.issue.number }}
-      cancel-in-progress: false
+      cancel-in-progress: true
     permissions:
       id-token: write
       contents: read
