@@ -33,9 +33,9 @@
                   BackRequested="AppTitleBar_BackRequested"
                   PaneToggleRequested="AppTitleBar_PaneToggleRequested">
             <TitleBar.Resources>
-                <!-- Растягиваем Content на всю ширину бара, чтобы хост пилюли
-                     обновления (#37) вставал справа, а пустое место таскало окно. -->
-                <HorizontalAlignment x:Key="TitleBarContentHorizontalAlignment">Stretch</HorizontalAlignment>
+                <!-- Контент прижат влево, рядом с названием: пилюля обновления
+                      встаёт сразу за заголовком, остальная ширина бара таскает окно. -->
+                <HorizontalAlignment x:Key="TitleBarContentHorizontalAlignment">Left</HorizontalAlignment>
             </TitleBar.Resources>
             <TitleBar.IconSource>
                 <ImageIconSource ImageSource="/Assets/AppIcon.ico" />
@@ -48,7 +48,7 @@
                      через MainViewModel.GoToUpdateCommand без дублирования логики.
                      Кнопка интерактивна и исключена из drag-зоны бара. -->
                 <Grid x:Name="UpdatePillHost"
-                      HorizontalAlignment="Right"
+                      HorizontalAlignment="Left"
                       VerticalAlignment="Center"
                       Visibility="Collapsed">
                     <Button x:Name="UpdatePillButton"

@@ -12,9 +12,9 @@
     mc:Ignorable="d">
 
     <Page.Resources>
-        <!-- Шаблон карточки скрипта -->
+        <!-- Шаблон карточки скрипта: нативная кнопка, как элементы истории расчётов калькулятора сдвига -->
         <DataTemplate x:Key="ScriptCardTemplate" x:DataType="core:ScriptInfo">
-            <Border Width="325" 
+            <Button Width="325" 
                     Height="100" 
                     Padding="16,12,16,12"
                     Margin="0,0,12,12"
@@ -22,12 +22,14 @@
                     Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                     BorderThickness="1"
-                    Tag="{x:Bind}"
-                    IsHitTestVisible="{x:Bind IsAvailable}"
-                    Opacity="{x:Bind CardOpacity}"
-                    PointerEntered="Card_PointerEntered"
-                    PointerExited="Card_PointerExited"
-                    Tapped="Card_Tapped">
+                    HorizontalContentAlignment="Stretch"
+                    VerticalContentAlignment="Stretch"
+                    IsEnabled="{x:Bind IsAvailable, Mode=OneTime}"
+                    Opacity="{x:Bind CardOpacity, Mode=OneTime}"
+                    AutomationProperties.Name="{x:Bind Name, Mode=OneTime}"
+                    ToolTipService.ToolTip="{x:Bind Description, Mode=OneTime}"
+                    Click="Card_Click"
+                    Style="{ThemeResource DefaultButtonStyle}">
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
@@ -65,7 +67,7 @@
                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                     </StackPanel>
                 </Grid>
-            </Border>
+            </Button>
         </DataTemplate>
     </Page.Resources>
 
