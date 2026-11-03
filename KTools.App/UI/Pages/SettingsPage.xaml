@@ -9,7 +9,7 @@
     xmlns:viewmodels="using:KTools_App.ViewModels"
     x:DataType="viewmodels:SettingsViewModel"
     mc:Ignorable="d"
-    NavigationCacheMode="Disabled">
+    NavigationCacheMode="Required">
 
 
 
@@ -602,9 +602,10 @@
 
             <!-- Раздел: Параметры отладки -->
             <community:SettingsExpander
+                x:Name="DebugSettingsExpander"
                 Header="Параметры отладки"
                 Description="Временные инструменты для тестирования и отладки приложения"
-                Visibility="{x:Bind ViewModel.IsDebugSettingsVisible, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
+                x:Load="{x:Bind ViewModel.IsDebugSettingsVisible, Mode=OneWay}"
                 IsExpanded="True"
                 Margin="0,12,0,0">
                 <community:SettingsExpander.HeaderIcon>
