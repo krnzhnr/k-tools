@@ -196,15 +196,58 @@ public sealed class FileQueueItem : INotifyPropertyChanged
     }
 
     /// <summary>
+    /// Разрешён ли показ пилюли частоты кадров в настройках отображения очереди.
+    /// Читается лениво, по умолчанию true (в тестах без сервисов тоже true).
+    /// </summary>
+    public bool ShowFrameRateBadge
+    {
+        get
+        {
+            // Провайдер пуст в юнит-тестах без инициализации приложения.
+            IServiceProvider? provider = App.Services;
+            if (provider != null)
+            {
+                var settingsManager = provider.GetService<ISettingsManager>();
+                if (settingsManager != null)
+                {
+                    return settingsManager.ShowFrameRateBadge;
+                }
+            }
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Разрешён ли показ пилюли типа развёртки (CFR/VFR) в настройках отображения очереди.
+    /// </summary>
+    public bool ShowFrameModeBadge
+    {
+        get
+        {
+            // Провайдер пуст в юнит-тестах без инициализации приложения.
+            IServiceProvider? provider = App.Services;
+            if (provider != null)
+            {
+                var settingsManager = provider.GetService<ISettingsManager>();
+                if (settingsManager != null)
+                {
+                    return settingsManager.ShowFrameModeBadge;
+                }
+            }
+            return true;
+        }
+    }
+
+    /// <summary>
     /// Флаг наличия бейджика частоты кадров для тестов и возможного управления видимостью.
     /// Сам AccentBadge скрывается автоматически при пустом тексте.
     /// </summary>
-    public bool HasFrameRateBadge => !string.IsNullOrEmpty(FrameRateBadgeText);
+    public bool HasFrameRateBadge => ShowFrameRateBadge && !string.IsNullOrEmpty(FrameRateBadgeText);
 
     /// <summary>
     /// Флаг наличия бейджика режима CFR/VFR.
     /// </summary>
-    public bool HasFrameModeBadge => !string.IsNullOrEmpty(FrameModeBadgeText);
+    public bool HasFrameModeBadge => ShowFrameModeBadge && !string.IsNullOrEmpty(FrameModeBadgeText);
 
     /// <summary>
     /// Признак переменной частоты кадров первой видеодорожки.
@@ -553,6 +596,17 @@ public sealed class FileQueueItem : INotifyPropertyChanged
     public void NotifySubtitlesSettingChanged()
     {
         OnPropertyChanged(nameof(ShowSubtitlesSelector));
+    }
+
+    /// <summary>
+    /// Оповещает UI о возможном изменении настроек отображения пилюль FPS и CFR/VFR.
+    /// </summary>
+    public void NotifyBadgeSettingsChanged()
+    {
+        OnPropertyChanged(nameof(ShowFrameRateBadge));
+        OnPropertyChanged(nameof(ShowFrameModeBadge));
+        OnPropertyChanged(nameof(HasFrameRateBadge));
+        OnPropertyChanged(nameof(HasFrameModeBadge));
     }
 
     /// <summary>

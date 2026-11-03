@@ -323,6 +323,37 @@
                     </ComboBox>
                 </community:SettingsCard>
 
+                <!-- Отображение элементов очереди файлов -->
+                <community:SettingsExpander
+                    Padding="16,12,16,12"
+                    Description="Какие пилюли показывать в строке элемента очереди рядом с размером файла"
+                    Header="Отображение элементов очереди"
+                    IsExpanded="False">
+                    <community:SettingsExpander.HeaderIcon>
+                        <FontIcon Glyph="&#xE8FD;" />
+                    </community:SettingsExpander.HeaderIcon>
+                    <community:SettingsExpander.Items>
+                        <community:SettingsCard
+                            Header="Частота кадров"
+                            Description="Показывать пилюлю FPS (например, 23,976 fps, для VFR со знаком ~)">
+                            <ToggleSwitch
+                                x:Name="ShowFrameRateBadgeToggle"
+                                OffContent="Выкл"
+                                OnContent="Вкл"
+                                IsOn="{x:Bind ViewModel.ShowFrameRateBadge, Mode=TwoWay}" />
+                        </community:SettingsCard>
+                        <community:SettingsCard
+                            Header="Тип развёртки"
+                            Description="Показывать пилюлю CFR/VFR рядом с частотой кадров">
+                            <ToggleSwitch
+                                x:Name="ShowFrameModeBadgeToggle"
+                                OffContent="Выкл"
+                                OnContent="Вкл"
+                                IsOn="{x:Bind ViewModel.ShowFrameModeBadge, Mode=TwoWay}" />
+                        </community:SettingsCard>
+                    </community:SettingsExpander.Items>
+                </community:SettingsExpander>
+
                 <!-- Эффект прозрачности (Backdrop) -->
                 <community:SettingsCard
                     Padding="16,12,16,12"

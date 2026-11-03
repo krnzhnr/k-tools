@@ -553,6 +553,17 @@ public sealed partial class FileListControl : UserControl
     }
 
     /// <summary>
+    /// Оповещает все элементы в очереди об изменении настроек отображения пилюль FPS и CFR/VFR.
+    /// </summary>
+    public void NotifyBadgeSettingsChanged()
+    {
+        foreach (var item in Files)
+        {
+            item.NotifyBadgeSettingsChanged();
+        }
+    }
+
+    /// <summary>
     /// Регистрация свойства зависимостей IsProcessingProperty для управления состоянием чтения списка файлов.
     /// </summary>
     public static readonly DependencyProperty IsProcessingProperty =

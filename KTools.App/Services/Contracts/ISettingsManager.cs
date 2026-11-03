@@ -1,4 +1,4 @@
-﻿// -*- coding: utf-8 -*-
+// -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
 
@@ -52,6 +52,16 @@ public interface ISettingsManager : IDisposable
     /// Очищать ли очередь перед добавлением новых файлов.
     /// </summary>
     bool ClearListOnAdd { get; set; }
+
+    /// <summary>
+    /// Показывать ли в очереди пилюлю частоты кадров.
+    /// </summary>
+    bool ShowFrameRateBadge { get; set; }
+
+    /// <summary>
+    /// Показывать ли в очереди пилюлю типа развёртки (CFR/VFR).
+    /// </summary>
+    bool ShowFrameModeBadge { get; set; }
 
     /// <summary>
     /// Отображать ли монитор логов (вкладку).

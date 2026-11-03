@@ -1,4 +1,4 @@
-﻿// -*- coding: utf-8 -*-
+// -*- coding: utf-8 -*-
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -189,6 +189,24 @@ public sealed class SettingsManager : ISettingsManager
     {
         get => GetSetting("General", "ClearListOnAdd", false);
         set => SetSetting("General", "ClearListOnAdd", value);
+    }
+
+    /// <summary>
+    /// Показывать ли в очереди пилюлю частоты кадров.
+    /// </summary>
+    public bool ShowFrameRateBadge
+    {
+        get => GetSetting("General", "ShowFrameRateBadge", true);
+        set => SetSetting("General", "ShowFrameRateBadge", value);
+    }
+
+    /// <summary>
+    /// Показывать ли в очереди пилюлю типа развёртки (CFR/VFR).
+    /// </summary>
+    public bool ShowFrameModeBadge
+    {
+        get => GetSetting("General", "ShowFrameModeBadge", true);
+        set => SetSetting("General", "ShowFrameModeBadge", value);
     }
 
     /// <summary>
@@ -1934,6 +1952,14 @@ public sealed class SettingsManager : ISettingsManager
                 applied++;
             }
             if (SetDefaultIfMissing("General", "ClearListOnAdd", false))
+            {
+                applied++;
+            }
+            if (SetDefaultIfMissing("General", "ShowFrameRateBadge", true))
+            {
+                applied++;
+            }
+            if (SetDefaultIfMissing("General", "ShowFrameModeBadge", true))
             {
                 applied++;
             }

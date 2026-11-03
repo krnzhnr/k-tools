@@ -217,6 +217,18 @@ public partial class SettingsViewModel : ThreadSafeViewModel
     public partial bool ShowLogsTab { get; set; }
 
     /// <summary>
+    /// Показывать ли в очереди пилюлю частоты кадров.
+    /// </summary>
+    [ObservableProperty]
+    public partial bool ShowFrameRateBadge { get; set; }
+
+    /// <summary>
+    /// Показывать ли в очереди пилюлю типа развёртки (CFR/VFR).
+    /// </summary>
+    [ObservableProperty]
+    public partial bool ShowFrameModeBadge { get; set; }
+
+    /// <summary>
     /// Путь к пользовательской директории хранения файлов журналов (логов).
     /// </summary>
     [ObservableProperty]
@@ -359,6 +371,8 @@ public partial class SettingsViewModel : ThreadSafeViewModel
 
             ShowLogsTab = _settingsManager.ShowLogsTab;
             LogDir = _settingsManager.LogDir;
+            ShowFrameRateBadge = _settingsManager.ShowFrameRateBadge;
+            ShowFrameModeBadge = _settingsManager.ShowFrameModeBadge;
 
             AutoCheckUpdates = _settingsManager.AutoCheckUpdates;
             ShowWhatsNewAfterUpdate = _settingsManager.ShowWhatsNewAfterUpdate;
@@ -467,6 +481,22 @@ public partial class SettingsViewModel : ThreadSafeViewModel
 
         WeakReferenceMessenger.Default.Send(
             new LogsTabVisibilityChangedMessage(value));
+    }
+
+    partial void OnShowFrameRateBadgeChanged(bool value)
+    {
+        if (!_isApplyingManagerState)
+        {
+            CommitSetting("General", "ShowFrameRateBadge", value, "Пилюля частоты кадров");
+        }
+    }
+
+    partial void OnShowFrameModeBadgeChanged(bool value)
+    {
+        if (!_isApplyingManagerState)
+        {
+            CommitSetting("General", "ShowFrameModeBadge", value, "Пилюля типа развёртки");
+        }
     }
 
     partial void OnAutoCheckUpdatesChanged(bool value)
@@ -718,6 +748,8 @@ public partial class SettingsViewModel : ThreadSafeViewModel
             new("General/RenameCaseSensitive", false),
             new("General/SearchTemplates", SettingsDefaults.GetDefaultSearchTemplates()),
             new("General/ReplaceTemplates", SettingsDefaults.GetDefaultReplaceTemplates()),
+            new("General/ShowFrameRateBadge", true),
+            new("General/ShowFrameModeBadge", true),
             new("Logging/ShowLogsTab", false),
             new("Logging/LogDir", string.Empty),
             new("Updates/AutoCheckUpdates", true),
@@ -749,6 +781,8 @@ public partial class SettingsViewModel : ThreadSafeViewModel
             SelectedBackdropIndex = 0;
             ShowLogsTab = false;
             LogDir = string.Empty;
+            ShowFrameRateBadge = true;
+            ShowFrameModeBadge = true;
             AutoCheckUpdates = true;
             ShowWhatsNewAfterUpdate = true;
             IncludePreReleases = true;

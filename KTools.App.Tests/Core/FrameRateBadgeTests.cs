@@ -351,6 +351,41 @@ public class FrameRateBadgeTests
     }
 
     /// <summary>
+    /// Без зарегистрированных сервисов показ пилюль разрешён по умолчанию.
+    /// </summary>
+    [TestMethod]
+    public void ShowBadges_WithoutServices_DefaultsToTrue()
+    {
+        // Arrange
+        var item = new FileQueueItem("C:\\video.mkv");
+
+        // Act & Assert
+        item.ShowFrameRateBadge.Should().BeTrue();
+        item.ShowFrameModeBadge.Should().BeTrue();
+    }
+
+    /// <summary>
+    /// Оповещение о смене настроек поднимает события видимости пилюль.
+    /// </summary>
+    [TestMethod]
+    public void NotifyBadgeSettingsChanged_RaisesBadgeVisibilityEvents()
+    {
+        // Arrange
+        var item = new FileQueueItem("C:\\video.mkv");
+        var recorder = new PropertyChangedRecorder(item);
+
+        // Act
+        item.NotifyBadgeSettingsChanged();
+
+        // Assert
+        recorder.GetEventsFor(nameof(FileQueueItem.ShowFrameRateBadge)).Should().HaveCount(1);
+        recorder.GetEventsFor(nameof(FileQueueItem.ShowFrameModeBadge)).Should().HaveCount(1);
+        recorder.GetEventsFor(nameof(FileQueueItem.HasFrameRateBadge)).Should().HaveCount(1);
+        recorder.GetEventsFor(nameof(FileQueueItem.HasFrameModeBadge)).Should().HaveCount(1);
+        recorder.Detach();
+    }
+
+    /// <summary>
     /// Установка MediaInfo синхронно уведомляет все бейджевые свойства.
     /// </summary>
     [TestMethod]
