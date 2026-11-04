@@ -1,6 +1,7 @@
 // -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
+using CommunityToolkit.Mvvm.Messaging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using FluentAssertions;
 using Moq;
@@ -407,5 +408,89 @@ public class SettingsViewModelTests
         updateMock.Verify(m => m.DownloadAndInstallUpdateAsync(
             It.IsAny<string>(), It.IsAny<string>(), It.IsAny<Action<double>>(), It.IsAny<System.Threading.CancellationToken>()),
             Times.Once, "обновление основной копии идёт как обычно");
+    }
+
+    /// <summary>
+    /// Проверяет, что тумблер пилюли FPS сохраняется и рассылает обновление спискам очереди.
+    /// </summary>
+    [TestMethod]
+    public void ShowFrameRateBadge_ToggleChanged_PersistsAndNotifiesQueue()
+    {
+        // Arrange
+        _settingsManagerMock
+            .Setup(m => m.SetSetting("General", "ShowFrameRateBadge", It.IsAny<bool>()))
+            .Returns<string, string, bool>((group, key, value) => PersistenceResult.Succeeded(new[] { group + "/" + key }));
+        var viewModel = new SettingsViewModel(
+            _settingsManagerMock.Object,
+            _dialogServiceMock.Object,
+            _updateServiceMock.Object,
+            _logServiceMock.Object,
+            _pathManagerMock.Object,
+            _scriptRegistryMock.Object,
+            _dependencyManagerMock.Object,
+            Mock.Of<IInstallLocationService>());
+        object recipient = new();
+        bool received = false;
+        WeakReferenceMessenger.Default.Register<QueueBadgeVisibilityChangedMessage>(
+            recipient, (r, m) => received = true);
+        try
+        {
+            // Act
+            viewModel.ShowFrameRateBadge = !viewModel.ShowFrameRateBadge;
+
+            // Assert
+            _settingsManagerMock.Verify(
+                m => m.SetSetting("General", "ShowFrameRateBadge", viewModel.ShowFrameRateBadge),
+                Times.Once,
+                "тумблер пилюли обязан сохраняться типизированным вызовом SetSetting");
+            received.Should().BeTrue(
+                "открытые списки очереди обязаны узнать о смене видимости пилюль без перезахода на вкладку");
+        }
+        finally
+        {
+            WeakReferenceMessenger.Default.Unregister<QueueBadgeVisibilityChangedMessage>(recipient);
+        }
+    }
+
+    /// <summary>
+    /// Проверяет, что тумблер пилюли CFR/VFR сохраняется и рассылает обновление спискам очереди.
+    /// </summary>
+    [TestMethod]
+    public void ShowFrameModeBadge_ToggleChanged_PersistsAndNotifiesQueue()
+    {
+        // Arrange
+        _settingsManagerMock
+            .Setup(m => m.SetSetting("General", "ShowFrameModeBadge", It.IsAny<bool>()))
+            .Returns<string, string, bool>((group, key, value) => PersistenceResult.Succeeded(new[] { group + "/" + key }));
+        var viewModel = new SettingsViewModel(
+            _settingsManagerMock.Object,
+            _dialogServiceMock.Object,
+            _updateServiceMock.Object,
+            _logServiceMock.Object,
+            _pathManagerMock.Object,
+            _scriptRegistryMock.Object,
+            _dependencyManagerMock.Object,
+            Mock.Of<IInstallLocationService>());
+        object recipient = new();
+        bool received = false;
+        WeakReferenceMessenger.Default.Register<QueueBadgeVisibilityChangedMessage>(
+            recipient, (r, m) => received = true);
+        try
+        {
+            // Act
+            viewModel.ShowFrameModeBadge = !viewModel.ShowFrameModeBadge;
+
+            // Assert
+            _settingsManagerMock.Verify(
+                m => m.SetSetting("General", "ShowFrameModeBadge", viewModel.ShowFrameModeBadge),
+                Times.Once,
+                "тумблер пилюли обязан сохраняться типизированным вызовом SetSetting");
+            received.Should().BeTrue(
+                "открытые списки очереди обязаны узнать о смене видимости пилюль без перезахода на вкладку");
+        }
+        finally
+        {
+            WeakReferenceMessenger.Default.Unregister<QueueBadgeVisibilityChangedMessage>(recipient);
+        }
     }
 }

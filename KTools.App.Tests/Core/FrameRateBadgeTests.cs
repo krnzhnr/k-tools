@@ -380,6 +380,10 @@ public class FrameRateBadgeTests
         // Assert
         recorder.GetEventsFor(nameof(FileQueueItem.ShowFrameRateBadge)).Should().HaveCount(1);
         recorder.GetEventsFor(nameof(FileQueueItem.ShowFrameModeBadge)).Should().HaveCount(1);
+        recorder.GetEventsFor(nameof(FileQueueItem.FrameRateBadgeText)).Should().HaveCount(1,
+            "XAML привязан именно к тексту пилюли, AccentBadge скрывается по пустому тексту");
+        recorder.GetEventsFor(nameof(FileQueueItem.FrameModeBadgeText)).Should().HaveCount(1,
+            "XAML привязан именно к тексту пилюли, AccentBadge скрывается по пустому тексту");
         recorder.GetEventsFor(nameof(FileQueueItem.HasFrameRateBadge)).Should().HaveCount(1);
         recorder.GetEventsFor(nameof(FileQueueItem.HasFrameModeBadge)).Should().HaveCount(1);
         recorder.Detach();

@@ -49,9 +49,16 @@ public partial class SettingsPage : Page
         InitializeComponent();
         this.Loaded += SettingsPage_Loaded;
 
-        // Сброс фокуса при клике на свободную область страницы
+        // Сброс фокуса только при клике по свободной области страницы.
+        // OriginalSource клика в поле ввода — внутренний элемент шаблона TextBox,
+        // поэтому проверяем всё визуальное дерево вверх, иначе поле сразу теряло бы фокус.
         this.PointerPressed += (s, e) =>
         {
+            if (FocusHelper.IsInsideTextInputElement(e.OriginalSource as DependencyObject))
+            {
+                return;
+            }
+
             this.IsTabStop = true;
             this.Focus(FocusState.Programmatic);
         };

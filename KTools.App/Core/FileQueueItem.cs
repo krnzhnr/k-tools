@@ -154,12 +154,18 @@ public sealed class FileQueueItem : INotifyPropertyChanged
 
     /// <summary>
     /// Текст бейджика частоты кадров (например, "23,976 fps", для VFR — "~23,976 fps").
-    /// Формат ru-RU с запятой, до трёх знаков. Null — данных нет, бейдж скрыт.
+    /// Формат ru-RU с запятой, до трёх знаков. Null — данных нет или пилюля отключена
+    /// в персонализации, бейдж скрыт.
     /// </summary>
     public string? FrameRateBadgeText
     {
         get
         {
+            if (!ShowFrameRateBadge)
+            {
+                return null;
+            }
+
             MediaTrack? track = FirstVideoTrack;
             if (track?.FrameRate is not { } fps || fps <= 0 || double.IsNaN(fps) || double.IsInfinity(fps))
             {
@@ -174,12 +180,18 @@ public sealed class FileQueueItem : INotifyPropertyChanged
 
     /// <summary>
     /// Текст бейджика режима частоты кадров ("CFR" или "VFR").
-    /// Null — режим неизвестен, бейдж скрыт. VFR визуально отличим текстом и префиксом ~ у fps.
+    /// Null — режим неизвестен или пилюля отключена в персонализации, бейдж скрыт.
+    /// VFR визуально отличим текстом и префиксом ~ у fps.
     /// </summary>
     public string? FrameModeBadgeText
     {
         get
         {
+            if (!ShowFrameModeBadge)
+            {
+                return null;
+            }
+
             MediaTrack? track = FirstVideoTrack;
             if (track?.IsVariableFrameRate is not bool isVfr)
             {
@@ -600,11 +612,15 @@ public sealed class FileQueueItem : INotifyPropertyChanged
 
     /// <summary>
     /// Оповещает UI о возможном изменении настроек отображения пилюль FPS и CFR/VFR.
+    /// Тексты пилюль тоже оповещаются: именно к ним привязан XAML, а AccentBadge
+    /// автоматически скрывается при пустом тексте.
     /// </summary>
     public void NotifyBadgeSettingsChanged()
     {
         OnPropertyChanged(nameof(ShowFrameRateBadge));
         OnPropertyChanged(nameof(ShowFrameModeBadge));
+        OnPropertyChanged(nameof(FrameRateBadgeText));
+        OnPropertyChanged(nameof(FrameModeBadgeText));
         OnPropertyChanged(nameof(HasFrameRateBadge));
         OnPropertyChanged(nameof(HasFrameModeBadge));
     }

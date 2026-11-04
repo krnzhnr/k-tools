@@ -1,4 +1,4 @@
-﻿// -*- coding: utf-8 -*-
+// -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -747,5 +747,81 @@ public class TrackExtractorScriptTests
                 It.IsAny<CancellationToken>(),
                 It.IsAny<ProcessExecutionContext?>()),
             Times.Never);
+    }
+
+    /// <summary>
+    /// Проверяет, что одинаковые имена из шаблона разводятся суффиксом по ID потока с понятным предупреждением.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_DuplicateFilenames_RenamesWithTrackIdAndWarns()
+    {
+        string tempRoot = CreateTempRoot();
+        string inputPath = Path.Combine(tempRoot, "movie.mkv");
+        File.WriteAllText(inputPath, "input");
+        string outputDir = Path.Combine(tempRoot, "Output");
+        Directory.CreateDirectory(outputDir);
+
+        var structure = new MediaStructure { Duration = 10.0 };
+        structure.Tracks.Add(new MediaTrack
+        {
+            TrackId = 1,
+            TrackType = "audio",
+            Codec = "ac3",
+            Language = "rus"
+        });
+        structure.Tracks.Add(new MediaTrack
+        {
+            TrackId = 2,
+            TrackType = "audio",
+            Codec = "ac3",
+            Language = "rus"
+        });
+
+        _mediaProbeServiceMock.Setup(m => m.ProbeAsync(inputPath)).ReturnsAsync(structure);
+
+        List<string>? capturedExtraArgs = null;
+        _ffmpegRunnerMock
+            .Setup(r => r.RunAsync(
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<List<string>?>(),
+                It.IsAny<List<string>?>(),
+                It.IsAny<bool>(),
+                It.IsAny<double>(),
+                It.IsAny<Action<ProgressInfo>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<ProcessExecutionContext?>()))
+            .Callback<string, string?, List<string>?, List<string>?, bool, double, Action<ProgressInfo>?, CancellationToken, ProcessExecutionContext?>(
+                (inP, outP, args, inArgs, ow, dur, prog, ct, ctx) =>
+                {
+                    if (args != null)
+                    {
+                        capturedExtraArgs = new List<string>(args);
+                    }
+
+                    CreateValidArtifacts(args);
+                })
+            .ReturnsAsync(MockBuilders.ProcessSucceeded());
+
+        var settings = new Dictionary<string, object>
+        {
+            { "selected_tracks_per_file", new Dictionary<string, List<int>> { { inputPath, new List<int> { 1, 2 } } } },
+            { "name_format", "{original}" }
+        };
+
+        var result = await _script.ExecuteSingleAsync(
+            inputPath, settings, outputDir,
+            (cur, total, msg, pct, fps, br) => { }, 1, 1);
+
+        result.Status.Should().Be(ExecutionStatus.Succeeded);
+        result.OutputExists.Should().BeTrue();
+        result.Should().Contain(r => r.Contains("⚠ Одинаковое имя"));
+        result.Should().Contain(r => r.Contains("✅ Извлечена дорожка 1: movie.ac3"));
+        result.Should().Contain(r => r.Contains("✅ Извлечена дорожка 2: movie_track02.ac3"));
+        capturedExtraArgs.Should().NotBeNull();
+        capturedExtraArgs.Should().Contain($"\"{Path.Combine(outputDir, "movie.ac3")}\"");
+        capturedExtraArgs.Should().Contain($"\"{Path.Combine(outputDir, "movie_track02.ac3")}\"");
+        File.Exists(Path.Combine(outputDir, "movie.ac3")).Should().BeTrue();
+        File.Exists(Path.Combine(outputDir, "movie_track02.ac3")).Should().BeTrue();
     }
 }

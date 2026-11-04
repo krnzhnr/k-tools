@@ -63,6 +63,14 @@ public sealed class BackdropChangedMessage
 }
 
 /// <summary>
+/// Сообщение для уведомления об изменении видимости пилюль очереди (FPS, CFR/VFR).
+/// Открытые списки файлов обновляют бейджики без перезахода на вкладку.
+/// </summary>
+public sealed class QueueBadgeVisibilityChangedMessage
+{
+}
+
+/// <summary>
 /// Модель представления страницы настроек приложения.
 /// Управляет всеми пользовательскими конфигурациями и синхронизирует их с SettingsManager.
 /// </summary>
@@ -488,6 +496,8 @@ public partial class SettingsViewModel : ThreadSafeViewModel
         {
             CommitSetting("General", "ShowFrameRateBadge", value, "Пилюля частоты кадров");
         }
+
+        WeakReferenceMessenger.Default.Send(new QueueBadgeVisibilityChangedMessage());
     }
 
     partial void OnShowFrameModeBadgeChanged(bool value)
@@ -496,6 +506,8 @@ public partial class SettingsViewModel : ThreadSafeViewModel
         {
             CommitSetting("General", "ShowFrameModeBadge", value, "Пилюля типа развёртки");
         }
+
+        WeakReferenceMessenger.Default.Send(new QueueBadgeVisibilityChangedMessage());
     }
 
     partial void OnAutoCheckUpdatesChanged(bool value)

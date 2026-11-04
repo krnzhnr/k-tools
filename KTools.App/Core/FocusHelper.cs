@@ -1,4 +1,4 @@
-﻿// -*- coding: utf-8 -*-
+// -*- coding: utf-8 -*-
 using System;
 
 using KTools_App.Diagnostics;
@@ -7,6 +7,7 @@ using KTools_App.Services.Contracts;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Media;
 
 namespace KTools_App.Core;
 
@@ -32,6 +33,41 @@ public static class FocusHelper
         }
 
         return element is NumberBox or AutoSuggestBox or PasswordBox;
+    }
+
+    /// <summary>
+    /// Проверяет, находится ли элемент внутри текстового поля ввода, включая
+    /// внутренние элементы его шаблона. Обход визуального дерева вверх обязателен:
+    /// OriginalSource нажатия указателя — это глубокий внутренний элемент шаблона
+    /// TextBox (граница, скроллер), а не сам TextBox, поэтому прямая проверка
+    /// OriginalSource всегда давала false и фокус отбирался у поля, в которое кликнули.
+    /// </summary>
+    /// <param name="source">Элемент интерфейса для проверки (обычно OriginalSource события указателя).</param>
+    /// <returns>True, если сам элемент или любой его предок — текстовое поле ввода.</returns>
+    public static bool IsInsideTextInputElement(DependencyObject? source)
+    {
+        DependencyObject? current = source;
+        while (current != null)
+        {
+            if (current is UIElement element && IsTextInputElement(element))
+            {
+                return true;
+            }
+
+            DependencyObject? parent;
+            try
+            {
+                parent = VisualTreeHelper.GetParent(current);
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+
+            current = parent;
+        }
+
+        return false;
     }
 
     /// <summary>

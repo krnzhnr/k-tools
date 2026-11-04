@@ -1,4 +1,4 @@
-﻿// -*- coding: utf-8 -*-
+// -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -130,8 +130,8 @@ public sealed partial class MainPage : Page
             return;
         }
 
-        var originalSource = e.OriginalSource as UIElement;
-        if (!FocusHelper.IsTextInputElement(originalSource))
+        var originalSource = e.OriginalSource as DependencyObject;
+        if (!FocusHelper.IsInsideTextInputElement(originalSource))
         {
             FocusHelper.ClearFocus(this.XamlRoot, RootGrid, _logService);
         }
