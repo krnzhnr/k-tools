@@ -1,0 +1,70 @@
+name: readme-agent
+
+# Агент ведёт README: при изменении фактов (CHANGELOG / скрипты)
+# пересобирает разделы README и открывает PR в develop. Прямых пушей в develop нет.
+on:
+  push:
+    branches:
+      - develop
+    paths:
+      - 'CHANGELOG.md'
+      - 'KTools.App/Scripts/**'
+      - 'KTools.App/Core/ScriptRegistry.cs'
+      - 'KTools.App/Core/AppConstants.cs'
+      - 'KTools.App.Tests/**/*.cs'
+  workflow_dispatch:
+
+concurrency:
+  group: readme-agent-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sync-readme:
+    # Не запускать на коммитах самого агента, чтобы не было петли.
+    if: >-
+      ${{ github.actor != 'github-actions[bot]' &&
+        !contains(github.event.head_commit.message, '[skip readme]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      id-token: write
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: anomalyco/opencode/github@latest
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          model: ${{ vars.OPENCODE_MODEL || 'opencode-go/muse-spark-1.3-contributor' }}
+          prompt: |
+            Ты ведёшь README.md репозитория k-tools (Windows-утилиты на C# / WinUI 3: видео, аудио, субтитры, MKV, yt-dlp).
+            У тебя ЕСТЬ инструменты — читай файлы и используй `gh` CLI для ветки и PR. Контекст (ветка, коммиты) уже есть в данных события выше — прочитай их оттуда.
+            Файлы за пределами рабочей директории НЕ читай (включая `.../_github_workflow/event.json`): такое чтение требует подтверждения, которое в CI дать некому, и шаг зависнет.
+
+            Шаг 1 — собери факты (только чтение, код НЕ меняй):
+            - `README.md` — текущее состояние.
+            - `CHANGELOG.md` — секции Unreleased и последний релиз (что реально уже есть в продукте). Версию для шапки README бери из верхнего заголовка вида `# x.y.z` (заголовок `# Unreleased` пропускай — это не версия).
+            - `KTools.App/Scripts/*.cs`, `KTools.App/Core/ScriptRegistry.cs`, `KTools.App/Core/AppConstants.cs` — фактический список модулей/скриптов.
+            - Число тестов: посчитай `grep -r "\[TestMethod" KTools.App.Tests --include="*.cs" | wc -l` (в README сейчас устаревшие «100 юнит-тестов»).
+
+            Шаг 2 — обнови ТОЛЬКО `README.md`, минимальным дифом и по-русски:
+            - Версия в шапке = версия из `CHANGELOG.md` (см. шаг 1); стек = факты (.NET 10, WinUI 3, MVVM, DI, актуальное число тестов).
+            - Раздел «Модули и функциональность» = фактические скрипты из реестра, без выдуманных пунктов; убери то, чего в коде уже нет, добавь то, что появилось.
+            - Сборка = команды из RULES.md (`dotnet build KTools.sln -c Debug -p:Platform=x64`, тесты), плюс `python build_csharp.py` для инсталлятора.
+            - Сохрани структуру, эмодзи-заголовки и стиль; ссылку на LICENSE не трогай. Полностью файл не переписывай.
+            - ЗАПРЕЩЕНО: менять любой файл кроме `README.md`; коммитить напрямую в `develop`/`main`/`master`.
+
+            Шаг 3 — если изменений в README нет: ничего не создавай, просто напиши в summary что расхождений нет и завершись.
+
+            Шаг 4 — если изменения есть (каждую команду выполняй с `|| true`, чтобы нехватка прав не роняла шаг):
+            - Создай ветку от актуального `develop`: `git checkout -b docs/readme-sync-${{ github.run_number }}`; закоммить ТОЛЬКО `README.md` с сообщением `docs(readme): синхронизация с CHANGELOG и реестром скриптов [skip readme]`; запушь `git push origin HEAD`.
+            - Открой PR в `develop`: `gh pr create --base develop --head docs/readme-sync-${{ github.run_number }} --title "docs(readme): синхронизация README" --body "Автосинхронизация README: версия из CHANGELOG, модули из ScriptRegistry, число тестов, пункты из CHANGELOG. Проверь диф вручную." || true`.
+            - Один запуск — максимум один PR; дубли не плоди (если такой PR уже открыт — допиши туда комментарием, что нового).
+
+            Правила: пиши по-русски, коротко, Markdown. Не упоминай имён людей.
