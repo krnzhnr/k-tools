@@ -219,6 +219,8 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
         private set => SetProperty(ref _files, value);
     }
 
+    private readonly ITaskbarProgressService? _taskbarProgress;
+
     /// <summary>
     /// Инициализирует новый экземпляр WorkPanelViewModel с внедрением зависимостей.
     /// </summary>
@@ -228,7 +230,8 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
         ISettingsManager settingsManager,
         ILogService logService,
         IDependencyManager dependencyManager,
-        IMediaProbeService mediaProbeService)
+        IMediaProbeService mediaProbeService,
+        ITaskbarProgressService? taskbarProgressService = null)
     {
         _navigationService = navigationService ?? throw new ArgumentNullException(nameof(navigationService));
         _dialogService = dialogService ?? throw new ArgumentNullException(nameof(dialogService));
@@ -236,6 +239,7 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
         _logService = logService ?? throw new ArgumentNullException(nameof(logService));
         _dependencyManager = dependencyManager ?? throw new ArgumentNullException(nameof(dependencyManager));
         _mediaProbeService = mediaProbeService ?? throw new ArgumentNullException(nameof(mediaProbeService));
+        _taskbarProgress = taskbarProgressService;
 
         // Регистрация подписки на сообщение изменения выбора дорожек
         CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Register<Messages.TrackSelectedMessage>(this, (r, m) =>
@@ -511,6 +515,7 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
         script.PrepareBatch(filesList.Select(f => f.FilePath));
         script.ResetCancellation();
         script.RaiseStateChanged();
+        ReportTaskbarProgress(0.0);
 
         AppendJournalText(
             $"Начало обработки: {filesList.Count} файлов.",
@@ -1014,6 +1019,7 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
             StatusText = finalStatus;
             GlobalProgressValue = allTerminal ? 100 : 0;
         });
+        ReportTaskbarFinished(failed > 0 || partial > 0, allTerminal ? 100.0 : 0.0);
         script.RaiseStateChanged();
     }
 
@@ -1072,6 +1078,7 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
         script.IsProcessing = false;
         script.SavedStatusText = "Очередь пуста";
         script.SavedGlobalProgress = 0;
+        _taskbarProgress?.Clear();
         script.RaiseStateChanged();
         RunOnUi(() =>
         {
@@ -1584,9 +1591,42 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
             script.SavedGlobalProgress = overallPercent;
         }
 
+        ReportTaskbarProgress(overallPercent);
+
         if (syncScriptState)
         {
             script.RaiseStateChanged();
+        }
+    }
+
+    /// <summary>
+    /// Дублирует общий прогресс очереди в иконку панели задач (зелёное состояние).
+    /// Служба сама троттлит вызовы и молча пропускает их без окна.
+    /// </summary>
+    private void ReportTaskbarProgress(double overallPercent)
+    {
+        _taskbarProgress?.SetProgress(overallPercent);
+    }
+
+    /// <summary>
+    /// Синхронизирует иконку панели задач с итогом очереди:
+    /// красное состояние только при ошибках элементов, иначе сброс индикатора
+    /// (успех, отмена и пропуск без отказов не являются ошибкой).
+    /// </summary>
+    private void ReportTaskbarFinished(bool hasErrors, double finalPercent)
+    {
+        if (_taskbarProgress is null)
+        {
+            return;
+        }
+
+        if (hasErrors)
+        {
+            _taskbarProgress.SetError(finalPercent);
+        }
+        else
+        {
+            _taskbarProgress.Clear();
         }
     }
 

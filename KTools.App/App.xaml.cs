@@ -840,6 +840,7 @@ public partial class App : Application
         services.AddSingleton<INavigationService, NavigationService>();
         services.AddSingleton<IDialogService, DialogService>();
         services.AddSingleton<IWindowHandleProvider, WindowHandleProvider>();
+        services.AddSingleton<ITaskbarProgressService, TaskbarProgressService>();
         services.AddSingleton<IUpdateService, UpdateService>();
         services.AddSingleton<IInstallLocationService, InstallLocationService>();
         services.AddSingleton<MainWindow>();
