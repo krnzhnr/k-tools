@@ -103,9 +103,14 @@ jobs:
       if: steps.prep.outputs.is_prerelease == 'true'
       shell: pwsh
       run: |
-        $body = gh release view pre-release --json body --jq .body 2>$null
-        if (-not $body) { $body = "" }
+        # Прошлого пререлиза может не быть (первый запуск, ручное удаление) —
+        # это не ошибка: начинаем с пустых заметок. $LASTEXITCODE проверяем явно
+        # и завершаем шаг с exit 0, иначе ненулевой код gh уронит весь ран.
+        $body = ""
+        $prev = gh release view pre-release --json body --jq .body 2>$null
+        if ($LASTEXITCODE -eq 0 -and $prev) { $body = $prev }
         Set-Content -Path prev_release_notes.md -Value $body -Encoding UTF8
+        exit 0
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
