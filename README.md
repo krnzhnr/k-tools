@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets-icon.png" width="128" height="128" alt="K-Tools icon" />
+</p>
+
 # K-Tools
 
 **K-Tools (v2.0.0)** — настольное Windows-приложение для пакетной обработки, транскодирования, ремуксинга медиафайлов и работы с метаданными. Построено на C#, .NET 10 и WinUI 3.
