@@ -196,7 +196,7 @@ public sealed class SettingsManager : ISettingsManager
     /// </summary>
     public bool ShowFrameRateBadge
     {
-        get => GetSetting("General", "ShowFrameRateBadge", true);
+        get => GetSetting("General", "ShowFrameRateBadge", false);
         set => SetSetting("General", "ShowFrameRateBadge", value);
     }
 
@@ -205,7 +205,7 @@ public sealed class SettingsManager : ISettingsManager
     /// </summary>
     public bool ShowFrameModeBadge
     {
-        get => GetSetting("General", "ShowFrameModeBadge", true);
+        get => GetSetting("General", "ShowFrameModeBadge", false);
         set => SetSetting("General", "ShowFrameModeBadge", value);
     }
 
@@ -1955,11 +1955,11 @@ public sealed class SettingsManager : ISettingsManager
             {
                 applied++;
             }
-            if (SetDefaultIfMissing("General", "ShowFrameRateBadge", true))
+            if (SetDefaultIfMissing("General", "ShowFrameRateBadge", false))
             {
                 applied++;
             }
-            if (SetDefaultIfMissing("General", "ShowFrameModeBadge", true))
+            if (SetDefaultIfMissing("General", "ShowFrameModeBadge", false))
             {
                 applied++;
             }

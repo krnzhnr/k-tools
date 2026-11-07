@@ -153,7 +153,7 @@ public sealed class FileQueueItem : INotifyPropertyChanged
     private MediaTrack? FirstVideoTrack => MediaInfo?.GetVideoTracks().FirstOrDefault();
 
     /// <summary>
-    /// Текст бейджика частоты кадров (например, "23,976 fps", для VFR — "~23,976 fps").
+    /// Текст бейджика частоты кадров (например, "23,976 FPS", для VFR — "~23,976 FPS").
     /// Формат ru-RU с запятой, до трёх знаков. Null — данных нет или пилюля отключена
     /// в персонализации, бейдж скрыт.
     /// </summary>
@@ -174,14 +174,14 @@ public sealed class FileQueueItem : INotifyPropertyChanged
 
             string formatted = fps.ToString("0.###", CultureInfo.GetCultureInfo("ru-RU"));
             bool isVfr = track.IsVariableFrameRate == true;
-            return (isVfr ? "~" : string.Empty) + formatted + " fps";
+            return (isVfr ? "~" : string.Empty) + formatted + " FPS";
         }
     }
 
     /// <summary>
     /// Текст бейджика режима частоты кадров ("CFR" или "VFR").
     /// Null — режим неизвестен или пилюля отключена в персонализации, бейдж скрыт.
-    /// VFR визуально отличим текстом и префиксом ~ у fps.
+    /// VFR визуально отличим текстом и префиксом ~ у FPS.
     /// </summary>
     public string? FrameModeBadgeText
     {

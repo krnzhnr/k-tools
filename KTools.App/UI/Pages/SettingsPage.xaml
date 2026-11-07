@@ -356,7 +356,7 @@
                     <community:SettingsExpander.Items>
                         <community:SettingsCard
                             Header="Частота кадров"
-                            Description="Показывать пилюлю FPS (например, 23,976 fps, для VFR со знаком ~)">
+                            Description="Показывать пилюлю FPS (например, 23,976 FPS, для VFR со знаком ~)">
                             <ToggleSwitch
                                 x:Name="ShowFrameRateBadgeToggle"
                                 OffContent="Выкл"

@@ -759,8 +759,8 @@ public partial class SettingsViewModel : ThreadSafeViewModel
             new("General/RenameCaseSensitive", false),
             new("General/SearchTemplates", SettingsDefaults.GetDefaultSearchTemplates()),
             new("General/ReplaceTemplates", SettingsDefaults.GetDefaultReplaceTemplates()),
-            new("General/ShowFrameRateBadge", true),
-            new("General/ShowFrameModeBadge", true),
+            new("General/ShowFrameRateBadge", false),
+            new("General/ShowFrameModeBadge", false),
             new("Logging/ShowLogsTab", false),
             new("Logging/LogDir", string.Empty),
             new("Updates/AutoCheckUpdates", true),
@@ -792,8 +792,8 @@ public partial class SettingsViewModel : ThreadSafeViewModel
             SelectedBackdropIndex = 0;
             ShowLogsTab = false;
             LogDir = string.Empty;
-            ShowFrameRateBadge = true;
-            ShowFrameModeBadge = true;
+            ShowFrameRateBadge = false;
+            ShowFrameModeBadge = false;
             AutoCheckUpdates = true;
             ShowWhatsNewAfterUpdate = true;
             IncludePreReleases = true;

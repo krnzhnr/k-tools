@@ -270,7 +270,7 @@ public class FrameRateBadgeTests
     }
 
     /// <summary>
-    /// CFR форматируется ru-RU с запятой: 23,976 fps и бейдж CFR.
+    /// CFR форматируется ru-RU с запятой: 23,976 FPS и бейдж CFR.
     /// </summary>
     [TestMethod]
     public void FrameRateBadge_Cfr_FormatsWithComma()
@@ -284,7 +284,7 @@ public class FrameRateBadgeTests
         item.MediaInfo = structure;
 
         // Assert
-        item.FrameRateBadgeText.Should().Be("23,976 fps");
+        item.FrameRateBadgeText.Should().Be("23,976 FPS");
         item.FrameModeBadgeText.Should().Be("CFR");
         item.HasFrameRateBadge.Should().BeTrue();
         item.HasFrameModeBadge.Should().BeTrue();
@@ -306,7 +306,7 @@ public class FrameRateBadgeTests
         item.MediaInfo = structure;
 
         // Assert
-        item.FrameRateBadgeText.Should().Be("~29,97 fps");
+        item.FrameRateBadgeText.Should().Be("~29,97 FPS");
         item.FrameModeBadgeText.Should().Be("VFR");
     }
 
@@ -325,7 +325,7 @@ public class FrameRateBadgeTests
         item.MediaInfo = structure;
 
         // Assert
-        item.FrameRateBadgeText.Should().Be("25 fps");
+        item.FrameRateBadgeText.Should().Be("25 FPS");
     }
 
     /// <summary>
