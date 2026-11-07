@@ -117,10 +117,9 @@ public sealed class FileQueueItem : INotifyPropertyChanged
                 OnPropertyChanged();
                 OnPropertyChanged(nameof(FrameRateBadgeText));
                 OnPropertyChanged(nameof(FrameModeBadgeText));
-                OnPropertyChanged(nameof(FrameRateTextLine));
+                OnPropertyChanged(nameof(FileSizeDetailsText));
                 OnPropertyChanged(nameof(HasFrameRateBadge));
                 OnPropertyChanged(nameof(HasFrameModeBadge));
-                OnPropertyChanged(nameof(HasFrameRateTextLine));
                 OnPropertyChanged(nameof(IsVariableFrameRate));
             }
         }
@@ -232,42 +231,42 @@ public sealed class FileQueueItem : INotifyPropertyChanged
     }
 
     /// <summary>
-    /// Спокойная текстовая строка FPS и режима рядом с размером файла
-    /// (например, "23,976 FPS · CFR"). Неизвестные значения пропускаются.
-    /// Null — режим не «Текстовой строкой» или нет данных, строка скрыта.
-    /// Состав сегментов задают те же тумблеры, что и для пилюль.
+    /// Строка размера файла с деталями видео в одну строку
+    /// (например, "12,4 МБ • 23,976 FPS • CFR").
+    /// В режиме «Текстовой строкой» дописывает FPS и режим через « • »,
+    /// неизвестные значения пропускаются; в остальных режимах — чистый размер.
     /// </summary>
-    public string? FrameRateTextLine => QueueBadgeMode == (int)QueueBadgeDisplayMode.Text
-        ? FormatFrameRateLine(FirstVideoTrack, ShowFrameRateBadge, ShowFrameModeBadge)
-        : null;
+    public string FileSizeDetailsText => QueueBadgeMode == (int)QueueBadgeDisplayMode.Text
+        ? FormatFileSizeDetails(FileSizeStr, FirstVideoTrack, ShowFrameRateBadge, ShowFrameModeBadge)
+        : FileSizeStr;
 
     /// <summary>
-    /// Чистое форматирование текстовой строки FPS и режима по дорожке, без чтения настроек.
-    /// Сегменты объединяются разделителем « · », неизвестные пропускаются.
-    /// Null — нет видеодорожки, частоты кадров или оба сегмента выключены.
+    /// Чистое форматирование строки «размер • FPS • режим» по размеру и дорожке.
+    /// Сегменты объединяются разделителем « • », неизвестные пропускаются.
+    /// Всегда возвращает хотя бы размер файла.
     /// </summary>
-    public static string? FormatFrameRateLine(MediaTrack? track, bool showFps, bool showMode)
+    public static string FormatFileSizeDetails(string fileSizeStr, MediaTrack? track, bool showFps, bool showMode)
     {
-        if (track == null || (!showFps && !showMode))
-        {
-            return null;
-        }
-
         string? fpsText = showFps ? FormatFrameRateBadge(track) : null;
         string? modeText = showMode ? FormatFrameModeBadge(track) : null;
 
         if (fpsText != null && modeText != null)
         {
-            return fpsText + " · " + modeText;
+            return fileSizeStr + " • " + fpsText + " • " + modeText;
         }
 
-        return fpsText ?? modeText;
-    }
+        if (fpsText != null)
+        {
+            return fileSizeStr + " • " + fpsText;
+        }
 
-    /// <summary>
-    /// Флаг наличия текстовой строки FPS и режима для управления видимостью в XAML.
-    /// </summary>
-    public bool HasFrameRateTextLine => !string.IsNullOrEmpty(FrameRateTextLine);
+        if (modeText != null)
+        {
+            return fileSizeStr + " • " + modeText;
+        }
+
+        return fileSizeStr;
+    }
 
     /// <summary>
     /// Разрешён ли показ пилюли частоты кадров в настройках отображения очереди.
@@ -676,8 +675,8 @@ public sealed class FileQueueItem : INotifyPropertyChanged
     /// <summary>
     /// Оповещает UI о возможном изменении настроек отображения очереди:
     /// режима (скрыто/пилюли/текст) и тумблеров FPS и CFR/VFR.
-    /// Тексты пилюль и строки тоже оповещаются: именно к ним привязан XAML, а AccentBadge
-    /// автоматически скрывается при пустом тексте.
+    /// Тексты пилюль и строка размера тоже оповещаются: именно к ним привязан XAML,
+    /// а AccentBadge автоматически скрывается при пустом тексте.
     /// </summary>
     public void NotifyBadgeSettingsChanged()
     {
@@ -686,10 +685,9 @@ public sealed class FileQueueItem : INotifyPropertyChanged
         OnPropertyChanged(nameof(ShowFrameModeBadge));
         OnPropertyChanged(nameof(FrameRateBadgeText));
         OnPropertyChanged(nameof(FrameModeBadgeText));
-        OnPropertyChanged(nameof(FrameRateTextLine));
+        OnPropertyChanged(nameof(FileSizeDetailsText));
         OnPropertyChanged(nameof(HasFrameRateBadge));
         OnPropertyChanged(nameof(HasFrameModeBadge));
-        OnPropertyChanged(nameof(HasFrameRateTextLine));
     }
 
     /// <summary>

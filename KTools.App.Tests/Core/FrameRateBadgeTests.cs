@@ -493,76 +493,77 @@ public class FrameRateBadgeTests
     }
 
     /// <summary>
-    /// Текстовая строка объединяет оба сегмента разделителем « · ».
+    /// Строка размера объединяет размер, FPS и режим разделителем « • ».
     /// </summary>
     [TestMethod]
-    public void FormatFrameRateLine_BothSegments_JoinsWithSeparator()
+    public void FormatFileSizeDetails_BothSegments_JoinsWithBullets()
     {
         // Arrange
         var track = new MediaTrack { TrackType = "video", FrameRate = 24000.0 / 1001.0, IsVariableFrameRate = false };
 
         // Act
-        string? line = FileQueueItem.FormatFrameRateLine(track, showFps: true, showMode: true);
+        string line = FileQueueItem.FormatFileSizeDetails("12,4 МБ", track, showFps: true, showMode: true);
 
         // Assert
-        line.Should().Be("23,976 FPS · CFR");
+        line.Should().Be("12,4 МБ • 23,976 FPS • CFR");
     }
 
     /// <summary>
-    /// Текстовая строка с одним включённым сегментом показывает только его, без разделителя.
+    /// Строка размера с одним включённым сегментом показывает только его, без лишнего разделителя.
     /// </summary>
     [TestMethod]
-    public void FormatFrameRateLine_OnlyFps_ReturnsSingleSegment()
+    public void FormatFileSizeDetails_OnlyFps_ReturnsSingleSegment()
     {
         // Arrange
         var track = new MediaTrack { TrackType = "video", FrameRate = 25.0, IsVariableFrameRate = false };
 
         // Act
-        string? line = FileQueueItem.FormatFrameRateLine(track, showFps: true, showMode: false);
+        string line = FileQueueItem.FormatFileSizeDetails("12,4 МБ", track, showFps: true, showMode: false);
 
         // Assert
-        line.Should().Be("25 FPS");
+        line.Should().Be("12,4 МБ • 25 FPS");
     }
 
     /// <summary>
-    /// Текстовая строка с одним включённым сегментом режима показывает только его.
+    /// Строка размера с одним включённым сегментом режима показывает только его.
     /// </summary>
     [TestMethod]
-    public void FormatFrameRateLine_OnlyMode_ReturnsSingleSegment()
+    public void FormatFileSizeDetails_OnlyMode_ReturnsSingleSegment()
     {
         // Arrange
         var track = new MediaTrack { TrackType = "video", FrameRate = 25.0, IsVariableFrameRate = true };
 
         // Act
-        string? line = FileQueueItem.FormatFrameRateLine(track, showFps: false, showMode: true);
+        string line = FileQueueItem.FormatFileSizeDetails("12,4 МБ", track, showFps: false, showMode: true);
 
         // Assert
-        line.Should().Be("VFR");
+        line.Should().Be("12,4 МБ • VFR");
     }
 
     /// <summary>
-    /// Текстовая строка без данных зонда возвращает null, ничего не выдумывает.
+    /// Строка размера без данных зонда или сегментов возвращает чистый размер, ничего не выдумывает.
     /// </summary>
     [TestMethod]
-    public void FormatFrameRateLine_Unknown_ReturnsNull()
+    public void FormatFileSizeDetails_Unknown_ReturnsSizeOnly()
     {
         // Arrange
         var track = new MediaTrack { TrackType = "video" };
 
         // Act & Assert
-        FileQueueItem.FormatFrameRateLine(track, showFps: true, showMode: true).Should().BeNull();
-        FileQueueItem.FormatFrameRateLine(null, showFps: true, showMode: true).Should().BeNull();
-        FileQueueItem.FormatFrameRateLine(
+        FileQueueItem.FormatFileSizeDetails("12,4 МБ", track, showFps: true, showMode: true).Should().Be("12,4 МБ");
+        FileQueueItem.FormatFileSizeDetails("12,4 МБ", null, showFps: true, showMode: true).Should().Be("12,4 МБ");
+        FileQueueItem.FormatFileSizeDetails(
+            "12,4 МБ",
             new MediaTrack { TrackType = "video", FrameRate = 25.0, IsVariableFrameRate = false },
             showFps: false,
-            showMode: false).Should().BeNull();
+            showMode: false).Should().Be("12,4 МБ");
     }
 
     /// <summary>
-    /// Без зарегистрированных сервисов текстовая строка скрыта по умолчанию (режим «Скрыто»).
+    /// Без зарегистрированных сервисов строка размера — чистый размер (режим «Скрыто»).
     /// </summary>
     [TestMethod]
-    public void FrameRateTextLine_WithoutServices_DefaultsToHidden()
+    public void FileSizeDetailsText_WithoutServices_ReturnsSizeOnly()
     {
         // Arrange
         var item = new FileQueueItem("C:\\video.mkv");
@@ -574,15 +575,14 @@ public class FrameRateBadgeTests
 
         // Assert
         item.QueueBadgeMode.Should().Be(0);
-        item.FrameRateTextLine.Should().BeNull();
-        item.HasFrameRateTextLine.Should().BeFalse();
+        item.FileSizeDetailsText.Should().Be(item.FileSizeStr);
     }
 
     /// <summary>
-    /// Оповещение о смене настроек поднимает события текстовой строки для XAML.
+    /// Оповещение о смене настроек поднимает событие строки размера для XAML.
     /// </summary>
     [TestMethod]
-    public void NotifyBadgeSettingsChanged_RaisesTextLineEvents()
+    public void NotifyBadgeSettingsChanged_RaisesDetailsTextEvent()
     {
         // Arrange
         var item = new FileQueueItem("C:\\video.mkv");
@@ -592,18 +592,16 @@ public class FrameRateBadgeTests
         item.NotifyBadgeSettingsChanged();
 
         // Assert
-        recorder.GetEventsFor(nameof(FileQueueItem.QueueBadgeMode)).Should().HaveCount(1);
-        recorder.GetEventsFor(nameof(FileQueueItem.FrameRateTextLine)).Should().HaveCount(1,
-            "XAML текстовой строки привязан именно к FrameRateTextLine");
-        recorder.GetEventsFor(nameof(FileQueueItem.HasFrameRateTextLine)).Should().HaveCount(1);
+        recorder.GetEventsFor(nameof(FileQueueItem.FileSizeDetailsText)).Should().HaveCount(1,
+            "XAML строки размера привязан именно к FileSizeDetailsText");
         recorder.Detach();
     }
 
     /// <summary>
-    /// Установка MediaInfo уведомляет и о текстовой строке, а не только о пилюлях.
+    /// Установка MediaInfo уведомляет и о строке размера, а не только о пилюлях.
     /// </summary>
     [TestMethod]
-    public void MediaInfo_SetValue_NotifiesFrameRateTextLine()
+    public void MediaInfo_SetValue_NotifiesFileSizeDetailsText()
     {
         // Arrange
         var item = new FileQueueItem("C:\\video.mkv");
@@ -615,8 +613,7 @@ public class FrameRateBadgeTests
         item.MediaInfo = structure;
 
         // Assert
-        recorder.GetEventsFor(nameof(FileQueueItem.FrameRateTextLine)).Should().HaveCount(1);
-        recorder.GetEventsFor(nameof(FileQueueItem.HasFrameRateTextLine)).Should().HaveCount(1);
+        recorder.GetEventsFor(nameof(FileQueueItem.FileSizeDetailsText)).Should().HaveCount(1);
         recorder.Detach();
     }
 }

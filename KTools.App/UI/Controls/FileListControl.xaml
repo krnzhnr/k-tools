@@ -262,18 +262,10 @@
                                     Spacing="8"
                                     VerticalAlignment="Center"
                                     Margin="6,0,12,6">
-                            <TextBlock Text="{x:Bind FileSizeStr}"
+                            <TextBlock Text="{x:Bind FileSizeDetailsText, Mode=OneWay}"
                                        x:Phase="2"
                                        Style="{ThemeResource BodyTextBlockStyle}"
                                        VerticalAlignment="Center"/>
-                            <TextBlock Text="{x:Bind FrameRateTextLine, Mode=OneWay}"
-                                       x:Phase="2"
-                                       Style="{ThemeResource CaptionTextBlockStyle}"
-                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                       TextTrimming="CharacterEllipsis"
-                                       ToolTipService.ToolTip="Частота кадров и режим развёртки видео"
-                                       VerticalAlignment="Center"
-                                       Visibility="{x:Bind HasFrameRateTextLine, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"/>
                             <local:AccentBadge Text="{x:Bind CropBadgeText, Mode=OneWay}"
                                                ToolTipService.ToolTip="Автоматическая обрезка черных полос (Crop)"
                                                VerticalAlignment="Center"/>
