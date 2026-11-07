@@ -412,6 +412,16 @@ public sealed class MediaProbeService : IMediaProbeService
                     {
                         track.IsVisualImpaired = visProp.GetBoolean();
                     }
+
+                    // Фолбэк FPS из default_duration mkvmerge (нс/кадр): FPS = 1e9 / default_duration.
+                    if (track.TrackType.Equals("video", StringComparison.OrdinalIgnoreCase) && !track.FrameRate.HasValue)
+                    {
+                        double? fallbackFps = TryParseDefaultDuration(props);
+                        if (fallbackFps.HasValue)
+                        {
+                            track.FrameRate = fallbackFps.Value;
+                        }
+                    }
                 }
 
                 structure.Tracks.Add(track);
@@ -448,6 +458,11 @@ public sealed class MediaProbeService : IMediaProbeService
                 structure.Attachments.Add(attach);
             }
         }
+
+        // Обогащение частоты кадров MKV через ffprobe: avg/r/nb уточняют фолбэк из default_duration.
+        await EnrichFrameRateFromFfprobeAsync(structure);
+
+        LogFrameRate(structure, "mkvmerge");
 
         _logService.Write(
             "media_probe.mkv_completed",
@@ -627,6 +642,20 @@ public sealed class MediaProbeService : IMediaProbeService
                         }
                     }
 
+                    // Частота кадров видео: FPS = avg_frame_rate, VFR-эвристика по r_frame_rate и nb_frames.
+                    if (trackType == "video")
+                    {
+                        double? avgFps = TryParseFrameRate(GetStreamField(stream, "avg_frame_rate"));
+                        double? rFps = TryParseFrameRate(GetStreamField(stream, "r_frame_rate"));
+                        long? nbFrames = TryParseFrameCount(stream);
+                        if (avgFps.HasValue)
+                        {
+                            track.FrameRate = avgFps.Value;
+                            track.FrameCount = nbFrames;
+                            track.IsVariableFrameRate = ResolveVariableFrameRate(avgFps.Value, rFps, nbFrames, structure.Duration);
+                        }
+                    }
+
                     // Каналы для аудио
                     if (trackType == "audio" && stream.TryGetProperty("channels", out var chanProp))
                     {
@@ -678,6 +707,8 @@ public sealed class MediaProbeService : IMediaProbeService
                 }
             }
         }
+
+        LogFrameRate(structure, "ffprobe");
 
         _logService.Write(
             "media_probe.ffprobe_completed",
@@ -778,6 +809,267 @@ public sealed class MediaProbeService : IMediaProbeService
                     ["Stage"] = "enrich_titles",
                     ["ErrorCode"] = "enrichment-failed"
                 });
+        }
+    }
+
+    /// <summary>
+    /// Читает строковое поле потока ffprobe (строка или число).
+    /// </summary>
+    private static string? GetStreamField(System.Text.Json.JsonElement stream, string name)
+    {
+        if (!stream.TryGetProperty(name, out var prop))
+        {
+            return null;
+        }
+
+        return prop.ValueKind switch
+        {
+            System.Text.Json.JsonValueKind.String => prop.GetString(),
+            System.Text.Json.JsonValueKind.Number => prop.GetRawText(),
+            _ => null,
+        };
+    }
+
+    /// <summary>
+    /// Разбирает частоту кадров ffprobe: дробь вида "30000/1001" считается как дробь,
+    /// иначе — десятичное число в инвариантной культуре. "0/0" и мусор дают null.
+    /// </summary>
+    private static double? TryParseFrameRate(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return null;
+        }
+
+        string value = raw.Trim();
+        int slash = value.IndexOf('/');
+        if (slash >= 0)
+        {
+            string numPart = value[..slash].Trim();
+            string denPart = value[(slash + 1)..].Trim();
+            if (double.TryParse(numPart, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double num) &&
+                double.TryParse(denPart, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double den) &&
+                den != 0 && num > 0)
+            {
+                double result = num / den;
+                return double.IsFinite(result) && result > 0 ? result : null;
+            }
+
+            return null;
+        }
+
+        if (double.TryParse(value, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double parsed) &&
+            double.IsFinite(parsed) && parsed > 0)
+        {
+            return parsed;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Разбирает число кадров nb_frames (строка или число). Мусор даёт null.
+    /// </summary>
+    private static long? TryParseFrameCount(System.Text.Json.JsonElement stream)
+    {
+        if (!stream.TryGetProperty("nb_frames", out var prop))
+        {
+            return null;
+        }
+
+        if (prop.ValueKind == System.Text.Json.JsonValueKind.Number && prop.TryGetInt64(out long num))
+        {
+            return num > 0 ? num : null;
+        }
+
+        if (prop.ValueKind == System.Text.Json.JsonValueKind.String &&
+            long.TryParse(prop.GetString()?.Trim(), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out long parsed) &&
+            parsed > 0)
+        {
+            return parsed;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Разбирает default_duration mkvmerge (нс/кадр, число или строка) в FPS = 1e9 / default_duration.
+    /// </summary>
+    private static double? TryParseDefaultDuration(System.Text.Json.JsonElement props)
+    {
+        if (!props.TryGetProperty("default_duration", out var prop))
+        {
+            return null;
+        }
+
+        double nanoseconds = 0;
+        if (prop.ValueKind == System.Text.Json.JsonValueKind.Number)
+        {
+            if (prop.TryGetInt64(out long nsLong))
+            {
+                nanoseconds = nsLong;
+            }
+            else if (prop.TryGetDouble(out double nsDouble))
+            {
+                nanoseconds = nsDouble;
+            }
+        }
+        else if (prop.ValueKind == System.Text.Json.JsonValueKind.String &&
+            !double.TryParse(prop.GetString()?.Trim(), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out nanoseconds))
+        {
+            return null;
+        }
+
+        if (nanoseconds <= 0 || !double.IsFinite(nanoseconds))
+        {
+            return null;
+        }
+
+        double fps = 1_000_000_000.0 / nanoseconds;
+        return double.IsFinite(fps) && fps > 0 ? fps : null;
+    }
+
+    /// <summary>
+    /// Эвристика VFR: avg_frame_rate отличается от r_frame_rate beyond допуска на дроби
+    /// (0,01 кадр/с) либо число кадров заметно расходится с duration * avg (допуск 2%).
+    /// Нет данных для решения — null, ничего не выдумываем.
+    /// </summary>
+    private static bool? ResolveVariableFrameRate(double avgFps, double? rFps, long? nbFrames, double duration)
+    {
+        if (rFps.HasValue && rFps.Value > 0 && System.Math.Abs(avgFps - rFps.Value) > 0.01)
+        {
+            return true;
+        }
+
+        if (nbFrames.HasValue && nbFrames.Value > 0 && duration > 0 && avgFps > 0)
+        {
+            double expected = duration * avgFps;
+            if (expected > 0 && double.IsFinite(expected))
+            {
+                double deviation = System.Math.Abs(nbFrames.Value - expected) / expected;
+                if (deviation > 0.02)
+                {
+                    return true;
+                }
+
+                return false;
+            }
+        }
+
+        if (rFps.HasValue && rFps.Value > 0)
+        {
+            return false;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Уточняет частоту кадров видеодорожек MKV данными ffprobe (avg/r/nb).
+    /// Фолбэк из default_duration сохраняется, если ffprobe данных не дал.
+    /// </summary>
+    private async Task EnrichFrameRateFromFfprobeAsync(MediaStructure structure)
+    {
+        try
+        {
+            var videoTracks = structure.Tracks.Where(t => t.TrackType.Equals("video", StringComparison.OrdinalIgnoreCase)).ToList();
+            if (videoTracks.Count == 0)
+            {
+                return;
+            }
+
+            using var probeDoc = await _ffmpegRunner.GetVideoInfoAsync(structure.FilePath);
+            if (probeDoc == null)
+            {
+                return;
+            }
+
+            if (!probeDoc.RootElement.TryGetProperty("streams", out var streams) ||
+                streams.ValueKind != System.Text.Json.JsonValueKind.Array)
+            {
+                return;
+            }
+
+            var probeVideo = streams.EnumerateArray()
+                .Where(s => s.TryGetProperty("codec_type", out var ct) &&
+                    string.Equals(ct.GetString(), "video", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            if (probeVideo.Count == 0)
+            {
+                return;
+            }
+
+            double duration = structure.Duration;
+            if (duration <= 0 && probeDoc.RootElement.TryGetProperty("format", out var format) &&
+                format.TryGetProperty("duration", out var durProp))
+            {
+                string? durRaw = durProp.ValueKind == System.Text.Json.JsonValueKind.String ? durProp.GetString() : durProp.GetRawText();
+                if (double.TryParse(durRaw?.Trim(), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double parsedDur) && parsedDur > 0)
+                {
+                    duration = parsedDur;
+                }
+            }
+
+            for (int i = 0; i < videoTracks.Count && i < probeVideo.Count; i++)
+            {
+                double? avgFps = TryParseFrameRate(GetStreamField(probeVideo[i], "avg_frame_rate"));
+                if (!avgFps.HasValue)
+                {
+                    continue;
+                }
+
+                double? rFps = TryParseFrameRate(GetStreamField(probeVideo[i], "r_frame_rate"));
+                long? nbFrames = TryParseFrameCount(probeVideo[i]);
+                videoTracks[i].FrameRate = avgFps.Value;
+                videoTracks[i].FrameCount = nbFrames;
+                videoTracks[i].IsVariableFrameRate = ResolveVariableFrameRate(avgFps.Value, rFps, nbFrames, duration);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logService.Write(
+                "media_probe.framerate_enrichment_failed",
+                LogLevel.Warning,
+                LogStatus.PartiallySucceeded,
+                "Не удалось уточнить частоту кадров MKV через ffprobe",
+                ex,
+                "MediaProbeService",
+                properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["Stage"] = "framerate",
+                    ["ErrorCode"] = "enrichment-failed",
+                    ["InputName"] = SafeFileName(structure.FilePath)
+                });
+        }
+    }
+
+    /// <summary>
+    /// Журналирует итог определения частоты кадров: успех или пропуск при отсутствии данных.
+    /// </summary>
+    private void LogFrameRate(MediaStructure structure, string tool)
+    {
+        var video = structure.Tracks.FirstOrDefault(t => t.TrackType.Equals("video", StringComparison.OrdinalIgnoreCase));
+        if (video?.FrameRate is { } fps && fps > 0 && double.IsFinite(fps))
+        {
+            _logService.Write(
+                "media.probe.framerate",
+                LogLevel.Debug,
+                LogStatus.Succeeded,
+                $"Частота кадров определена для '{LogProps.FileName(structure.FilePath)}'",
+                null,
+                SourceName,
+                properties: LogProps.Create("InputName", LogProps.FileName(structure.FilePath)).With("FrameRate", video.FrameRate).With("Fps", video.FrameRate).With("Tool", tool));
+        }
+        else
+        {
+            _logService.Write(
+                "media.probe.framerate.unknown",
+                LogLevel.Debug,
+                LogStatus.Skipped,
+                $"Частота кадров не определена для '{LogProps.FileName(structure.FilePath)}'",
+                null,
+                SourceName,
+                properties: LogProps.Create("InputName", LogProps.FileName(structure.FilePath)).With("Tool", tool));
         }
     }
 

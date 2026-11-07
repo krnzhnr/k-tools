@@ -221,7 +221,7 @@ public sealed class FFmpegRunner : AbstractProcessRunner, IFFmpegRunner
     /// <returns>Документ JsonDocument со свойствами потоков, или null при сбоях.</returns>
     public async Task<JsonDocument?> GetVideoInfoAsync(string filePath, ProcessExecutionContext? context = null)
     {
-        string arguments = $"-v error -analyzeduration 100M -probesize 100M -show_entries format=duration,bit_rate:stream=index,codec_name,codec_type,duration,bit_rate,disposition,pix_fmt,width,height,channels:stream_tags -of json \"{filePath}\"";
+        string arguments = $"-v error -analyzeduration 100M -probesize 100M -show_entries format=duration,bit_rate:stream=index,codec_name,codec_type,duration,bit_rate,disposition,pix_fmt,width,height,channels,r_frame_rate,avg_frame_rate,nb_frames:stream_tags -of json \"{filePath}\"";
         string fileName = Path.GetFileName(filePath);
         var outputLines = new List<string>();
 

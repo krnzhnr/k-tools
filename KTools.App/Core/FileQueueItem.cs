@@ -1,7 +1,9 @@
-﻿// -*- coding: utf-8 -*-
+// -*- coding: utf-8 -*-
 using System;
 using System.ComponentModel;
+using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Runtime.CompilerServices;
 
 using KTools_App.Models;
@@ -113,6 +115,11 @@ public sealed class FileQueueItem : INotifyPropertyChanged
             {
                 _mediaInfo = value;
                 OnPropertyChanged();
+                OnPropertyChanged(nameof(FrameRateBadgeText));
+                OnPropertyChanged(nameof(FrameModeBadgeText));
+                OnPropertyChanged(nameof(HasFrameRateBadge));
+                OnPropertyChanged(nameof(HasFrameModeBadge));
+                OnPropertyChanged(nameof(IsVariableFrameRate));
             }
         }
     }
@@ -139,6 +146,120 @@ public sealed class FileQueueItem : INotifyPropertyChanged
     /// Флаг наличия текста бейджика кропа для управления видимостью в XAML.
     /// </summary>
     public bool HasCropBadge => !string.IsNullOrEmpty(CropBadgeText);
+
+    /// <summary>
+    /// Первая видеодорожка из структуры зонда. Null — зонд ещё не выполнен или видео нет.
+    /// </summary>
+    private MediaTrack? FirstVideoTrack => MediaInfo?.GetVideoTracks().FirstOrDefault();
+
+    /// <summary>
+    /// Текст бейджика частоты кадров (например, "23,976 FPS", для VFR — "~23,976 FPS").
+    /// Формат ru-RU с запятой, до трёх знаков. Null — данных нет или пилюля отключена
+    /// в персонализации, бейдж скрыт.
+    /// </summary>
+    public string? FrameRateBadgeText => ShowFrameRateBadge ? FormatFrameRateBadge(FirstVideoTrack) : null;
+
+    /// <summary>
+    /// Чистое форматирование бейджика частоты кадров по дорожке, без чтения настроек.
+    /// Null — нет видеодорожки или частоты кадров.
+    /// </summary>
+    public static string? FormatFrameRateBadge(MediaTrack? track)
+    {
+        if (track?.FrameRate is not { } fps || fps <= 0 || double.IsNaN(fps) || double.IsInfinity(fps))
+        {
+            return null;
+        }
+
+        string formatted = fps.ToString("0.###", CultureInfo.GetCultureInfo("ru-RU"));
+        bool isVfr = track.IsVariableFrameRate == true;
+        return (isVfr ? "~" : string.Empty) + formatted + " FPS";
+    }
+
+    /// <summary>
+    /// Текст бейджика режима частоты кадров ("CFR" или "VFR").
+    /// Null — режим неизвестен или пилюля отключена в персонализации, бейдж скрыт.
+    /// VFR визуально отличим текстом и префиксом ~ у FPS.
+    /// </summary>
+    public string? FrameModeBadgeText => ShowFrameModeBadge ? FormatFrameModeBadge(FirstVideoTrack) : null;
+
+    /// <summary>
+    /// Чистое форматирование бейджика режима частоты кадров по дорожке, без чтения настроек.
+    /// Null — режим или частота кадров неизвестны.
+    /// </summary>
+    public static string? FormatFrameModeBadge(MediaTrack? track)
+    {
+        if (track?.IsVariableFrameRate is not bool isVfr)
+        {
+            return null;
+        }
+
+        if (track.FrameRate is not { } fps || fps <= 0 || double.IsNaN(fps) || double.IsInfinity(fps))
+        {
+            return null;
+        }
+
+        return isVfr ? "VFR" : "CFR";
+    }
+
+    /// <summary>
+    /// Разрешён ли показ пилюли частоты кадров в настройках отображения очереди.
+    /// По умолчанию false (пилюли выкл); без сервисов тоже false.
+    /// </summary>
+    public bool ShowFrameRateBadge
+    {
+        get
+        {
+            // Провайдер пуст в юнит-тестах без инициализации приложения.
+            IServiceProvider? provider = App.Services;
+            if (provider != null)
+            {
+                var settingsManager = provider.GetService<ISettingsManager>();
+                if (settingsManager != null)
+                {
+                    return settingsManager.ShowFrameRateBadge;
+                }
+            }
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Разрешён ли показ пилюли типа развёртки (CFR/VFR) в настройках отображения очереди.
+    /// По умолчанию false (пилюли выкл); без сервисов тоже false.
+    /// </summary>
+    public bool ShowFrameModeBadge
+    {
+        get
+        {
+            // Провайдер пуст в юнит-тестах без инициализации приложения.
+            IServiceProvider? provider = App.Services;
+            if (provider != null)
+            {
+                var settingsManager = provider.GetService<ISettingsManager>();
+                if (settingsManager != null)
+                {
+                    return settingsManager.ShowFrameModeBadge;
+                }
+            }
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Флаг наличия бейджика частоты кадров для тестов и возможного управления видимостью.
+    /// Сам AccentBadge скрывается автоматически при пустом тексте.
+    /// </summary>
+    public bool HasFrameRateBadge => ShowFrameRateBadge && !string.IsNullOrEmpty(FrameRateBadgeText);
+
+    /// <summary>
+    /// Флаг наличия бейджика режима CFR/VFR.
+    /// </summary>
+    public bool HasFrameModeBadge => ShowFrameModeBadge && !string.IsNullOrEmpty(FrameModeBadgeText);
+
+    /// <summary>
+    /// Признак переменной частоты кадров первой видеодорожки.
+    /// </summary>
+    public bool IsVariableFrameRate => FirstVideoTrack?.IsVariableFrameRate == true;
 
     /// <summary>
     /// Текущее состояние обработки файла.
@@ -482,6 +603,21 @@ public sealed class FileQueueItem : INotifyPropertyChanged
     public void NotifySubtitlesSettingChanged()
     {
         OnPropertyChanged(nameof(ShowSubtitlesSelector));
+    }
+
+    /// <summary>
+    /// Оповещает UI о возможном изменении настроек отображения пилюль FPS и CFR/VFR.
+    /// Тексты пилюль тоже оповещаются: именно к ним привязан XAML, а AccentBadge
+    /// автоматически скрывается при пустом тексте.
+    /// </summary>
+    public void NotifyBadgeSettingsChanged()
+    {
+        OnPropertyChanged(nameof(ShowFrameRateBadge));
+        OnPropertyChanged(nameof(ShowFrameModeBadge));
+        OnPropertyChanged(nameof(FrameRateBadgeText));
+        OnPropertyChanged(nameof(FrameModeBadgeText));
+        OnPropertyChanged(nameof(HasFrameRateBadge));
+        OnPropertyChanged(nameof(HasFrameModeBadge));
     }
 
     /// <summary>

@@ -24,10 +24,58 @@
               Background="{ThemeResource SolidBackdropBackgroundBrush}"
               Visibility="Collapsed" />
 
-        <TitleBar x:Name="AppTitleBar" Title="K-Tools" Grid.Row="0">
+        <TitleBar x:Name="AppTitleBar"
+                  Title="K-Tools"
+                  Grid.Row="0"
+                  IsBackButtonVisible="True"
+                  IsPaneToggleButtonVisible="True"
+                  AutoRefreshDragRegions="True"
+                  BackRequested="AppTitleBar_BackRequested"
+                  PaneToggleRequested="AppTitleBar_PaneToggleRequested">
+            <TitleBar.Resources>
+                <!-- Контент прижат влево, рядом с названием: пилюля обновления
+                      встаёт сразу за заголовком, остальная ширина бара таскает окно. -->
+                <HorizontalAlignment x:Key="TitleBarContentHorizontalAlignment">Left</HorizontalAlignment>
+            </TitleBar.Resources>
             <TitleBar.IconSource>
                 <ImageIconSource ImageSource="/Assets/AppIcon.ico" />
             </TitleBar.IconSource>
+            <TitleBar.Content>
+                <!-- Пилюля обновления (#37): обычная кнопка DefaultButtonStyle без
+                     кастомных кистей — как карточки истории в калькуляторе сдвига.
+                     Покой/ховер/нажатие полностью штатные из стиля, смысл успеха несёт
+                     зелёная иконка. Клик повторяет действие бывшей кнопки «Обновиться»
+                     через MainViewModel.GoToUpdateCommand без дублирования логики.
+                     Кнопка интерактивна и исключена из drag-зоны бара. -->
+                <Grid x:Name="UpdatePillHost"
+                      HorizontalAlignment="Left"
+                      VerticalAlignment="Center"
+                      Visibility="Collapsed">
+                    <Button x:Name="UpdatePillButton"
+                            Click="UpdatePillButton_Click"
+                            Height="28"
+                            Padding="12,0"
+                            CornerRadius="14"
+                            FontSize="12"
+                            Style="{ThemeResource DefaultButtonStyle}"
+                            AutomationProperties.Name="Доступно обновление">
+                        <ToolTipService.ToolTip>
+                            <ToolTip x:Name="UpdatePillToolTip" Content="" />
+                        </ToolTipService.ToolTip>
+                        <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                            <FontIcon Glyph="&#xE895;"
+                                      FontSize="12"
+                                      FontFamily="Segoe Fluent Icons"
+                                      Foreground="{ThemeResource SystemFillColorSuccessBrush}"
+                                      VerticalAlignment="Center" />
+                            <TextBlock x:Name="UpdatePillText"
+                                       Text="Обновление"
+                                       FontSize="12"
+                                       VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
+                </Grid>
+            </TitleBar.Content>
         </TitleBar>
 
         <!--

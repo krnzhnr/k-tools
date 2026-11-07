@@ -9,7 +9,7 @@
     xmlns:viewmodels="using:KTools_App.ViewModels"
     x:DataType="viewmodels:SettingsViewModel"
     mc:Ignorable="d"
-    NavigationCacheMode="Disabled">
+    NavigationCacheMode="Required">
 
 
 
@@ -343,6 +343,37 @@
                             Content="Обычный" />
                     </ComboBox>
                 </community:SettingsCard>
+
+                <!-- Отображение элементов очереди файлов -->
+                <community:SettingsExpander
+                    Padding="16,12,16,12"
+                    Description="Какие пилюли показывать в строке элемента очереди рядом с размером файла"
+                    Header="Отображение элементов очереди"
+                    IsExpanded="False">
+                    <community:SettingsExpander.HeaderIcon>
+                        <FontIcon Glyph="&#xE8FD;" />
+                    </community:SettingsExpander.HeaderIcon>
+                    <community:SettingsExpander.Items>
+                        <community:SettingsCard
+                            Header="Частота кадров"
+                            Description="Показывать пилюлю FPS (например, 23,976 FPS, для VFR со знаком ~)">
+                            <ToggleSwitch
+                                x:Name="ShowFrameRateBadgeToggle"
+                                OffContent="Выкл"
+                                OnContent="Вкл"
+                                IsOn="{x:Bind ViewModel.ShowFrameRateBadge, Mode=TwoWay}" />
+                        </community:SettingsCard>
+                        <community:SettingsCard
+                            Header="Тип развёртки"
+                            Description="Показывать пилюлю CFR/VFR рядом с частотой кадров">
+                            <ToggleSwitch
+                                x:Name="ShowFrameModeBadgeToggle"
+                                OffContent="Выкл"
+                                OnContent="Вкл"
+                                IsOn="{x:Bind ViewModel.ShowFrameModeBadge, Mode=TwoWay}" />
+                        </community:SettingsCard>
+                    </community:SettingsExpander.Items>
+                </community:SettingsExpander>
             </StackPanel>
 
             <!-- Раздел: Логирование -->
@@ -571,9 +602,10 @@
 
             <!-- Раздел: Параметры отладки -->
             <community:SettingsExpander
+                x:Name="DebugSettingsExpander"
                 Header="Параметры отладки"
                 Description="Временные инструменты для тестирования и отладки приложения"
-                Visibility="{x:Bind ViewModel.IsDebugSettingsVisible, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
+                x:Load="{x:Bind ViewModel.IsDebugSettingsVisible, Mode=OneWay}"
                 IsExpanded="True"
                 Margin="0,12,0,0">
                 <community:SettingsExpander.HeaderIcon>

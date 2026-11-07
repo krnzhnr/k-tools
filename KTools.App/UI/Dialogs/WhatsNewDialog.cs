@@ -51,6 +51,7 @@ public sealed class WhatsNewDialog : ContentDialog
     private Grid _artHeader = null!;
     private Image _frontImage = null!;
     private Image _backImage = null!;
+    private Button _prevArtButton = null!;
     private Button _nextArtButton = null!;
     private CheckBox _optOutCheckBox = null!;
     private TextBlock _artFallbackLabel = null!;
@@ -268,14 +269,17 @@ public sealed class WhatsNewDialog : ContentDialog
         header.Children.Add(_veil);
         _veilFadeOut = BuildOpacityFade(_veil, 1, 0, 350);
 
-        var overlay = new StackPanel
+        var overlay = new Grid
         {
-            Orientation = Orientation.Horizontal,
             HorizontalAlignment = HorizontalAlignment.Stretch,
             VerticalAlignment = VerticalAlignment.Bottom,
             Margin = new Thickness(12, 0, 12, 8),
-            Spacing = 8,
+            ColumnSpacing = 8,
         };
+        overlay.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        overlay.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        overlay.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        overlay.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
         var versionBadge = new TextBlock
         {
@@ -286,34 +290,82 @@ public sealed class WhatsNewDialog : ContentDialog
         };
         overlay.Children.Add(versionBadge);
 
-        var spacer = new Border { HorizontalAlignment = HorizontalAlignment.Stretch };
-        overlay.Children.Add(spacer);
-
-        _nextArtButton = new Button
-        {
-            Content = "Другая анимация",
-            VerticalAlignment = VerticalAlignment.Center,
-            Opacity = 0.92,
-            Visibility = _availableArt.Count > 1 ? Visibility.Visible : Visibility.Collapsed,
-        };
-        AutomationProperties.SetName(_nextArtButton, "Показать другую анимацию");
-        _nextArtButton.Click += async (s, e) =>
-        {
-            // Блокируем повторные клики на время кроссфейда.
-            _nextArtButton.IsEnabled = false;
-            try
-            {
-                await ShowNextArtAsync();
-            }
-            finally
-            {
-                _nextArtButton.IsEnabled = true;
-            }
-        };
+        // Две аккуратные стрелки справа от версии (на месте бывшей кнопки переключения).
+        // Скрыты при единственной сцене, блокируются на время кроссфейда.
+        // Клавиатура: обычные кнопки — Tab доводит фокус, Enter/Пробел листают.
+        _prevArtButton = BuildArtNavButton("\uE76B", "Показать предыдущую анимацию", 0);
+        _nextArtButton = BuildArtNavButton("\uE76C", "Показать следующую анимацию", 1);
+        Grid.SetColumn(_prevArtButton, 2);
+        Grid.SetColumn(_nextArtButton, 3);
+        overlay.Children.Add(_prevArtButton);
         overlay.Children.Add(_nextArtButton);
 
         header.Children.Add(overlay);
+        _prevArtButton.Click += async (s, e) =>
+        {
+            SetArtNavEnabled(false);
+            try
+            {
+                await ShowArtAsync(PrevAvailablePiece());
+            }
+            finally
+            {
+                SetArtNavEnabled(true);
+            }
+        };
+        _nextArtButton.Click += async (s, e) =>
+        {
+            SetArtNavEnabled(false);
+            try
+            {
+                await ShowArtAsync(NextAvailablePiece());
+            }
+            finally
+            {
+                SetArtNavEnabled(true);
+            }
+        };
+        UpdateArtNavVisibility();
         return header;
+    }
+
+    /// <summary>
+    /// Аккуратная стрелка в полосе версии: шеврон по центру, полупрозрачная.
+    /// Имя автоматизации и подсказка совпадают, фокус с клавиатуры доступен.
+    /// </summary>
+    private static Button BuildArtNavButton(string glyph, string automationName, int tabIndex)
+    {
+        var button = new Button
+        {
+            Content = new FontIcon { Glyph = glyph, FontSize = 12 },
+            Width = 28,
+            Height = 28,
+            MinWidth = 0,
+            MinHeight = 0,
+            Padding = new Thickness(0),
+            VerticalAlignment = VerticalAlignment.Center,
+            Opacity = 0.92,
+            TabIndex = tabIndex,
+            IsTabStop = true,
+        };
+        AutomationProperties.SetName(button, automationName);
+        AutomationProperties.SetAutomationId(button, automationName == "Показать предыдущую анимацию" ? "WhatsNewPrevArtButton" : "WhatsNewNextArtButton");
+        return button;
+    }
+
+    /// <summary>Скрывает обе стрелки, когда листать нечего.</summary>
+    private void UpdateArtNavVisibility()
+    {
+        var visibility = _availableArt.Count > 1 ? Visibility.Visible : Visibility.Collapsed;
+        _prevArtButton.Visibility = visibility;
+        _nextArtButton.Visibility = visibility;
+    }
+
+    /// <summary>Блокирует обе стрелки на время кроссфейда.</summary>
+    private void SetArtNavEnabled(bool enabled)
+    {
+        _prevArtButton.IsEnabled = enabled;
+        _nextArtButton.IsEnabled = enabled;
     }
 
     private static Image BuildArtImage(string automationName)
@@ -560,8 +612,9 @@ public sealed class WhatsNewDialog : ContentDialog
     /// <summary>
     /// Листание сцен по кругу через прозрачность: текущая растворяется,
     /// новая проявляется после готовности. Без чёрных вспышек.
+    /// Направление задаёт вызывающая стрелка через готовое имя сцены.
     /// </summary>
-    private async System.Threading.Tasks.Task ShowNextArtAsync()
+    private async System.Threading.Tasks.Task ShowArtAsync(string next)
     {
         System.Threading.CancellationToken token = _closeCts.Token;
         if (_availableArt.Count < 2)
@@ -572,7 +625,6 @@ public sealed class WhatsNewDialog : ContentDialog
         try
         {
             token.ThrowIfCancellationRequested();
-            string next = NextAvailablePiece();
             if (!WhatsNewArtCatalog.TryResolveArtPath(next, out string artPath))
             {
                 return;
@@ -610,6 +662,23 @@ public sealed class WhatsNewDialog : ContentDialog
             if (_availableArt[i].Equals(_currentPiece, StringComparison.OrdinalIgnoreCase))
             {
                 return _availableArt[(i + 1) % _availableArt.Count];
+            }
+        }
+
+        return _availableArt[0];
+    }
+
+    /// <summary>
+    /// Предыдущая сцена из имеющихся на диске по кругу.
+    /// Зеркалит <see cref="NextAvailablePiece"/> для стрелки назад.
+    /// </summary>
+    private string PrevAvailablePiece()
+    {
+        for (int i = 0; i < _availableArt.Count; i++)
+        {
+            if (_availableArt[i].Equals(_currentPiece, StringComparison.OrdinalIgnoreCase))
+            {
+                return _availableArt[(i - 1 + _availableArt.Count) % _availableArt.Count];
             }
         }
 

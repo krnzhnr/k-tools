@@ -666,6 +666,7 @@ public sealed partial class WorkPanel : Page
         {
             contentFrame.Content = _filesContainer;
             FileList.NotifySubtitlesSettingChanged();
+            FileList.NotifyBadgeSettingsChanged();
         }
         else if (tag == "tracks")
         {

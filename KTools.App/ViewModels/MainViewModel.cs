@@ -58,19 +58,19 @@ public partial class MainViewModel : ThreadSafeViewModel
     public partial bool IsLogsTabVisible { get; set; }
 
     /// <summary>
-    /// Флаг видимости баннера обновлений на главном экране.
+    /// Флаг видимости пилюли обновления в заголовке окна.
     /// </summary>
     [ObservableProperty]
-    public partial bool IsUpdateBannerVisible { get; set; }
+    public partial bool IsUpdatePillVisible { get; set; }
 
     /// <summary>
-    /// Текст статуса для баннера обновлений.
+    /// Текст статуса для пилюли обновлений.
     /// </summary>
     [ObservableProperty]
     public partial string UpdateStatusText { get; set; } = string.Empty;
 
     /// <summary>
-    /// Информация о доступном обновлении для баннера.
+    /// Информация о доступном обновлении для пилюли.
     /// </summary>
     [ObservableProperty]
     public partial UpdateInfo? NewUpdateInfo { get; set; }
@@ -271,10 +271,10 @@ public partial class MainViewModel : ThreadSafeViewModel
                 _settingsViewModel.IsUpdateAvailable = true;
                 _settingsViewModel.UpdateStatusText = $"Доступна новая версия: {update.Version}";
 
-                // Устанавливаем свойства для отображения баннера на главной странице
+                // Устанавливаем свойства для отображения пилюли обновления в заголовке окна
                 NewUpdateInfo = update;
                 UpdateStatusText = $"Доступна новая версия: {update.Version}";
-                IsUpdateBannerVisible = true;
+                IsUpdatePillVisible = true;
             }
         }
         catch (Exception ex)
@@ -366,7 +366,7 @@ public partial class MainViewModel : ThreadSafeViewModel
             HeaderTitle = "Настройки";
             HeaderSubtitle =
                 "Общие параметры и конфигурация приложения";
-            IsUpdateBannerVisible = false; // Скрываем баннер обновлений, чтобы избежать дублирования интерфейса обновлений
+            IsUpdatePillVisible = false; // Скрываем пилюлю обновлений, чтобы избежать дублирования интерфейса обновлений
             _navigationService.NavigateTo(typeof(SettingsPage));
         }
         else if (tag == "home")
@@ -374,12 +374,12 @@ public partial class MainViewModel : ThreadSafeViewModel
             HeaderTitle = "K-Tools";
             HeaderSubtitle =
                 "Ваш персональный набор инструментов для обработки медиа";
-            // Показываем баннер обновлений снова, если обновление доступно, но еще не загружается/устанавливается
+            // Показываем пилюлю обновлений снова, если обновление доступно, но еще не загружается/устанавливается
             if (_settingsViewModel.IsUpdateAvailable && !_settingsViewModel.IsDownloading)
             {
                 NewUpdateInfo = _settingsViewModel.NewUpdateInfo;
                 UpdateStatusText = _settingsViewModel.UpdateStatusText;
-                IsUpdateBannerVisible = true;
+                IsUpdatePillVisible = true;
             }
             _navigationService.NavigateTo(typeof(HomePage));
         }
@@ -458,21 +458,12 @@ public partial class MainViewModel : ThreadSafeViewModel
     }
 
     /// <summary>
-    /// Закрывает баннер обновлений на главном экране.
-    /// </summary>
-    [RelayCommand]
-    private void CloseUpdateBanner()
-    {
-        IsUpdateBannerVisible = false;
-    }
-
-    /// <summary>
     /// Переходит на страницу настроек и запускает процесс скачивания обновления.
     /// </summary>
     [RelayCommand]
     private void GoToUpdate()
     {
-        IsUpdateBannerVisible = false;
+        IsUpdatePillVisible = false;
         _logService.Write(
             "app.update.install_requested",
             LogLevel.Info,

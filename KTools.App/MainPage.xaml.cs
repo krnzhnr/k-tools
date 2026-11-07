@@ -1,4 +1,4 @@
-﻿// -*- coding: utf-8 -*-
+// -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -13,6 +13,7 @@ using KTools_App.UI.Pages;
 using KTools_App.ViewModels;
 
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.UI.Input;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 
@@ -71,8 +72,21 @@ public sealed partial class MainPage : Page
             (r, m) => r.OnBackdropChanged(m.NewBackdrop));
         ApplyContentBackgroundOverride(ReadSavedBackdropType());
 
+        // Кнопка панели живёт в TitleBar главного окна: переключаем панель по сообщению.
+        messenger.Register<MainPage, ToggleNavigationPaneMessage>(
+            this,
+            (r, m) => r.OnToggleNavigationPane());
+
         // Регистрируем глобальный обработчик Enter для снятия фокуса с текстовых полей ввода
         AddHandler(UIElement.KeyDownEvent, new Microsoft.UI.Xaml.Input.KeyEventHandler(OnGlobalKeyDown), handledEventsToo: true);
+
+        // Боковые кнопки мыши ловим поверх дочерних контролов (handledEventsToo):
+        // кнопки и поля помечают PointerPressed как handled ради своего Click,
+        // без этого «назад» срабатывал бы только на пустых местах.
+        RootGrid.AddHandler(
+            UIElement.PointerPressedEvent,
+            new Microsoft.UI.Xaml.Input.PointerEventHandler(RootGrid_PointerPressed),
+            handledEventsToo: true);
     }
 
     /// <summary>
@@ -93,15 +107,45 @@ public sealed partial class MainPage : Page
 
     /// <summary>
     /// Глобальный обработчик нажатия указки (мыши/тача) на корневой контейнер приложения.
-    /// Автоматически снимает фокус с текстовых полей ввода при клике на свободную область.
+    /// Боковая кнопка «назад» (XButton1) работает как кнопка «Назад» в TitleBar
+    /// и не зависит от фокуса полей ввода. Остальные нажатия снимают фокус
+    /// с текстовых полей ввода при клике на свободную область.
     /// </summary>
     private void RootGrid_PointerPressed(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
     {
-        var originalSource = e.OriginalSource as UIElement;
-        if (!FocusHelper.IsTextInputElement(originalSource))
+        PointerUpdateKind updateKind = e.GetCurrentPoint(RootGrid).Properties.PointerUpdateKind;
+        if (ShouldNavigateBackOnPointerUpdate(updateKind, _navigationService.CanGoBack))
+        {
+            e.Handled = true;
+            _logService.Write(
+                "ui.navigation.mouse_back_pressed",
+                LogLevel.Debug,
+                LogStatus.Changed,
+                "Нажата боковая кнопка мыши «назад», выполнен возврат по истории навигации",
+                source: SourceName,
+                properties: LogProps
+                    .Create("Control", "Mouse")
+                    .With("Reason", "XButton1"));
+            _navigationService.GoBack();
+            return;
+        }
+
+        var originalSource = e.OriginalSource as DependencyObject;
+        if (!FocusHelper.IsInsideTextInputElement(originalSource))
         {
             FocusHelper.ClearFocus(this.XamlRoot, RootGrid, _logService);
         }
+    }
+
+    /// <summary>
+    /// Чистое решение о навигации назад по кнопкам указки.
+    /// Возврат — только по нажатию XButton1 при непустой истории навигации;
+    /// отпускание и остальные кнопки указателя навигацию не запускают.
+    /// Вперёд (XButton2) не поддерживается: в INavigationService нет стека вперёд.
+    /// </summary>
+    private static bool ShouldNavigateBackOnPointerUpdate(PointerUpdateKind updateKind, bool canGoBack)
+    {
+        return updateKind == PointerUpdateKind.XButton1Pressed && canGoBack;
     }
 
     /// <summary>
@@ -648,6 +692,18 @@ public sealed partial class MainPage : Page
     }
 
     /// <summary>
+    /// Переключает боковую панель по запросу кнопки панели в TitleBar главного окна.
+    /// Маршалится в UI-поток: сообщение может прийти вне потока интерфейса.
+    /// </summary>
+    private void OnToggleNavigationPane()
+    {
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            NavView.IsPaneOpen = !NavView.IsPaneOpen;
+        });
+    }
+
+    /// <summary>
     /// Публичный метод для внешней навигации к домашней странице (для совместимости).
     /// </summary>
     public void NavigateToHomeExternally()
@@ -661,17 +717,5 @@ public sealed partial class MainPage : Page
     public void NavigateToDependenciesExternally()
     {
         NavView.SelectedItem = NavItemDependencies;
-    }
-
-    /// <summary>
-    /// Обработчик события закрытия InfoBar об обновлении на главном экране.
-    /// Перенаправляет вызов во ViewModel для обновления состояния.
-    /// </summary>
-    private void MainUpdateInfoBar_CloseButtonClick(InfoBar sender, object args)
-    {
-        if (ViewModel.CloseUpdateBannerCommand.CanExecute(null))
-        {
-            ViewModel.CloseUpdateBannerCommand.Execute(null);
-        }
     }
 }

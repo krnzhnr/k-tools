@@ -1,4 +1,4 @@
-﻿// -*- coding: utf-8 -*-
+// -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -179,12 +179,15 @@ public sealed class TrackExtractorScript : AbstractScript
         var trackMetaByPath = new Dictionary<string, (int TrackId, string FileName)>(StringComparer.OrdinalIgnoreCase);
         var fontsToExtract = new List<string>();
         var fontMetaByPath = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var fontByPlannedPath = new Dictionary<string, MediaAttachment>(StringComparer.OrdinalIgnoreCase);
         var skippedValid = new List<string>();
         var skippedMessages = new List<string>();
         var extractResults = new List<string>();
         var validTracks = new List<string>();
         var validFonts = new List<string>();
         var ffmpegArgs = new List<string>();
+        var duplicateWarnings = new List<string>();
+        var reservedOutPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         // 4. Определение языковых дубликатов для формирования уникальных суффиксов
         var activeTracks = structure.Tracks
@@ -227,6 +230,22 @@ public sealed class TrackExtractorScript : AbstractScript
                 string renamedStem = ApplyPowerRename(trackStem, fileIndex + 1, settings);
                 outFilename = $"{renamedStem}{trackExt}";
                 string outPath = Path.Combine(baseDir, outFilename);
+
+                // Защита от коллизий внутри одного файла: одинаковые имена из шаблона
+                // (например {original} для двух дорожек с одним расширением) разводятся
+                // детерминированным суффиксом _trackXX по ID потока, а не случайным (1).
+                // Набор занятых путей живёт в пределах одного вызова (один входной файл).
+                if (reservedOutPaths.Contains(outPath))
+                {
+                    string originalFilename = outFilename;
+                    outFilename = BuildUniqueTrackFilename(baseDir, outFilename, track.TrackId, reservedOutPaths);
+                    outPath = Path.Combine(baseDir, outFilename);
+                    string warnMsg = $"⚠ Одинаковое имя '{originalFilename}': дорожка #{track.TrackId} сохранена как '{outFilename}'. Добавьте {{id}} в шаблон имени, чтобы избежать переименования";
+                    duplicateWarnings.Add(warnMsg);
+                    _logService.Write("script.track_extractor.duplicate_renamed", LogLevel.Warning, LogStatus.Changed, $"Имя '{LogProps.FileName(originalFilename)}' уже занято в этом файле, дорожка #{track.TrackId} сохранена как '{LogProps.FileName(outFilename)}'", source: Name, properties: LogProps.Create("Index", track.TrackId).With("FileName", LogProps.FileName(originalFilename)).With("OutputName", LogProps.FileName(outFilename)).With("InputName", LogProps.FileName(filePath)));
+                }
+
+                reservedOutPaths.Add(outPath);
 
                 // Проверка заглушек: пустой файл (0 байт) удаляется и идёт на повторное извлечение.
                 // Пропуск только для валидных артефактов (существует и длина больше нуля).
@@ -321,6 +340,17 @@ public sealed class TrackExtractorScript : AbstractScript
             foreach (var font in activeFontsForPlan)
             {
                 string plannedFontPath = Path.Combine(baseDir, font.FileName);
+                if (reservedOutPaths.Contains(plannedFontPath))
+                {
+                    string originalFontName = font.FileName;
+                    string uniqueFontName = BuildUniqueFilename(baseDir, font.FileName, reservedOutPaths);
+                    plannedFontPath = Path.Combine(baseDir, uniqueFontName);
+                    string warnMsg = $"⚠ Одинаковое имя '{originalFontName}': шрифт #{font.AttachmentId} сохранён как '{uniqueFontName}'";
+                    duplicateWarnings.Add(warnMsg);
+                    _logService.Write("script.track_extractor.duplicate_renamed", LogLevel.Warning, LogStatus.Changed, $"Имя '{LogProps.FileName(originalFontName)}' уже занято в этой очереди, шрифт #{font.AttachmentId} сохранён как '{LogProps.FileName(uniqueFontName)}'", source: Name, properties: LogProps.Create("Index", font.AttachmentId).With("FileName", LogProps.FileName(originalFontName)).With("OutputName", LogProps.FileName(uniqueFontName)).With("InputName", LogProps.FileName(filePath)));
+                }
+
+                reservedOutPaths.Add(plannedFontPath);
                 if (File.Exists(plannedFontPath))
                 {
                     long fontLen = 0;
@@ -347,7 +377,8 @@ public sealed class TrackExtractorScript : AbstractScript
                 }
 
                 fontsToExtract.Add(plannedFontPath);
-                fontMetaByPath[plannedFontPath] = font.FileName;
+                fontMetaByPath[plannedFontPath] = Path.GetFileName(plannedFontPath);
+                fontByPlannedPath[plannedFontPath] = font;
             }
         }
 
@@ -427,8 +458,10 @@ public sealed class TrackExtractorScript : AbstractScript
             if (!tracksRun.IsSuccess)
             {
                 RemoveZeroByteArtifacts(filesToExtract);
-                string failMsg = $"❌ Ошибка во время выполнения FFmpeg для {Path.GetFileName(filePath)}";
-                _logService.Write("script.track_extractor.failed", LogLevel.Error, LogStatus.Failed, failMsg, source: Name, properties: LogProps.Create("ErrorCode", "TRACK_EXTRACTION_FAILED").With("InputName", LogProps.FileName(filePath)).With("Retryable", true));
+                string plannedList = string.Join(", ", filesToExtract.Select(p => $"'{Path.GetFileName(p)}'").Take(4));
+                string failMsg = $"❌ FFmpeg не смог извлечь дорожки из '{Path.GetFileName(filePath)}' (код {tracksRun.ErrorCode ?? "ffmpeg-error"}): ожидались {plannedList}";
+                _logService.Write("script.track_extractor.failed", LogLevel.Error, LogStatus.Failed, $"FFmpeg не смог извлечь дорожки из '{LogProps.FileName(filePath)}': ожидались {plannedList}", source: Name, properties: LogProps.Create("ErrorCode", "TRACK_EXTRACTION_FAILED").With("InputName", LogProps.FileName(filePath)).With("Retryable", true));
+                results.AddRange(duplicateWarnings);
                 results.Add(failMsg);
                 var failedValid = filesToExtract.Where(IsValidArtifact).ToList();
                 return ExecutionResult.Failed(
@@ -470,8 +503,11 @@ public sealed class TrackExtractorScript : AbstractScript
                     string invalidName = trackMetaByPath.TryGetValue(plannedPath, out var meta)
                         ? meta.FileName
                         : Path.GetFileName(plannedPath);
-                    _logService.Write("script.track_extractor.artifact_invalid", LogLevel.Error, LogStatus.Failed, $"Дорожка не извлечена: файл '{LogProps.FileName(invalidName)}' отсутствует, пуст или устарел", source: Name, properties: LogProps.Create("ErrorCode", "OUTPUT_MISSING").With("OutputName", LogProps.FileName(invalidName)).With("Retryable", true));
-                    extractResults.Add($"❌ Дорожка не извлечена (пустой или устаревший файл): {invalidName}");
+                    int invalidId = trackMetaByPath.TryGetValue(plannedPath, out var metaId)
+                        ? metaId.TrackId
+                        : 0;
+                    _logService.Write("script.track_extractor.artifact_invalid", LogLevel.Error, LogStatus.Failed, $"Дорожка #{invalidId} не извлечена: файл '{LogProps.FileName(invalidName)}' отсутствует или пуст. Проверьте шаблон имени, место на диске и исходную дорожку", source: Name, properties: LogProps.Create("ErrorCode", "OUTPUT_MISSING").With("Index", invalidId).With("OutputName", LogProps.FileName(invalidName)).With("Retryable", true));
+                    extractResults.Add($"❌ Дорожка #{invalidId} не извлечена: файл '{invalidName}' отсутствует или пуст");
                 }
             }
         }
@@ -479,9 +515,6 @@ public sealed class TrackExtractorScript : AbstractScript
         // 8. Последовательное извлечение отобранных шрифтов с проверкой артефакта.
         if (fontsToExtract.Count > 0 && hasAttachments && selectedAttachmentIds != null)
         {
-            var activeFonts = structure.Attachments
-                .Where(a => selectedAttachmentIds.Contains(a.AttachmentId) && a.IsFont)
-                .ToDictionary(a => Path.Combine(baseDir, a.FileName), a => a, StringComparer.OrdinalIgnoreCase);
             int fontIndex = 0;
             int totalFonts = fontsToExtract.Count;
 
@@ -492,7 +525,7 @@ public sealed class TrackExtractorScript : AbstractScript
                     break;
                 }
 
-                if (!activeFonts.TryGetValue(outFontPath, out var font))
+                if (!fontByPlannedPath.TryGetValue(outFontPath, out var font))
                 {
                     continue;
                 }
@@ -589,6 +622,7 @@ public sealed class TrackExtractorScript : AbstractScript
             }
 
             results.AddRange(skippedMessages);
+            results.AddRange(duplicateWarnings);
             results.AddRange(extractResults);
 
             var allValid = validTracks.Concat(validFonts).Where(IsValidArtifact).ToList();
@@ -620,8 +654,14 @@ public sealed class TrackExtractorScript : AbstractScript
             }
 
             RemoveZeroByteArtifacts(filesToExtract.Concat(fontsToExtract));
-            string failMsg = $"❌ Сбой извлечения потоков из файла: {Path.GetFileName(filePath)}";
-            _logService.Write("script.track_extractor.failed", LogLevel.Error, LogStatus.Failed, failMsg, source: Name, properties: LogProps.Create("ErrorCode", "TRACK_EXTRACTION_FAILED").With("InputName", LogProps.FileName(filePath)).With("Count", validCount).With("Total", expectedCount).With("Verified", false).With("Retryable", true));
+            string plannedList = string.Join(", ", filesToExtract.Concat(fontsToExtract).Select(p => $"'{Path.GetFileName(p)}'").Take(4));
+            if (filesToExtract.Count + fontsToExtract.Count > 4)
+            {
+                plannedList += $" и ещё {filesToExtract.Count + fontsToExtract.Count - 4}";
+            }
+
+            string failMsg = $"❌ Не извлечена ни одна дорожка из {expectedCount} (файл '{Path.GetFileName(filePath)}'): {plannedList}. Проверьте шаблон имени, место на диске и исходные дорожки";
+            _logService.Write("script.track_extractor.failed", LogLevel.Error, LogStatus.Failed, $"Не извлечена ни одна дорожка из {expectedCount} для '{LogProps.FileName(filePath)}': ожидались {plannedList}", source: Name, properties: LogProps.Create("ErrorCode", "TRACK_EXTRACTION_FAILED").With("InputName", LogProps.FileName(filePath)).With("Count", validCount).With("Total", expectedCount).With("Verified", false).With("Retryable", true));
             progressCallback(fileIndex, totalCount, "Ошибка выполнения", 0.0);
             results.Add(failMsg);
             return ExecutionResult.Failed(
@@ -667,6 +707,51 @@ public sealed class TrackExtractorScript : AbstractScript
         clean = SanitizeRegex.Replace(clean, "");
         clean = clean.Replace(" ", "_");
         return clean;
+    }
+
+    /// <summary>
+    /// Строит уникальное имя дорожки при коллизии в одной очереди.
+    /// Первым пробуется детерминированный суффикс _trackXX по ID потока (стабилен между запусками
+    /// и виден в панели выбора дорожек), заголовок не используется: он часто пуст или одинаков
+    /// у всех дорожек. При повторной коллизии добавляется числовой суффикс _1, _2.
+    /// </summary>
+    private static string BuildUniqueTrackFilename(
+        string baseDir,
+        string collidingFilename,
+        int trackId,
+        HashSet<string> reservedOutPaths)
+    {
+        string stem = Path.GetFileNameWithoutExtension(collidingFilename);
+        string ext = Path.GetExtension(collidingFilename);
+        string candidate = $"{stem}_track{trackId:D2}{ext}";
+        if (!reservedOutPaths.Contains(Path.Combine(baseDir, candidate)))
+        {
+            return candidate;
+        }
+
+        return BuildUniqueFilename(baseDir, candidate, reservedOutPaths);
+    }
+
+    /// <summary>
+    /// Строит уникальное имя файла числовым суффиксом _1, _2 при повторной коллизии.
+    /// </summary>
+    private static string BuildUniqueFilename(
+        string baseDir,
+        string collidingFilename,
+        HashSet<string> reservedOutPaths)
+    {
+        string stem = Path.GetFileNameWithoutExtension(collidingFilename);
+        string ext = Path.GetExtension(collidingFilename);
+        int counter = 1;
+        string candidate;
+        do
+        {
+            candidate = $"{stem}_{counter}{ext}";
+            counter++;
+        }
+        while (reservedOutPaths.Contains(Path.Combine(baseDir, candidate)));
+
+        return candidate;
     }
 
     /// <summary>

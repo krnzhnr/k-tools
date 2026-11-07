@@ -77,9 +77,17 @@ public sealed partial class ScriptSettingsControl : UserControl
             this,
             (r, m) => r.OnHardwareCapabilitiesChanged());
 
-        // Обеспечивает автоматический сброс фокуса с полей ввода при клике на свободную область формы
+        // Сброс фокуса только при клике по свободной области формы.
+        // OriginalSource клика в поле ввода — внутренний элемент шаблона TextBox,
+        // поэтому проверяем всё визуальное дерево вверх: иначе поле шаблона имени
+        // сразу теряло бы фокус и печатать в нём было бы невозможно.
         this.PointerPressed += (s, e) =>
         {
+            if (FocusHelper.IsInsideTextInputElement(e.OriginalSource as DependencyObject))
+            {
+                return;
+            }
+
             this.IsTabStop = true;
             this.Focus(FocusState.Programmatic);
         };
@@ -116,6 +124,10 @@ public sealed partial class ScriptSettingsControl : UserControl
         {
             _activeScript.FilesQueue.CollectionChanged -= OnFilesQueueCollectionChanged;
             _activeScript.FilesQueue.CollectionChanged += OnFilesQueueCollectionChanged;
+            // Вкладка могла быть закрыта в момент замены файлов: подписки молчали
+            // и панель осталась со старым содержимым. Обновляем принудительно
+            // по текущему составу очереди.
+            UpdatePreview();
         }
 
         if (_whisperModelManager != null)

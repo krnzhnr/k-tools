@@ -269,6 +269,14 @@
                             <local:AccentBadge Text="{x:Bind CropBadgeText, Mode=OneWay}"
                                                ToolTipService.ToolTip="Автоматическая обрезка черных полос (Crop)"
                                                VerticalAlignment="Center"/>
+                            <local:AccentBadge Text="{x:Bind FrameRateBadgeText, Mode=OneWay}"
+                                               ToolTipService.ToolTip="Частота кадров видео"
+                                               AutomationProperties.Name="Частота кадров"
+                                               VerticalAlignment="Center"/>
+                            <local:AccentBadge Text="{x:Bind FrameModeBadgeText, Mode=OneWay}"
+                                               ToolTipService.ToolTip="Режим частоты кадров: постоянный (CFR) или переменный (VFR)"
+                                               AutomationProperties.Name="Режим частоты кадров"
+                                               VerticalAlignment="Center"/>
                         </StackPanel>
 
                         <!-- Кольцевой прогресс-бар и иконка статуса -->

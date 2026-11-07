@@ -1,6 +1,5 @@
 // -*- coding: utf-8 -*-
 using System;
-using System.Reflection;
 
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -61,6 +60,14 @@ public sealed class BackdropChangedMessage
     {
         NewBackdrop = newBackdrop;
     }
+}
+
+/// <summary>
+/// Сообщение для уведомления об изменении видимости пилюль очереди (FPS, CFR/VFR).
+/// Открытые списки файлов обновляют бейджики без перезахода на вкладку.
+/// </summary>
+public sealed class QueueBadgeVisibilityChangedMessage
+{
 }
 
 /// <summary>
@@ -217,6 +224,18 @@ public partial class SettingsViewModel : ThreadSafeViewModel
     public partial bool ShowLogsTab { get; set; }
 
     /// <summary>
+    /// Показывать ли в очереди пилюлю частоты кадров.
+    /// </summary>
+    [ObservableProperty]
+    public partial bool ShowFrameRateBadge { get; set; }
+
+    /// <summary>
+    /// Показывать ли в очереди пилюлю типа развёртки (CFR/VFR).
+    /// </summary>
+    [ObservableProperty]
+    public partial bool ShowFrameModeBadge { get; set; }
+
+    /// <summary>
     /// Путь к пользовательской директории хранения файлов журналов (логов).
     /// </summary>
     [ObservableProperty]
@@ -319,7 +338,7 @@ public partial class SettingsViewModel : ThreadSafeViewModel
         RenameRegexSearch = string.Empty;
         RenameRegexReplace = string.Empty;
 
-        CurrentVersionText = $"Версия {GetAppVersion()} (WinAppSDK / WinUI 3)";
+        CurrentVersionText = $"Версия {AppVersion.Resolve()} (WinAppSDK / WinUI 3)";
         DefaultLogDir = System.IO.Path.Combine(_pathManager.GetSettingsDirectory(), "logs");
 
         MaxParallelLimit = Environment.ProcessorCount;
@@ -359,6 +378,8 @@ public partial class SettingsViewModel : ThreadSafeViewModel
 
             ShowLogsTab = _settingsManager.ShowLogsTab;
             LogDir = _settingsManager.LogDir;
+            ShowFrameRateBadge = _settingsManager.ShowFrameRateBadge;
+            ShowFrameModeBadge = _settingsManager.ShowFrameModeBadge;
 
             AutoCheckUpdates = _settingsManager.AutoCheckUpdates;
             ShowWhatsNewAfterUpdate = _settingsManager.ShowWhatsNewAfterUpdate;
@@ -467,6 +488,26 @@ public partial class SettingsViewModel : ThreadSafeViewModel
 
         WeakReferenceMessenger.Default.Send(
             new LogsTabVisibilityChangedMessage(value));
+    }
+
+    partial void OnShowFrameRateBadgeChanged(bool value)
+    {
+        if (!_isApplyingManagerState)
+        {
+            CommitSetting("General", "ShowFrameRateBadge", value, "Пилюля частоты кадров");
+        }
+
+        WeakReferenceMessenger.Default.Send(new QueueBadgeVisibilityChangedMessage());
+    }
+
+    partial void OnShowFrameModeBadgeChanged(bool value)
+    {
+        if (!_isApplyingManagerState)
+        {
+            CommitSetting("General", "ShowFrameModeBadge", value, "Пилюля типа развёртки");
+        }
+
+        WeakReferenceMessenger.Default.Send(new QueueBadgeVisibilityChangedMessage());
     }
 
     partial void OnAutoCheckUpdatesChanged(bool value)
@@ -718,6 +759,8 @@ public partial class SettingsViewModel : ThreadSafeViewModel
             new("General/RenameCaseSensitive", false),
             new("General/SearchTemplates", SettingsDefaults.GetDefaultSearchTemplates()),
             new("General/ReplaceTemplates", SettingsDefaults.GetDefaultReplaceTemplates()),
+            new("General/ShowFrameRateBadge", false),
+            new("General/ShowFrameModeBadge", false),
             new("Logging/ShowLogsTab", false),
             new("Logging/LogDir", string.Empty),
             new("Updates/AutoCheckUpdates", true),
@@ -749,6 +792,8 @@ public partial class SettingsViewModel : ThreadSafeViewModel
             SelectedBackdropIndex = 0;
             ShowLogsTab = false;
             LogDir = string.Empty;
+            ShowFrameRateBadge = false;
+            ShowFrameModeBadge = false;
             AutoCheckUpdates = true;
             ShowWhatsNewAfterUpdate = true;
             IncludePreReleases = true;
@@ -925,25 +970,12 @@ public partial class SettingsViewModel : ThreadSafeViewModel
     }
 
     /// <summary>
-    /// Возвращает информационную версию текущей сборки приложения из метаданных сборки.
+    /// Возвращает информационную версию текущей сборки приложения.
+    /// Делегирует чтение единому источнику <see cref="AppVersion"/>.
     /// </summary>
-    private string GetAppVersion()
+    private static string GetAppVersion()
     {
-        try
-        {
-            var assembly = Assembly.GetExecutingAssembly();
-            var infoVersion = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
-            if (!string.IsNullOrEmpty(infoVersion))
-            {
-                int plusIdx = infoVersion.IndexOf('+');
-                return plusIdx > 0 ? infoVersion.Substring(0, plusIdx) : infoVersion;
-            }
-            return assembly.GetName().Version?.ToString() ?? "2.0.0";
-        }
-        catch
-        {
-            return "2.0.0";
-        }
+        return AppVersion.Resolve();
     }
 
     /// <summary>
@@ -979,7 +1011,7 @@ public partial class SettingsViewModel : ThreadSafeViewModel
             + "### Добавлено\n"
             + "1. Окно «Что нового» с анимированной шапкой.\n"
             + "2. Случайный выбор сцены из коллекции ascii.rest.\n"
-            + "3. Кнопка «Другая анимация» прямо в шапке окна.\n"
+            + "3. Стрелки листания анимаций вперёд и назад прямо в шапке окна.\n"
             + "4. Заглушка-градиент при отсутствии сети.\n"
             + "### Изменено\n"
             + "1. Демонстрационный порядок секций для проверки прокрутки.\n"

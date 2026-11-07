@@ -1,4 +1,4 @@
-﻿// -*- coding: utf-8 -*-
+// -*- coding: utf-8 -*-
 using System;
 
 using KTools_App.Core;
@@ -8,7 +8,6 @@ using KTools_App.ViewModels;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Input;
 
 namespace KTools_App.UI.Pages;
 
@@ -33,37 +32,12 @@ public sealed partial class HomePage : Page
     }
 
     /// <summary>
-    /// Обработчик наведения указателя мыши на карточку скрипта.
-    /// Добавляет визуальный эффект Fluent-дизайна (изменение непрозрачности).
-    /// </summary>
-    private void Card_PointerEntered(object sender, PointerRoutedEventArgs e)
-    {
-        if (sender is Border border)
-        {
-            border.Opacity = 0.8;
-        }
-    }
-
-    /// <summary>
-    /// Обработчик ухода указателя мыши с карточки скрипта.
-    /// Возвращает исходную непрозрачность карточки.
-    /// </summary>
-    private void Card_PointerExited(object sender, PointerRoutedEventArgs e)
-    {
-        if (sender is Border border &&
-            border.Tag is ScriptInfo scriptInfo)
-        {
-            border.Opacity = scriptInfo.CardOpacity;
-        }
-    }
-
-    /// <summary>
     /// Обработчик клика по карточке скрипта.
     /// Выполняет переход к экрану выполнения скрипта через службу навигации.
     /// </summary>
-    private void Card_Tapped(object sender, TappedRoutedEventArgs e)
+    private void Card_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is Border border && border.Tag is ScriptInfo scriptInfo)
+        if (sender is Button button && button.DataContext is ScriptInfo scriptInfo)
         {
             ViewModel.NavigateToScriptCommand.Execute(scriptInfo);
         }

@@ -10,12 +10,13 @@
     x:DataType="viewmodels:MainViewModel"
     mc:Ignorable="d">
 
-    <Grid x:Name="RootGrid" IsTabStop="True" PointerPressed="RootGrid_PointerPressed">
+    <Grid x:Name="RootGrid" IsTabStop="True">
         <!-- Главное меню навигации приложения -->
         <NavigationView x:Name="NavView"
                          PaneDisplayMode="Left"
                          IsPaneOpen="False"
                          IsBackButtonVisible="Collapsed"
+                         IsPaneToggleButtonVisible="False"
                          AlwaysShowHeader="False"
                          Loaded="NavView_Loaded"
                          SelectionChanged="NavView_SelectionChanged"
@@ -193,49 +194,14 @@
                                HorizontalAlignment="Left" />
                 </StackPanel>
 
-                <!-- Область отображения дочерних страниц и баннера обновлений -->
+                <!-- Область отображения дочерних страниц (пилюля обновления живёт в TitleBar) -->
                 <Grid Grid.Row="1">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="*" />
-                    </Grid.RowDefinitions>
-
-                    <!-- Плашка об обновлении на главном экране -->
-                    <InfoBar
-                        Grid.Row="0"
-                        x:Name="MainUpdateInfoBar"
-                        Severity="Success"
-                        IsOpen="{x:Bind ViewModel.IsUpdateBannerVisible, Mode=OneWay}"
-                        Visibility="{x:Bind ViewModel.IsUpdateBannerVisible, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
-                        IsClosable="True"
-                        CloseButtonClick="MainUpdateInfoBar_CloseButtonClick"
-                        Margin="36,4,36,12">
-                        <InfoBar.Content>
-                            <Grid Margin="0,0,0,0">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
-                                <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,4,16,4">
-                                    <TextBlock Text="{x:Bind ViewModel.UpdateStatusText, Mode=OneWay}" FontWeight="SemiBold" FontSize="14" />
-                                    <TextBlock Text="{x:Bind ViewModel.NewUpdateInfo.Title, Mode=OneWay}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
-                                </StackPanel>
-                                <Button
-                                    Grid.Column="1"
-                                    Command="{x:Bind ViewModel.GoToUpdateCommand}"
-                                    Content="Обновиться"
-                                    Style="{ThemeResource AccentButtonStyle}"
-                                    VerticalAlignment="Center" />
-                            </Grid>
-                        </InfoBar.Content>
-                    </InfoBar>
-
                     <!--
                         В WinUI 3 Frame не имеет перехода по умолчанию, поэтому анимация
                         навигации задается явно: плавное появление содержимого при переходах
                         между главной страницей, логами, настройками и рабочей панелью.
                     -->
-                    <Frame x:Name="ContentFrame" Grid.Row="1" Margin="0">
+                    <Frame x:Name="ContentFrame" Margin="0">
                         <Frame.ContentTransitions>
                             <TransitionCollection>
                                 <NavigationThemeTransition />

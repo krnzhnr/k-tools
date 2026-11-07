@@ -9,11 +9,14 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 
+using CommunityToolkit.Mvvm.Messaging;
+
 using KTools_App.Core;
 using KTools_App.Diagnostics;
 using KTools_App.Infrastructure;
 using KTools_App.Scripts;
 using KTools_App.Services.Contracts;
+using KTools_App.ViewModels;
 
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
@@ -466,6 +469,12 @@ public sealed partial class FileListControl : UserControl
         DownloaderListView.ItemsSource = _files;
         UpdateEmptyState();
         CheckAdministratorStatus();
+
+        // Пилюли FPS/CFR-VFR переключаются из персонализации, пока список открыт:
+        // обновляем бейджики живым сообщением, не дожидаясь возврата на вкладку.
+        WeakReferenceMessenger.Default.Register<FileListControl, QueueBadgeVisibilityChangedMessage>(
+            this,
+            (r, m) => r._dispatcherQueue.TryEnqueue(r.NotifyBadgeSettingsChanged));
     }
 
     /// <summary>
@@ -549,6 +558,17 @@ public sealed partial class FileListControl : UserControl
         foreach (var item in Files)
         {
             item.NotifySubtitlesSettingChanged();
+        }
+    }
+
+    /// <summary>
+    /// Оповещает все элементы в очереди об изменении настроек отображения пилюль FPS и CFR/VFR.
+    /// </summary>
+    public void NotifyBadgeSettingsChanged()
+    {
+        foreach (var item in Files)
+        {
+            item.NotifyBadgeSettingsChanged();
         }
     }
 

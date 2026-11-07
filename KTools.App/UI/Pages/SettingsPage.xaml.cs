@@ -32,6 +32,8 @@ public partial class SettingsPage : Page
     private List<TemplateItem> _searchTemplates = new();
     private List<TemplateItem> _replaceTemplates = new();
     private DispatcherTimer? _helpFlyoutRebuildTimer;
+    private bool _scrollToUpdatesPending;
+    private bool _templatesRefreshQueued;
 
     /// <summary>
     /// Предоставляет доступ к модели представления страницы настроек.
@@ -47,9 +49,16 @@ public partial class SettingsPage : Page
         InitializeComponent();
         this.Loaded += SettingsPage_Loaded;
 
-        // Сброс фокуса при клике на свободную область страницы
+        // Сброс фокуса только при клике по свободной области страницы.
+        // OriginalSource клика в поле ввода — внутренний элемент шаблона TextBox,
+        // поэтому проверяем всё визуальное дерево вверх, иначе поле сразу теряло бы фокус.
         this.PointerPressed += (s, e) =>
         {
+            if (FocusHelper.IsInsideTextInputElement(e.OriginalSource as DependencyObject))
+            {
+                return;
+            }
+
             this.IsTabStop = true;
             this.Focus(FocusState.Programmatic);
         };
@@ -57,25 +66,62 @@ public partial class SettingsPage : Page
 
     private void SettingsPage_Loaded(object sender, RoutedEventArgs e)
     {
-        LoadTemplatesUI();
+        if (_scrollToUpdatesPending)
+        {
+            _scrollToUpdatesPending = false;
+            UpdatesSection.StartBringIntoView(new BringIntoViewOptions
+            {
+                VerticalAlignmentRatio = 0.0
+            });
+        }
+
+        QueueTemplatesRefresh();
+    }
+
+    /// <summary>
+    /// Откладывает построение строк шаблонов за пределы перехода навигации:
+    /// Frame.Navigate завершается и анимация стартует до тяжёлой работы,
+    /// поэтому затуп между кликом и появлением страницы исчезает.
+    /// </summary>
+    private void QueueTemplatesRefresh()
+    {
+        if (_templatesRefreshQueued)
+        {
+            return;
+        }
+
+        _templatesRefreshQueued = true;
+        bool enqueued = DispatcherQueue.TryEnqueue(
+            Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
+            () =>
+            {
+                _templatesRefreshQueued = false;
+                if (!IsLoaded)
+                {
+                    return;
+                }
+
+                LoadTemplatesUI();
+            });
+
+        if (!enqueued)
+        {
+            _templatesRefreshQueued = false;
+            LoadTemplatesUI();
+        }
     }
 
     /// <summary>
     /// Вызывается при навигации на страницу настроек.
-    /// Обрабатывает параметр навигации для скролла к блоку обновлений.
+    /// Запоминает запрос скролла к блоку обновлений: сам скролл выполняется
+    /// в Loaded, поэтому одноразовая подписка не накапливается при кэшировании.
     /// </summary>
     protected override void OnNavigatedTo(Microsoft.UI.Xaml.Navigation.NavigationEventArgs e)
     {
         base.OnNavigatedTo(e);
         if (e.Parameter is string action && action == "scroll_to_updates")
         {
-            this.Loaded += (s, ev) =>
-            {
-                UpdatesSection.StartBringIntoView(new BringIntoViewOptions
-                {
-                    VerticalAlignmentRatio = 0.0
-                });
-            };
+            _scrollToUpdatesPending = true;
         }
     }
 
@@ -381,126 +427,38 @@ public partial class SettingsPage : Page
         if (ReplaceHelpButton != null) AttachReplaceHelpFlyout(ReplaceHelpButton);
     }
 
+    /// <summary>
+    /// Назначает кнопке лёгкую оболочку подсказки без содержимого: тяжёлое дерево
+    /// кнопок шаблонов строится только при открытии подсказки, а не при каждой
+    /// навигации на страницу.
+    /// </summary>
     private void AttachSearchHelpFlyout(Button button)
     {
         var flyout = new Flyout { Placement = Microsoft.UI.Xaml.Controls.Primitives.FlyoutPlacementMode.BottomEdgeAlignedRight };
-        var mainStack = new StackPanel { Spacing = 6, Width = 280 };
-
-        // Безопасное получение ресурсов темы с проверкой типа
-        Application.Current.Resources.TryGetValue("AccentTextFillColorPrimaryBrush", out var accentBrushObj);
-        var accentBrush = accentBrushObj as Microsoft.UI.Xaml.Media.Brush;
-        Application.Current.Resources.TryGetValue("TextFillColorSecondaryBrush", out var secondaryBrushObj);
-        var secondaryBrush = secondaryBrushObj as Microsoft.UI.Xaml.Media.Brush;
-
-        var title = new TextBlock
+        flyout.Opening += (s, e) =>
         {
-            Text = "Шаблоны поиска",
-            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-            FontSize = 14,
-            Margin = new Thickness(0, 0, 0, 4)
+            flyout.Content = BuildHelpFlyoutContent(isSearch: true);
         };
-        var desc = new TextBlock
-        {
-            Text = "Нажмите на шаблон, чтобы скопировать:",
-            FontSize = 12,
-            Margin = new Thickness(0, 0, 0, 8)
-        };
-        if (secondaryBrush != null) desc.Foreground = secondaryBrush;
-
-        mainStack.Children.Add(title);
-        mainStack.Children.Add(desc);
-
-        foreach (TemplateItem item in _searchTemplates)
-        {
-            if (string.IsNullOrEmpty(item.Pattern)) continue;
-
-            var rowGrid = new Grid { HorizontalAlignment = HorizontalAlignment.Stretch };
-            rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-
-            var insertBtn = new Button
-            {
-                Content = new FontIcon { Glyph = "\uE710", FontSize = 10 },
-                Width = 32,
-                Height = 32,
-                Margin = new Thickness(0, 0, 6, 0),
-                Padding = new Thickness(0),
-                VerticalAlignment = VerticalAlignment.Center
-            };
-            insertBtn.Click += (s, e) =>
-            {
-                RenameRegexSearchTextBox.Text += item.Pattern;
-                RenameRegexSearchTextBox.Focus(FocusState.Programmatic);
-            };
-            Grid.SetColumn(insertBtn, 0);
-            rowGrid.Children.Add(insertBtn);
-
-            var btn = new Button
-            {
-                HorizontalAlignment = HorizontalAlignment.Stretch,
-                HorizontalContentAlignment = HorizontalAlignment.Left,
-                Height = 32,
-                VerticalAlignment = VerticalAlignment.Center
-            };
-
-            var btnGrid = new Grid { HorizontalAlignment = HorizontalAlignment.Stretch };
-            var rowStack = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-            var patternText = new TextBlock
-            {
-                Text = item.Pattern,
-                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold
-            };
-            if (accentBrush != null) patternText.Foreground = accentBrush;
-            rowStack.Children.Add(patternText);
-            rowStack.Children.Add(new TextBlock { Text = string.IsNullOrEmpty(item.Description) ? "" : $"— {CleanDescription(item.Description)}", FontSize = 12 });
-
-            var copiedText = new TextBlock
-            {
-                Text = "Скопировано!",
-                FontSize = 12,
-                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
-                Visibility = Visibility.Collapsed
-            };
-            if (accentBrush != null) copiedText.Foreground = accentBrush;
-
-            btnGrid.Children.Add(rowStack);
-            btnGrid.Children.Add(copiedText);
-            btn.Content = btnGrid;
-
-            btn.Click += (s, e) =>
-            {
-                var dataPackage = new Windows.ApplicationModel.DataTransfer.DataPackage();
-                dataPackage.SetText(item.Pattern);
-                Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(dataPackage);
-
-                rowStack.Opacity = 0;
-                copiedText.Visibility = Visibility.Visible;
-
-                var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
-                timer.Tick += (s2, ev) =>
-                {
-                    copiedText.Visibility = Visibility.Collapsed;
-                    rowStack.Opacity = 1;
-                    timer.Stop();
-                };
-                timer.Start();
-            };
-
-            Grid.SetColumn(btn, 1);
-            rowGrid.Children.Add(btn);
-
-            mainStack.Children.Add(rowGrid);
-        }
-
-        flyout.Content = mainStack;
         button.Flyout = flyout;
     }
 
     private void AttachReplaceHelpFlyout(Button button)
     {
         var flyout = new Flyout { Placement = Microsoft.UI.Xaml.Controls.Primitives.FlyoutPlacementMode.BottomEdgeAlignedRight };
+        flyout.Opening += (s, e) =>
+        {
+            flyout.Content = BuildHelpFlyoutContent(isSearch: false);
+        };
+        button.Flyout = flyout;
+    }
+
+    /// <summary>
+    /// Строит содержимое подсказки со списком шаблонов для копирования и вставки.
+    /// Вызывается лениво при открытии подсказки.
+    /// </summary>
+    /// <param name="isSearch">Шаблоны поиска (true) или шаблоны замены (false).</param>
+    private StackPanel BuildHelpFlyoutContent(bool isSearch)
+    {
         var mainStack = new StackPanel { Spacing = 6, Width = 280 };
 
         // Безопасное получение ресурсов темы с проверкой типа
@@ -511,7 +469,7 @@ public partial class SettingsPage : Page
 
         var title = new TextBlock
         {
-            Text = "Переменные замены",
+            Text = isSearch ? "Шаблоны поиска" : "Переменные замены",
             FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
             FontSize = 14,
             Margin = new Thickness(0, 0, 0, 4)
@@ -527,7 +485,10 @@ public partial class SettingsPage : Page
         mainStack.Children.Add(title);
         mainStack.Children.Add(desc);
 
-        foreach (TemplateItem item in _replaceTemplates)
+        List<TemplateItem> templates = isSearch ? _searchTemplates : _replaceTemplates;
+        TextBox targetBox = isSearch ? RenameRegexSearchTextBox : RenameRegexReplaceTextBox;
+
+        foreach (TemplateItem item in templates)
         {
             if (string.IsNullOrEmpty(item.Pattern)) continue;
 
@@ -546,8 +507,8 @@ public partial class SettingsPage : Page
             };
             insertBtn.Click += (s, e) =>
             {
-                RenameRegexReplaceTextBox.Text += item.Pattern;
-                RenameRegexReplaceTextBox.Focus(FocusState.Programmatic);
+                targetBox.Text += item.Pattern;
+                targetBox.Focus(FocusState.Programmatic);
             };
             Grid.SetColumn(insertBtn, 0);
             rowGrid.Children.Add(insertBtn);
@@ -611,7 +572,6 @@ public partial class SettingsPage : Page
             mainStack.Children.Add(rowGrid);
         }
 
-        flyout.Content = mainStack;
-        button.Flyout = flyout;
+        return mainStack;
     }
 }

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Runtime.InteropServices;
 
 using CommunityToolkit.Mvvm.Messaging;
@@ -9,8 +10,10 @@ using KTools_App.Diagnostics;
 using KTools_App.Services.Contracts;
 using KTools_App.ViewModels;
 
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
 
 using Windows.Graphics;
 
@@ -104,6 +107,8 @@ public sealed partial class MainWindow : Window
     private readonly IDependencyManager _dependencyManager;
     private readonly IDialogService _dialogService;
     private readonly IScriptRegistry _scriptRegistry;
+    private readonly INavigationService _navigationService;
+    private MainViewModel? _updateViewModel;
     private bool _isForcedClose;
     private SizeInt32 _lastWindowSize;
     private PointInt32 _lastWindowPosition = new(WindowPlacementHelper.UnspecifiedPosition, WindowPlacementHelper.UnspecifiedPosition);
@@ -116,13 +121,15 @@ public sealed partial class MainWindow : Window
         ISettingsManager settingsManager,
         IDependencyManager dependencyManager,
         IDialogService dialogService,
-        IScriptRegistry scriptRegistry)
+        IScriptRegistry scriptRegistry,
+        INavigationService navigationService)
     {
         _logService = logService ?? throw new ArgumentNullException(nameof(logService));
         _settingsManager = settingsManager ?? throw new ArgumentNullException(nameof(settingsManager));
         _dependencyManager = dependencyManager ?? throw new ArgumentNullException(nameof(dependencyManager));
         _dialogService = dialogService ?? throw new ArgumentNullException(nameof(dialogService));
         _scriptRegistry = scriptRegistry ?? throw new ArgumentNullException(nameof(scriptRegistry));
+        _navigationService = navigationService ?? throw new ArgumentNullException(nameof(navigationService));
 
         try
         {
@@ -130,6 +137,7 @@ public sealed partial class MainWindow : Window
 
             ExtendsContentIntoTitleBar = true;
             SetTitleBar(AppTitleBar);
+            ConfigureTitleBar();
 
             // Установка иконки приложения в панель задач и настройка заголовка.
             try
@@ -473,6 +481,11 @@ public sealed partial class MainWindow : Window
                 try
                 {
                     AppWindow.Changed -= OnAppWindowChanged;
+                    _navigationService.Navigated -= OnNavigationServiceNavigated;
+                    if (_updateViewModel is not null)
+                    {
+                        _updateViewModel.PropertyChanged -= OnUpdateStateChanged;
+                    }
                 }
                 catch { }
 
@@ -828,6 +841,250 @@ public sealed partial class MainWindow : Window
         }
 
         return "Mica";
+    }
+
+    /// <summary>
+    /// Настраивает TitleBar главного окна: живой сабтайтл с версией,
+    /// высота Tall, синхронизация кнопки «Назад» с навигацией.
+    /// Панель переключается сообщением: самим NavigationView владеет MainPage.
+    /// </summary>
+    private void ConfigureTitleBar()
+    {
+        try
+        {
+            AppTitleBar.Subtitle = AppVersion.ToTitleSubtitle();
+        }
+        catch (Exception ex)
+        {
+            _logService.Write(
+                "window.titlebar.subtitle_failed",
+                LogLevel.Warning,
+                LogStatus.PartiallySucceeded,
+                "Сабтайтл с версией в заголовке окна не установлен, показан только заголовок",
+                ex,
+                SourceName,
+                properties: LogProps
+                    .Create("Stage", "titlebar_subtitle")
+                    .With("Control", "TitleBar")
+                    .With("ErrorCode", "subtitle-apply-failed"));
+        }
+
+        try
+        {
+            if (AppWindow.TitleBar is { } caption)
+            {
+                caption.PreferredHeightOption = TitleBarHeightOption.Tall;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logService.Write(
+                "window.titlebar.height_failed",
+                LogLevel.Warning,
+                LogStatus.PartiallySucceeded,
+                "Высота заголовка окна не переключена на Tall, применена стандартная высота",
+                ex,
+                SourceName,
+                properties: LogProps
+                    .Create("Stage", "titlebar_height")
+                    .With("Control", "TitleBar")
+                    .With("ErrorCode", "height-apply-failed"));
+        }
+
+        SyncTitleBarBackButton();
+        _navigationService.Navigated += OnNavigationServiceNavigated;
+        WireUpdatePill();
+    }
+
+    /// <summary>
+    /// Синхронизирует доступность кнопки «Назад» в TitleBar со стеком навигации.
+    /// Frame выставляется позже в MainPage, поэтому состояние обновляется
+    /// по каждому событию навигации, а не только в конструкторе.
+    /// </summary>
+    private void SyncTitleBarBackButton()
+    {
+        try
+        {
+            AppTitleBar.IsBackButtonEnabled = _navigationService.CanGoBack;
+        }
+        catch (Exception ex)
+        {
+            _logService.Write(
+                "window.titlebar.back_sync_failed",
+                LogLevel.Warning,
+                LogStatus.PartiallySucceeded,
+                "Состояние кнопки «Назад» в заголовке окна не синхронизировано с навигацией",
+                ex,
+                SourceName,
+                properties: LogProps
+                    .Create("Stage", "titlebar_back_sync")
+                    .With("Control", "TitleBar")
+                    .With("ErrorCode", "back-sync-failed"));
+        }
+    }
+
+    /// <summary>
+    /// Обновляет кнопку «Назад» после каждой завершённой навигации.
+    /// Маршалится в UI-поток: событие может прийти из службы навигации.
+    /// </summary>
+    private void OnNavigationServiceNavigated(object? sender, string pageName)
+    {
+        try
+        {
+            DispatcherQueue.TryEnqueue(SyncTitleBarBackButton);
+        }
+        catch (Exception ex)
+        {
+            _logService.Write(
+                "window.titlebar.back_sync_failed",
+                LogLevel.Warning,
+                LogStatus.PartiallySucceeded,
+                "Состояние кнопки «Назад» в заголовке окна не обновлено после навигации",
+                ex,
+                SourceName,
+                properties: LogProps
+                    .Create("Stage", "titlebar_back_sync")
+                    .With("Control", "TitleBar")
+                    .With("ErrorCode", "back-sync-enqueue-failed"));
+        }
+    }
+
+    /// <summary>
+    /// Клик по кнопке «Назад» в TitleBar: возврат по стеку навигации.
+    /// </summary>
+    private void AppTitleBar_BackRequested(TitleBar sender, object args)
+    {
+        if (_navigationService.CanGoBack)
+        {
+            _logService.Write(
+                "ui.titlebar.back_pressed",
+                LogLevel.Debug,
+                LogStatus.Changed,
+                "Нажата кнопка «Назад» в заголовке окна",
+                source: SourceName,
+                properties: LogProps.Create("Control", "TitleBar"));
+            _navigationService.GoBack();
+        }
+    }
+
+    /// <summary>
+    /// Клик по кнопке панели в TitleBar: переключение NavigationView.
+    /// Сам элемент живёт в MainPage, поэтому отправляется сообщение.
+    /// </summary>
+    private void AppTitleBar_PaneToggleRequested(TitleBar sender, object args)
+    {
+        _logService.Write(
+            "ui.titlebar.pane_pressed",
+            LogLevel.Debug,
+            LogStatus.Changed,
+            "Нажата кнопка панели в заголовке окна",
+            source: SourceName,
+            properties: LogProps.Create("Control", "TitleBar"));
+        WeakReferenceMessenger.Default.Send(new ToggleNavigationPaneMessage());
+    }
+
+    /// <summary>
+    /// Подключает пилюлю обновления к состоянию MainViewModel.
+    /// Пилюля читает то же состояние, что читал удалённый баннер главной
+    /// страницы (IsUpdatePillVisible + NewUpdateInfo), второй источник не заводится.
+    /// </summary>
+    private void WireUpdatePill()
+    {
+        try
+        {
+            _updateViewModel = App.Services.GetRequiredService<MainViewModel>();
+            _updateViewModel.PropertyChanged += OnUpdateStateChanged;
+            SyncUpdatePill();
+        }
+        catch (Exception ex)
+        {
+            _logService.Write(
+                "window.titlebar.update_wire_failed",
+                LogLevel.Warning,
+                LogStatus.PartiallySucceeded,
+                "Пилюля обновления в заголовке окна не подключена к состоянию, обновления не показываются",
+                ex,
+                SourceName,
+                properties: LogProps
+                    .Create("Stage", "titlebar_update_wire")
+                    .With("Control", "TitleBar")
+                    .With("ErrorCode", "update-wire-failed"));
+        }
+    }
+
+    /// <summary>
+    /// Обновляет пилюлю при изменении состояния обновлений.
+    /// Маршалится в UI-поток: свойство может меняться в фоновой проверке.
+    /// </summary>
+    private void OnUpdateStateChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(MainViewModel.IsUpdatePillVisible)
+            or nameof(MainViewModel.NewUpdateInfo)
+            or nameof(MainViewModel.UpdateStatusText))
+        {
+            try
+            {
+                DispatcherQueue.TryEnqueue(SyncUpdatePill);
+            }
+            catch (Exception ex)
+            {
+                _logService.Write(
+                    "window.titlebar.update_sync_failed",
+                    LogLevel.Warning,
+                    LogStatus.PartiallySucceeded,
+                    "Пилюля обновления в заголовке окна не обновлена",
+                    ex,
+                    SourceName,
+                    properties: LogProps
+                        .Create("Stage", "titlebar_update_sync")
+                        .With("Control", "TitleBar")
+                        .With("ErrorCode", "update-sync-enqueue-failed"));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Применяет состояние обновлений к пилюле: видимость, версия, подсказка.
+    /// Выполняется строго в UI-потоке.
+    /// </summary>
+    private void SyncUpdatePill()
+    {
+        MainViewModel? viewModel = _updateViewModel;
+        if (viewModel is null)
+        {
+            UpdatePillHost.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        bool visible = viewModel.IsUpdatePillVisible;
+        UpdatePillHost.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        if (!visible)
+        {
+            return;
+        }
+
+        string? version = viewModel.NewUpdateInfo?.Version;
+        UpdatePillText.Text = string.IsNullOrEmpty(version)
+            ? "Доступно обновление"
+            : $"Обновление {version}";
+
+        string status = viewModel.UpdateStatusText;
+        UpdatePillToolTip.Content = string.IsNullOrEmpty(status)
+            ? UpdatePillText.Text
+            : status;
+    }
+
+    /// <summary>
+    /// Клик по пилюле: то же действие, что бывшая кнопка «Обновиться» —
+    /// переход в настройки и запуск установки через GoToUpdateCommand.
+    /// Логирует сама команда, дублировать событие не нужно.
+    /// </summary>
+    private void UpdatePillButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_updateViewModel?.GoToUpdateCommand.CanExecute(null) == true)
+        {
+            _updateViewModel.GoToUpdateCommand.Execute(null);
+        }
     }
 
     /// <summary>
