@@ -427,4 +427,196 @@ public class FrameRateBadgeTests
         recorder.GetEventsFor(nameof(FileQueueItem.IsVariableFrameRate)).Should().HaveCount(1);
         recorder.Detach();
     }
+
+    /// <summary>
+    /// Замер около стандарта пишется как есть, без подмены номиналом: 24,0006 даёт 24,001 FPS.
+    /// </summary>
+    [TestMethod]
+    public void FormatFrameRateBadge_NearStandardCfr_ShowsMeasuredValue()
+    {
+        // Arrange
+        var track = new MediaTrack { TrackType = "video", FrameRate = 24.0006, IsVariableFrameRate = false };
+
+        // Act
+        string? fpsText = FileQueueItem.FormatFrameRateBadge(track);
+
+        // Assert
+        fpsText.Should().Be("24,001 FPS");
+    }
+
+    /// <summary>
+    /// Дробный CFR пишется как есть: 23,97648 даёт 23,976 FPS.
+    /// </summary>
+    [TestMethod]
+    public void FormatFrameRateBadge_FractionalCfr_ShowsMeasuredValue()
+    {
+        // Arrange
+        var track = new MediaTrack { TrackType = "video", FrameRate = 23.97648, IsVariableFrameRate = false };
+
+        // Act
+        string? fpsText = FileQueueItem.FormatFrameRateBadge(track);
+
+        // Assert
+        fpsText.Should().Be("23,976 FPS");
+    }
+
+    /// <summary>
+    /// Нестандартный CFR пишется как есть, без замены на похожий стандарт.
+    /// </summary>
+    [TestMethod]
+    public void FormatFrameRateBadge_NonStandardCfr_KeepsAsIs()
+    {
+        // Arrange
+        var track = new MediaTrack { TrackType = "video", FrameRate = 24.01, IsVariableFrameRate = false };
+
+        // Act
+        string? fpsText = FileQueueItem.FormatFrameRateBadge(track);
+
+        // Assert
+        fpsText.Should().Be("24,01 FPS");
+    }
+
+    /// <summary>
+    /// Околостандартный VFR не снапится: показывает среднее как есть с тильдой.
+    /// </summary>
+    [TestMethod]
+    public void FormatFrameRateBadge_NearStandardVfr_KeepsRawWithTilde()
+    {
+        // Arrange
+        var track = new MediaTrack { TrackType = "video", FrameRate = 932832.0 / 38867.0, IsVariableFrameRate = true };
+
+        // Act
+        string? fpsText = FileQueueItem.FormatFrameRateBadge(track);
+
+        // Assert
+        fpsText.Should().Be("~24,001 FPS");
+    }
+
+    /// <summary>
+    /// Текстовая строка объединяет оба сегмента разделителем « · ».
+    /// </summary>
+    [TestMethod]
+    public void FormatFrameRateLine_BothSegments_JoinsWithSeparator()
+    {
+        // Arrange
+        var track = new MediaTrack { TrackType = "video", FrameRate = 24000.0 / 1001.0, IsVariableFrameRate = false };
+
+        // Act
+        string? line = FileQueueItem.FormatFrameRateLine(track, showFps: true, showMode: true);
+
+        // Assert
+        line.Should().Be("23,976 FPS · CFR");
+    }
+
+    /// <summary>
+    /// Текстовая строка с одним включённым сегментом показывает только его, без разделителя.
+    /// </summary>
+    [TestMethod]
+    public void FormatFrameRateLine_OnlyFps_ReturnsSingleSegment()
+    {
+        // Arrange
+        var track = new MediaTrack { TrackType = "video", FrameRate = 25.0, IsVariableFrameRate = false };
+
+        // Act
+        string? line = FileQueueItem.FormatFrameRateLine(track, showFps: true, showMode: false);
+
+        // Assert
+        line.Should().Be("25 FPS");
+    }
+
+    /// <summary>
+    /// Текстовая строка с одним включённым сегментом режима показывает только его.
+    /// </summary>
+    [TestMethod]
+    public void FormatFrameRateLine_OnlyMode_ReturnsSingleSegment()
+    {
+        // Arrange
+        var track = new MediaTrack { TrackType = "video", FrameRate = 25.0, IsVariableFrameRate = true };
+
+        // Act
+        string? line = FileQueueItem.FormatFrameRateLine(track, showFps: false, showMode: true);
+
+        // Assert
+        line.Should().Be("VFR");
+    }
+
+    /// <summary>
+    /// Текстовая строка без данных зонда возвращает null, ничего не выдумывает.
+    /// </summary>
+    [TestMethod]
+    public void FormatFrameRateLine_Unknown_ReturnsNull()
+    {
+        // Arrange
+        var track = new MediaTrack { TrackType = "video" };
+
+        // Act & Assert
+        FileQueueItem.FormatFrameRateLine(track, showFps: true, showMode: true).Should().BeNull();
+        FileQueueItem.FormatFrameRateLine(null, showFps: true, showMode: true).Should().BeNull();
+        FileQueueItem.FormatFrameRateLine(
+            new MediaTrack { TrackType = "video", FrameRate = 25.0, IsVariableFrameRate = false },
+            showFps: false,
+            showMode: false).Should().BeNull();
+    }
+
+    /// <summary>
+    /// Без зарегистрированных сервисов текстовая строка скрыта по умолчанию (режим «Скрыто»).
+    /// </summary>
+    [TestMethod]
+    public void FrameRateTextLine_WithoutServices_DefaultsToHidden()
+    {
+        // Arrange
+        var item = new FileQueueItem("C:\\video.mkv");
+        var structure = new MediaStructure { FilePath = "C:\\video.mkv" };
+        structure.Tracks.Add(new MediaTrack { TrackType = "video", FrameRate = 24000.0 / 1001.0, IsVariableFrameRate = false });
+
+        // Act
+        item.MediaInfo = structure;
+
+        // Assert
+        item.QueueBadgeMode.Should().Be(0);
+        item.FrameRateTextLine.Should().BeNull();
+        item.HasFrameRateTextLine.Should().BeFalse();
+    }
+
+    /// <summary>
+    /// Оповещение о смене настроек поднимает события текстовой строки для XAML.
+    /// </summary>
+    [TestMethod]
+    public void NotifyBadgeSettingsChanged_RaisesTextLineEvents()
+    {
+        // Arrange
+        var item = new FileQueueItem("C:\\video.mkv");
+        var recorder = new PropertyChangedRecorder(item);
+
+        // Act
+        item.NotifyBadgeSettingsChanged();
+
+        // Assert
+        recorder.GetEventsFor(nameof(FileQueueItem.QueueBadgeMode)).Should().HaveCount(1);
+        recorder.GetEventsFor(nameof(FileQueueItem.FrameRateTextLine)).Should().HaveCount(1,
+            "XAML текстовой строки привязан именно к FrameRateTextLine");
+        recorder.GetEventsFor(nameof(FileQueueItem.HasFrameRateTextLine)).Should().HaveCount(1);
+        recorder.Detach();
+    }
+
+    /// <summary>
+    /// Установка MediaInfo уведомляет и о текстовой строке, а не только о пилюлях.
+    /// </summary>
+    [TestMethod]
+    public void MediaInfo_SetValue_NotifiesFrameRateTextLine()
+    {
+        // Arrange
+        var item = new FileQueueItem("C:\\video.mkv");
+        var recorder = new PropertyChangedRecorder(item);
+        var structure = new MediaStructure { FilePath = "C:\\video.mkv" };
+        structure.Tracks.Add(new MediaTrack { TrackType = "video", FrameRate = 25.0, IsVariableFrameRate = false });
+
+        // Act
+        item.MediaInfo = structure;
+
+        // Assert
+        recorder.GetEventsFor(nameof(FileQueueItem.FrameRateTextLine)).Should().HaveCount(1);
+        recorder.GetEventsFor(nameof(FileQueueItem.HasFrameRateTextLine)).Should().HaveCount(1);
+        recorder.Detach();
+    }
 }

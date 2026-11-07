@@ -30,6 +30,20 @@ namespace KTools_App.ViewModels;
 public partial class WorkPanelViewModel : ThreadSafeViewModel
 {
     private const string SourceName = nameof(WorkPanelViewModel);
+
+    /// <summary>
+    /// Группа настроек для глобального выходного пути по умолчанию (ишью #42, глобальный скоуп).
+    /// Хранение напрямую через ISettingsManager без типизированных свойств.
+    /// </summary>
+    public const string DefaultOutputPathSettingsGroup = "General";
+
+    /// <summary>
+    /// Ключ глобального выходного пути по умолчанию в настройках.
+    /// Один запоминаемый путь для всех скриптов (индивидуально по скриптам — позже, не в этой волне).
+    /// </summary>
+    public const string DefaultOutputPathSettingsKey = "DefaultOutputPath";
+
+    private bool _isRestoringOutputPath;
     private readonly INavigationService _navigationService;
     private readonly IDialogService _dialogService;
     private readonly ISettingsManager _settingsManager;
@@ -146,9 +160,43 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
 
     /// <summary>
     /// Пользовательский путь для сохранения обработанных файлов.
+    /// Смена значения (обзор, перетаскивание, ручной ввод) сохраняется в настройки,
+    /// очистка поля затирает сохранённое значение.
     /// </summary>
     [ObservableProperty]
     public partial string OutputPath { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Сохраняет смену выходного пути в глобальные настройки (ишью #42).
+    /// Во время восстановления из настроек запись пропускается, чтобы временная
+    /// недоступность папки (сеть, отключённый диск) не стирала сохранённое значение.
+    /// </summary>
+    partial void OnOutputPathChanged(string value)
+    {
+        string path = value ?? string.Empty;
+        if (ActiveScript != null)
+        {
+            ActiveScript.SavedOutputPath = path;
+        }
+
+        if (_isRestoringOutputPath)
+        {
+            return;
+        }
+
+        PersistOutputPath(path);
+    }
+
+    /// <summary>
+    /// Записывает выходной путь в глобальные настройки напрямую через ISettingsManager.
+    /// Пустое значение затирает сохранённое. Несуществующие пути на записи не отбрасываются:
+    /// проверка существования выполняется только при восстановлении.
+    /// </summary>
+    private void PersistOutputPath(string? value)
+    {
+        string normalized = string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
+        _settingsManager.SetSetting(DefaultOutputPathSettingsGroup, DefaultOutputPathSettingsKey, normalized);
+    }
 
     /// <summary>
     /// Динамический текст плейсхолдера для поля выбора выходного пути.
@@ -350,13 +398,53 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
         }
 
         LogText = ActiveScript.SavedLogText ?? string.Empty;
-        OutputPath = ActiveScript.SavedOutputPath ?? string.Empty;
+        RestoreGlobalOutputPath(ActiveScript);
 
         StatusText =
             ActiveScript.SavedStatusText ?? "Ожидание запуска...";
         GlobalProgressValue = ActiveScript.SavedGlobalProgress;
         IsProcessing = ActiveScript.IsProcessing;
         IsStartButtonEnabled = !IsProcessing && CheckDependencies();
+    }
+
+    /// <summary>
+    /// Восстанавливает глобальный выходной путь из настроек (ишью #42).
+    /// Сохранённой папки больше нет — молча откат к дефолту без подстановки битого пути.
+    /// Запись отсутствует (первый запуск) — прежнее поведение в памяти скрипта.
+    /// Явная очистка (пустая строка) — дефолт без воскрешения из памяти.
+    /// </summary>
+    private void RestoreGlobalOutputPath(AbstractScript script)
+    {
+        string? persisted = _settingsManager.GetSetting<string?>(
+            DefaultOutputPathSettingsGroup,
+            DefaultOutputPathSettingsKey,
+            null);
+
+        string restored;
+        if (!string.IsNullOrWhiteSpace(persisted))
+        {
+            restored = Directory.Exists(persisted) ? persisted : string.Empty;
+        }
+        else if (persisted is null)
+        {
+            restored = script.SavedOutputPath ?? string.Empty;
+        }
+        else
+        {
+            restored = string.Empty;
+        }
+
+        _isRestoringOutputPath = true;
+        try
+        {
+            OutputPath = restored;
+        }
+        finally
+        {
+            _isRestoringOutputPath = false;
+        }
+
+        script.SavedOutputPath = restored;
     }
 
     /// <summary>
@@ -382,6 +470,7 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
             }
 
             script.SavedOutputPath = OutputPath;
+            PersistOutputPath(OutputPath);
         }
         finally
         {

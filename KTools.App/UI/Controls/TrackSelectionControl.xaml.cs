@@ -90,6 +90,55 @@ public sealed class TrackNodeItem
 }
 
 /// <summary>
+/// Персистентное состояние одноразовой подсказки о горизонтальной прокрутке фильтров.
+/// Факт показа хранится в настройках («General»/«DemuxScrollTipShown») и переживает
+/// пересоздание элемента управления и перезапуск приложения (ишью #77).
+/// </summary>
+public sealed class DemuxScrollTipTracker
+{
+    /// <summary>
+    /// Группа настройки с флагом показа подсказки.
+    /// Совпадает с группой, используемой «Сбросить настройки» для общих параметров.
+    /// </summary>
+    public const string SettingsGroup = "General";
+
+    /// <summary>
+    /// Ключ настройки с флагом показа подсказки.
+    /// Для сброса флага вместе с остальными настройками достаточно записи
+    /// «General/DemuxScrollTipShown» со значением false в набор сброса.
+    /// </summary>
+    public const string SettingsKey = "DemuxScrollTipShown";
+
+    private readonly ISettingsManager _settingsManager;
+
+    /// <summary>
+    /// Инициализирует трекер факта показа подсказки.
+    /// </summary>
+    /// <param name="settingsManager">Менеджер настроек для чтения и записи флага.</param>
+    public DemuxScrollTipTracker(ISettingsManager settingsManager)
+    {
+        _settingsManager = settingsManager ?? throw new ArgumentNullException(nameof(settingsManager));
+    }
+
+    /// <summary>
+    /// Проверяет, показывалась ли подсказка ранее.
+    /// </summary>
+    /// <returns>True, если факт показа уже сохранён в настройках.</returns>
+    public bool HasBeenShown()
+    {
+        return _settingsManager.GetSetting(SettingsGroup, SettingsKey, false);
+    }
+
+    /// <summary>
+    /// Запоминает факт показа подсказки в настройках.
+    /// </summary>
+    public void MarkAsShown()
+    {
+        _settingsManager.SetSetting(SettingsGroup, SettingsKey, true);
+    }
+}
+
+/// <summary>
 /// Пользовательский элемент управления для наглядного выбора извлекаемых дорожек
 /// и шрифтов на базе WinUI 3 TreeView в режиме множественного выбора.
 /// Все комментарии и логирование выполнены исключительно на русском языке.
@@ -128,6 +177,7 @@ public sealed partial class TrackSelectionControl : UserControl
     private bool _isResettingFilters;
     private bool _isUpdatingSelection;
     private bool _hasShownScrollTip;
+    private readonly DemuxScrollTipTracker _scrollTipTracker;
     private bool _isUnloaded;
     private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _rebuildTreeTimer;
 
@@ -135,6 +185,7 @@ public sealed partial class TrackSelectionControl : UserControl
     {
         ViewModel = App.Services.GetRequiredService<TrackSelectionViewModel>();
         _logService = App.Services.GetRequiredService<ILogService>();
+        _scrollTipTracker = new DemuxScrollTipTracker(App.Services.GetRequiredService<ISettingsManager>());
 
         InitializeComponent();
         Loaded += TrackSelectionControl_Loaded;
@@ -1769,6 +1820,8 @@ public sealed partial class TrackSelectionControl : UserControl
 
     /// <summary>
     /// Проверяет наличие переполнения панели фильтров и при необходимости показывает подсказку.
+    /// Подсказка показывается максимум один раз: факт показа сохраняется в настройках
+    /// и переживает пересоздание элемента управления и перезапуск приложения (ишью #77).
     /// </summary>
     private void CheckForFilterOverflow()
     {
@@ -1776,12 +1829,22 @@ public sealed partial class TrackSelectionControl : UserControl
         {
             if (_hasShownScrollTip) return;
 
+            // Персистентный флаг: подсказка уже показывалась в прошлых запусках.
+            if (_scrollTipTracker.HasBeenShown())
+            {
+                _hasShownScrollTip = true;
+                return;
+            }
+
             // Если панель видима и ширина кнопок превышает видимую ширину скроллера
             if (FiltersBorder.Visibility == Visibility.Visible &&
                 FilterButtonsStackPanel.ActualWidth > FilterScrollViewer.ActualWidth &&
                 FilterScrollViewer.ActualWidth > 0)
             {
+                // Флаг выставляется до показа, чтобы повторные события изменения
+                // размера не открывали подсказку дважды в текущем сеансе.
                 _hasShownScrollTip = true;
+                _scrollTipTracker.MarkAsShown();
                 FilterScrollTeachingTip.IsOpen = true;
                 _logService.Write(
                     "ui.track_filter.scroll_hint_shown",

@@ -453,15 +453,16 @@ public class SettingsViewModelTests
     }
 
     /// <summary>
-    /// Проверяет, что тумблер пилюли CFR/VFR сохраняется и рассылает обновление спискам очереди.
+    /// Проверяет, что смена режима отображения очереди сохраняется и рассылает обновление спискам очереди.
     /// </summary>
     [TestMethod]
-    public void ShowFrameModeBadge_ToggleChanged_PersistsAndNotifiesQueue()
+    public void QueueBadgeMode_Changed_PersistsAndNotifiesQueue()
     {
         // Arrange
         _settingsManagerMock
-            .Setup(m => m.SetSetting("General", "ShowFrameModeBadge", It.IsAny<bool>()))
-            .Returns<string, string, bool>((group, key, value) => PersistenceResult.Succeeded(new[] { group + "/" + key }));
+            .Setup(m => m.SetSetting("General", "QueueBadgeMode", It.IsAny<int>()))
+            .Returns<string, string, int>((group, key, value) => PersistenceResult.Succeeded(new[] { group + "/" + key }));
+        _settingsManagerMock.SetupGet(m => m.QueueBadgeMode).Returns(0);
         var viewModel = new SettingsViewModel(
             _settingsManagerMock.Object,
             _dialogServiceMock.Object,
@@ -478,19 +479,142 @@ public class SettingsViewModelTests
         try
         {
             // Act
-            viewModel.ShowFrameModeBadge = !viewModel.ShowFrameModeBadge;
+            viewModel.QueueBadgeMode = 2;
 
             // Assert
             _settingsManagerMock.Verify(
-                m => m.SetSetting("General", "ShowFrameModeBadge", viewModel.ShowFrameModeBadge),
+                m => m.SetSetting("General", "QueueBadgeMode", 2),
                 Times.Once,
-                "тумблер пилюли обязан сохраняться типизированным вызовом SetSetting");
+                "комбобокс режима обязан сохраняться типизированным вызовом SetSetting");
             received.Should().BeTrue(
-                "открытые списки очереди обязаны узнать о смене видимости пилюль без перезахода на вкладку");
+                "открытые списки очереди обязаны узнать о смене режима без перезахода на вкладку");
+            viewModel.IsQueueBadgeTogglesEnabled.Should().BeTrue(
+                "тумблеры состава активны во всех режимах, кроме «Скрыто»");
         }
         finally
         {
             WeakReferenceMessenger.Default.Unregister<QueueBadgeVisibilityChangedMessage>(recipient);
         }
+    }
+
+    /// <summary>
+    /// Проверяет, что тумблеры состава активны во всех режимах, кроме «Скрыто».
+    /// </summary>
+    [TestMethod]
+    public void IsQueueBadgeTogglesEnabled_ReflectsSelectedMode()
+    {
+        // Arrange
+        _settingsManagerMock.SetupGet(m => m.QueueBadgeMode).Returns(0);
+        _settingsManagerMock
+            .Setup(m => m.SetSetting("General", "QueueBadgeMode", It.IsAny<int>()))
+            .Returns<string, string, int>((group, key, value) => PersistenceResult.Succeeded(new[] { group + "/" + key }));
+        var viewModel = new SettingsViewModel(
+            _settingsManagerMock.Object,
+            _dialogServiceMock.Object,
+            _updateServiceMock.Object,
+            _logServiceMock.Object,
+            _pathManagerMock.Object,
+            _scriptRegistryMock.Object,
+            _dependencyManagerMock.Object,
+            Mock.Of<IInstallLocationService>());
+
+        // Act & Assert
+        viewModel.QueueBadgeMode.Should().Be(0);
+        viewModel.IsQueueBadgeTogglesEnabled.Should().BeFalse(
+            "в режиме «Скрыто» настраивать нечего, тумблеры заблокированы");
+
+        // Act
+        viewModel.QueueBadgeMode = 1;
+
+        // Assert
+        viewModel.IsQueueBadgeTogglesEnabled.Should().BeTrue();
+    }
+
+    /// <summary>
+    /// Проверяет, что сброс настроек возвращает флаг одноразовой подсказки разборки в false.
+    /// </summary>
+    [TestMethod]
+    public async Task ResetSettingsAsync_ResetsDemuxScrollTipFlag()
+    {
+        // Arrange
+        _dialogServiceMock
+            .Setup(m => m.ShowConfirmationAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
+            .ReturnsAsync(true);
+        _dialogServiceMock
+            .Setup(m => m.ShowMessageAsync(It.IsAny<string>(), It.IsAny<string>()))
+            .Returns(Task.CompletedTask);
+        _scriptRegistryMock.SetupGet(m => m.Scripts).Returns(new List<AbstractScript>());
+        IReadOnlyList<KeyValuePair<string, object?>>? captured = null;
+        _settingsManagerMock
+            .Setup(m => m.ResetToDefaults(It.IsAny<List<AbstractScript>>(), It.IsAny<IReadOnlyList<KeyValuePair<string, object?>>?>()))
+            .Callback<List<AbstractScript>, IReadOnlyList<KeyValuePair<string, object?>>?>((_, defaults) => captured = defaults)
+            .Returns(PersistenceResult.Succeeded());
+        var viewModel = new SettingsViewModel(
+            _settingsManagerMock.Object,
+            _dialogServiceMock.Object,
+            _updateServiceMock.Object,
+            _logServiceMock.Object,
+            _pathManagerMock.Object,
+            _scriptRegistryMock.Object,
+            _dependencyManagerMock.Object,
+            Mock.Of<IInstallLocationService>());
+
+        // Act
+        await viewModel.ResetSettingsCommand.ExecuteAsync(null);
+
+        // Assert
+        string tipKey = KTools_App.UI.Controls.DemuxScrollTipTracker.SettingsGroup
+            + "/"
+            + KTools_App.UI.Controls.DemuxScrollTipTracker.SettingsKey;
+        captured.Should().NotBeNull("сброс обязан передавать явный набор значений по умолчанию");
+        captured.Should().Contain(new KeyValuePair<string, object?>(tipKey, false),
+            "одноразовая подсказка разборки обязана показываться заново после сброса настроек");
+        captured.Should().Contain(new KeyValuePair<string, object?>("General/QueueBadgeMode", 0),
+            "режим очереди обязан возвращаться к скрытому после сброса настроек");
+    }
+
+    /// <summary>
+    /// Проверяет, что тумблер параллельной разборки сохраняется, а слайдер ограничен процессорами.
+    /// </summary>
+    [TestMethod]
+    public void EnableParallelDemux_ToggleChanged_Persists()
+    {
+        // Arrange
+        _settingsManagerMock
+            .Setup(m => m.SetSetting("General", "EnableParallelDemux", It.IsAny<bool>()))
+            .Returns<string, string, bool>((group, key, value) => PersistenceResult.Succeeded(new[] { group + "/" + key }));
+        _settingsManagerMock
+            .Setup(m => m.SetSetting("General", "MaxParallelDemuxTasks", It.IsAny<int>()))
+            .Returns<string, string, int>((group, key, value) => PersistenceResult.Succeeded(new[] { group + "/" + key }));
+        _settingsManagerMock.SetupGet(m => m.EnableParallelDemux).Returns(false);
+        _settingsManagerMock.SetupGet(m => m.MaxParallelDemuxTasks).Returns(2);
+        var viewModel = new SettingsViewModel(
+            _settingsManagerMock.Object,
+            _dialogServiceMock.Object,
+            _updateServiceMock.Object,
+            _logServiceMock.Object,
+            _pathManagerMock.Object,
+            _scriptRegistryMock.Object,
+            _dependencyManagerMock.Object,
+            Mock.Of<IInstallLocationService>());
+
+        // Act & Assert
+        viewModel.EnableParallelDemux.Should().BeFalse("многопоточная разборка по умолчанию выключена");
+        viewModel.MaxParallelDemuxLimit.Should().Be(Environment.ProcessorCount);
+        viewModel.MaxParallelDemuxTasks.Should().Be(2);
+
+        // Act
+        viewModel.EnableParallelDemux = true;
+        viewModel.MaxParallelDemuxTasks = 3;
+
+        // Assert
+        _settingsManagerMock.Verify(
+            m => m.SetSetting("General", "EnableParallelDemux", true),
+            Times.Once,
+            "тумблер разборки обязан сохраняться типизированным вызовом SetSetting");
+        _settingsManagerMock.Verify(
+            m => m.SetSetting("General", "MaxParallelDemuxTasks", 3),
+            Times.Once,
+            "слайдер потоков разборки обязан сохраняться типизированным вызовом SetSetting");
     }
 }

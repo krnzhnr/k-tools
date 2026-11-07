@@ -183,6 +183,25 @@ public sealed class SettingsManager : ISettingsManager
     }
 
     /// <summary>
+    /// Максимальное количество одновременных потоков разборки контейнера.
+    /// </summary>
+    public int MaxParallelDemuxTasks
+    {
+        get => GetSetting("General", "MaxParallelDemuxTasks", Math.Max(1, Environment.ProcessorCount / 2));
+        set => SetSetting("General", "MaxParallelDemuxTasks", value);
+    }
+
+    /// <summary>
+    /// Разрешить ли параллельную разборку контейнеров очереди.
+    /// По умолчанию выключена: параллельный demux — опция для быстрых дисков.
+    /// </summary>
+    public bool EnableParallelDemux
+    {
+        get => GetSetting("General", "EnableParallelDemux", false);
+        set => SetSetting("General", "EnableParallelDemux", value);
+    }
+
+    /// <summary>
     /// Очищать ли очередь перед добавлением новых файлов.
     /// </summary>
     public bool ClearListOnAdd
@@ -207,6 +226,16 @@ public sealed class SettingsManager : ISettingsManager
     {
         get => GetSetting("General", "ShowFrameModeBadge", false);
         set => SetSetting("General", "ShowFrameModeBadge", value);
+    }
+
+    /// <summary>
+    /// Режим отображения FPS и CFR/VFR в строке очереди:
+    /// 0 — скрыто, 1 — пилюли, 2 — текстовой строкой.
+    /// </summary>
+    public int QueueBadgeMode
+    {
+        get => GetSetting("General", "QueueBadgeMode", 0);
+        set => SetSetting("General", "QueueBadgeMode", value);
     }
 
     /// <summary>
@@ -1951,6 +1980,14 @@ public sealed class SettingsManager : ISettingsManager
             {
                 applied++;
             }
+            if (SetDefaultIfMissing("General", "MaxParallelDemuxTasks", Math.Max(1, Environment.ProcessorCount / 2)))
+            {
+                applied++;
+            }
+            if (SetDefaultIfMissing("General", "EnableParallelDemux", false))
+            {
+                applied++;
+            }
             if (SetDefaultIfMissing("General", "ClearListOnAdd", false))
             {
                 applied++;
@@ -1960,6 +1997,10 @@ public sealed class SettingsManager : ISettingsManager
                 applied++;
             }
             if (SetDefaultIfMissing("General", "ShowFrameModeBadge", false))
+            {
+                applied++;
+            }
+            if (SetDefaultIfMissing("General", "QueueBadgeMode", 0))
             {
                 applied++;
             }

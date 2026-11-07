@@ -402,30 +402,18 @@ public sealed class VideoEncodingScript : AbstractScript
             ),
 
             // --- Вкладка: Субтитры ---
+            // Главный тумблер вшивания всегда виден; вторичные параметры скрыты при выключенном Burn-in,
+            // продвинутые (поиск дорожек, чистка тегов) убраны в свёрнутый по умолчанию экспандер,
+            // чтобы сырые ASS-теги не показывались пользователю в открытом виде.
             new SettingField(
                 "burn_in_subtitles",
                 "Вшивать найденные надписи в видеоряд (Burn-in)",
                 SettingType.Checkbox,
                 true,
                 "Субтитры",
+                comment: "Надписи вшиваются поверх кадра и становятся частью видеоряда. При выключении дорожки сохраняются отдельно, кодирование идёт без вшивания.",
                 column: 0,
                 colSpan: 2
-            ),
-            new SettingField(
-                "sub_keywords",
-                "Поиск надписей",
-                SettingType.KeywordList,
-                new List<Dictionary<string, object>>
-                {
-                    new() { { "word", "Надписи" }, { "active", true } }
-                },
-                "Субтитры",
-                column: 0,
-                colSpan: 2,
-                visibilityConditions: new List<SettingVisibilityCondition>
-                {
-                    new("burn_in_subtitles", "True")
-                }
             ),
             new SettingField(
                 "sub_not_found_action",
@@ -438,29 +426,61 @@ public sealed class VideoEncodingScript : AbstractScript
                     "Пропускать хардсаб",
                     "Спрашивать"
                 },
+                comment: "«Пропускать хардсаб» — кодировать видео без надписей. «Спрашивать» — показать диалог ручного выбора дорожки субтитров.",
                 column: 0,
-                colSpan: 2,
+                colSpan: 1,
                 visibilityConditions: new List<SettingVisibilityCondition>
                 {
                     new("burn_in_subtitles", "True")
                 }
             ),
             new SettingField(
-                "strip_keywords",
-                "Удалять теги оформления субтитров",
-                SettingType.KeywordList,
-                new List<Dictionary<string, object>>
-                {
-                    new() { { "word", @"{\fad(500,500)\b1\an3\fnTahoma\fs50\shad3\bord1.3\4c&H000000&\4a&H00&}" }, { "active", false } },
-                    new() { { "word", @"{\fad(500,500)\b1\an3\fnTahoma\fs16.667\shad1\bord0.433\4c&H000000&\4a&H00&}" }, { "active", false } },
-                    new() { { "word", @"{\fad(500,500)\b1\an3\fnTahoma\fs100\shad6\bord2.6\4c&H000000&\4a&H00&}" }, { "active", false } }
-                },
+                "sub_advanced_options",
+                "Поиск и очистка надписей",
+                SettingType.Expander,
+                null,
                 "Субтитры",
-                column: 0,
-                colSpan: 2,
+                comment: "Продвинутые параметры: какие дорожки считать надписями и какие технические теги оформления вырезать перед вшиванием. Обычным пользователям менять не требуется.",
+                headerIconGlyph: "\uE713",
                 visibilityConditions: new List<SettingVisibilityCondition>
                 {
                     new("burn_in_subtitles", "True")
+                },
+                hasToggleSwitch: false,
+                childFields: new List<SettingField>
+                {
+                    new SettingField(
+                        "sub_keywords",
+                        "Поиск надписей",
+                        SettingType.KeywordList,
+                        new List<Dictionary<string, object>>
+                        {
+                            new() { { "word", "Надписи" }, { "active", true } }
+                        },
+                        "Субтитры",
+                        comment: "Дорожка считается надписью, если её название содержит одно из активных ключевых слов.",
+                        visibilityConditions: new List<SettingVisibilityCondition>
+                        {
+                            new("burn_in_subtitles", "True")
+                        }
+                    ),
+                    new SettingField(
+                        "strip_keywords",
+                        "Удалять теги оформления субтитров",
+                        SettingType.KeywordList,
+                        new List<Dictionary<string, object>>
+                        {
+                            new() { { "word", @"{\fad(500,500)\b1\an3\fnTahoma\fs50\shad3\bord1.3\4c&H000000&\4a&H00&}" }, { "active", false } },
+                            new() { { "word", @"{\fad(500,500)\b1\an3\fnTahoma\fs16.667\shad1\bord0.433\4c&H000000&\4a&H00&}" }, { "active", false } },
+                            new() { { "word", @"{\fad(500,500)\b1\an3\fnTahoma\fs100\shad6\bord2.6\4c&H000000&\4a&H00&}" }, { "active", false } }
+                        },
+                        "Субтитры",
+                        comment: "Готовые пресеты технических тегов ASS (шрифт, размер, позиция). Строка субтитров удаляется целиком, только если полностью содержит активную запись. По умолчанию все записи выключены — трогать только при лишних надписях в кадре.",
+                        visibilityConditions: new List<SettingVisibilityCondition>
+                        {
+                            new("burn_in_subtitles", "True")
+                        }
+                    )
                 }
             ),
 

@@ -117,8 +117,10 @@ public sealed class FileQueueItem : INotifyPropertyChanged
                 OnPropertyChanged();
                 OnPropertyChanged(nameof(FrameRateBadgeText));
                 OnPropertyChanged(nameof(FrameModeBadgeText));
+                OnPropertyChanged(nameof(FrameRateTextLine));
                 OnPropertyChanged(nameof(HasFrameRateBadge));
                 OnPropertyChanged(nameof(HasFrameModeBadge));
+                OnPropertyChanged(nameof(HasFrameRateTextLine));
                 OnPropertyChanged(nameof(IsVariableFrameRate));
             }
         }
@@ -154,10 +156,12 @@ public sealed class FileQueueItem : INotifyPropertyChanged
 
     /// <summary>
     /// Текст бейджика частоты кадров (например, "23,976 FPS", для VFR — "~23,976 FPS").
-    /// Формат ru-RU с запятой, до трёх знаков. Null — данных нет или пилюля отключена
-    /// в персонализации, бейдж скрыт.
+    /// Формат ru-RU с запятой, до трёх знаков. Null — данных нет, пилюли выключены
+    /// тумблером или режим отображения очереди не «Пилюли», бейдж скрыт.
     /// </summary>
-    public string? FrameRateBadgeText => ShowFrameRateBadge ? FormatFrameRateBadge(FirstVideoTrack) : null;
+    public string? FrameRateBadgeText => QueueBadgeMode == (int)QueueBadgeDisplayMode.Badges && ShowFrameRateBadge
+        ? FormatFrameRateBadge(FirstVideoTrack)
+        : null;
 
     /// <summary>
     /// Чистое форматирование бейджика частоты кадров по дорожке, без чтения настроек.
@@ -177,10 +181,13 @@ public sealed class FileQueueItem : INotifyPropertyChanged
 
     /// <summary>
     /// Текст бейджика режима частоты кадров ("CFR" или "VFR").
-    /// Null — режим неизвестен или пилюля отключена в персонализации, бейдж скрыт.
+    /// Null — режим неизвестен, пилюля выключена тумблером или режим отображения
+    /// очереди не «Пилюли», бейдж скрыт.
     /// VFR визуально отличим текстом и префиксом ~ у FPS.
     /// </summary>
-    public string? FrameModeBadgeText => ShowFrameModeBadge ? FormatFrameModeBadge(FirstVideoTrack) : null;
+    public string? FrameModeBadgeText => QueueBadgeMode == (int)QueueBadgeDisplayMode.Badges && ShowFrameModeBadge
+        ? FormatFrameModeBadge(FirstVideoTrack)
+        : null;
 
     /// <summary>
     /// Чистое форматирование бейджика режима частоты кадров по дорожке, без чтения настроек.
@@ -200,6 +207,67 @@ public sealed class FileQueueItem : INotifyPropertyChanged
 
         return isVfr ? "VFR" : "CFR";
     }
+
+    /// <summary>
+    /// Режим отображения FPS и CFR/VFR в строке очереди
+    /// (0 — скрыто, 1 — пилюли, 2 — текстовой строкой).
+    /// По умолчанию скрыто; без сервисов тоже скрыто.
+    /// </summary>
+    public int QueueBadgeMode
+    {
+        get
+        {
+            // Провайдер пуст в юнит-тестах без инициализации приложения.
+            IServiceProvider? provider = App.Services;
+            if (provider != null)
+            {
+                var settingsManager = provider.GetService<ISettingsManager>();
+                if (settingsManager != null)
+                {
+                    return settingsManager.QueueBadgeMode;
+                }
+            }
+            return (int)QueueBadgeDisplayMode.Hidden;
+        }
+    }
+
+    /// <summary>
+    /// Спокойная текстовая строка FPS и режима рядом с размером файла
+    /// (например, "23,976 FPS · CFR"). Неизвестные значения пропускаются.
+    /// Null — режим не «Текстовой строкой» или нет данных, строка скрыта.
+    /// Состав сегментов задают те же тумблеры, что и для пилюль.
+    /// </summary>
+    public string? FrameRateTextLine => QueueBadgeMode == (int)QueueBadgeDisplayMode.Text
+        ? FormatFrameRateLine(FirstVideoTrack, ShowFrameRateBadge, ShowFrameModeBadge)
+        : null;
+
+    /// <summary>
+    /// Чистое форматирование текстовой строки FPS и режима по дорожке, без чтения настроек.
+    /// Сегменты объединяются разделителем « · », неизвестные пропускаются.
+    /// Null — нет видеодорожки, частоты кадров или оба сегмента выключены.
+    /// </summary>
+    public static string? FormatFrameRateLine(MediaTrack? track, bool showFps, bool showMode)
+    {
+        if (track == null || (!showFps && !showMode))
+        {
+            return null;
+        }
+
+        string? fpsText = showFps ? FormatFrameRateBadge(track) : null;
+        string? modeText = showMode ? FormatFrameModeBadge(track) : null;
+
+        if (fpsText != null && modeText != null)
+        {
+            return fpsText + " · " + modeText;
+        }
+
+        return fpsText ?? modeText;
+    }
+
+    /// <summary>
+    /// Флаг наличия текстовой строки FPS и режима для управления видимостью в XAML.
+    /// </summary>
+    public bool HasFrameRateTextLine => !string.IsNullOrEmpty(FrameRateTextLine);
 
     /// <summary>
     /// Разрешён ли показ пилюли частоты кадров в настройках отображения очереди.
@@ -606,18 +674,22 @@ public sealed class FileQueueItem : INotifyPropertyChanged
     }
 
     /// <summary>
-    /// Оповещает UI о возможном изменении настроек отображения пилюль FPS и CFR/VFR.
-    /// Тексты пилюль тоже оповещаются: именно к ним привязан XAML, а AccentBadge
+    /// Оповещает UI о возможном изменении настроек отображения очереди:
+    /// режима (скрыто/пилюли/текст) и тумблеров FPS и CFR/VFR.
+    /// Тексты пилюль и строки тоже оповещаются: именно к ним привязан XAML, а AccentBadge
     /// автоматически скрывается при пустом тексте.
     /// </summary>
     public void NotifyBadgeSettingsChanged()
     {
+        OnPropertyChanged(nameof(QueueBadgeMode));
         OnPropertyChanged(nameof(ShowFrameRateBadge));
         OnPropertyChanged(nameof(ShowFrameModeBadge));
         OnPropertyChanged(nameof(FrameRateBadgeText));
         OnPropertyChanged(nameof(FrameModeBadgeText));
+        OnPropertyChanged(nameof(FrameRateTextLine));
         OnPropertyChanged(nameof(HasFrameRateBadge));
         OnPropertyChanged(nameof(HasFrameModeBadge));
+        OnPropertyChanged(nameof(HasFrameRateTextLine));
     }
 
     /// <summary>

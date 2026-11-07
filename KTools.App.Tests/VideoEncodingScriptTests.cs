@@ -1213,6 +1213,119 @@ public class VideoEncodingScriptTests
     }
 
     /// <summary>
+    /// Проверяет, что продвинутые параметры субтитров сгруппированы в раскрывающийся блок без тумблера,
+    /// скрытый при выключенном Burn-in.
+    /// </summary>
+    [TestMethod]
+    public void SettingsSchema_SubtitlesAdvancedExpander_GroupsSearchAndCleanupFields()
+    {
+        // Act
+        var schema = _script.SettingsSchema;
+
+        // Assert
+        var subtitlesTopLevel = schema.Where(f => f.Group == "Субтитры").ToList();
+        var expander = subtitlesTopLevel.FirstOrDefault(f => f.Key == "sub_advanced_options");
+        expander.Should().NotBeNull();
+        expander!.Type.Should().Be(SettingType.Expander);
+        expander.HasToggleSwitch.Should().BeFalse("блок является чисто визуальной группировкой без собственного состояния");
+        expander.VisibilityConditions.Should().HaveCount(1);
+        expander.VisibilityConditions![0].Key.Should().Be("burn_in_subtitles");
+        expander.VisibilityConditions[0].Values.Should().Contain("True");
+        expander.ChildFields.Select(f => f.Key).Should().BeEquivalentTo("sub_keywords", "strip_keywords");
+    }
+
+    /// <summary>
+    /// Проверяет, что сырые ASS-теги не отображаются пользователю в открытом виде:
+    /// на верхнем уровне вкладки «Субтитры» их нет, они живут только внутри свёрнутого блока.
+    /// </summary>
+    [TestMethod]
+    public void SettingsSchema_SubtitlesTopLevel_ContainsNoRawAssTags()
+    {
+        // Act
+        var schema = _script.SettingsSchema;
+
+        // Assert
+        var subtitlesTopLevel = schema.Where(f => f.Group == "Субтитры").ToList();
+        subtitlesTopLevel.Should().NotBeEmpty();
+        foreach (var field in subtitlesTopLevel)
+        {
+            field.Label.Should().NotContain(@"{\fad");
+            field.Comment.Should().NotContain(@"{\fad");
+            field.Options.Should().NotContain(o => o.Contains(@"{\fad"));
+        }
+
+        var expander = subtitlesTopLevel.FirstOrDefault(f => f.Type == SettingType.Expander);
+        expander.Should().NotBeNull("сырые теги допускаются только внутри продвинутого блока");
+        expander!.ChildFields.Should().Contain(f => f.Key == "strip_keywords");
+    }
+
+    /// <summary>
+    /// Проверяет, что вложенные поля субтитров сохранили ключи, типы, группу,
+    /// значения по умолчанию и зависимость видимости от Burn-in (поведение кодирования не меняется).
+    /// </summary>
+    [TestMethod]
+    public void SettingsSchema_SubtitlesAdvancedChildren_PreservesEncodingDefaults()
+    {
+        // Act
+        var schema = _script.SettingsSchema;
+
+        // Assert
+        var expander = schema.FirstOrDefault(f => f.Key == "sub_advanced_options");
+        expander.Should().NotBeNull();
+
+        var subKeywords = expander!.ChildFields.FirstOrDefault(f => f.Key == "sub_keywords");
+        subKeywords.Should().NotBeNull();
+        subKeywords!.Type.Should().Be(SettingType.KeywordList);
+        subKeywords.Group.Should().Be("Субтитры");
+        var searchDefaults = GetKeywordDefaults(subKeywords.DefaultValue);
+        searchDefaults.Should().ContainSingle();
+        searchDefaults[0]["word"]?.ToString().Should().Be("Надписи");
+        searchDefaults[0]["active"].Should().Be(true);
+        subKeywords.VisibilityConditions.Should().HaveCount(1);
+        subKeywords.VisibilityConditions![0].Key.Should().Be("burn_in_subtitles");
+
+        var stripKeywords = expander.ChildFields.FirstOrDefault(f => f.Key == "strip_keywords");
+        stripKeywords.Should().NotBeNull();
+        stripKeywords!.Type.Should().Be(SettingType.KeywordList);
+        stripKeywords.Group.Should().Be("Субтитры");
+        var stripDefaults = GetKeywordDefaults(stripKeywords.DefaultValue);
+        stripDefaults.Should().HaveCount(3, "дефолтные пресеты очистки обязаны сохраниться");
+        stripDefaults.Should().OnlyContain(d => d.ContainsKey("active") && Equals(d["active"], false),
+            "все пресеты по умолчанию выключены");
+        stripDefaults.Select(d => d["word"]?.ToString()).Should().OnlyContain(w => w != null && w.Contains(@"{\fad"));
+        stripKeywords.VisibilityConditions.Should().HaveCount(1);
+        stripKeywords.VisibilityConditions![0].Key.Should().Be("burn_in_subtitles");
+    }
+
+    /// <summary>
+    /// Проверяет, что поле «Если надписи не найдены» осталось на верхнем уровне,
+    /// стало компактным (одна колонка) и зависит от Burn-in.
+    /// </summary>
+    [TestMethod]
+    public void SettingsSchema_SubNotFoundAction_IsCompactAndBurnInDependent()
+    {
+        // Act
+        var schema = _script.SettingsSchema;
+
+        // Assert
+        var field = schema.FirstOrDefault(f => f.Key == "sub_not_found_action");
+        field.Should().NotBeNull();
+        field!.Group.Should().Be("Субтитры");
+        field.ColSpan.Should().Be(1);
+        field.VisibilityConditions.Should().HaveCount(1);
+        field.VisibilityConditions![0].Key.Should().Be("burn_in_subtitles");
+        field.VisibilityConditions[0].Values.Should().Contain("True");
+    }
+
+    /// <summary>
+    /// Извлекает словарные значения по умолчанию списка ключевых слов для проверок схемы.
+    /// </summary>
+    private static List<Dictionary<string, object>> GetKeywordDefaults(object? defaultValue)
+    {
+        return defaultValue as List<Dictionary<string, object>> ?? new List<Dictionary<string, object>>();
+    }
+
+    /// <summary>
     /// Проверяет, что при отсутствии совпадений по ключевым словам и режиме 'Пропускать хардсаб' сторонние субтитры не вшиваются.
     /// </summary>
     [TestMethod]

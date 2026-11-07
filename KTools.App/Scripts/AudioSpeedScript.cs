@@ -25,6 +25,25 @@ public sealed class AudioSpeedScript : AbstractScript
     private readonly IFFmpegRunner _ffmpegRunner;
     private readonly IEac3toRunner _eac3toRunner;
 
+    /// <summary>
+    /// Значение режима преобразования FPS по умолчанию.
+    /// </summary>
+    private const string DefaultSpeedMode = "25.000 ➔ 23.976";
+
+    /// <summary>
+    /// Маппинг старых названий режимов скорости (до переименования) в новые.
+    /// Нужен, чтобы сохранённый выбор пользователей не слетал после упрощения пунктов комбобокса.
+    /// </summary>
+    private static readonly Dictionary<string, string> LegacySpeedModeMap = new(StringComparer.Ordinal)
+    {
+        ["Slowdown (25.000 → 23.976)"] = "25.000 ➔ 23.976",
+        ["Speedup (23.976 → 25.000)"] = "23.976 ➔ 25.000",
+        ["Custom (24.000 → 23.976)"] = "24.000 ➔ 23.976",
+        ["Custom (23.976 → 24.000)"] = "23.976 ➔ 24.000",
+        ["Custom (25.000 → 24.000)"] = "25.000 ➔ 24.000",
+        ["Custom (29.970 → 23.976)"] = "29.970 ➔ 23.976"
+    };
+
     public AudioSpeedScript(ILogService logService, ISettingsManager settingsManager, IPathManager pathManager, IDependencyManager dependencyManager, IFFmpegRunner ffmpegRunner, IEac3toRunner eac3toRunner)
         : base(logService, settingsManager, pathManager)
     {
@@ -78,18 +97,18 @@ public sealed class AudioSpeedScript : AbstractScript
     {
         new SettingField(
             "SpeedMode",
-            "Режим преобразования",
+            "Режим преобразования FPS",
             SettingType.Combo,
-            "Slowdown (25.000 → 23.976)",
+            DefaultSpeedMode,
             "Настройки скорости",
             options: new List<string>
             {
-                "Slowdown (25.000 → 23.976)",
-                "Speedup (23.976 → 25.000)",
-                "Custom (24.000 → 23.976)",
-                "Custom (23.976 → 24.000)",
-                "Custom (25.000 → 24.000)",
-                "Custom (29.970 → 23.976)"
+                "25.000 ➔ 23.976",
+                "23.976 ➔ 25.000",
+                "24.000 ➔ 23.976",
+                "23.976 ➔ 24.000",
+                "25.000 ➔ 24.000",
+                "29.970 ➔ 23.976"
             }),
 
         new SettingField(
@@ -130,7 +149,8 @@ public sealed class AudioSpeedScript : AbstractScript
         string mode = GetSettingValue(
             settings,
             "SpeedMode",
-            "Slowdown (25.000 → 23.976)");
+            DefaultSpeedMode);
+        mode = MigrateSpeedMode(mode);
         string format = GetSettingValue(
             settings,
             "OutputFormat",
@@ -158,35 +178,35 @@ public sealed class AudioSpeedScript : AbstractScript
         // Подготовка опций изменения скорости
         var options = new List<string>();
         string suffix = "_slowdown";
-        if (mode == "Slowdown (25.000 → 23.976)")
+        if (mode == "25.000 ➔ 23.976")
         {
             options.Add("-slowdown");
             suffix = "_slowdown";
         }
-        else if (mode == "Speedup (23.976 → 25.000)")
+        else if (mode == "23.976 ➔ 25.000")
         {
             options.Add("-speedup");
             suffix = "_speedup";
         }
-        else if (mode == "Custom (24.000 → 23.976)")
+        else if (mode == "24.000 ➔ 23.976")
         {
             options.Add("-24.000");
             options.Add("-slowdown");
             suffix = "_24_to_23";
         }
-        else if (mode == "Custom (23.976 → 24.000)")
+        else if (mode == "23.976 ➔ 24.000")
         {
             options.Add("-23.976");
             options.Add("-changeTo24.000");
             suffix = "_23_to_24";
         }
-        else if (mode == "Custom (25.000 → 24.000)")
+        else if (mode == "25.000 ➔ 24.000")
         {
             options.Add("-25.000");
             options.Add("-changeTo24.000");
             suffix = "_25_to_24";
         }
-        else if (mode == "Custom (29.970 → 23.976)")
+        else if (mode == "29.970 ➔ 23.976")
         {
             options.Add("-29.970");
             options.Add("-changeTo23.976");
@@ -485,6 +505,31 @@ public sealed class AudioSpeedScript : AbstractScript
             errorCode: "output-missing",
             outputFile: outputFilePath,
             outputExists: false);
+    }
+
+    /// <summary>
+    /// Разово мигрирует сохранённое старое название режима скорости на новое.
+    /// Если пользователь значение не менял, подменяет новым и сохраняет, иначе старый
+    /// выбор из файла настроек не совпадёт с пунктами комбобокса и сбросится.
+    /// </summary>
+    private string MigrateSpeedMode(string mode)
+    {
+        if (!LegacySpeedModeMap.TryGetValue(mode, out string? migrated))
+        {
+            return mode;
+        }
+
+        try
+        {
+            string groupName = _settingsManager.GetSafeGroupName(Name);
+            _settingsManager.SetSetting(groupName, "SpeedMode", migrated);
+        }
+        catch (Exception ex)
+        {
+            _logService.Write("script.audio_speed.setting_migration_failed", LogLevel.Warning, LogStatus.PartiallySucceeded, "Настройка скорости аудио не перенесена, применено новое значение режима", ex, Name, properties: LogProps.Create("ErrorCode", "SETTING_MIGRATION_FAILED").With("Key", LogRedactor.CompactSafeToken("SpeedMode")));
+        }
+
+        return migrated;
     }
 
     /// <summary>

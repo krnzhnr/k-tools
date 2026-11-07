@@ -188,6 +188,24 @@ public partial class SettingsViewModel : ThreadSafeViewModel
     public partial bool EnableParallel { get; set; }
 
     /// <summary>
+    /// Количество одновременных потоков разборки контейнера.
+    /// </summary>
+    [ObservableProperty]
+    public partial int MaxParallelDemuxTasks { get; set; }
+
+    /// <summary>
+    /// Разрешить ли параллельную разборку контейнеров очереди (по умолчанию выкл).
+    /// </summary>
+    [ObservableProperty]
+    public partial bool EnableParallelDemux { get; set; }
+
+    /// <summary>
+    /// Максимально допустимый лимит потоков разборки, основанный на количестве ядер процессора.
+    /// </summary>
+    [ObservableProperty]
+    public partial int MaxParallelDemuxLimit { get; set; }
+
+    /// <summary>
     /// Максимально допустимый лимит параллельных задач обработки, основанный на количестве ядер процессора.
     /// </summary>
     [ObservableProperty]
@@ -234,6 +252,20 @@ public partial class SettingsViewModel : ThreadSafeViewModel
     /// </summary>
     [ObservableProperty]
     public partial bool ShowFrameModeBadge { get; set; }
+
+    /// <summary>
+    /// Режим отображения FPS и CFR/VFR в строке очереди:
+    /// 0 — скрыто, 1 — пилюли, 2 — текстовой строкой.
+    /// </summary>
+    [ObservableProperty]
+    public partial int QueueBadgeMode { get; set; }
+
+    /// <summary>
+    /// Активны ли тумблеры состава (FPS/режим): во всех режимах, кроме «Скрыто».
+    /// Пилюли при этом видны только в режиме «Пилюли», в остальных скрыто всё.
+    /// </summary>
+    [ObservableProperty]
+    public partial bool IsQueueBadgeTogglesEnabled { get; set; }
 
     /// <summary>
     /// Путь к пользовательской директории хранения файлов журналов (логов).
@@ -342,6 +374,7 @@ public partial class SettingsViewModel : ThreadSafeViewModel
         DefaultLogDir = System.IO.Path.Combine(_pathManager.GetSettingsDirectory(), "logs");
 
         MaxParallelLimit = Environment.ProcessorCount;
+        MaxParallelDemuxLimit = Environment.ProcessorCount;
         LoadCurrentSettings();
     }
 
@@ -359,6 +392,8 @@ public partial class SettingsViewModel : ThreadSafeViewModel
             ClearListOnAdd = _settingsManager.ClearListOnAdd;
             EnableParallel = _settingsManager.EnableParallel;
             MaxParallelTasks = Math.Max(1, _settingsManager.MaxParallelTasks);
+            EnableParallelDemux = _settingsManager.EnableParallelDemux;
+            MaxParallelDemuxTasks = Math.Max(1, _settingsManager.MaxParallelDemuxTasks);
             DefaultOutputSubfolder = _settingsManager.DefaultOutputSubfolder;
             UseAutoSubfolder = _settingsManager.UseAutoSubfolder;
 
@@ -380,6 +415,8 @@ public partial class SettingsViewModel : ThreadSafeViewModel
             LogDir = _settingsManager.LogDir;
             ShowFrameRateBadge = _settingsManager.ShowFrameRateBadge;
             ShowFrameModeBadge = _settingsManager.ShowFrameModeBadge;
+            QueueBadgeMode = Math.Clamp(_settingsManager.QueueBadgeMode, 0, 2);
+            IsQueueBadgeTogglesEnabled = QueueBadgeMode != (int)QueueBadgeDisplayMode.Hidden;
 
             AutoCheckUpdates = _settingsManager.AutoCheckUpdates;
             ShowWhatsNewAfterUpdate = _settingsManager.ShowWhatsNewAfterUpdate;
@@ -430,6 +467,24 @@ public partial class SettingsViewModel : ThreadSafeViewModel
     partial void OnEnableParallelChanged(bool value)
     {
         CommitSetting("General", "EnableParallel", value, "Параллельное выполнение задач");
+    }
+
+    partial void OnMaxParallelDemuxTasksChanged(int value)
+    {
+        // Если значение меньше 1 (например, слайдер перетащили в крайнее левое положение 0),
+        // принудительно возвращаем его к 1 для предотвращения некорректной настройки.
+        if (value < 1)
+        {
+            MaxParallelDemuxTasks = 1;
+            return;
+        }
+
+        CommitSetting("General", "MaxParallelDemuxTasks", value, "Число потоков разборки");
+    }
+
+    partial void OnEnableParallelDemuxChanged(bool value)
+    {
+        CommitSetting("General", "EnableParallelDemux", value, "Параллельная разборка контейнера");
     }
 
     partial void OnDefaultOutputSubfolderChanged(string value)
@@ -505,6 +560,25 @@ public partial class SettingsViewModel : ThreadSafeViewModel
         if (!_isApplyingManagerState)
         {
             CommitSetting("General", "ShowFrameModeBadge", value, "Пилюля типа развёртки");
+        }
+
+        WeakReferenceMessenger.Default.Send(new QueueBadgeVisibilityChangedMessage());
+    }
+
+    partial void OnQueueBadgeModeChanged(int value)
+    {
+        // Защита от повреждённых значений: допустимы только 0 (скрыто), 1 (пилюли), 2 (текст).
+        if (value < 0 || value > 2)
+        {
+            QueueBadgeMode = Math.Clamp(value, 0, 2);
+            return;
+        }
+
+        IsQueueBadgeTogglesEnabled = value != (int)QueueBadgeDisplayMode.Hidden;
+
+        if (!_isApplyingManagerState)
+        {
+            CommitSetting("General", "QueueBadgeMode", value, "Режим отображения очереди");
         }
 
         WeakReferenceMessenger.Default.Send(new QueueBadgeVisibilityChangedMessage());
@@ -748,6 +822,8 @@ public partial class SettingsViewModel : ThreadSafeViewModel
             new("General/ClearListOnAdd", false),
             new("General/EnableParallel", true),
             new("General/MaxParallelTasks", Math.Max(1, Environment.ProcessorCount / 2)),
+            new("General/EnableParallelDemux", false),
+            new("General/MaxParallelDemuxTasks", Math.Max(1, Environment.ProcessorCount / 2)),
             new("General/DefaultOutputSubfolder", "KTools_Result"),
             new("General/UseAutoSubfolder", false),
             new("General/Theme", "Dark"),
@@ -761,6 +837,8 @@ public partial class SettingsViewModel : ThreadSafeViewModel
             new("General/ReplaceTemplates", SettingsDefaults.GetDefaultReplaceTemplates()),
             new("General/ShowFrameRateBadge", false),
             new("General/ShowFrameModeBadge", false),
+            new("General/QueueBadgeMode", 0),
+            new(UI.Controls.DemuxScrollTipTracker.SettingsGroup + "/" + UI.Controls.DemuxScrollTipTracker.SettingsKey, false),
             new("Logging/ShowLogsTab", false),
             new("Logging/LogDir", string.Empty),
             new("Updates/AutoCheckUpdates", true),
@@ -786,6 +864,8 @@ public partial class SettingsViewModel : ThreadSafeViewModel
             ClearListOnAdd = false;
             EnableParallel = true;
             MaxParallelTasks = Math.Max(1, Environment.ProcessorCount / 2);
+            EnableParallelDemux = false;
+            MaxParallelDemuxTasks = Math.Max(1, Environment.ProcessorCount / 2);
             DefaultOutputSubfolder = "KTools_Result";
             UseAutoSubfolder = false;
             SelectedThemeIndex = 1;
@@ -794,6 +874,11 @@ public partial class SettingsViewModel : ThreadSafeViewModel
             LogDir = string.Empty;
             ShowFrameRateBadge = false;
             ShowFrameModeBadge = false;
+            QueueBadgeMode = 0;
+            IsQueueBadgeTogglesEnabled = false;
+            // Флаг одноразовой подсказки разборки (DemuxScrollTipShown) отдельного свойства
+            // в модели не имеет: трекер читает менеджер напрямую, а ResetToDefaults уже
+            // записал false из набора выше, поэтому синхронизировать здесь нечего.
             AutoCheckUpdates = true;
             ShowWhatsNewAfterUpdate = true;
             IncludePreReleases = true;

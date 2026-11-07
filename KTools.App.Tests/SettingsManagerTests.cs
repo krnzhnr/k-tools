@@ -157,6 +157,105 @@ public class SettingsManagerTests
     }
 
     /// <summary>
+    /// Проверяет, что режим отображения очереди по умолчанию скрыт (как сейчас — всё выкл).
+    /// </summary>
+    [TestMethod]
+    public void QueueBadgeMode_WhenNoFileExists_DefaultsToHidden()
+    {
+        // Act
+        var manager = CreateManager();
+
+        // Assert
+        manager.QueueBadgeMode.Should().Be(0);
+    }
+
+    /// <summary>
+    /// Проверяет чтение и запись режима отображения очереди с перезагрузкой с диска.
+    /// </summary>
+    [TestMethod]
+    public void QueueBadgeMode_SetValue_SavesAndReadsCorrectly()
+    {
+        // Arrange
+        var manager = CreateManager();
+
+        // Act
+        manager.QueueBadgeMode = 2;
+
+        // Assert
+        manager.QueueBadgeMode.Should().Be(2);
+
+        // Проверяем перезагрузку
+        var newManager = CreateManager();
+        newManager.QueueBadgeMode.Should().Be(2);
+    }
+
+    /// <summary>
+    /// Проверяет, что параллельная разборка контейнера по умолчанию выключена.
+    /// </summary>
+    [TestMethod]
+    public void EnableParallelDemux_WhenNoFileExists_DefaultsToFalse()
+    {
+        // Act
+        var manager = CreateManager();
+
+        // Assert
+        manager.EnableParallelDemux.Should().BeFalse();
+    }
+
+    /// <summary>
+    /// Проверяет, что лимит потоков разборки по умолчанию в пределах числа процессоров.
+    /// </summary>
+    [TestMethod]
+    public void MaxParallelDemuxTasks_WhenNoFileExists_DefaultsToProcessorBound()
+    {
+        // Act
+        var manager = CreateManager();
+
+        // Assert
+        manager.MaxParallelDemuxTasks.Should().BeInRange(1, Environment.ProcessorCount);
+    }
+
+    /// <summary>
+    /// Проверяет чтение и запись флага параллельной разборки с перезагрузкой с диска.
+    /// </summary>
+    [TestMethod]
+    public void EnableParallelDemux_SetValue_SavesAndReadsCorrectly()
+    {
+        // Arrange
+        var manager = CreateManager();
+
+        // Act
+        manager.EnableParallelDemux = true;
+
+        // Assert
+        manager.EnableParallelDemux.Should().BeTrue();
+
+        // Проверяем перезагрузку
+        var newManager = CreateManager();
+        newManager.EnableParallelDemux.Should().BeTrue();
+    }
+
+    /// <summary>
+    /// Проверяет чтение и запись лимита потоков разборки с перезагрузкой с диска.
+    /// </summary>
+    [TestMethod]
+    public void MaxParallelDemuxTasks_SetValue_SavesAndReadsCorrectly()
+    {
+        // Arrange
+        var manager = CreateManager();
+
+        // Act
+        manager.MaxParallelDemuxTasks = 3;
+
+        // Assert
+        manager.MaxParallelDemuxTasks.Should().Be(3);
+
+        // Проверяем перезагрузку
+        var newManager = CreateManager();
+        newManager.MaxParallelDemuxTasks.Should().Be(3);
+    }
+
+    /// <summary>
     /// Проверяет чтение и запись списков сложных объектов (шаблонов) в настройках.
     /// </summary>
     [TestMethod]

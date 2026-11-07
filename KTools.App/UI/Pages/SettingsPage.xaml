@@ -106,6 +106,48 @@
                     </community:SettingsExpander.Items>
                 </community:SettingsExpander>
 
+                <!-- Параллельная разборка контейнера: копия блока выше под другую цель -->
+                <community:SettingsExpander
+                    Padding="16,12,16,12"
+                    Description="Выполнять разборку контейнеров очереди в несколько фоновых потоков одновременно"
+                    Header="Параллельная разборка контейнера"
+                    IsExpanded="False">
+                    <community:SettingsExpander.HeaderIcon>
+                        <FontIcon Glyph="&#xE7F4;" />
+                    </community:SettingsExpander.HeaderIcon>
+                    <ToggleSwitch
+                        x:Name="EnableParallelDemuxToggle"
+                        OffContent="Выкл"
+                        OnContent="Вкл"
+                        IsOn="{x:Bind ViewModel.EnableParallelDemux, Mode=TwoWay}" />
+
+                    <community:SettingsExpander.Items>
+                        <community:SettingsCard
+                            Header="Количество одновременных потоков разборки"
+                            Description="Задайте лимит параллельно разбираемых контейнеров (не более числа логических процессоров)"
+                            IsEnabled="{x:Bind ViewModel.EnableParallelDemux, Mode=OneWay}">
+                            <StackPanel Orientation="Horizontal" Spacing="12">
+                                <TextBlock
+                                    x:Name="ParallelDemuxValueText"
+                                    Width="24"
+                                    VerticalAlignment="Center"
+                                    FontWeight="SemiBold"
+                                    Text="{x:Bind ViewModel.MaxParallelDemuxTasks, Mode=OneWay}" />
+                                <Slider
+                                    x:Name="ParallelDemuxSlider"
+                                    Width="200"
+                                    VerticalAlignment="Center"
+                                    Maximum="{x:Bind ViewModel.MaxParallelDemuxLimit, Mode=OneWay}"
+                                    Minimum="0"
+                                    Value="{x:Bind ViewModel.MaxParallelDemuxTasks, Mode=TwoWay}"
+                                    TickFrequency="1"
+                                    TickPlacement="Outside"
+                                    SnapsTo="Ticks" />
+                            </StackPanel>
+                        </community:SettingsCard>
+                    </community:SettingsExpander.Items>
+                </community:SettingsExpander>
+
                 <!-- Автоматическое создание подпапки (через SettingsExpander) -->
                 <community:SettingsExpander
                     Padding="16,12,16,12"
@@ -347,16 +389,29 @@
                 <!-- Отображение элементов очереди файлов -->
                 <community:SettingsExpander
                     Padding="16,12,16,12"
-                    Description="Какие пилюли показывать в строке элемента очереди рядом с размером файла"
+                    Description="Как показывать FPS и CFR/VFR в строке элемента очереди рядом с размером файла"
                     Header="Отображение элементов очереди"
                     IsExpanded="False">
                     <community:SettingsExpander.HeaderIcon>
                         <FontIcon Glyph="&#xE8FD;" />
                     </community:SettingsExpander.HeaderIcon>
+                    <ComboBox
+                        x:Name="QueueBadgeModeComboBox"
+                        Width="200"
+                        VerticalAlignment="Center"
+                        SelectedIndex="{x:Bind ViewModel.QueueBadgeMode, Mode=TwoWay}"
+                        AutomationProperties.Name="Режим отображения FPS и CFR/VFR"
+                        ToolTipService.ToolTip="Скрыто — ничего не показывать; Пилюли — отдельные бейджи; Текстовой строкой — спокойный текст рядом с размером файла">
+                        <ComboBoxItem Content="Скрыто" />
+                        <ComboBoxItem Content="Пилюли" />
+                        <ComboBoxItem Content="Текстовой строкой" />
+                    </ComboBox>
+
                     <community:SettingsExpander.Items>
                         <community:SettingsCard
                             Header="Частота кадров"
-                            Description="Показывать пилюлю FPS (например, 23,976 FPS, для VFR со знаком ~)">
+                            Description="Показывать FPS: пилюлей (например, 23,976 FPS, для VFR со знаком ~) или сегментом текстовой строки"
+                            IsEnabled="{x:Bind ViewModel.IsQueueBadgeTogglesEnabled, Mode=OneWay}">
                             <ToggleSwitch
                                 x:Name="ShowFrameRateBadgeToggle"
                                 OffContent="Выкл"
@@ -365,7 +420,8 @@
                         </community:SettingsCard>
                         <community:SettingsCard
                             Header="Тип развёртки"
-                            Description="Показывать пилюлю CFR/VFR рядом с частотой кадров">
+                            Description="Показывать CFR/VFR: пилюлей рядом с частотой кадров или сегментом текстовой строки"
+                            IsEnabled="{x:Bind ViewModel.IsQueueBadgeTogglesEnabled, Mode=OneWay}">
                             <ToggleSwitch
                                 x:Name="ShowFrameModeBadgeToggle"
                                 OffContent="Выкл"

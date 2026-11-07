@@ -49,6 +49,17 @@ public interface ISettingsManager : IDisposable
     bool EnableParallel { get; set; }
 
     /// <summary>
+    /// Максимальное количество одновременных потоков разборки контейнера.
+    /// </summary>
+    int MaxParallelDemuxTasks { get; set; }
+
+    /// <summary>
+    /// Разрешить ли параллельную разборку контейнеров очереди.
+    /// По умолчанию выключена: параллельный demux — опция для быстрых дисков.
+    /// </summary>
+    bool EnableParallelDemux { get; set; }
+
+    /// <summary>
     /// Очищать ли очередь перед добавлением новых файлов.
     /// </summary>
     bool ClearListOnAdd { get; set; }
@@ -62,6 +73,12 @@ public interface ISettingsManager : IDisposable
     /// Показывать ли в очереди пилюлю типа развёртки (CFR/VFR).
     /// </summary>
     bool ShowFrameModeBadge { get; set; }
+
+    /// <summary>
+    /// Режим отображения FPS и CFR/VFR в строке очереди:
+    /// 0 — скрыто, 1 — пилюли, 2 — текстовой строкой.
+    /// </summary>
+    int QueueBadgeMode { get; set; }
 
     /// <summary>
     /// Отображать ли монитор логов (вкладку).
