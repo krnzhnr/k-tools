@@ -648,7 +648,7 @@ public sealed class UserDataMigrator : IUserDataMigrator
         if (File.Exists(legacySettings))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (File.Exists(newSettings) && FilesHashEqual(legacySettings, newSettings))
+            if (File.Exists(newSettings) && (FilesHashEqual(legacySettings, newSettings) || IsUntouchedSinceMigration(legacySettings, receipt.MigratedAtUtc)))
             {
                 if (TryDeleteFile(legacySettings))
                 {
@@ -983,6 +983,15 @@ public sealed class UserDataMigrator : IUserDataMigrator
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// Проверяет, что файл не менялся с момента переноса: такой исходник — протухший бэкап (приложение уже пишет в назначение), удаление безопасно. Файл, изменённый позже (например, записанный откаченной старой версией), трогать запрещено. Допуск 5 секунд — на гранулярность меток.
+    /// </summary>
+    private static bool IsUntouchedSinceMigration(string path, DateTime migratedAtUtc)
+    {
+        try { return new FileInfo(path).LastWriteTimeUtc <= migratedAtUtc.AddSeconds(5); }
+        catch (Exception) { return false; }
     }
 
     private static bool FilesHashEqual(string first, string second)

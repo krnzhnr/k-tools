@@ -326,6 +326,46 @@ public class UserDataMigrationTests
     }
 
     [TestMethod]
+    public async Task VerifyAndCleanupAsync_StaleSettingsBackup_DeletesSource()
+    {
+        // Arrange — протухший бэкап: исходник не менялся с момента переноса, назначение ушло вперёд штатными записями.
+        var context = CreateContext();
+        string legacySettings = context.Legacy.CreateFile("settings.json", "{\"theme\":\"dark\"}");
+        File.SetLastWriteTimeUtc(legacySettings, new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+        context.Migrator.EnsureMigrated();
+        context.Migrator.NeedsVerification().Should().BeTrue();
+        // Эмуляция штатных записей приложения в новый файл после миграции.
+        File.AppendAllText(context.Data.GetFullPath("settings.json"), "\n{\"extra\":1}");
+
+        // Act
+        await context.Migrator.VerifyAndCleanupAsync(new List<BinaryProbeResult>(), CancellationToken.None);
+
+        // Assert — протухший бэкап удалён, повторная проверка не требуется.
+        File.Exists(context.Legacy.GetFullPath("settings.json")).Should().BeFalse();
+        context.Migrator.NeedsVerification().Should().BeFalse();
+    }
+
+    [TestMethod]
+    public async Task VerifyAndCleanupAsync_RecentlyModifiedSettings_KeepsSource()
+    {
+        // Arrange — откаченная старая версия писала в исходник после миграции.
+        var context = CreateContext();
+        string legacySettings = context.Legacy.CreateFile("settings.json", "{\"theme\":\"dark\"}");
+        context.Migrator.EnsureMigrated();
+        context.Migrator.NeedsVerification().Should().BeTrue();
+        // Эмуляция штатных записей в назначение и поздней записи откаченной версии в исходник.
+        File.AppendAllText(context.Data.GetFullPath("settings.json"), "\n{\"extra\":1}");
+        File.SetLastWriteTimeUtc(legacySettings, DateTime.UtcNow.AddHours(1));
+
+        // Act
+        await context.Migrator.VerifyAndCleanupAsync(new List<BinaryProbeResult>(), CancellationToken.None);
+
+        // Assert — изменённый позже исходник трогать запрещено, проверка повторяется.
+        File.Exists(context.Legacy.GetFullPath("settings.json")).Should().BeTrue();
+        context.Migrator.NeedsVerification().Should().BeTrue();
+    }
+
+    [TestMethod]
     public void NeedsVerification_NoReceipt_ReturnsFalse()
     {
         // Arrange — миграция не выполнялась.
