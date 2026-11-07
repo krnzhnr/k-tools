@@ -276,19 +276,15 @@ public class FrameRateBadgeTests
     public void FrameRateBadge_Cfr_FormatsWithComma()
     {
         // Arrange
-        var item = new FileQueueItem("C:\\video.mkv");
-        var structure = new MediaStructure { FilePath = "C:\\video.mkv" };
-        structure.Tracks.Add(new MediaTrack { TrackType = "video", FrameRate = 24000.0 / 1001.0, IsVariableFrameRate = false });
+        var track = new MediaTrack { TrackType = "video", FrameRate = 24000.0 / 1001.0, IsVariableFrameRate = false };
 
         // Act
-        item.MediaInfo = structure;
+        string? fpsText = FileQueueItem.FormatFrameRateBadge(track);
+        string? modeText = FileQueueItem.FormatFrameModeBadge(track);
 
         // Assert
-        item.FrameRateBadgeText.Should().Be("23,976 FPS");
-        item.FrameModeBadgeText.Should().Be("CFR");
-        item.HasFrameRateBadge.Should().BeTrue();
-        item.HasFrameModeBadge.Should().BeTrue();
-        item.IsVariableFrameRate.Should().BeFalse();
+        fpsText.Should().Be("23,976 FPS");
+        modeText.Should().Be("CFR");
     }
 
     /// <summary>
@@ -296,6 +292,65 @@ public class FrameRateBadgeTests
     /// </summary>
     [TestMethod]
     public void FrameRateBadge_Vfr_AddsTildePrefix()
+    {
+        // Arrange
+        var track = new MediaTrack { TrackType = "video", FrameRate = 29.97, IsVariableFrameRate = true };
+
+        // Act
+        string? fpsText = FileQueueItem.FormatFrameRateBadge(track);
+        string? modeText = FileQueueItem.FormatFrameModeBadge(track);
+
+        // Assert
+        fpsText.Should().Be("~29,97 FPS");
+        modeText.Should().Be("VFR");
+    }
+
+    /// <summary>
+    /// Целое значение 25 показывает без дробной части.
+    /// </summary>
+    [TestMethod]
+    public void FrameRateBadge_WholeNumber_OmitsDecimals()
+    {
+        // Arrange
+        var track = new MediaTrack { TrackType = "video", FrameRate = 25.0, IsVariableFrameRate = false };
+
+        // Act
+        string? fpsText = FileQueueItem.FormatFrameRateBadge(track);
+
+        // Assert
+        fpsText.Should().Be("25 FPS");
+    }
+
+    /// <summary>
+    /// Без данных зонда форматтеры возвращают null, свойства скрывают бейджи.
+    /// </summary>
+    [TestMethod]
+    public void FrameRateBadge_Unknown_HidesBadges()
+    {
+        // Arrange
+        var track = new MediaTrack { TrackType = "video" };
+        var item = new FileQueueItem("C:\\video.mkv");
+        var structure = new MediaStructure { FilePath = "C:\\video.mkv" };
+        structure.Tracks.Add(track);
+
+        // Act
+        item.MediaInfo = structure;
+
+        // Assert
+        FileQueueItem.FormatFrameRateBadge(track).Should().BeNull();
+        FileQueueItem.FormatFrameModeBadge(track).Should().BeNull();
+        item.FrameRateBadgeText.Should().BeNull();
+        item.FrameModeBadgeText.Should().BeNull();
+        item.HasFrameRateBadge.Should().BeFalse();
+        item.HasFrameModeBadge.Should().BeFalse();
+        item.IsVariableFrameRate.Should().BeFalse();
+    }
+
+    /// <summary>
+    /// Признак VFR первой видеодорожки читается без учёта настроек отображения.
+    /// </summary>
+    [TestMethod]
+    public void IsVariableFrameRate_ReflectsFirstVideoTrack()
     {
         // Arrange
         var item = new FileQueueItem("C:\\video.mkv");
@@ -306,62 +361,21 @@ public class FrameRateBadgeTests
         item.MediaInfo = structure;
 
         // Assert
-        item.FrameRateBadgeText.Should().Be("~29,97 FPS");
-        item.FrameModeBadgeText.Should().Be("VFR");
+        item.IsVariableFrameRate.Should().BeTrue();
     }
 
     /// <summary>
-    /// Целое значение 25 показывает без дробной части.
+    /// Без зарегистрированных сервисов показ пилюль запрещён по умолчанию.
     /// </summary>
     [TestMethod]
-    public void FrameRateBadge_WholeNumber_OmitsDecimals()
-    {
-        // Arrange
-        var item = new FileQueueItem("C:\\video.mkv");
-        var structure = new MediaStructure { FilePath = "C:\\video.mkv" };
-        structure.Tracks.Add(new MediaTrack { TrackType = "video", FrameRate = 25.0, IsVariableFrameRate = false });
-
-        // Act
-        item.MediaInfo = structure;
-
-        // Assert
-        item.FrameRateBadgeText.Should().Be("25 FPS");
-    }
-
-    /// <summary>
-    /// Без данных зонда бейджи скрыты: тексты null.
-    /// </summary>
-    [TestMethod]
-    public void FrameRateBadge_Unknown_HidesBadges()
-    {
-        // Arrange
-        var item = new FileQueueItem("C:\\video.mkv");
-        var structure = new MediaStructure { FilePath = "C:\\video.mkv" };
-        structure.Tracks.Add(new MediaTrack { TrackType = "video" });
-
-        // Act
-        item.MediaInfo = structure;
-
-        // Assert
-        item.FrameRateBadgeText.Should().BeNull();
-        item.FrameModeBadgeText.Should().BeNull();
-        item.HasFrameRateBadge.Should().BeFalse();
-        item.HasFrameModeBadge.Should().BeFalse();
-        item.IsVariableFrameRate.Should().BeFalse();
-    }
-
-    /// <summary>
-    /// Без зарегистрированных сервисов показ пилюль разрешён по умолчанию.
-    /// </summary>
-    [TestMethod]
-    public void ShowBadges_WithoutServices_DefaultsToTrue()
+    public void ShowBadges_WithoutServices_DefaultsToFalse()
     {
         // Arrange
         var item = new FileQueueItem("C:\\video.mkv");
 
         // Act & Assert
-        item.ShowFrameRateBadge.Should().BeTrue();
-        item.ShowFrameModeBadge.Should().BeTrue();
+        item.ShowFrameRateBadge.Should().BeFalse();
+        item.ShowFrameModeBadge.Should().BeFalse();
     }
 
     /// <summary>

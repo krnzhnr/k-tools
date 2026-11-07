@@ -231,9 +231,10 @@ public sealed class TrackExtractorScript : AbstractScript
                 outFilename = $"{renamedStem}{trackExt}";
                 string outPath = Path.Combine(baseDir, outFilename);
 
-                // Защита от коллизий внутри одной очереди: одинаковые имена из шаблона
+                // Защита от коллизий внутри одного файла: одинаковые имена из шаблона
                 // (например {original} для двух дорожек с одним расширением) разводятся
                 // детерминированным суффиксом _trackXX по ID потока, а не случайным (1).
+                // Набор занятых путей живёт в пределах одного вызова (один входной файл).
                 if (reservedOutPaths.Contains(outPath))
                 {
                     string originalFilename = outFilename;
@@ -241,7 +242,7 @@ public sealed class TrackExtractorScript : AbstractScript
                     outPath = Path.Combine(baseDir, outFilename);
                     string warnMsg = $"⚠ Одинаковое имя '{originalFilename}': дорожка #{track.TrackId} сохранена как '{outFilename}'. Добавьте {{id}} в шаблон имени, чтобы избежать переименования";
                     duplicateWarnings.Add(warnMsg);
-                    _logService.Write("script.track_extractor.duplicate_renamed", LogLevel.Warning, LogStatus.Changed, $"Имя '{LogProps.FileName(originalFilename)}' уже занято в этой очереди, дорожка #{track.TrackId} сохранена как '{LogProps.FileName(outFilename)}'", source: Name, properties: LogProps.Create("Index", track.TrackId).With("FileName", LogProps.FileName(originalFilename)).With("OutputName", LogProps.FileName(outFilename)).With("InputName", LogProps.FileName(filePath)));
+                    _logService.Write("script.track_extractor.duplicate_renamed", LogLevel.Warning, LogStatus.Changed, $"Имя '{LogProps.FileName(originalFilename)}' уже занято в этом файле, дорожка #{track.TrackId} сохранена как '{LogProps.FileName(outFilename)}'", source: Name, properties: LogProps.Create("Index", track.TrackId).With("FileName", LogProps.FileName(originalFilename)).With("OutputName", LogProps.FileName(outFilename)).With("InputName", LogProps.FileName(filePath)));
                 }
 
                 reservedOutPaths.Add(outPath);

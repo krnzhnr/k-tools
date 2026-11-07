@@ -157,25 +157,22 @@ public sealed class FileQueueItem : INotifyPropertyChanged
     /// Формат ru-RU с запятой, до трёх знаков. Null — данных нет или пилюля отключена
     /// в персонализации, бейдж скрыт.
     /// </summary>
-    public string? FrameRateBadgeText
+    public string? FrameRateBadgeText => ShowFrameRateBadge ? FormatFrameRateBadge(FirstVideoTrack) : null;
+
+    /// <summary>
+    /// Чистое форматирование бейджика частоты кадров по дорожке, без чтения настроек.
+    /// Null — нет видеодорожки или частоты кадров.
+    /// </summary>
+    public static string? FormatFrameRateBadge(MediaTrack? track)
     {
-        get
+        if (track?.FrameRate is not { } fps || fps <= 0 || double.IsNaN(fps) || double.IsInfinity(fps))
         {
-            if (!ShowFrameRateBadge)
-            {
-                return null;
-            }
-
-            MediaTrack? track = FirstVideoTrack;
-            if (track?.FrameRate is not { } fps || fps <= 0 || double.IsNaN(fps) || double.IsInfinity(fps))
-            {
-                return null;
-            }
-
-            string formatted = fps.ToString("0.###", CultureInfo.GetCultureInfo("ru-RU"));
-            bool isVfr = track.IsVariableFrameRate == true;
-            return (isVfr ? "~" : string.Empty) + formatted + " FPS";
+            return null;
         }
+
+        string formatted = fps.ToString("0.###", CultureInfo.GetCultureInfo("ru-RU"));
+        bool isVfr = track.IsVariableFrameRate == true;
+        return (isVfr ? "~" : string.Empty) + formatted + " FPS";
     }
 
     /// <summary>
@@ -183,33 +180,30 @@ public sealed class FileQueueItem : INotifyPropertyChanged
     /// Null — режим неизвестен или пилюля отключена в персонализации, бейдж скрыт.
     /// VFR визуально отличим текстом и префиксом ~ у FPS.
     /// </summary>
-    public string? FrameModeBadgeText
+    public string? FrameModeBadgeText => ShowFrameModeBadge ? FormatFrameModeBadge(FirstVideoTrack) : null;
+
+    /// <summary>
+    /// Чистое форматирование бейджика режима частоты кадров по дорожке, без чтения настроек.
+    /// Null — режим или частота кадров неизвестны.
+    /// </summary>
+    public static string? FormatFrameModeBadge(MediaTrack? track)
     {
-        get
+        if (track?.IsVariableFrameRate is not bool isVfr)
         {
-            if (!ShowFrameModeBadge)
-            {
-                return null;
-            }
-
-            MediaTrack? track = FirstVideoTrack;
-            if (track?.IsVariableFrameRate is not bool isVfr)
-            {
-                return null;
-            }
-
-            if (track.FrameRate is not { } fps || fps <= 0 || double.IsNaN(fps) || double.IsInfinity(fps))
-            {
-                return null;
-            }
-
-            return isVfr ? "VFR" : "CFR";
+            return null;
         }
+
+        if (track.FrameRate is not { } fps || fps <= 0 || double.IsNaN(fps) || double.IsInfinity(fps))
+        {
+            return null;
+        }
+
+        return isVfr ? "VFR" : "CFR";
     }
 
     /// <summary>
     /// Разрешён ли показ пилюли частоты кадров в настройках отображения очереди.
-    /// Читается лениво, по умолчанию true (в тестах без сервисов тоже true).
+    /// По умолчанию false (пилюли выкл); без сервисов тоже false.
     /// </summary>
     public bool ShowFrameRateBadge
     {
@@ -225,12 +219,13 @@ public sealed class FileQueueItem : INotifyPropertyChanged
                     return settingsManager.ShowFrameRateBadge;
                 }
             }
-            return true;
+            return false;
         }
     }
 
     /// <summary>
     /// Разрешён ли показ пилюли типа развёртки (CFR/VFR) в настройках отображения очереди.
+    /// По умолчанию false (пилюли выкл); без сервисов тоже false.
     /// </summary>
     public bool ShowFrameModeBadge
     {
@@ -246,7 +241,7 @@ public sealed class FileQueueItem : INotifyPropertyChanged
                     return settingsManager.ShowFrameModeBadge;
                 }
             }
-            return true;
+            return false;
         }
     }
 

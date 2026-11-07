@@ -43,6 +43,7 @@ public sealed class TimingHistoryEntry
     public string Direction { get; set; } = string.Empty;
 
     /// <summary>Строка сдвига в миллисекундах для отображения.</summary>
+    [JsonIgnore]
     public string ShiftMsText => $"{ShiftMs} ms";
 
     /// <summary>Признак сдвига вперёд (для показа зелёной стрелки).</summary>
