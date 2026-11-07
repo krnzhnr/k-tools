@@ -46,6 +46,15 @@ public static class AppEventIds
     public const string StaleCopyRedirectFailed = "app.stale_copy.redirect_failed";
     public const string StaleCopySkipped = "app.stale_copy.skipped";
     public const string ShellIntegrationSkippedStaleCopy = "app.shell_integration.skipped_stale_copy";
+    public const string MigrationSkipped = "app.migration.skipped";
+    public const string MigrationStarted = "app.migration.started";
+    public const string MigrationSettingsCopied = "app.migration.settings_copied";
+    public const string MigrationBinRelocated = "app.migration.bin_relocated";
+    public const string MigrationDeferred = "app.migration.deferred";
+    public const string MigrationFailed = "app.migration.failed";
+    public const string MigrationProbeFailed = "app.migration.probe_failed";
+    public const string MigrationVerified = "app.migration.verified";
+    public const string MigrationCleanupCompleted = "app.migration.cleanup_completed";
 }
 
 /// <summary>
@@ -73,6 +82,12 @@ public static class AppErrorCodes
     public const string ShutdownStageFailed = "app-shutdown-stage-failed";
     public const string StaleCopyRedirectFailed = "app-stale-copy-redirect-failed";
     public const string StaleCopyCheckFailed = "app-stale-copy-check-failed";
+    public const string MigrationFailed = "migration-failed";
+    public const string MigrationSettingsCopyFailed = "migration-settings-copy-failed";
+    public const string MigrationBinRelocateFailed = "migration-bin-relocate-failed";
+    public const string MigrationProbeFailed = "migration-probe-failed";
+    public const string MigrationCleanupFailed = "migration-cleanup-failed";
+    public const string MigrationNoSpace = "migration-no-space";
 }
 
 /// <summary>

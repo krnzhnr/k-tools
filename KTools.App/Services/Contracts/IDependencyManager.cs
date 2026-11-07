@@ -1,6 +1,7 @@
-﻿// -*- coding: utf-8 -*-
+// -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 
 using KTools_App.Core;
@@ -91,6 +92,14 @@ public interface IDependencyManager
     /// Синхронная обёртка получения версии установленной зависимости.
     /// </summary>
     string GetInstalledVersion(string key);
+
+    /// <summary>
+    /// Опрашивает версии всех зарегистрированных бинарных зависимостей по текущим путям,
+    /// в обход кэшей версий. Используется проверкой миграции данных.
+    /// </summary>
+    /// <param name="cancellationToken">Токен отмены (проверяется между опросами).</param>
+    /// <returns>Результат опроса по каждой записи реестра.</returns>
+    Task<IReadOnlyList<BinaryProbeResult>> ProbeInstalledBinariesAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Выполняет проверку обновлений всех зависимостей (включая FFmpeg, MKVToolNix, eac3to и yt-dlp) раз в сутки.

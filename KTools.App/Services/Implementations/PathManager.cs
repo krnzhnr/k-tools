@@ -1,10 +1,7 @@
-﻿// -*- coding: utf-8 -*-
+// -*- coding: utf-8 -*-
 using System;
+using System.Collections.Generic;
 using System.IO;
-using System.Reflection;
-using System.Security.Cryptography;
-using System.Text;
-using System.Text.Json;
 
 using KTools_App.Diagnostics;
 using KTools_App.Services.Contracts;
@@ -18,25 +15,14 @@ public sealed class PathManager : IPathManager
 {
     private const string SourceName = nameof(PathManager);
 
-    // Маркер решения о записи в каталог установки (PERF-06).
-    // Каталог: %LocalAppData%\KTools.
-    // Имя: write-probe-&lt;отпечаток&gt;.json, где отпечаток — первые 16 hex-символов
-    // SHA256 от нормализованного пути установки в нижнем регистре (один файл на путь
-    // установки, чтобы разные установки и параллельные тесты не затирали друг друга).
-    // Содержимое JSON: { "BaseDir": "...", "IsWritable": true, "AppVersion": "2.1.0",
-    // "ProbedAtUtc": "2026-10-14T00:00:00Z" }.
-    // Маркер валиден, если путь совпадает (без учёта регистра), версия совпадает
-    // и возраст не старше ProbeCacheTtl. При валидном маркере пробная запись
-    // не выполняется; при смене пути, версии, отсутствии или протухании маркера
-    // выполняется одна проба с атомарной перезаписью маркера (временный файл
-    // и перемещение). MSIX-установки маркер не используют (всегда LocalAppData
-    // без проб). Все ошибки чтения и записи маркера тихие: откат к пробе,
-    // без диалогов и запросов прав.
-    private const string ProbeCacheFilePrefix = "write-probe-";
-
-    private const string ProbeCacheFileSuffix = ".json";
-
-    private static readonly TimeSpan ProbeCacheTtl = TimeSpan.FromDays(30);
+    // Модель хранения данных (ишью 46): основной путь для всех пользовательских данных —
+    // %LocalAppData%\KTools (настройки, bin, кэши, логи). Каталог установки считается
+    // неизменяемым: апдейтер перезаписывает его целиком, поэтому данные рядом с exe
+    // живут только в явном portable-режиме. Признак режима — пустой файл-маркер
+    // portable.txt рядом с исполняемым файлом. Никаких проб записи на старте нет:
+    // ответ заранее известен (per-user установка записываема, per-machine — нет,
+    // MSIX всегда работает в LocalAppData), поэтому вердикт вычисляется детерминированно.
+    private const string PortableMarkerFileName = "portable.txt";
 
     private readonly string _baseDir;
     private readonly ILogService _logService;
@@ -44,8 +30,12 @@ public sealed class PathManager : IPathManager
     private readonly object _binDirectoryLock = new();
     private string? _settingsDirectory;
     private readonly object _settingsDirectoryLock = new();
-    private readonly object _probeLock = new();
-    private bool? _cachedIsWritable;
+    private bool? _isPortableMode;
+    private readonly object _portableModeLock = new();
+    private bool _legacyFallback;
+    private readonly object _legacyFallbackLock = new();
+    private bool _modeLogged;
+    private readonly object _modeLoggedLock = new();
     private readonly Dictionary<string, string> _binaryPathCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _shortPathCache = new(StringComparer.Ordinal);
 
@@ -79,16 +69,10 @@ public sealed class PathManager : IPathManager
 
     /// <summary>
     /// Возвращает абсолютный путь к директории bin для утилит.
-    /// 
-    /// Для обычных приложений: использует папку bin рядом с исполняемым файлом.
-    /// Для MSIX приложений: использует LocalAppData (так как Program Files доступен только для чтения).
-    /// Это обеспечивает работу скачивания и распаковки зависимостей в MSIX приложениях.
-    /// <summary>
-    /// Возвращает абсолютный путь к директории bin для утилит.
-    /// 
-    /// Для обычных приложений: при наличии прав использует папку bin рядом с исполняемым файлом.
-    /// Если прав записи нет (например, установка в Program Files) - автоматически переключается на LocalAppData.
-    /// Это гарантирует беспрепятственную загрузку и обновление утилит без ошибок доступа.
+    ///
+    /// В portable-режиме (маркер portable.txt рядом с exe): папка bin рядом с исполняемым файлом.
+    /// Иначе: %LocalAppData%\KTools\bin. Каталог установки считается неизменяемым
+    /// (апдейтер перезаписывает его целиком), проба записи не выполняется.
     /// </summary>
     /// <returns>Абсолютный путь к локальной папке bin утилит.</returns>
     public string GetBinDirectory()
@@ -106,39 +90,25 @@ public sealed class PathManager : IPathManager
                 return _binDirectory;
             }
 
-            // Проверка: если приложение запущено из защищенной системной папки MSIX
-            if (IsMsixInstallation())
+            string resolved = IsPortableMode() || IsLegacyFallback()
+                ? Path.Combine(_baseDir, "bin")
+                : Path.Combine(GetManagedDataRoot(), "bin");
+
+            if (!Directory.Exists(resolved))
             {
-                string appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-                return _binDirectory = Path.Combine(appData, "KTools", "bin");
+                Directory.CreateDirectory(resolved);
             }
 
-            // Вердикт о записи берётся из межзапускового маркера; проба — только при
-            // отсутствии, смене пути или версии, протухании маркера.
-            bool writable = ResolveBaseDirWritable();
-            if (writable)
-            {
-                return _binDirectory = Path.Combine(_baseDir, "bin");
-            }
-
-            // При отсутствии прав записи в папку установки (Program Files) используем LOCALAPPDATA
-            string fallbackDir = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-            string fallbackPath = Path.Combine(fallbackDir, "KTools", "bin");
-
-            if (!Directory.Exists(fallbackPath))
-            {
-                Directory.CreateDirectory(fallbackPath);
-            }
-            return _binDirectory = fallbackPath;
+            LogModeOnce();
+            return _binDirectory = resolved;
         }
     }
 
     /// <summary>
     /// Возвращает путь к директории для хранения конфигурационных файлов.
-    /// 
-    /// Для обычных приложений (Portable): попытается использовать папку приложения,
-    /// если нет прав - использует LOCALAPPDATA.
-    /// Для MSIX приложений: всегда использует LOCALAPPDATA (так как Program Files доступен только для чтения).
+    ///
+    /// В portable-режиме (маркер portable.txt рядом с exe): каталог установки.
+    /// Иначе: %LocalAppData%\KTools. Проба записи не выполняется.
     /// </summary>
     /// <returns>Абсолютный путь к папке настроек.</returns>
     public string GetSettingsDirectory()
@@ -156,352 +126,162 @@ public sealed class PathManager : IPathManager
                 return _settingsDirectory;
             }
 
-            if (IsMsixInstallation())
+            string resolved;
+            if (IsPortableMode() || IsLegacyFallback())
             {
-                string appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-                string msixSettingsPath = Path.Combine(appData, "KTools");
-                if (!Directory.Exists(msixSettingsPath))
+                resolved = _baseDir;
+            }
+            else
+            {
+                resolved = GetManagedDataRoot();
+                if (!Directory.Exists(resolved))
                 {
-                    Directory.CreateDirectory(msixSettingsPath);
+                    Directory.CreateDirectory(resolved);
                 }
-                return _settingsDirectory = msixSettingsPath;
             }
 
-            // Общий с GetBinDirectory вердикт о записи: валидный маркер исключает
-            // повторную пробу, инвалидация приводит к одной пробе и обновлению маркера.
-            bool writable = ResolveBaseDirWritable();
-            if (writable)
-            {
-                return _settingsDirectory = _baseDir;
-            }
-
-            // 2. Fallback в LOCALAPPDATA при отсутствии прав
-            string fallbackDir = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-            string fallbackPath = Path.Combine(fallbackDir, "KTools");
-
-            if (!Directory.Exists(fallbackPath))
-            {
-                Directory.CreateDirectory(fallbackPath);
-            }
-            return _settingsDirectory = fallbackPath;
+            LogModeOnce();
+            return _settingsDirectory = resolved;
         }
     }
 
     /// <summary>
-    /// Возвращает путь к файлу-маркеру решения о записи в каталог установки.
-    /// Маркер лежит в %LocalAppData%\KTools и называется write-probe-&lt;отпечаток&gt;.json.
+    /// Проверяет, работает ли приложение в portable-режиме.
+    /// Признак — файл-маркер portable.txt рядом с исполняемым файлом.
+    /// В этом режиме все данные хранятся рядом с exe, миграция не выполняется.
     /// </summary>
-    /// <param name="baseDir">Базовая директория установки (при null или пустоте используется AppContext.BaseDirectory).</param>
-    /// <returns>Абсолютный путь к файлу маркера для указанного пути установки.</returns>
-    public static string GetProbeCacheFilePath(string? baseDir)
+    /// <returns>True, если рядом с exe есть маркер portable.txt.</returns>
+    public bool IsPortableMode()
     {
-        string effective = string.IsNullOrWhiteSpace(baseDir) ? AppContext.BaseDirectory : baseDir;
-        string cacheDir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "KTools");
-        return Path.Combine(cacheDir, ProbeCacheFilePrefix + ComputeBaseDirFingerprint(effective) + ProbeCacheFileSuffix);
-    }
-
-    /// <summary>
-    /// Проверяет, запущено ли приложение из защищённой системной папки MSIX.
-    /// </summary>
-    /// <returns>True для MSIX-установок, иначе false.</returns>
-    private bool IsMsixInstallation()
-    {
-        return _baseDir.Contains("WindowsApps", StringComparison.OrdinalIgnoreCase);
-    }
-
-    /// <summary>
-    /// Возвращает сохранённый вердикт о записи в каталог установки.
-    /// При валидном маркере проба не выполняется; иначе выполняется одна проба
-    /// с обновлением маркера. Результат запоминается до конца жизни процесса.
-    /// </summary>
-    /// <returns>True, если каталог установки доступен для записи.</returns>
-    private bool ResolveBaseDirWritable()
-    {
-        lock (_probeLock)
+        if (_isPortableMode.HasValue)
         {
-            if (_cachedIsWritable.HasValue)
-            {
-                _logService.Write(
-                    "path.probe.cache_hit",
-                    LogLevel.Debug,
-                    LogStatus.Succeeded,
-                    "Проверка записи в каталог установки пропущена, использовано сохранённое решение",
-                    source: SourceName,
-                    properties: LogProps
-                        .Create("FileName", LogProps.FileName(_baseDir))
-                        .With("Version", GetCurrentAppVersion()));
-                return _cachedIsWritable.Value;
-            }
-
-            if (TryLoadVerdictFromFile(out bool cached))
-            {
-                _cachedIsWritable = cached;
-                _logService.Write(
-                    "path.probe.cache_hit",
-                    LogLevel.Debug,
-                    LogStatus.Succeeded,
-                    "Проверка записи в каталог установки пропущена, использовано сохранённое решение",
-                    source: SourceName,
-                    properties: LogProps
-                        .Create("FileName", LogProps.FileName(_baseDir))
-                        .With("Version", GetCurrentAppVersion()));
-                return cached;
-            }
-
-            bool writable = ProbeBaseDirWritable();
-            _cachedIsWritable = writable;
-            SaveVerdictToFile(writable);
-            _logService.Write(
-                "path.probe.completed",
-                LogLevel.Debug,
-                LogStatus.Succeeded,
-                "Пробная запись в каталог установки выполнена, решение сохранено",
-                source: SourceName,
-                properties: LogProps
-                    .Create("FileName", LogProps.FileName(_baseDir))
-                    .With("Value", writable)
-                    .With("Version", GetCurrentAppVersion()));
-            return writable;
+            return _isPortableMode.Value;
         }
-    }
 
-    /// <summary>
-    /// Выполняет единственную пробную запись в каталог установки.
-    /// Имя файла уникально, чтобы параллельные процессы не мешали друг другу.
-    /// </summary>
-    /// <returns>True, если запись удалась.</returns>
-    private bool ProbeBaseDirWritable()
-    {
-        string testFile = Path.Combine(_baseDir, $".write_test_probe_{Guid.NewGuid():N}");
-        try
+        lock (_portableModeLock)
         {
-            File.WriteAllText(testFile, "test");
+            if (_isPortableMode.HasValue)
+            {
+                return _isPortableMode.Value;
+            }
+
+            bool portable = false;
             try
             {
-                File.Delete(testFile);
+                string marker = Path.Combine(_baseDir, PortableMarkerFileName);
+                portable = File.Exists(marker) || Directory.Exists(marker);
             }
             catch (Exception)
             {
-                // Удаление пробного файла лучше не доводить до fallback: запись удалась.
+                // Не удалось проверить маркер — считаем режим управляемым:
+                // данные в LocalAppData всегда безопасны, рядом с exe — нет.
+                portable = false;
             }
 
+            _isPortableMode = portable;
+            return portable;
+        }
+    }
+
+    /// <summary>
+    /// Переключает разрешение путей на каталог установки после сбоя миграции.
+    /// Приложение стартует «по-старому», повторная попытка — при следующем запуске.
+    /// </summary>
+    public void EnterLegacyFallbackMode()
+    {
+        lock (_legacyFallbackLock)
+        {
+            _legacyFallback = true;
+            _binDirectory = null;
+            _settingsDirectory = null;
+        }
+
+        lock (_modeLoggedLock)
+        {
+            _modeLogged = false;
+        }
+
+        LogModeOnce();
+    }
+
+    /// <summary>
+    /// Проверяет, включён ли откат на каталог установки после сбоя миграции.
+    /// </summary>
+    /// <returns>True, если пути разрешаются в каталог установки.</returns>
+    private bool IsLegacyFallback()
+    {
+        lock (_legacyFallbackLock)
+        {
+            return _legacyFallback;
+        }
+    }
+
+    /// <summary>
+    /// Проверяет, недоступен ли LocalAppData (данные уйдут во временный каталог).
+    /// </summary>
+    /// <returns>True, если каталог LocalAppData пуст или недоступен.</returns>
+    private static bool IsTempDataRoot()
+    {
+        try
+        {
+            return string.IsNullOrEmpty(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData));
+        }
+        catch (Exception)
+        {
             return true;
         }
-        catch (Exception)
-        {
-            try
-            {
-                if (File.Exists(testFile))
-                {
-                    File.Delete(testFile);
-                }
-            }
-            catch (Exception)
-            {
-                // Тихое игнорирование очистки: вердикт уже определён как отсутствие прав.
-            }
-
-            return false;
-        }
     }
 
     /// <summary>
-    /// Читает маркер решения из %LocalAppData%\KTools и проверяет путь, версию и возраст.
-    /// Любая ошибка чтения или несоответствие трактуется как отсутствие маркера.
+    /// Возвращает корневой каталог управляемых данных (%LocalAppData%\KTools).
+    /// При недоступном LocalAppData откатывается на временный каталог.
     /// </summary>
-    /// <param name="isWritable">Сохранённый вердикт при успехе.</param>
-    /// <returns>True, если маркер валиден.</returns>
-    private bool TryLoadVerdictFromFile(out bool isWritable)
+    /// <returns>Абсолютный путь к корню данных.</returns>
+    internal static string GetManagedDataRoot()
     {
-        isWritable = false;
-        string cacheFile;
-        try
+        string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        if (string.IsNullOrEmpty(localAppData))
         {
-            cacheFile = GetProbeCacheFilePath(_baseDir);
-        }
-        catch (Exception)
-        {
-            return false;
+            localAppData = Path.GetTempPath();
         }
 
-        string json;
-        try
+        return Path.Combine(localAppData, LogFilePolicy.ApplicationFolderName);
+    }
+
+    /// <summary>
+    /// Однократно фиксирует в журнале выбранный режим хранения данных.
+    /// </summary>
+    private void LogModeOnce()
+    {
+        lock (_modeLoggedLock)
         {
-            if (!File.Exists(cacheFile))
+            if (_modeLogged)
             {
-                return false;
+                return;
             }
 
-            json = File.ReadAllText(cacheFile);
-        }
-        catch (Exception)
-        {
-            return false;
+            _modeLogged = true;
         }
 
-        ProbeCacheEntry? entry;
-        try
-        {
-            entry = JsonSerializer.Deserialize<ProbeCacheEntry>(json);
-        }
-        catch (Exception)
-        {
-            return false;
-        }
-
-        if (entry is null || string.IsNullOrWhiteSpace(entry.BaseDir))
-        {
-            return false;
-        }
-
-        if (!string.Equals(NormalizeBaseDir(entry.BaseDir), NormalizeBaseDir(_baseDir), StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        if (!string.Equals(entry.AppVersion ?? string.Empty, GetCurrentAppVersion(), StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        DateTime probed = entry.ProbedAtUtc.Kind == DateTimeKind.Unspecified
-            ? DateTime.SpecifyKind(entry.ProbedAtUtc, DateTimeKind.Utc)
-            : entry.ProbedAtUtc.ToUniversalTime();
-        if (probed == default)
-        {
-            return false;
-        }
-
-        if (DateTime.UtcNow - probed > ProbeCacheTtl)
-        {
-            return false;
-        }
-
-        isWritable = entry.IsWritable;
-        return true;
-    }
-
-    /// <summary>
-    /// Атомарно сохраняет вердикт в маркер (%LocalAppData%\KTools).
-    /// Ошибки тихие: при следующем запуске проба повторится.
-    /// </summary>
-    /// <param name="isWritable">Вердикт о записи в каталог установки.</param>
-    private void SaveVerdictToFile(bool isWritable)
-    {
-        try
-        {
-            string cacheFile = GetProbeCacheFilePath(_baseDir);
-            string? directory = Path.GetDirectoryName(cacheFile);
-            if (!string.IsNullOrEmpty(directory))
-            {
-                Directory.CreateDirectory(directory);
-            }
-
-            var entry = new ProbeCacheEntry
-            {
-                BaseDir = _baseDir,
-                IsWritable = isWritable,
-                AppVersion = GetCurrentAppVersion(),
-                ProbedAtUtc = DateTime.UtcNow,
-            };
-            string json = JsonSerializer.Serialize(entry);
-            string tempFile = cacheFile + ".tmp";
-            File.WriteAllText(tempFile, json, Encoding.UTF8);
-            File.Move(tempFile, cacheFile, overwrite: true);
-        }
-        catch (Exception)
-        {
-            // Тихий кэш: маркер необязателен, проба повторится при следующем запуске.
-        }
-    }
-
-    /// <summary>
-    /// Приводит путь установки к сопоставимому виду для сравнения маркера.
-    /// </summary>
-    /// <param name="baseDir">Проверяемый путь установки.</param>
-    /// <returns>Нормализованный путь.</returns>
-    private static string NormalizeBaseDir(string baseDir)
-    {
-        try
-        {
-            return Path.GetFullPath(baseDir)
-                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        }
-        catch (Exception)
-        {
-            return baseDir.Trim();
-        }
-    }
-
-    /// <summary>
-    /// Вычисляет стабильный между запусками отпечаток пути установки.
-    /// </summary>
-    /// <param name="baseDir">Путь установки.</param>
-    /// <returns>Первые 16 hex-символов SHA256 в нижнем регистре.</returns>
-    private static string ComputeBaseDirFingerprint(string baseDir)
-    {
-        string normalized;
-        try
-        {
-            normalized = Path.GetFullPath(baseDir)
-                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-                .ToLowerInvariant();
-        }
-        catch (Exception)
-        {
-            normalized = baseDir.ToLowerInvariant();
-        }
-
-        byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(normalized));
-        return Convert.ToHexString(hash, 0, 8).ToLowerInvariant();
-    }
-
-    /// <summary>
-    /// Возвращает версию сборки для инвалидации маркера при обновлении.
-    /// </summary>
-    /// <returns>Версия приложения или 0.0.0 при недоступности.</returns>
-    private static string GetCurrentAppVersion()
-    {
-        try
-        {
-            Assembly assembly = typeof(PathManager).Assembly;
-            string? informational = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
-            if (!string.IsNullOrWhiteSpace(informational))
-            {
-                int plus = informational.IndexOf('+');
-                string version = plus > 0 ? informational[..plus] : informational;
-                if (!string.IsNullOrWhiteSpace(version))
-                {
-                    return version.Trim();
-                }
-            }
-
-            return assembly.GetName().Version?.ToString() ?? "0.0.0";
-        }
-        catch (Exception)
-        {
-            return "0.0.0";
-        }
-    }
-
-    /// <summary>
-    /// Запись маркера решения о записи в каталог установки.
-    /// </summary>
-    private sealed class ProbeCacheEntry
-    {
-        /// <summary>Путь установки, для которого выполнен вердикт.</summary>
-        public string? BaseDir { get; set; }
-
-        /// <summary>Доступен ли каталог установки для записи.</summary>
-        public bool IsWritable { get; set; }
-
-        /// <summary>Версия приложения на момент пробы.</summary>
-        public string? AppVersion { get; set; }
-
-        /// <summary>Момент пробы в UTC.</summary>
-        public DateTime ProbedAtUtc { get; set; }
+        bool portable = IsPortableMode();
+        bool fallback = !portable && IsLegacyFallback();
+        bool tempData = !portable && !fallback && IsTempDataRoot();
+        string mode = portable ? "portable" : (fallback ? "legacy-fallback" : (tempData ? "managed-temp" : "managed"));
+        _logService.Write(
+            "path.mode.resolved",
+            tempData ? LogLevel.Warning : LogLevel.Debug,
+            tempData ? LogStatus.Changed : LogStatus.Succeeded,
+            portable
+                ? "Данные приложения хранятся рядом с исполняемым файлом (portable-режим)"
+                : (fallback
+                    ? "Миграция не удалась, данные берутся из каталога установки (режим отката)"
+                    : (tempData
+                        ? "Каталог LocalAppData недоступен, данные хранятся во временном каталоге и могут быть удалены очисткой системы"
+                        : "Данные приложения хранятся в каталоге LocalAppData")),
+            source: SourceName,
+            properties: LogProps
+                .Create("FileName", LogProps.FileName(_baseDir))
+                .With("Mode", mode));
     }
 
     /// <summary>

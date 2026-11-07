@@ -22,6 +22,18 @@ public interface IPathManager
     string GetSettingsDirectory();
 
     /// <summary>
+    /// Проверяет, работает ли приложение в portable-режиме
+    /// (маркер portable.txt рядом с исполняемым файлом).
+    /// </summary>
+    bool IsPortableMode();
+
+    /// <summary>
+    /// Переключает разрешение путей на каталог установки после сбоя миграции.
+    /// Приложение стартует «по-старому», повторная попытка — при следующем запуске.
+    /// </summary>
+    void EnterLegacyFallbackMode();
+
+    /// <summary>
     /// Получить абсолютный путь к бинарному файлу утилиты.
     /// </summary>
     string GetBinaryPath(string binaryName);

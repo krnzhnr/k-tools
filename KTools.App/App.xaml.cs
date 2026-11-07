@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Text;
 using System.Threading;
@@ -151,6 +151,9 @@ public partial class App : Application
             },
             () =>
             {
+                // Ишью 46: перенос данных в LocalAppData — строго до первого чтения настроек.
+                // При сбое мигратор включает legacy-режим, приложение стартует «по-старому».
+                Services.GetRequiredService<IUserDataMigrator>().EnsureMigrated();
                 _settingsManager = Services.GetRequiredService<ISettingsManager>();
                 return _settingsManager;
             });
@@ -792,6 +795,7 @@ public partial class App : Application
         services.AddSingleton<ICrashCoordinator>(provider => provider.GetRequiredService<CrashCoordinator>());
         services.AddSingleton<ISystemInfoService, SystemInfoService>();
         services.AddSingleton<IPathManager, PathManager>();
+        services.AddSingleton<IUserDataMigrator, UserDataMigrator>();
         services.AddSingleton<ISettingsManager, SettingsManager>();
         services.AddSingleton<IDependencyManager, DependencyManager>();
         services.AddSingleton<IScriptRegistry, ScriptRegistry>();
@@ -993,6 +997,36 @@ public partial class App : Application
                 catch (Exception)
                 {
                     // Отложенная проба не должна ронять фоновую задачу: сбои уже залогированы внутри кэша.
+                }
+            });
+
+            // Ишью 46, фаза B: проверка переноса в фоне после старта. Опрос версий
+            // запускается только если квитанция миграции требует проверки (NeedsVerification),
+            // поэтому на обычных запусках процессов не создаётся. Оригиналы в каталоге
+            // установки удаляются только после версий, полученных по новым путям.
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    if (IsControlledShutdownStarted || Volatile.Read(ref _servicesDisposed) != 0)
+                    {
+                        return;
+                    }
+
+                    var migrator = Services.GetRequiredService<IUserDataMigrator>();
+                    if (!migrator.NeedsVerification())
+                    {
+                        return;
+                    }
+
+                    var dependencies = Services.GetRequiredService<IDependencyManager>();
+                    using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+                    var probes = await dependencies.ProbeInstalledBinariesAsync(cts.Token).ConfigureAwait(false);
+                    await migrator.VerifyAndCleanupAsync(probes, cts.Token).ConfigureAwait(false);
+                }
+                catch (Exception)
+                {
+                    // Сбои проверки уже залогированы внутри мигратора, оригиналы сохранены.
                 }
             });
 

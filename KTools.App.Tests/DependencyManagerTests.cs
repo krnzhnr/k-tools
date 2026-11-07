@@ -31,6 +31,7 @@ public class DependencyManagerTests
     private Mock<ISettingsManager> _settingsManagerMock = null!;
     private Mock<KTools_App.Encoders.IHardwareCapabilityCache> _hardwareCacheMock = null!;
     private string _tempBinDir = null!;
+    private string _tempBaseDir = null!;
 
     [TestInitialize]
     public void Setup()
@@ -45,7 +46,13 @@ public class DependencyManagerTests
         _tempBinDir = Path.Combine(Path.GetTempPath(), "KTools_DepsTests_" + Guid.NewGuid().ToString());
         Directory.CreateDirectory(_tempBinDir);
 
+        // Временный каталог установки без legacy-bin: удаление работает только с каноническим путём.
+        _tempBaseDir = Path.Combine(Path.GetTempPath(), "KTools_DepsTests_Base_" + Guid.NewGuid().ToString());
+        Directory.CreateDirectory(_tempBaseDir);
+
         _pathManagerMock.Setup(pm => pm.GetBinDirectory()).Returns(_tempBinDir);
+
+        _pathManagerMock.Setup(pm => pm.GetBaseDirectory()).Returns(_tempBaseDir);
         
         // По умолчанию GetBinaryPath возвращает переданное имя файла
         _pathManagerMock.Setup(pm => pm.GetBinaryPath(It.IsAny<string>()))
@@ -62,6 +69,11 @@ public class DependencyManagerTests
         if (Directory.Exists(_tempBinDir))
         {
             try { Directory.Delete(_tempBinDir, true); } catch { }
+        }
+
+        if (Directory.Exists(_tempBaseDir))
+        {
+            try { Directory.Delete(_tempBaseDir, true); } catch { }
         }
     }
 
@@ -159,6 +171,103 @@ public class DependencyManagerTests
         result.Should().BeTrue();
         Directory.Exists(ffmpegFolder).Should().BeFalse();
         manager.GetStatus("ffmpeg").Should().Be(DependencyStatus.NotInstalled);
+    }
+
+    /// <summary>
+    /// Проверяет удаление legacy-остатка при побайтовой идентичности канонической копии.
+    /// </summary>
+    [TestMethod]
+    public void RemoveDependency_LegacyIdentical_DeletesBothAndReturnsTrue()
+    {
+        // Arrange — одинаковое содержимое в обоих местах.
+        string canonicalFile = Path.Combine(_tempBinDir, "ffmpeg", "kt-ffmpeg.exe");
+        Directory.CreateDirectory(Path.GetDirectoryName(canonicalFile)!);
+        File.WriteAllText(canonicalFile, "same-bytes");
+        string legacyFile = Path.Combine(_tempBaseDir, "bin", "ffmpeg", "kt-ffmpeg.exe");
+        Directory.CreateDirectory(Path.GetDirectoryName(legacyFile)!);
+        File.WriteAllText(legacyFile, "same-bytes");
+
+        var manager = new DependencyManager(_logServiceMock.Object, _pathManagerMock.Object, _httpClientFactoryMock.Object, _settingsManagerMock.Object, _hardwareCacheMock.Object);
+
+        // Act
+        bool result = manager.RemoveDependency("ffmpeg");
+
+        // Assert — идентичный остаток удаляется вместе с канонической копией.
+        result.Should().BeTrue();
+        File.Exists(canonicalFile).Should().BeFalse();
+        File.Exists(legacyFile).Should().BeFalse();
+    }
+
+    /// <summary>
+    /// Проверяет сохранение расходящегося legacy-остатка: молча не трём чужие данные.
+    /// </summary>
+    [TestMethod]
+    public void RemoveDependency_LegacyDiverged_KeepsLegacyAndReturnsFalse()
+    {
+        // Arrange — содержимое различается (конфликт после миграции).
+        string canonicalFile = Path.Combine(_tempBinDir, "ffmpeg", "kt-ffmpeg.exe");
+        Directory.CreateDirectory(Path.GetDirectoryName(canonicalFile)!);
+        File.WriteAllText(canonicalFile, "NEW-BYTES");
+        string legacyFile = Path.Combine(_tempBaseDir, "bin", "ffmpeg", "kt-ffmpeg.exe");
+        Directory.CreateDirectory(Path.GetDirectoryName(legacyFile)!);
+        File.WriteAllText(legacyFile, "OLD-BYTES");
+
+        var manager = new DependencyManager(_logServiceMock.Object, _pathManagerMock.Object, _httpClientFactoryMock.Object, _settingsManagerMock.Object, _hardwareCacheMock.Object);
+
+        // Act
+        bool result = manager.RemoveDependency("ffmpeg");
+
+        // Assert — каноническая копия удалена, расходящийся исходник оставлен.
+        result.Should().BeFalse("неполное удаление обязано сигнализировать сбоем");
+        File.Exists(canonicalFile).Should().BeFalse();
+        File.Exists(legacyFile).Should().BeTrue("расходящийся остаток не трогаем");
+    }
+
+    /// <summary>
+    /// Проверяет удаление единственной legacy-копии при отсутствии канонической.
+    /// </summary>
+    [TestMethod]
+    public void RemoveDependency_CanonicalMissing_DeletesLegacyOnly()
+    {
+        // Arrange — файлы только в каталоге установки (состояние до миграции).
+        string legacyFile = Path.Combine(_tempBaseDir, "bin", "ffmpeg", "kt-ffmpeg.exe");
+        Directory.CreateDirectory(Path.GetDirectoryName(legacyFile)!);
+        File.WriteAllText(legacyFile, "legacy-bytes");
+
+        var manager = new DependencyManager(_logServiceMock.Object, _pathManagerMock.Object, _httpClientFactoryMock.Object, _settingsManagerMock.Object, _hardwareCacheMock.Object);
+
+        // Act
+        bool result = manager.RemoveDependency("ffmpeg");
+
+        // Assert — единственная копия удалена по запросу пользователя.
+        result.Should().BeTrue();
+        File.Exists(legacyFile).Should().BeFalse();
+        manager.GetStatus("ffmpeg").Should().Be(DependencyStatus.NotInstalled);
+    }
+
+    /// <summary>
+    /// Проверяет пробу версий: неисполняемый мусор даёт маркер «версия не извлечена».
+    /// </summary>
+    [TestMethod]
+    public async Task ProbeInstalledBinaries_BrokenBinary_ReportsUnknownMarker()
+    {
+        // Arrange — мусор вместо исполняемого файла (запуск невозможен).
+        string fake = Path.Combine(_tempBinDir, "ffmpeg", "kt-ffmpeg.exe");
+        Directory.CreateDirectory(Path.GetDirectoryName(fake)!);
+        File.WriteAllText(fake, "not-an-executable");
+        _pathManagerMock.Setup(pm => pm.GetBinaryPath("kt-ffmpeg.exe")).Returns(fake);
+
+        var manager = new DependencyManager(_logServiceMock.Object, _pathManagerMock.Object, _httpClientFactoryMock.Object, _settingsManagerMock.Object, _hardwareCacheMock.Object);
+
+        // Act
+        IReadOnlyList<BinaryProbeResult> probes = await manager.ProbeInstalledBinariesAsync(CancellationToken.None);
+
+        // Assert — файл на месте и в текущем bin, но версия не извлечена.
+        BinaryProbeResult ffmpeg = probes.Should().ContainSingle(p => p.Key == "ffmpeg").Which;
+        ffmpeg.Exists.Should().BeTrue();
+        ffmpeg.IsUnderBinDirectory.Should().BeTrue();
+        ffmpeg.Version.Should().Be(BinaryProbeResult.VersionUnknownMarker);
+        probes.Should().ContainSingle(p => p.Key == "eac3to_decoders" && p.IsSkipped);
     }
 
     /// <summary>

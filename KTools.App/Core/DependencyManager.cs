@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -71,7 +72,13 @@ public class DependencyManager : IDependencyManager
     /// </summary>
     private const string VersionCacheGroup = "DependencyVersions";
 
-    private readonly string _binDir;
+    /// <summary>
+    /// Текущий каталог bin. Запрашивается через IPathManager при каждом обращении,
+    /// а не фиксируется в конструкторе: смена базового каталога (например, после
+    /// миграции данных в LocalAppData) не оставляет устаревшего пути.
+    /// </summary>
+    private string BinDir => _pathManager.GetBinDirectory();
+
     private readonly Dictionary<string, DependencyStatus> _statuses = new();
     private readonly List<DependencyInfo> _registry = new();
     private readonly IHttpClientFactory _httpClientFactory;
@@ -107,8 +114,6 @@ public class DependencyManager : IDependencyManager
         _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
         _settingsManager = settingsManager ?? throw new ArgumentNullException(nameof(settingsManager));
         _hardwareCache = hardwareCache ?? throw new ArgumentNullException(nameof(hardwareCache));
-        // Используем метод интеллектуального поиска директории bin
-        _binDir = _pathManager.GetBinDirectory();
         _httpClient = _httpClientFactory.CreateClient("DefaultClient");
         _httpClient.Timeout = TimeSpan.FromMinutes(10);
 
@@ -332,7 +337,7 @@ public class DependencyManager : IDependencyManager
         // Проверяем только наличие файлов (дёшево): проверка версии Node.js через
         // FileVersionInfo выполняется лениво при первом запросе версии, а не здесь.
         // 1. Проверяем локальный путь релиза
-        string localPath = Path.Combine(_binDir, dep.Subfolder, dep.VerifyBinary);
+        string localPath = Path.Combine(BinDir, dep.Subfolder, dep.VerifyBinary);
         if (File.Exists(localPath))
         {
             return true;
@@ -506,6 +511,193 @@ public class DependencyManager : IDependencyManager
             return persistedVersion;
         }
 
+        return await QueryBinaryVersionAsync(key, binaryPath).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Ключи инструментов с известным форматом вывода версии: для них проверка
+    /// миграции требует непустой извлечённой версии, остальные достаточно
+    /// подтвердить наличием файла по новому пути.
+    /// </summary>
+    private static readonly HashSet<string> VersionExpectedKeys = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "ffmpeg", "mkvtoolnix", "eac3to", "node", "yt-dlp", "qaac"
+    };
+
+    /// <summary>
+    /// Опрашивает версии всех зарегистрированных бинарных зависимостей по текущим путям,
+    /// в обход кэшей версий. Используется проверкой миграции (ишью 46): доказывает, что
+    /// запросы версий идут по новым путям, а не по остаткам в каталоге установки.
+    /// Процессы запускаются с тем же жёстким таймаутом, что и в обычном опросе версий.
+    /// </summary>
+    /// <param name="cancellationToken">Токен отмены (проверяется между опросами).</param>
+    /// <returns>Результат опроса по каждой записи реестра.</returns>
+    public async Task<IReadOnlyList<BinaryProbeResult>> ProbeInstalledBinariesAsync(CancellationToken cancellationToken = default)
+    {
+        List<BinaryProbeResult> results = new(_registry.Count);
+        string binDir = BinDir;
+        foreach (DependencyInfo dep in _registry)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // Декодеры eac3to — системный DirectShow-фильтр без исполняемого файла: пропускаем.
+            if (dep.Key.Equals("eac3to_decoders", StringComparison.OrdinalIgnoreCase))
+            {
+                results.Add(BinaryProbeResult.Skipped(dep.Key, "системный компонент без исполняемого файла"));
+                continue;
+            }
+
+            bool versionExpected = VersionExpectedKeys.Contains(dep.Key);
+            string binaryPath = string.Empty;
+            bool exists = false;
+            try
+            {
+                binaryPath = _pathManager.GetBinaryPath(dep.VerifyBinary);
+                exists = !string.IsNullOrEmpty(binaryPath) && File.Exists(binaryPath);
+            }
+            catch (Exception ex)
+            {
+                results.Add(new BinaryProbeResult(dep.Key, dep.Subfolder, dep.VerifyBinary, binaryPath, false, string.Empty, versionExpected, false, ex.GetType().Name));
+                continue;
+            }
+
+            string version = string.Empty;
+            string error = string.Empty;
+            if (exists && versionExpected)
+            {
+                try
+                {
+                    // Тот же опрос, что показывает вкладка «Компоненты», но мимо всех кэшей:
+                    // персистентный кэш мог остаться валидным после перемещения (метки времени
+                    // файла сохраняются), и только живой опрос доказывает новый путь.
+                    // Инструменты без известного формата версии (dee, whisper) не запускаем:
+                    // запускать неизвестный бинарник без аргументов ради проверки нельзя,
+                    // для них достаточно наличия файла по новому пути.
+                    version = await QueryBinaryVersionAsync(dep.Key, binaryPath).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    // QueryBinaryVersionAsync исключений не бросает (гасит внутри),
+                    // ветка — страховка от будущих изменений.
+                    error = ex.GetType().Name;
+                }
+            }
+            else if (exists)
+            {
+                error = "опрос версии не выполняется для этого инструмента";
+            }
+
+            bool underBin = exists && IsUnderDirectory(binaryPath, binDir);
+            results.Add(new BinaryProbeResult(dep.Key, dep.Subfolder, dep.VerifyBinary, binaryPath, exists, version, versionExpected, underBin, error));
+        }
+
+        return results;
+    }
+
+    /// <summary>
+    /// Проверяет, лежит ли путь внутри указанного каталога (регистр не важен).
+    /// </summary>
+    /// <param name="path">Проверяемый путь.</param>
+    /// <param name="directory">Каталог-контейнер.</param>
+    /// <returns>True, если путь находится внутри каталога.</returns>
+    private static bool IsUnderDirectory(string path, string directory)
+    {
+        try
+        {
+            string fullPath = Path.GetFullPath(path);
+            string fullDir = Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                + Path.DirectorySeparatorChar;
+            return fullPath.StartsWith(fullDir, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Сравнивает два пути после нормализации (регистр и концевые разделители не важны).
+    /// </summary>
+    /// <returns>True, если пути указывают на один каталог.</returns>
+    private static bool PathsEqual(string first, string second)
+    {
+        try
+        {
+            return string.Equals(
+                Path.GetFullPath(first).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                Path.GetFullPath(second).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception)
+        {
+            return string.Equals(first, second, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    /// <summary>
+    /// Проверяет, что каждый файл исходного дерева имеет побайтово идентичную копию
+    /// по тому же относительному пути в целевом дереве. Несовпадение размера —
+    /// гарантированное различие без чтения содержимого; совпадение размера
+    /// подтверждается только хэшем (метки времени доказательством не являются).
+    /// </summary>
+    /// <returns>True, если всё содержимое источника идентично есть в назначении.</returns>
+    private static bool TreesIdentical(string sourceRoot, string destRoot)
+    {
+        try
+        {
+            foreach (string sourceFile in Directory.EnumerateFiles(sourceRoot, "*", SearchOption.AllDirectories))
+            {
+                string relative = Path.GetRelativePath(sourceRoot, sourceFile);
+                string destFile = Path.Combine(destRoot, relative);
+
+                FileInfo a = new(sourceFile);
+                FileInfo b = new(destFile);
+                if (!b.Exists || a.Length != b.Length || !FilesContentEqual(sourceFile, destFile))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Побайтовое сравнение двух файлов по SHA256.
+    /// </summary>
+    private static bool FilesContentEqual(string first, string second)
+    {
+        try
+        {
+            using var hasher = SHA256.Create();
+            using var a = new FileStream(first, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 1 << 20);
+            byte[] hashA = hasher.ComputeHash(a);
+            using var b = new FileStream(second, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 1 << 20);
+            byte[] hashB = SHA256.HashData(b);
+            return CryptographicOperations.FixedTimeEquals(hashA, hashB);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Запрашивает версию зависимости у её исполняемого файла (живой опрос без кэшей).
+    /// Общая логика с GetInstalledVersionAsync: те же ветки и аргументы запуска.
+    /// При сбое возвращает "Установлено" (как и обычный опрос); вызывающий код
+    /// проверки миграции трактует такое значение как непройденную пробу.
+    /// </summary>
+    /// <param name="key">Ключ зависимости.</param>
+    /// <param name="binaryPath">Разрешённый путь к исполняемому файлу.</param>
+    /// <returns>Строка версии или "Установлено" при сбое извлечения.</returns>
+    private async Task<string> QueryBinaryVersionAsync(string key, string binaryPath)
+    {
+        bool isQaac = key.Equals("qaac", StringComparison.OrdinalIgnoreCase);
         try
         {
             if (key.Equals("yt-dlp", StringComparison.OrdinalIgnoreCase))
@@ -541,7 +733,7 @@ public class DependencyManager : IDependencyManager
             }
 
             // Для qaac вызываем qaac64.exe --check
-            if (key.Equals("qaac", StringComparison.OrdinalIgnoreCase))
+            if (isQaac)
             {
                 string qaacPath = _pathManager.GetBinaryPath("qaac64.exe");
                 if (!File.Exists(qaacPath)) return string.Empty;
@@ -589,7 +781,7 @@ public class DependencyManager : IDependencyManager
         catch (Exception ex)
         {
             _logService.Write("dependency.version_extract_failed", LogLevel.Warning, LogStatus.Skipped, $"Не удалось извлечь версию зависимости '{key}'", ex, "DependencyManager");
-            return "Установлено";
+            return BinaryProbeResult.VersionUnknownMarker;
         }
     }
 
@@ -869,7 +1061,7 @@ public class DependencyManager : IDependencyManager
                 .With("Group", dep.DisplayName));
 
         // Предварительная проверка доступности бинарных файлов на запись (не заняты ли они другими процессами)
-        string verifyPath = Path.Combine(_binDir, dep.Subfolder, dep.VerifyBinary);
+        string verifyPath = Path.Combine(BinDir, dep.Subfolder, dep.VerifyBinary);
         if (File.Exists(verifyPath))
         {
             try
@@ -999,7 +1191,7 @@ public class DependencyManager : IDependencyManager
                     ["FileName"] = dep.ArchiveName
                 });
 
-            string destinationFolder = Path.Combine(_binDir, dep.Subfolder);
+            string destinationFolder = Path.Combine(BinDir, dep.Subfolder);
 
             // Гарантируем наличие целевых папок и очистку от старых файлов перед новой распаковкой
             try
@@ -1671,7 +1863,13 @@ public class DependencyManager : IDependencyManager
             }
         }
 
-        string folderPath = Path.Combine(_binDir, dep.Subfolder);
+        string folderPath = Path.Combine(BinDir, dep.Subfolder);
+        // Переходный период миграции (ишью 46): файлы могли остаться в каталоге
+        // установки (<exe>\bin), пока канонический каталог уже используется.
+        // Удаляем обе папки, чтобы статус «Компонентов» не расходился с диском
+        // («показывает установлено, а удалить не даёт»).
+        string legacyFolderPath = Path.Combine(_pathManager.GetBaseDirectory(), "bin", dep.Subfolder);
+        bool legacyDiffers = !PathsEqual(folderPath, legacyFolderPath);
         lock (_cachedVersions)
         {
             _cachedVersions.Remove(key);
@@ -1690,7 +1888,9 @@ public class DependencyManager : IDependencyManager
             _updatesAvailable[key] = false;
         }
 
-        if (!Directory.Exists(folderPath))
+        bool canonicalExists = Directory.Exists(folderPath);
+        bool legacyExists = legacyDiffers && Directory.Exists(legacyFolderPath);
+        if (!canonicalExists && !legacyExists)
         {
             _logService.Write(
                 "dependency.folder_missing",
@@ -1708,9 +1908,63 @@ public class DependencyManager : IDependencyManager
             return true;
         }
 
+        // Legacy-остаток удаляем только при побайтовой идентичности дереву назначения:
+        // расходящиеся файлы (например, конфликт после миграции) молча не трём —
+        // это скачанные данные пользователя, а не мусор.
+        bool legacyMatches = canonicalExists && legacyExists && TreesIdentical(legacyFolderPath, folderPath);
+        if (canonicalExists && legacyExists && !legacyMatches)
+        {
+            _logService.Write(
+                "dependency.remove.legacy_diverged",
+                LogLevel.Warning,
+                LogStatus.Skipped,
+                $"В каталоге установки остались отличающиеся файлы зависимости '{dep.DisplayName}', удалена только копия из LocalAppData",
+                null,
+                "DependencyManager",
+                properties: LogProps
+                    .Create("Key", LogRedactor.CompactSafeToken(dep.Key))
+                    .With("Group", dep.DisplayName)
+                    .With("Retryable", true));
+        }
+
         try
         {
-            Directory.Delete(folderPath, true);
+            if (canonicalExists)
+            {
+                Directory.Delete(folderPath, true);
+            }
+
+            if (legacyExists && (!canonicalExists || legacyMatches))
+            {
+                Directory.Delete(legacyFolderPath, true);
+                _logService.Write(
+                    "dependency.remove.legacy_cleaned",
+                    LogLevel.Info,
+                    LogStatus.Succeeded,
+                    $"Удалён остаток зависимости '{dep.DisplayName}' из каталога установки",
+                    source: SourceName,
+                    properties: LogProps
+                        .Create("Key", LogRedactor.CompactSafeToken(dep.Key))
+                        .With("Group", dep.DisplayName));
+            }
+
+            if (legacyExists && canonicalExists && !legacyMatches)
+            {
+                _logService.Write(
+                    "dependency.folder_removal_failed",
+                    LogLevel.Warning,
+                    LogStatus.Skipped,
+                    $"Не удалось полностью удалить зависимость '{dep.DisplayName}': в каталоге установки остались отличающиеся файлы",
+                    null,
+                    "DependencyManager",
+                    properties: LogProps
+                        .Create("Key", LogRedactor.CompactSafeToken(dep.Key))
+                        .With("Group", dep.DisplayName)
+                        .With("ErrorCode", "DEPENDENCY_LEGACY_DIVERGED"));
+                RefreshAllStatuses();
+                return false;
+            }
+
             _logService.Write(
                 "dependency.remove.completed",
                 LogLevel.Info,

@@ -508,29 +508,37 @@ public class ServicesIntegrationTests
     }
 
     [TestMethod]
-    public void PathManager_GetBinDirectory_ReturnsWritableDirectory()
+    public void PathManager_GetBinDirectory_DefaultMode_ReturnsManagedBin()
     {
-        // Arrange
+        // Arrange — без маркера portable: канонический каталог, проб в базовой директории нет.
         var pathManager = new PathManager(MockBuilders.CreateLogServiceMock().Object);
 
         // Act
         string binDir = pathManager.GetBinDirectory();
 
-        // Assert — тестовая директория доступна для записи → bin рядом с базовой
-        binDir.Should().Be(Path.Combine(AppContext.BaseDirectory, "bin"));
+        // Assert — управляемый каталог, а не bin рядом с базовой директорией.
+        string expected = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "KTools",
+            "bin");
+        binDir.Should().Be(expected);
+        Directory.GetFiles(AppContext.BaseDirectory, ".write_test*", SearchOption.TopDirectoryOnly).Should().BeEmpty();
     }
 
     [TestMethod]
-    public void PathManager_GetSettingsDirectory_ReturnsBaseDirectoryInPortableMode()
+    public void PathManager_GetSettingsDirectory_PortableMarker_ReturnsBaseDir()
     {
-        // Arrange — тестовый запуск эквивалентен portable-режиму (есть права записи)
-        var pathManager = new PathManager(MockBuilders.CreateLogServiceMock().Object);
+        // Arrange — явный portable-режим через маркер (изолированная временная директория,
+        // чтобы не засорять каталог тестовой сборки).
+        using var scope = new TempDirectoryScope();
+        File.WriteAllText(Path.Combine(scope.RootPath, "portable.txt"), string.Empty);
+        var pathManager = new PathManager(MockBuilders.CreateLogServiceMock().Object, scope.RootPath);
 
         // Act
         string settingsDir = pathManager.GetSettingsDirectory();
 
         // Assert
-        settingsDir.Should().Be(AppContext.BaseDirectory);
+        settingsDir.Should().Be(scope.RootPath);
     }
 
     [TestMethod]

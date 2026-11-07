@@ -55,41 +55,54 @@ public sealed class LogFilePolicy
     public string? ResolveDirectory(string? requestedDirectory, out string? rejectionReason)
     {
         rejectionReason = null;
-        List<string> candidates = new(3);
+
+        // Кандидат с проверкой записи (true) — только явно заданный пользователем.
+        // Управляемый каталог текущего пользователя записываем по определению:
+        // достаточно создания, отдельная проба не нужна и следов не оставляет.
+        List<(string Path, bool VerifyWritable)> candidates = new(2);
 
         if (!string.IsNullOrWhiteSpace(requestedDirectory))
         {
-            candidates.Add(requestedDirectory.Trim());
+            candidates.Add((requestedDirectory.Trim(), true));
         }
         else
         {
-            string baseDirectory = AppContext.BaseDirectory;
-            if (IsDirectoryWritable(baseDirectory))
-            {
-                candidates.Add(Path.Combine(baseDirectory, LogsFolderName));
-            }
+            // Ишью 46: каталог установки считается неизменяемым, проба записи
+            // в него на старте не выполняется — сразу используется управляемый
+            // каталог %LocalAppData%\KTools\logs (или Temp при недоступности).
+            candidates.Add((GetFallbackDirectory(), false));
         }
 
         string fallback = GetFallbackDirectory();
-        if (!candidates.Contains(fallback, StringComparer.OrdinalIgnoreCase))
+        bool hasFallback = false;
+        foreach ((string path, _) in candidates)
         {
-            candidates.Add(fallback);
+            if (string.Equals(path, fallback, StringComparison.OrdinalIgnoreCase))
+            {
+                hasFallback = true;
+                break;
+            }
+        }
+
+        if (!hasFallback)
+        {
+            candidates.Add((fallback, false));
         }
 
         string? firstFailure = null;
-        foreach (string candidate in candidates)
+        foreach ((string path, bool verifyWritable) in candidates)
         {
-            if (TryEnsureDirectory(candidate))
+            if (verifyWritable ? TryEnsureDirectory(path) : EnsureDirectoryExists(path))
             {
                 if (firstFailure is not null)
                 {
                     rejectionReason = firstFailure;
                 }
 
-                return candidate;
+                return path;
             }
 
-            firstFailure ??= candidate;
+            firstFailure ??= path;
         }
 
         rejectionReason = firstFailure ?? "none";
@@ -486,19 +499,23 @@ public sealed class LogFilePolicy
         }
     }
 
-    private static bool IsDirectoryWritable(string path)
+    /// <summary>
+    /// Создаёт управляемый каталог данных без пробной записи: каталог текущего
+    /// пользователя записываем по определению, проба только оставляла бы следы.
+    /// </summary>
+    /// <param name="path">Создаваемый каталог.</param>
+    /// <returns>True, если каталог существует после вызова.</returns>
+    private static bool EnsureDirectoryExists(string path)
     {
         try
         {
-            if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path))
+            if (string.IsNullOrWhiteSpace(path))
             {
                 return false;
             }
 
-            string probe = Path.Combine(path, WritableProbeFileName + Guid.NewGuid().ToString("N"));
-            File.WriteAllText(probe, "1");
-            File.Delete(probe);
-            return true;
+            Directory.CreateDirectory(path);
+            return Directory.Exists(path);
         }
         catch (Exception)
         {
