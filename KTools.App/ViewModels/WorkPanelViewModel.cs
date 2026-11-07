@@ -625,6 +625,32 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
             });
     }
 
+    /// <summary>
+    /// Чистое планирование параллельности очереди: сколько файлов гнать одновременно.
+    /// Скрипты с лимитом разборки (разборка контейнера) читают свой тумблер,
+    /// остальные параллельные — общий. Возвращает 1 для последовательной обработки.
+    /// </summary>
+    public static int ResolveMaxParallelism(
+        bool supportsParallel,
+        bool usesDemuxLimit,
+        bool enableParallel,
+        int maxParallelTasks,
+        bool enableParallelDemux,
+        int maxParallelDemuxTasks)
+    {
+        if (!supportsParallel)
+        {
+            return 1;
+        }
+
+        if (usesDemuxLimit)
+        {
+            return enableParallelDemux ? Math.Max(1, maxParallelDemuxTasks) : 1;
+        }
+
+        return enableParallel ? Math.Max(1, maxParallelTasks) : 1;
+    }
+
     private async Task ProcessQueueAsync(
         AbstractScript script,
         List<FileQueueItem> filesList,
@@ -632,10 +658,15 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
         string? outPath)
     {
         int total = filesList.Count;
-        bool supportsParallel = script.SupportsParallel && _settingsManager.EnableParallel;
-        int maxParallel = supportsParallel ? Math.Max(1, _settingsManager.MaxParallelTasks) : 1;
+        int maxParallel = ResolveMaxParallelism(
+            script.SupportsParallel,
+            script.UsesDemuxParallelLimit,
+            _settingsManager.EnableParallel,
+            _settingsManager.MaxParallelTasks,
+            _settingsManager.EnableParallelDemux,
+            _settingsManager.MaxParallelDemuxTasks);
 
-        if (supportsParallel && maxParallel > 1 && total > 1)
+        if (maxParallel > 1 && total > 1)
         {
             using var semaphore = new System.Threading.SemaphoreSlim(maxParallel);
             var tasks = new List<Task>(total);

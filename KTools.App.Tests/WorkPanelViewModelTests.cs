@@ -62,4 +62,89 @@ public class WorkPanelViewModelTests
         viewModel.Files.Should().BeEmpty();
         viewModel.IsStartButtonEnabled.Should().BeTrue();
     }
+
+    /// <summary>
+    /// Скрипт без поддержки параллельности всегда идёт последовательно.
+    /// </summary>
+    [TestMethod]
+    public void ResolveMaxParallelism_UnsupportedScript_ReturnsOne()
+    {
+        // Act
+        int maxParallel = WorkPanelViewModel.ResolveMaxParallelism(
+            supportsParallel: false, usesDemuxLimit: false,
+            enableParallel: true, maxParallelTasks: 8,
+            enableParallelDemux: true, maxParallelDemuxTasks: 4);
+
+        // Assert
+        maxParallel.Should().Be(1);
+    }
+
+    /// <summary>
+    /// Разборка с включённым тумблером берёт лимит разборки, а не общий.
+    /// </summary>
+    [TestMethod]
+    public void ResolveMaxParallelism_DemuxEnabled_ReturnsDemuxLimit()
+    {
+        // Act
+        int maxParallel = WorkPanelViewModel.ResolveMaxParallelism(
+            supportsParallel: true, usesDemuxLimit: true,
+            enableParallel: true, maxParallelTasks: 8,
+            enableParallelDemux: true, maxParallelDemuxTasks: 3);
+
+        // Assert
+        maxParallel.Should().Be(3);
+    }
+
+    /// <summary>
+    /// Разборка с выключенным тумблером идёт последовательно, даже при включённой общей параллельности.
+    /// </summary>
+    [TestMethod]
+    public void ResolveMaxParallelism_DemuxDisabled_ReturnsOne()
+    {
+        // Act
+        int maxParallel = WorkPanelViewModel.ResolveMaxParallelism(
+            supportsParallel: true, usesDemuxLimit: true,
+            enableParallel: true, maxParallelTasks: 8,
+            enableParallelDemux: false, maxParallelDemuxTasks: 3);
+
+        // Assert
+        maxParallel.Should().Be(1);
+    }
+
+    /// <summary>
+    /// Обычный параллельный скрипт берёт общий лимит.
+    /// </summary>
+    [TestMethod]
+    public void ResolveMaxParallelism_GenericEnabled_ReturnsGenericLimit()
+    {
+        // Act
+        int maxParallel = WorkPanelViewModel.ResolveMaxParallelism(
+            supportsParallel: true, usesDemuxLimit: false,
+            enableParallel: true, maxParallelTasks: 6,
+            enableParallelDemux: true, maxParallelDemuxTasks: 3);
+
+        // Assert
+        maxParallel.Should().Be(6);
+    }
+
+    /// <summary>
+    /// Нулевые лимиты нормализуются к единице, а не к нулю.
+    /// </summary>
+    [TestMethod]
+    public void ResolveMaxParallelism_ZeroLimits_ReturnsOne()
+    {
+        // Act
+        int demux = WorkPanelViewModel.ResolveMaxParallelism(
+            supportsParallel: true, usesDemuxLimit: true,
+            enableParallel: false, maxParallelTasks: 0,
+            enableParallelDemux: true, maxParallelDemuxTasks: 0);
+        int generic = WorkPanelViewModel.ResolveMaxParallelism(
+            supportsParallel: true, usesDemuxLimit: false,
+            enableParallel: true, maxParallelTasks: 0,
+            enableParallelDemux: false, maxParallelDemuxTasks: 0);
+
+        // Assert
+        demux.Should().Be(1);
+        generic.Should().Be(1);
+    }
 }

@@ -824,4 +824,81 @@ public class TrackExtractorScriptTests
         File.Exists(Path.Combine(outputDir, "movie.ac3")).Should().BeTrue();
         File.Exists(Path.Combine(outputDir, "movie_track02.ac3")).Should().BeTrue();
     }
+
+    /// <summary>
+    /// Разборка поддерживает параллельность с лимитом разборки контейнера.
+    /// </summary>
+    [TestMethod]
+    public void TrackExtractorScript_ParallelFlags_AreEnabled()
+    {
+        // Assert
+        _script.SupportsParallel.Should().BeTrue();
+        _script.UsesDemuxParallelLimit.Should().BeTrue();
+    }
+
+    /// <summary>
+    /// Одноимённые выходы разных файлов батча разводятся, а не перезаписывают друг друга:
+    /// резервирование общее для батча, переживает вызовы в пределах PrepareBatch.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_SameStemAcrossFiles_ReservesUniqueNamesPerBatch()
+    {
+        string tempRoot = CreateTempRoot();
+        string dirA = Path.Combine(tempRoot, "A");
+        string dirB = Path.Combine(tempRoot, "B");
+        Directory.CreateDirectory(dirA);
+        Directory.CreateDirectory(dirB);
+        string inputA = Path.Combine(dirA, "movie.mkv");
+        string inputB = Path.Combine(dirB, "movie.mkv");
+        File.WriteAllText(inputA, "input-a");
+        File.WriteAllText(inputB, "input-b");
+        string outputDir = Path.Combine(tempRoot, "Output");
+        Directory.CreateDirectory(outputDir);
+
+        MediaStructure MakeStructure() => new() { Duration = 10.0 };
+        var structureA = MakeStructure();
+        structureA.Tracks.Add(new MediaTrack { TrackId = 1, TrackType = "audio", Codec = "ac3", Language = "rus" });
+        var structureB = MakeStructure();
+        structureB.Tracks.Add(new MediaTrack { TrackId = 1, TrackType = "audio", Codec = "ac3", Language = "rus" });
+
+        _mediaProbeServiceMock.Setup(m => m.ProbeAsync(inputA)).ReturnsAsync(structureA);
+        _mediaProbeServiceMock.Setup(m => m.ProbeAsync(inputB)).ReturnsAsync(structureB);
+        _ffmpegRunnerMock
+            .Setup(r => r.RunAsync(
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<List<string>?>(),
+                It.IsAny<List<string>?>(),
+                It.IsAny<bool>(),
+                It.IsAny<double>(),
+                It.IsAny<Action<ProgressInfo>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<ProcessExecutionContext?>()))
+            .Callback<string, string?, List<string>?, List<string>?, bool, double, Action<ProgressInfo>?, CancellationToken, ProcessExecutionContext?>(
+                (inP, outP, args, inArgs, ow, dur, prog, ct, ctx) => CreateValidArtifacts(args))
+            .ReturnsAsync(MockBuilders.ProcessSucceeded());
+
+        _script.PrepareBatch(new[] { inputA, inputB });
+
+        Dictionary<string, object> SettingsFor(string input) => new()
+        {
+            { "selected_tracks_per_file", new Dictionary<string, List<int>> { { input, new List<int> { 1 } } } },
+            { "name_format", "{original}" }
+        };
+
+        var first = await _script.ExecuteSingleAsync(
+            inputA, SettingsFor(inputA), outputDir,
+            (cur, total, msg, pct, fps, br) => { }, 1, 2);
+        var second = await _script.ExecuteSingleAsync(
+            inputB, SettingsFor(inputB), outputDir,
+            (cur, total, msg, pct, fps, br) => { }, 2, 2);
+
+        // Assert
+        first.Status.Should().Be(ExecutionStatus.Succeeded);
+        second.Status.Should().Be(ExecutionStatus.Succeeded);
+        second.OutputFile.Should().Be(Path.Combine(outputDir, "movie_track01.ac3"));
+        second.Should().Contain(r => r.Contains("⚠ Одинаковое имя"));
+        File.Exists(Path.Combine(outputDir, "movie.ac3")).Should().BeTrue();
+        File.Exists(Path.Combine(outputDir, "movie_track01.ac3")).Should().BeTrue();
+    }
 }

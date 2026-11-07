@@ -1,4 +1,4 @@
-﻿// -*- coding: utf-8 -*-
+// -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -150,6 +150,13 @@ public abstract class AbstractScript
     /// Указывает, поддерживает ли скрипт одновременную параллельную обработку файлов.
     /// </summary>
     public virtual bool SupportsParallel => false;
+
+    /// <summary>
+    /// Указывает, что лимит параллельности скрипта задаётся настройками разборки
+    /// контейнера (EnableParallelDemux/MaxParallelDemuxTasks), а не общей параллельной
+    /// обработкой файлов. Действует только вместе с <see cref="SupportsParallel"/>.
+    /// </summary>
+    public virtual bool UsesDemuxParallelLimit => false;
 
     /// <summary>
     /// Указывает, использует ли скрипт кастомный виджет выбора дорожек (например, TreeView).

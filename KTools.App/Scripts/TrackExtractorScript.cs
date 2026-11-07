@@ -46,6 +46,35 @@ public sealed class TrackExtractorScript : AbstractScript
     public override string[] RequiredDependencies => new[] { "mkvtoolnix", "ffmpeg" };
     public override bool UseCustomWidget => true;
 
+    /// <summary>
+    /// Разборка независима по файлам: один вызов FFmpeg на файл, состояние только локальное.
+    /// Лимит параллельности задаётся настройками разборки контейнера (#52).
+    /// </summary>
+    public override bool SupportsParallel => true;
+
+    /// <inheritdoc/>
+    public override bool UsesDemuxParallelLimit => true;
+
+    /// <summary>
+    /// Занятые выходные пути текущего батча (все файлы очереди). Общий для всех
+    /// параллельных вызовов: защищает от коллизий одноимённых выходов разных файлов.
+    /// Очищается в <see cref="PrepareBatch"/>.
+    /// </summary>
+    private readonly HashSet<string> _batchReservedOutPaths = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Блокировка резервирования выходных путей между параллельными файлами.</summary>
+    private readonly object _reservationLock = new();
+
+    /// <inheritdoc/>
+    public override void PrepareBatch(IEnumerable<string>? inputFiles = null)
+    {
+        base.PrepareBatch(inputFiles);
+        lock (_reservationLock)
+        {
+            _batchReservedOutPaths.Clear();
+        }
+    }
+
     public override List<SettingField> SettingsSchema => new()
     {
         new SettingField(
@@ -187,7 +216,6 @@ public sealed class TrackExtractorScript : AbstractScript
         var validFonts = new List<string>();
         var ffmpegArgs = new List<string>();
         var duplicateWarnings = new List<string>();
-        var reservedOutPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         // 4. Определение языковых дубликатов для формирования уникальных суффиксов
         var activeTracks = structure.Tracks
@@ -231,21 +259,25 @@ public sealed class TrackExtractorScript : AbstractScript
                 outFilename = $"{renamedStem}{trackExt}";
                 string outPath = Path.Combine(baseDir, outFilename);
 
-                // Защита от коллизий внутри одного файла: одинаковые имена из шаблона
-                // (например {original} для двух дорожек с одним расширением) разводятся
-                // детерминированным суффиксом _trackXX по ID потока, а не случайным (1).
-                // Набор занятых путей живёт в пределах одного вызова (один входной файл).
-                if (reservedOutPaths.Contains(outPath))
+                // Защита от коллизий внутри батча: одинаковые имена из шаблона
+                // (например {original} для двух дорожек с одним расширением или
+                // одноимённые выходы разных файлов очереди) разводятся детерминированным
+                // суффиксом _trackXX по ID потока, а не случайным (1).
+                // Набор занятых путей общий для всех файлов батча (см. PrepareBatch).
+                lock (_reservationLock)
                 {
-                    string originalFilename = outFilename;
-                    outFilename = BuildUniqueTrackFilename(baseDir, outFilename, track.TrackId, reservedOutPaths);
-                    outPath = Path.Combine(baseDir, outFilename);
-                    string warnMsg = $"⚠ Одинаковое имя '{originalFilename}': дорожка #{track.TrackId} сохранена как '{outFilename}'. Добавьте {{id}} в шаблон имени, чтобы избежать переименования";
-                    duplicateWarnings.Add(warnMsg);
-                    _logService.Write("script.track_extractor.duplicate_renamed", LogLevel.Warning, LogStatus.Changed, $"Имя '{LogProps.FileName(originalFilename)}' уже занято в этом файле, дорожка #{track.TrackId} сохранена как '{LogProps.FileName(outFilename)}'", source: Name, properties: LogProps.Create("Index", track.TrackId).With("FileName", LogProps.FileName(originalFilename)).With("OutputName", LogProps.FileName(outFilename)).With("InputName", LogProps.FileName(filePath)));
-                }
+                    if (_batchReservedOutPaths.Contains(outPath))
+                    {
+                        string originalFilename = outFilename;
+                        outFilename = BuildUniqueTrackFilename(baseDir, outFilename, track.TrackId, _batchReservedOutPaths);
+                        outPath = Path.Combine(baseDir, outFilename);
+                        string warnMsg = $"⚠ Одинаковое имя '{originalFilename}': дорожка #{track.TrackId} сохранена как '{outFilename}'. Добавьте {{id}} в шаблон имени, чтобы избежать переименования";
+                        duplicateWarnings.Add(warnMsg);
+                        _logService.Write("script.track_extractor.duplicate_renamed", LogLevel.Warning, LogStatus.Changed, $"Имя '{LogProps.FileName(originalFilename)}' уже занято в этой очереди, дорожка #{track.TrackId} сохранена как '{LogProps.FileName(outFilename)}'", source: Name, properties: LogProps.Create("Index", track.TrackId).With("FileName", LogProps.FileName(originalFilename)).With("OutputName", LogProps.FileName(outFilename)).With("InputName", LogProps.FileName(filePath)));
+                    }
 
-                reservedOutPaths.Add(outPath);
+                    _batchReservedOutPaths.Add(outPath);
+                }
 
                 // Проверка заглушек: пустой файл (0 байт) удаляется и идёт на повторное извлечение.
                 // Пропуск только для валидных артефактов (существует и длина больше нуля).
@@ -340,17 +372,20 @@ public sealed class TrackExtractorScript : AbstractScript
             foreach (var font in activeFontsForPlan)
             {
                 string plannedFontPath = Path.Combine(baseDir, font.FileName);
-                if (reservedOutPaths.Contains(plannedFontPath))
+                lock (_reservationLock)
                 {
-                    string originalFontName = font.FileName;
-                    string uniqueFontName = BuildUniqueFilename(baseDir, font.FileName, reservedOutPaths);
-                    plannedFontPath = Path.Combine(baseDir, uniqueFontName);
-                    string warnMsg = $"⚠ Одинаковое имя '{originalFontName}': шрифт #{font.AttachmentId} сохранён как '{uniqueFontName}'";
-                    duplicateWarnings.Add(warnMsg);
-                    _logService.Write("script.track_extractor.duplicate_renamed", LogLevel.Warning, LogStatus.Changed, $"Имя '{LogProps.FileName(originalFontName)}' уже занято в этой очереди, шрифт #{font.AttachmentId} сохранён как '{LogProps.FileName(uniqueFontName)}'", source: Name, properties: LogProps.Create("Index", font.AttachmentId).With("FileName", LogProps.FileName(originalFontName)).With("OutputName", LogProps.FileName(uniqueFontName)).With("InputName", LogProps.FileName(filePath)));
-                }
+                    if (_batchReservedOutPaths.Contains(plannedFontPath))
+                    {
+                        string originalFontName = font.FileName;
+                        string uniqueFontName = BuildUniqueFilename(baseDir, font.FileName, _batchReservedOutPaths);
+                        plannedFontPath = Path.Combine(baseDir, uniqueFontName);
+                        string warnMsg = $"⚠ Одинаковое имя '{originalFontName}': шрифт #{font.AttachmentId} сохранён как '{uniqueFontName}'";
+                        duplicateWarnings.Add(warnMsg);
+                        _logService.Write("script.track_extractor.duplicate_renamed", LogLevel.Warning, LogStatus.Changed, $"Имя '{LogProps.FileName(originalFontName)}' уже занято в этой очереди, шрифт #{font.AttachmentId} сохранён как '{LogProps.FileName(uniqueFontName)}'", source: Name, properties: LogProps.Create("Index", font.AttachmentId).With("FileName", LogProps.FileName(originalFontName)).With("OutputName", LogProps.FileName(uniqueFontName)).With("InputName", LogProps.FileName(filePath)));
+                    }
 
-                reservedOutPaths.Add(plannedFontPath);
+                    _batchReservedOutPaths.Add(plannedFontPath);
+                }
                 if (File.Exists(plannedFontPath))
                 {
                     long fontLen = 0;
