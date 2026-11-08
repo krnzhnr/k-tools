@@ -380,6 +380,16 @@ begin
             FileExists(ExpandConstant('{{commondesktop}}\\KTools.lnk'));
 end;
 
+function LegacyDesktopIconExists: Boolean;
+begin
+  // Старые ярлыки с дефисом (до переименования в KTools): их наличие означает,
+  // что пользователь ярлыком пользуется, — при интерактивном обновлении задачу
+  // desktopicon отмечаем, чтобы новый ярлык создался взамен удаляемого старого.
+  Result := FileExists(ExpandConstant('{{autodesktop}}\\K-Tools.lnk')) or
+            FileExists(ExpandConstant('{{userdesktop}}\\K-Tools.lnk')) or
+            FileExists(ExpandConstant('{{commondesktop}}\\K-Tools.lnk'));
+end;
+
 function ShouldCreateDesktopIcon: Boolean;
 begin
   // Если установка выполняется в тихом режиме (автоматическое обновление из программы):
@@ -399,11 +409,13 @@ begin
   begin
     // При интерактивном обновлении поверх уже установленной версии:
     // Автоматически синхронизируем выбор задачи desktopicon с реальным наличием ярлыка.
+    // Учитываем и старые ярлыки с дефисом: их наличие означает, что пользователь
+    // ярлыком пользуется, и новый ярлык должен создаться взамен удаляемого старого.
     // Если ярлык на рабочем столе отсутствует (пользователь его удалил), снимаем отметку,
     // чтобы ярлык не пересоздавался повторно при обычном нажатии "Далее".
     if IsAppInstalled then
     begin
-      if DesktopIconExists then
+      if DesktopIconExists or LegacyDesktopIconExists then
         WizardSelectTasks('desktopicon')
       else
         WizardSelectTasks('!desktopicon');
@@ -440,6 +452,26 @@ begin
     IsPerMachineEntryPresent('krnzhnr.ktools'));
 end;
 
+// Защита от зачистки целевого каталога (ишью 46, инцидент обновления):
+// sInstallDir из чужой/старой записи может совпасть с текущим каталогом
+// (UsePreviousAppDir переиспользует каталог), и удаление остатков снесло бы
+// живую установку. Поэтому каталоги сравниваем нормализованно.
+function TrimRightBackslash(const S: String): String;
+var
+  sTmp: String;
+begin
+  sTmp := S;
+  while (Length(sTmp) > 0) and ((sTmp[Length(sTmp)] = '\\') or (sTmp[Length(sTmp)] = ' ')) do
+    Delete(sTmp, Length(sTmp), 1);
+  Result := sTmp;
+end;
+
+function SameDir(const A, B: String): Boolean;
+begin
+  // Сравнение без учёта регистра и концевых слэшей.
+  Result := LowerCase(TrimRightBackslash(A)) = LowerCase(TrimRightBackslash(B));
+end;
+
 function RemoveUninstallEntry(const AppIdStr: String; RootKey: Integer): Boolean;
 var
   sUnKey, sUnInstallString, sInstallDir, sLogFile, sParams, sExecState: String;
@@ -474,7 +506,14 @@ begin
     else
       Log('Миграция: запуск с повышением отклонён, код=' + IntToStr(iExecError));
   end;
-  if (sInstallDir <> '') and DirExists(sInstallDir) then
+  // Защитный гейт (ишью 46): текущий целевой каталог не трогаем никогда.
+  // При совпадении пропускаем ТОЛЬКО удаление каталога, запись деинсталлятора
+  // из реестра ниже удаляется как раньше.
+  if SameDir(sInstallDir, ExpandConstant('{{app}}')) then
+  begin
+    Log('Миграция: пропуск DelTree (пропуск удаления каталога): ' + sInstallDir + ' совпадает с целевым каталогом ' + ExpandConstant('{{app}}'));
+  end
+  else if (sInstallDir <> '') and DirExists(sInstallDir) then
   begin
     Log('Миграция: удаление остатков каталога ' + sInstallDir);
     if DelTree(sInstallDir, True, True, True) then
@@ -489,7 +528,8 @@ begin
     Result := False;
     Exit;
   end;
-  if (sInstallDir <> '') and DirExists(sInstallDir) then
+  // Совпавший с целевым каталог остатком не считаем: его удаление пропущено гейтом выше.
+  if (not SameDir(sInstallDir, ExpandConstant('{{app}}'))) and (sInstallDir <> '') and DirExists(sInstallDir) then
   begin
     Log('Миграция: каталог ' + sInstallDir + ' остался на диске (возможно, старая версия запущена)');
     Result := False;
@@ -575,8 +615,15 @@ begin
   begin
     // Удаление старых версий выполняется в PrepareToInstall до старта установки.
     // Здесь только чистка устаревших ярлыков с дефисом.
-    DeleteFile(ExpandConstant('{{autodesktop}}\\K-Tools.lnk'));
-    DeleteFile(ExpandConstant('{{userdesktop}}\\K-Tools.lnk'));
+    // Защита от потери ярлыка (ишью 46): старые имена трём только если новый ярлык
+    // будет создан (задача desktopicon выбрана и разрешена) или новый ярлык уже есть
+    // (чистка дубля). Иначе оставляем единственный рабочий ярлык пользователя.
+    if (WizardIsTaskSelected('desktopicon') and ShouldCreateDesktopIcon()) or DesktopIconExists() then
+    begin
+      DeleteFile(ExpandConstant('{{autodesktop}}\\K-Tools.lnk'));
+      DeleteFile(ExpandConstant('{{userdesktop}}\\K-Tools.lnk'));
+      DeleteFile(ExpandConstant('{{commondesktop}}\\K-Tools.lnk'));
+    end;
   end;
 end;
 // === Удаление пользовательских данных только по явной отметке (ишью 46) ===

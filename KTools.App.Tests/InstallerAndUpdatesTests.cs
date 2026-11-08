@@ -353,4 +353,109 @@ public sealed class InstallerAndUpdatesTests
             "удаляться обязан именно каталог данных %LocalAppData%\\KTools");
     }
 
+    /// <summary>
+    /// Проверяет защитный гейт DelTree (ишью 46, инцидент обновления):
+    /// каталог, совпавший с целевым {app}, никогда не удаляется.
+    /// Сравнение обязано быть нормализованным: без учёта регистра и концевых слэшей.
+    /// </summary>
+    [TestMethod]
+    public void BuildScript_DelTree_TargetDirMatch_SkipsDirectoryRemoval()
+    {
+        // Arrange
+        string root = GetRepositoryRoot();
+        string pyPath = Path.Combine(root, "build_csharp.py");
+
+        // Act
+        string pyContent = File.ReadAllText(pyPath);
+
+        // Assert
+        pyContent.Should().Contain("function SameDir", "сравнение каталогов обязано быть вынесено в нормализующую функцию SameDir");
+        pyContent.Should().Contain("TrimRightBackslash", "нормализация обязана использовать TrimRightBackslash");
+        pyContent.Should().Contain("LowerCase(", "SameDir обязан сравнивать без учёта регистра через LowerCase(");
+        pyContent.Should().Contain("Delete(s", "TrimRightBackslash обязан вырезать символы через Delete(S...)");
+        pyContent.Should().Contain("TrimRight", "SameDir обязан отбрасывать концевые слэши");
+        pyContent.Should().Contain("{app}", "гейт обязан сверяться с целевым каталогом установки {app}");
+        pyContent.Should().Contain("SameDir(sInstallDir, ExpandConstant", "гейт обязан стоять перед удалением остатков каталога");
+        pyContent.Should().Contain("пропуск DelTree", "пропуск удаления обязан писаться в лог");
+        pyContent.Should().Contain("совпадает с целевым каталогом", "в логе обязана быть причина пропуска");
+        pyContent.Should().Contain("DelTree(sInstallDir, True, True, True)", "удаление чужих остатков обязано сохраниться для несовпавших каталогов");
+    }
+
+    /// <summary>
+    /// Проверяет детектор старых ярлыков (ишью 46, инцидент обновления):
+    /// имена строго с дефисом K-Tools.lnk во всех трёх местах рабочего стола.
+    /// Новые имена KTools.lnk детектор не трогает: их проверяет DesktopIconExists.
+    /// </summary>
+    [TestMethod]
+    public void BuildScript_LegacyDesktopIcon_OldHyphenName_IsDetected()
+    {
+        // Arrange
+        string root = GetRepositoryRoot();
+        string pyPath = Path.Combine(root, "build_csharp.py");
+
+        // Act
+        string pyContent = File.ReadAllText(pyPath);
+
+        // Assert
+        pyContent.Should().Contain("function LegacyDesktopIconExists: Boolean;", "обязан быть объявлен детектор старых ярлыков");
+        pyContent.Should().Contain(@"{{autodesktop}}\\K-Tools.lnk", "старый ярлык обязан искаться в autodesktop");
+        pyContent.Should().Contain(@"{{userdesktop}}\\K-Tools.lnk", "старый ярлык обязан искаться в userdesktop");
+        pyContent.Should().Contain(@"{{commondesktop}}\\K-Tools.lnk", "старый ярлык обязан искаться в commondesktop");
+        pyContent.Should().Contain("function DesktopIconExists: Boolean;", "проверка новых имён обязана сохраниться отдельно в DesktopIconExists");
+    }
+
+    /// <summary>
+    /// Проверяет миграцию ярлыка при интерактивном обновлении (ишью 46):
+    /// наличие старого ярлыка с дефисом отмечает задачу desktopicon,
+    /// и новый ярлык создаётся взамен удаляемого старого.
+    /// </summary>
+    [TestMethod]
+    public void BuildScript_CurPageChanged_LegacyIcon_MarksDesktopTask()
+    {
+        // Arrange
+        string root = GetRepositoryRoot();
+        string pyPath = Path.Combine(root, "build_csharp.py");
+
+        // Act
+        string pyContent = File.ReadAllText(pyPath);
+
+        // Assert
+        pyContent.Should().Contain("or LegacyDesktopIconExists", "выбор задачи обязан учитывать старые ярлыки с дефисом");
+        pyContent.Should().Contain("WizardSelectTasks('desktopicon')", "при живом ярлыке задача desktopicon обязана отмечаться");
+        pyContent.Should().Contain("WizardSelectTasks('!desktopicon')", "при отсутствии ярлыков задача обязана сниматься как раньше");
+    }
+
+    /// <summary>
+    /// Проверяет защиту от потери ярлыка (ишью 46, регрессия):
+    /// старые K-Tools.lnk удаляются только если новый ярлык будет создан
+    /// (задача desktopicon выбрана и разрешена) или новый ярлык уже есть (чистка дубля).
+    /// Иначе единственный рабочий ярлык сохраняется. Удаляются все три места,
+    /// включая commondesktop (вечный stale-триггер). Логика ShouldCreateDesktopIcon не меняется.
+    /// </summary>
+    [TestMethod]
+    public void BuildScript_CurStepChanged_SilentWithoutIcon_KeepsLegacyShortcut()
+    {
+        // Arrange
+        string root = GetRepositoryRoot();
+        string pyPath = Path.Combine(root, "build_csharp.py");
+
+        // Act
+        string pyContent = File.ReadAllText(pyPath);
+
+        // Assert
+        pyContent.Should().Contain("WizardIsTaskSelected('desktopicon')",
+            "удаление старых ярлыков обязано учитывать выбор задачи desktopicon");
+        pyContent.Should().Contain("ShouldCreateDesktopIcon()",
+            "удаление старых ярлыков обязано учитывать разрешение ShouldCreateDesktopIcon");
+        pyContent.Should().Contain("or DesktopIconExists()",
+            "чистка дубля обязана срабатывать при уже существующем новом ярлыке");
+        pyContent.Should().MatchRegex(@"(?s)if\s*\(WizardIsTaskSelected\('desktopicon'\)\s*and\s*ShouldCreateDesktopIcon\(\)\)\s*or\s*DesktopIconExists\(\).*?DeleteFile\(ExpandConstant.*?K-Tools\.lnk",
+            "удаление старых ярлыков обязано стоять под составным гейтом создания/наличия замены");
+        pyContent.Should().Contain(@"{{autodesktop}}\\K-Tools.lnk", "старый ярлык обязан удаляться из autodesktop");
+        pyContent.Should().Contain(@"{{userdesktop}}\\K-Tools.lnk", "старый ярлык обязан удаляться из userdesktop");
+        pyContent.Should().Contain(@"{{commondesktop}}\\K-Tools.lnk", "старый ярлык обязан удаляться из commondesktop, иначе останется вечный stale-триггер");
+        pyContent.Should().Contain("if IsSilentUpdate and not DesktopIconExists",
+            "логика ShouldCreateDesktopIcon обязана остаться без изменений");
+    }
+
 }
