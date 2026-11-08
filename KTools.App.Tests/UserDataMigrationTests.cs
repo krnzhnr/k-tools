@@ -373,6 +373,22 @@ public class UserDataMigrationTests
     }
 
     [TestMethod]
+    public async Task VerifyAndCleanupAsync_LegacySettingsMissing_DoesNotPend()
+    {
+        // Arrange — исходника нет вообще, назначение создано напрямую, bin отсутствует везде.
+        var context = CreateContext();
+        context.Data.CreateFile("settings.json", "{\"theme\":\"dark\"}");
+
+        // Act
+        context.Migrator.EnsureMigrated();
+        await context.Migrator.VerifyAndCleanupAsync(new List<BinaryProbeResult>(), CancellationToken.None);
+
+        // Assert — чистить нечего: тихо, без вечного pending и без бэкапа.
+        context.Migrator.NeedsVerification().Should().BeFalse();
+        File.Exists(context.Data.GetFullPath("settings.json.migrated-backup.bak")).Should().BeFalse();
+    }
+
+    [TestMethod]
     public async Task NeedsVerification_LeftoverAfterVerifiedClean_RechecksAndKeepsNewer()
     {
         // Arrange — доводим миграцию до чистой квитанции: файл удалён по хэшу.

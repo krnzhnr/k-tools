@@ -666,7 +666,7 @@ public sealed class UserDataMigrator : IUserDataMigrator
                 }
                 else { kept++; }
             }
-            else { kept++; }  // оставить как есть (включая случай отсутствия newSettings)
+            else if (File.Exists(legacySettings)) { kept++; }  // назначения нет — оставить и повторить; исходника нет — тихий no-op, чистить нечего.
         }
 
         // Bin: удаляем только файлы, побайтово совпадающие с назначением.
