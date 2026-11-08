@@ -373,6 +373,57 @@ public class UserDataMigrationTests
     }
 
     [TestMethod]
+    public async Task NeedsVerification_LeftoverAfterVerifiedClean_RechecksAndKeepsNewer()
+    {
+        // Arrange — доводим миграцию до чистой квитанции: файл удалён по хэшу.
+        var context = CreateContext();
+        context.Legacy.CreateFile("settings.json", "{\"theme\":\"dark\"}");
+        Directory.CreateDirectory(context.Data.GetFullPath("bin"));
+        context.Migrator.EnsureMigrated();
+        await context.Migrator.VerifyAndCleanupAsync(new List<BinaryProbeResult>(), CancellationToken.None);
+        context.Migrator.NeedsVerification().Should().BeFalse("чистая миграция не повторяется");
+
+        // Эмуляция рассинхрона: файл вернулся с содержимым новее назначения
+        // (откаченная версия писала в каталог установки после чистки).
+        string legacySettings = context.Legacy.CreateFile("settings.json", "{\"theme\":\"light\"}");
+        File.SetLastWriteTimeUtc(legacySettings, DateTime.UtcNow.AddHours(1));
+
+        // Act — квитанция чистая, но наследие на диске: перепроверка обязана сработать.
+        context.Migrator.NeedsVerification().Should().BeTrue("рассинхрон квитанции и диска требует перепроверки");
+        await context.Migrator.VerifyAndCleanupAsync(new List<BinaryProbeResult>(), CancellationToken.None);
+
+        // Assert — свежий чужой файл трогать запрещено, проверка повторяется.
+        File.Exists(context.Legacy.GetFullPath("settings.json")).Should().BeTrue();
+        context.Migrator.NeedsVerification().Should().BeTrue("защита от даунгрейда держит pending");
+    }
+
+    [TestMethod]
+    public async Task NeedsVerification_LeftoverAfterVerifiedClean_ArchivesStale()
+    {
+        // Arrange — доводим миграцию до чистой квитанции.
+        var context = CreateContext();
+        context.Legacy.CreateFile("settings.json", "{\"theme\":\"dark\"}");
+        Directory.CreateDirectory(context.Data.GetFullPath("bin"));
+        context.Migrator.EnsureMigrated();
+        await context.Migrator.VerifyAndCleanupAsync(new List<BinaryProbeResult>(), CancellationToken.None);
+        context.Migrator.NeedsVerification().Should().BeFalse("чистая миграция не повторяется");
+
+        // Эмуляция рассинхрона: вернулся протухший файл с содержимым,
+        // отличающимся от назначения.
+        string legacySettings = context.Legacy.CreateFile("settings.json", "{\"theme\":\"stale\"}");
+        File.SetLastWriteTimeUtc(legacySettings, new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+
+        // Act — перепроверка по факту остатков на диске.
+        context.Migrator.NeedsVerification().Should().BeTrue("рассинхрон квитанции и диска требует перепроверки");
+        await context.Migrator.VerifyAndCleanupAsync(new List<BinaryProbeResult>(), CancellationToken.None);
+
+        // Assert — протухший файл убран в бэкап, повторная проверка не требуется.
+        File.Exists(context.Legacy.GetFullPath("settings.json")).Should().BeFalse();
+        File.Exists(context.Data.GetFullPath("settings.json.migrated-backup.bak")).Should().BeTrue();
+        context.Migrator.NeedsVerification().Should().BeFalse();
+    }
+
+    [TestMethod]
     public void NeedsVerification_NoReceipt_ReturnsFalse()
     {
         // Arrange — миграция не выполнялась.

@@ -87,10 +87,7 @@ public sealed class UserDataMigrator : IUserDataMigrator
 
             MigrationReceipt receipt = MigrationReceipt.Load(ReceiptPath(dataRoot), legacyRoot);
             bool priorPending = receipt.CleanupPending;
-            if (receipt.IsVerifiedCleanFor(legacyRoot))
-            {
-                return;
-            }
+            if (receipt.IsVerifiedCleanFor(legacyRoot) && !LegacyLeftoversExist(legacyRoot)) return;
 
             using (System.Threading.Mutex? migrationMutex = TryAcquireMutex())
             {
@@ -200,14 +197,19 @@ public sealed class UserDataMigrator : IUserDataMigrator
             }
 
             MigrationReceipt receipt = MigrationReceipt.Load(ReceiptPath(dataRoot), legacyRoot);
-            if (!receipt.MatchesSource(legacyRoot)
-                || (receipt.Verified && !receipt.CleanupPending)
-                || (!BinNeedsVerification(receipt.Bin) && receipt.Settings != "copied"))
+            if (!receipt.MatchesSource(legacyRoot))
             {
                 return false;
             }
 
-            return true;
+            if (!receipt.Verified || receipt.CleanupPending)
+            {
+                return BinNeedsVerification(receipt.Bin) || receipt.Settings == "copied";
+            }
+
+            // Квитанция чистая, но наследие на диске есть (рассинхрон): перепроверить и добрать.
+            // Проверка дешёвая (1-2 системных вызова), выполняется на каждом старте.
+            return LegacyLeftoversExist(legacyRoot);
         }
         catch (Exception)
         {
@@ -237,10 +239,8 @@ public sealed class UserDataMigrator : IUserDataMigrator
             }
 
             MigrationReceipt receipt = MigrationReceipt.Load(ReceiptPath(dataRoot), legacyRoot);
-            if (!receipt.MatchesSource(legacyRoot) || (receipt.Verified && !receipt.CleanupPending))
-            {
-                return;
-            }
+            if (!receipt.MatchesSource(legacyRoot)) return;
+            if (receipt.Verified && !receipt.CleanupPending && !LegacyLeftoversExist(legacyRoot)) return;
 
             Task<BinCopyResult>? copy;
             lock (_copyLock)
@@ -903,6 +903,30 @@ public sealed class UserDataMigrator : IUserDataMigrator
         {
             using IEnumerator<string> entries = Directory.EnumerateFileSystemEntries(directory).GetEnumerator();
             return !entries.MoveNext();
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Проверяет, остались ли непереехавшие пользовательские данные в каталоге установки.</summary>
+    private static bool LegacyLeftoversExist(string legacyRoot)
+    {
+        try
+        {
+            if (File.Exists(Path.Combine(legacyRoot, SettingsFileName)))
+            {
+                return true;
+            }
+
+            string legacyBin = Path.Combine(legacyRoot, BinFolderName);
+            if (Directory.Exists(legacyBin) && !IsDirectoryEmpty(legacyBin))
+            {
+                return true;
+            }
+
+            return false;
         }
         catch (Exception)
         {
