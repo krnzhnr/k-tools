@@ -605,7 +605,7 @@ begin
     Log('Деинсталлятор: тихий режим, пользовательские данные сохранены');
     Exit;
   end;
-  DataForm := CreateCustomForm(420, 200, False, True);
+  DataForm := CreateCustomForm(480, 210, False, True);
   try
     DataForm.Caption := 'Удаление KTools';
     PromptLabel := TNewStaticText.Create(DataForm);
@@ -613,7 +613,7 @@ begin
     PromptLabel.Left := ScaleX(12);
     PromptLabel.Top := ScaleY(12);
     PromptLabel.Width := DataForm.ClientWidth - ScaleX(24);
-    PromptLabel.Caption := 'Настройки, загруженные компоненты и журналы хранятся в %LocalAppData%\\KTools. Удалить их вместе с программой?';
+    PromptLabel.Caption := 'Настройки, загруженные компоненты и журналы хранятся в:' + #13#10 + '%LocalAppData%\\KTools' + #13#10 + 'Удалить их вместе с программой?';
     PromptLabel.AutoSize := False;
     PromptLabel.WordWrap := True;
     PromptLabel.AdjustHeight;
@@ -622,7 +622,7 @@ begin
     DeleteUserDataCheckBox.Left := ScaleX(12);
     DeleteUserDataCheckBox.Top := PromptLabel.Top + PromptLabel.Height + ScaleY(8);
     DeleteUserDataCheckBox.Width := DataForm.ClientWidth - ScaleX(24);
-    DeleteUserDataCheckBox.Caption := 'Удалить настройки, загруженные компоненты и журналы';
+    DeleteUserDataCheckBox.Caption := 'Удалить пользовательские данные';
     // По умолчанию НЕ отмечен: обычное нажатие «ОК» данные сохраняет.
     DeleteUserDataCheckBox.Checked := False;
     OKButton := TNewButton.Create(DataForm);

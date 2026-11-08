@@ -292,8 +292,8 @@ public sealed class InstallerAndUpdatesTests
             "деинсталлятор обязан определять InitializeUninstall для окна выбора");
         pyContent.Should().Contain("CreateCustomForm(",
             "вопрос про данные обязан задаваться отдельным окном: страниц мастера в деинсталляторе нет");
-        pyContent.Should().Contain("Удалить настройки, загруженные компоненты и журналы",
-            "окно обязано предлагать удаление настроек, компонентов и журналов");
+        pyContent.Should().Contain("Удалить пользовательские данные",
+            "окно обязано предлагать удаление пользовательских данных короткой подписью");
         pyContent.Should().Contain("DeleteUserDataChecked := False",
             "флаг удаления обязан сбрасываться: по умолчанию данные сохраняются");
         pyContent.Should().Contain("DeleteUserDataCheckBox.Checked := False",
