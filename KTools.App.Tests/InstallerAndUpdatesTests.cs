@@ -303,6 +303,25 @@ public sealed class InstallerAndUpdatesTests
     }
 
     /// <summary>
+    /// Проверяет, что установщик зафиксирован строго на per-user (ишью 46):
+    /// диалог выбора режима убран, установка всегда без прав администратора.
+    /// </summary>
+    [TestMethod]
+    public void BuildScript_InstallMode_PerUserOnly()
+    {
+        // Arrange
+        string root = GetRepositoryRoot();
+        string pyPath = Path.Combine(root, "build_csharp.py");
+
+        // Act
+        string pyContent = File.ReadAllText(pyPath);
+
+        // Assert
+        pyContent.Should().Contain("PrivilegesRequired=lowest", "установка обязана всегда идти без прав администратора");
+        pyContent.Should().NotContain("PrivilegesRequiredOverridesAllowed", "выбор режима установки запрещён в любом виде: только дефолтный per-user без оверрайдов");
+    }
+
+    /// <summary>
     /// Проверяет, что тихий режим никогда не удаляет пользовательские данные (ишью 46):
     /// обновление через RemoveUninstallEntry запускает деинсталлятор с /VERYSILENT.
     /// </summary>

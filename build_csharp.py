@@ -298,7 +298,7 @@ UsePreviousAppDir=yes
 ; (см. ишью #60) и удалённый пользователем ярлык пересоздаётся.
 UsePreviousTasks=no
 PrivilegesRequired=lowest
-PrivilegesRequiredOverridesAllowed=dialog
+; Только per-user (ишью 46, RULES §10): установка всегда в %LocalAppData%\Programs без прав администратора и без вопросов. Директива выбора режима отсутствует намеренно: дефолт Inno Setup запрещает любые оверрайды. Обновления всегда тихие. Старые per-machine-копии удаляет код PrepareToInstall ниже (один запрос прав).
 DefaultGroupName=KTools
 OutputDir={output_dir}
 OutputBaseFilename=KTools_v{version}_Setup
