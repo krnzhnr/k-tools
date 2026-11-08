@@ -579,6 +579,106 @@ begin
     DeleteFile(ExpandConstant('{{userdesktop}}\\K-Tools.lnk'));
   end;
 end;
+// === Удаление пользовательских данных только по явной отметке (ишью 46) ===
+// Два предохранителя от потери данных при тихом обновлении:
+// 1) отметка по умолчанию снята; 2) тихий режим (/VERYSILENT) данные не трогает никогда.
+// В деинсталляторе нет страниц мастера: CreateCustomPage работает только в установке
+// (в исходниках Inno Setup помечена sfNoUninstall), поэтому вопрос задаётся
+// отдельным окном через CreateCustomForm в InitializeUninstall.
+var
+  DeleteUserDataChecked: Boolean;
+
+function InitializeUninstall: Boolean;
+var
+  DataForm: TSetupForm;
+  PromptLabel: TNewStaticText;
+  DeleteUserDataCheckBox: TNewCheckBox;
+  OKButton, CancelButton: TNewButton;
+begin
+  Result := True;
+  // По умолчанию данные сохраняются: отметка появляется только из окна ниже.
+  DeleteUserDataChecked := False;
+  // Тихий режим (/VERYSILENT при обновлении через RemoveUninstallEntry)
+  // НИКОГДА не удаляет данные: вопрос не задаётся, отметку взять негде.
+  if UninstallSilent() then
+  begin
+    Log('Деинсталлятор: тихий режим, пользовательские данные сохранены');
+    Exit;
+  end;
+  DataForm := CreateCustomForm(420, 200, False, True);
+  try
+    DataForm.Caption := 'Удаление KTools';
+    PromptLabel := TNewStaticText.Create(DataForm);
+    PromptLabel.Parent := DataForm;
+    PromptLabel.Left := ScaleX(12);
+    PromptLabel.Top := ScaleY(12);
+    PromptLabel.Width := DataForm.ClientWidth - ScaleX(24);
+    PromptLabel.Caption := 'Настройки, загруженные компоненты и журналы хранятся в %LocalAppData%\\KTools. Удалить их вместе с программой?';
+    PromptLabel.AutoSize := False;
+    PromptLabel.WordWrap := True;
+    PromptLabel.AdjustHeight;
+    DeleteUserDataCheckBox := TNewCheckBox.Create(DataForm);
+    DeleteUserDataCheckBox.Parent := DataForm;
+    DeleteUserDataCheckBox.Left := ScaleX(12);
+    DeleteUserDataCheckBox.Top := PromptLabel.Top + PromptLabel.Height + ScaleY(8);
+    DeleteUserDataCheckBox.Width := DataForm.ClientWidth - ScaleX(24);
+    DeleteUserDataCheckBox.Caption := 'Удалить настройки, загруженные компоненты и журналы';
+    // По умолчанию НЕ отмечен: обычное нажатие «ОК» данные сохраняет.
+    DeleteUserDataCheckBox.Checked := False;
+    OKButton := TNewButton.Create(DataForm);
+    OKButton.Parent := DataForm;
+    OKButton.Caption := 'ОК';
+    OKButton.ModalResult := mrOk;
+    OKButton.Default := True;
+    OKButton.Left := DataForm.ClientWidth - ScaleX(75 + 6 + 75 + 10);
+    OKButton.Top := DataForm.ClientHeight - ScaleY(23 + 10);
+    OKButton.Width := ScaleX(75);
+    OKButton.Height := ScaleY(23);
+    CancelButton := TNewButton.Create(DataForm);
+    CancelButton.Parent := DataForm;
+    CancelButton.Caption := 'Отмена';
+    CancelButton.ModalResult := mrCancel;
+    CancelButton.Cancel := True;
+    CancelButton.Left := DataForm.ClientWidth - ScaleX(75 + 10);
+    CancelButton.Top := OKButton.Top;
+    CancelButton.Width := ScaleX(75);
+    CancelButton.Height := ScaleY(23);
+    if DataForm.ShowModal() = mrOk then
+      DeleteUserDataChecked := DeleteUserDataCheckBox.Checked
+    else
+      // Отмена в окне выбора означает отмену всей деинсталляции.
+      Result := False;
+  finally
+    DataForm.Free();
+  end;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  sUserDataDir: String;
+begin
+  if CurUninstallStep = usUninstall then
+  begin
+    // Тихий режим (/VERYSILENT при обновлении через RemoveUninstallEntry)
+    // НИКОГДА не удаляет данные: окна с выбором там нет, отметку взять негде.
+    if UninstallSilent() then
+    begin
+      Log('Деинсталлятор: тихий режим, пользовательские данные сохранены');
+      Exit;
+    end;
+    if DeleteUserDataChecked then
+    begin
+      sUserDataDir := ExpandConstant('{{localappdata}}\\KTools');
+      Log('Деинсталлятор: удаляем пользовательские данные ' + sUserDataDir);
+      if DelTree(sUserDataDir, True, True, True) then
+        Log('Деинсталлятор: пользовательские данные удалены ' + sUserDataDir)
+      else
+        Log('Деинсталлятор: DelTree не смог удалить ' + sUserDataDir);
+    end
+    else
+      Log('Деинсталлятор: пользовательские данные сохранены (отметка снята)');
+  end;
+end;
 """
     iss_file.write_text(iss_content, encoding="utf-8")
     print(f"[✓] Скрипт установки {iss_file.name} успешно сгенерирован.")

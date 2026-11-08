@@ -273,4 +273,65 @@ public sealed class InstallerAndUpdatesTests
         pyContent.Should().Contain("RemoveUninstallEntry('krnzhnr.ktools', HKCU)", "копия текущего AppId в чужом режиме обязана вычищаться при установке для всех");
         pyContent.Should().Contain("RemoveUninstallEntry('krnzhnr.ktools', HKLM)", "копия текущего AppId в чужом режиме обязана вычищаться при установке per-user");
     }
+    /// <summary>
+    /// Проверяет, что деинсталлятор спрашивает про пользовательские данные отдельным окном (ишью 46):
+    /// отметка по умолчанию снята, удаление только по явному согласию.
+    /// </summary>
+    [TestMethod]
+    public void BuildScript_Uninstall_UserDataDialog_IsOptInByDefault()
+    {
+        // Arrange
+        string root = GetRepositoryRoot();
+        string pyPath = Path.Combine(root, "build_csharp.py");
+
+        // Act
+        string pyContent = File.ReadAllText(pyPath);
+
+        // Assert
+        pyContent.Should().Contain("function InitializeUninstall: Boolean;",
+            "деинсталлятор обязан определять InitializeUninstall для окна выбора");
+        pyContent.Should().Contain("CreateCustomForm(",
+            "вопрос про данные обязан задаваться отдельным окном: страниц мастера в деинсталляторе нет");
+        pyContent.Should().Contain("Удалить настройки, загруженные компоненты и журналы",
+            "окно обязано предлагать удаление настроек, компонентов и журналов");
+        pyContent.Should().Contain("DeleteUserDataChecked := False",
+            "флаг удаления обязан сбрасываться: по умолчанию данные сохраняются");
+        pyContent.Should().Contain("DeleteUserDataCheckBox.Checked := False",
+            "чекбокс удаления данных обязан быть снят по умолчанию: проверка по полному имени контрола");
+        pyContent.Should().NotContain("Checked := True",
+            "чекбокс удаления данных обязан быть снят по умолчанию: включение по умолчанию запрещено");
+    }
+
+    /// <summary>
+    /// Проверяет, что тихий режим никогда не удаляет пользовательские данные (ишью 46):
+    /// обновление через RemoveUninstallEntry запускает деинсталлятор с /VERYSILENT.
+    /// </summary>
+    [TestMethod]
+    public void BuildScript_Uninstall_SilentMode_NeverDeletesUserData()
+    {
+        // Arrange
+        string root = GetRepositoryRoot();
+        string pyPath = Path.Combine(root, "build_csharp.py");
+
+        // Act
+        string pyContent = File.ReadAllText(pyPath);
+
+        // Assert
+        pyContent.Should().Contain("procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);",
+            "деинсталлятор обязан обрабатывать шаг удаления");
+        pyContent.Should().Contain("usUninstall",
+            "удаление данных обязано выполняться только на шаге usUninstall");
+        pyContent.Should().Contain("UninstallSilent()",
+            "перед удалением данных обязана стоять проверка тихого режима");
+        int silentGateCount = pyContent.Split(new[] { "UninstallSilent" }, StringSplitOptions.None).Length - 1;
+        silentGateCount.Should().Be(2,
+            "оба silent-гейта обязаны присутствовать: InitializeUninstall и CurUninstallStepChanged; удаление любого одного гейта обязано ронять тест");
+        pyContent.Should().Contain("if DeleteUserDataChecked then",
+            "удаление данных обязано быть защищено флагом явного согласия");
+        pyContent.Should().Contain("DelTree(sUserDataDir, True, True, True)",
+            "подтверждённые данные обязаны удаляться целиком");
+        pyContent.Should().Contain(@"ExpandConstant('{{localappdata}}\\KTools')",
+            "удаляться обязан именно каталог данных %LocalAppData%\\KTools");
+    }
+
 }
