@@ -222,6 +222,7 @@ public class UserDataMigrationTests
         // Assert — оригиналы удалены только после живых версий по новым путям.
         File.Exists(resolvedTool).Should().BeTrue("проверенный файл назначения остаётся");
         File.Exists(context.Legacy.GetFullPath("settings.json")).Should().BeFalse();
+        File.Exists(context.Data.GetFullPath("settings.json.migrated-backup.bak")).Should().BeFalse("hash-путь не должен создавать бэкапы");
         Directory.Exists(context.Legacy.GetFullPath("bin")).Should().BeFalse();
         File.Exists(context.Legacy.GetFullPath(Path.Combine("logs", "old.log"))).Should().BeFalse("старые логи — отработанная история, новая версия туда не пишет");
         File.Exists(context.Legacy.GetFullPath("nvenc-capabilities.json")).Should().BeFalse("кэш железа пересоздаётся пробой");
@@ -326,7 +327,7 @@ public class UserDataMigrationTests
     }
 
     [TestMethod]
-    public async Task VerifyAndCleanupAsync_StaleSettingsBackup_DeletesSource()
+    public async Task VerifyAndCleanupAsync_StaleSettingsBackup_MovesAsideToBackup()
     {
         // Arrange — протухший бэкап: исходник не менялся с момента переноса, назначение ушло вперёд штатными записями.
         var context = CreateContext();
@@ -335,13 +336,16 @@ public class UserDataMigrationTests
         context.Migrator.EnsureMigrated();
         context.Migrator.NeedsVerification().Should().BeTrue();
         // Эмуляция штатных записей приложения в новый файл после миграции.
-        File.AppendAllText(context.Data.GetFullPath("settings.json"), "\n{\"extra\":1}");
+        File.WriteAllText(context.Data.GetFullPath("settings.json"), "{\"theme\":\"dark\",\"extra\":1}");
 
         // Act
         await context.Migrator.VerifyAndCleanupAsync(new List<BinaryProbeResult>(), CancellationToken.None);
 
-        // Assert — протухший бэкап удалён, повторная проверка не требуется.
+        // Assert — исходник перемещён в бэкап в каталоге данных, повторная проверка не требуется.
         File.Exists(context.Legacy.GetFullPath("settings.json")).Should().BeFalse();
+        string backup = context.Data.GetFullPath("settings.json.migrated-backup.bak");
+        File.Exists(backup).Should().BeTrue();
+        File.ReadAllText(backup).Should().Be("{\"theme\":\"dark\"}");
         context.Migrator.NeedsVerification().Should().BeFalse();
     }
 
@@ -354,7 +358,8 @@ public class UserDataMigrationTests
         context.Migrator.EnsureMigrated();
         context.Migrator.NeedsVerification().Should().BeTrue();
         // Эмуляция штатных записей в назначение и поздней записи откаченной версии в исходник.
-        File.AppendAllText(context.Data.GetFullPath("settings.json"), "\n{\"extra\":1}");
+        File.WriteAllText(context.Data.GetFullPath("settings.json"), "{\"theme\":\"dark\",\"extra\":1}");
+        File.WriteAllText(legacySettings, "{\"theme\":\"dark\",\"oldkey\":\"oldval\"}");
         File.SetLastWriteTimeUtc(legacySettings, DateTime.UtcNow.AddHours(1));
 
         // Act
@@ -362,6 +367,8 @@ public class UserDataMigrationTests
 
         // Assert — изменённый позже исходник трогать запрещено, проверка повторяется.
         File.Exists(context.Legacy.GetFullPath("settings.json")).Should().BeTrue();
+        File.ReadAllText(context.Legacy.GetFullPath("settings.json")).Should().Contain("oldkey");
+        File.Exists(context.Data.GetFullPath("settings.json.migrated-backup.bak")).Should().BeFalse();
         context.Migrator.NeedsVerification().Should().BeTrue();
     }
 

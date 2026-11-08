@@ -544,21 +544,29 @@ public class ServicesIntegrationTests
     [TestMethod]
     public void PathManager_GetBinaryPath_RenamesFfmpegToKtFfmpegWithExeSuffix()
     {
-        // Arrange
-        var pathManager = new PathManager(MockBuilders.CreateLogServiceMock().Object);
+        // Arrange — portable-режим: изолированный temp\bin проверяется первым,
+        // настоящий LocalAppData\bin не влияет на результат.
+        using var scope = new TempDirectoryScope();
+        File.WriteAllText(Path.Combine(scope.RootPath, "portable.txt"), string.Empty);
+        var pathManager = new PathManager(MockBuilders.CreateLogServiceMock().Object, scope.RootPath);
+        string ffmpegDir = Path.Combine(scope.RootPath, "bin", "ffmpeg");
+        string ffmpegExe = Path.Combine(ffmpegDir, "kt-ffmpeg.exe");
+        Directory.CreateDirectory(ffmpegDir);
+        File.WriteAllText(ffmpegExe, "stub");
 
         // Act — договор об именовании K-Tools: ffmpeg → kt-ffmpeg, подпапка ffmpeg
         string ffmpegPath = pathManager.GetBinaryPath("ffmpeg");
 
-        // Assert — файла нет в bin → возвращено короткое имя для поиска в PATH
-        ffmpegPath.Should().Be("kt-ffmpeg.exe", "несуществующая утилита возвращается именем для PATH");
+        // Assert — правило переименования ffmpeg→kt-ffmpeg + маппинг в подпапку ffmpeg
+        ffmpegPath.Should().Be(ffmpegExe);
     }
 
     [TestMethod]
     public void PathManager_GetBinaryPath_MkvmergeMappedToMkvtoolnixSubfolder()
     {
-        // Arrange
+        // Arrange — portable-режим: изолированный temp\bin проверяется первым
         using var scope = new TempDirectoryScope();
+        File.WriteAllText(Path.Combine(scope.RootPath, "portable.txt"), string.Empty);
         var pathManager = new PathManager(MockBuilders.CreateLogServiceMock().Object, scope.RootPath);
         string mkvDir = Path.Combine(scope.RootPath, "bin", "mkvtoolnix");
         string mkvExe = Path.Combine(mkvDir, "mkvmerge.exe");
@@ -575,8 +583,9 @@ public class ServicesIntegrationTests
     [TestMethod]
     public void PathManager_GetBinaryPath_FindsFileInBinRoot()
     {
-        // Arrange
+        // Arrange — portable-режим: изолированный temp\bin проверяется первым
         using var scope = new TempDirectoryScope();
+        File.WriteAllText(Path.Combine(scope.RootPath, "portable.txt"), string.Empty);
         var pathManager = new PathManager(MockBuilders.CreateLogServiceMock().Object, scope.RootPath);
         string binDir = Path.Combine(scope.RootPath, "bin");
         Directory.CreateDirectory(binDir);
@@ -588,6 +597,23 @@ public class ServicesIntegrationTests
 
         // Assert
         path.Should().Be(eacPath);
+    }
+
+    [TestMethod]
+    public void PathManager_GetBinaryPath_MissingBinary_ReturnsExeNameForPathSearch()
+    {
+        // Arrange — portable-режим: бинарник с уникальным именем нигде не существует,
+        // настоящий LocalAppData\bin не влияет на результат.
+        using var scope = new TempDirectoryScope();
+        File.WriteAllText(Path.Combine(scope.RootPath, "portable.txt"), string.Empty);
+        var pathManager = new PathManager(MockBuilders.CreateLogServiceMock().Object, scope.RootPath);
+        string missingName = $"missing-{Guid.NewGuid():N}.exe";
+
+        // Act
+        string path = pathManager.GetBinaryPath(missingName);
+
+        // Assert — контракт fallback в PATH: возвращается имя как есть
+        path.Should().Be(missingName);
     }
 
     [TestMethod]

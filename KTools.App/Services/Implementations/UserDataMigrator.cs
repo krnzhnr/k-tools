@@ -35,6 +35,7 @@ public sealed class UserDataMigrator : IUserDataMigrator
     private const string SourceName = nameof(UserDataMigrator);
     private const string ReceiptFileName = ".migration.json";
     private const string SettingsFileName = "settings.json";
+    private const string SettingsBackupFileName = "settings.json.migrated-backup.bak";
     private const string BinFolderName = "bin";
     private const string MutexName = "KTools_UserDataMigration";
 
@@ -85,6 +86,7 @@ public sealed class UserDataMigrator : IUserDataMigrator
             }
 
             MigrationReceipt receipt = MigrationReceipt.Load(ReceiptPath(dataRoot), legacyRoot);
+            bool priorPending = receipt.CleanupPending;
             if (receipt.IsVerifiedCleanFor(legacyRoot))
             {
                 return;
@@ -138,8 +140,9 @@ public sealed class UserDataMigrator : IUserDataMigrator
                 receipt.Bin = binState;
                 receipt.MigratedAtUtc = DateTime.UtcNow;
                 receipt.AppVersion = GetCurrentAppVersion();
-                receipt.CleanupPending = binState.EndsWith("pending", StringComparison.Ordinal)
+                bool currentPending = binState.EndsWith("pending", StringComparison.Ordinal)
                     || settingsState.EndsWith("pending", StringComparison.Ordinal);
+                receipt.CleanupPending = currentPending || priorPending;
 
                 if (binState.StartsWith("failed", StringComparison.Ordinal))
                 {
@@ -641,28 +644,29 @@ public sealed class UserDataMigrator : IUserDataMigrator
         int kept = 0;
 
         // Настройки: удаляем исходник только при побайтовом совпадении с назначением.
-        // Расхождение означает, что старая версия писала в каталог установки после
-        // миграции (откат версии), — такой файл оставляем нетронутым.
+        // Расходящийся, но нетронутый с момента переноса исходник — это протухший бэкап
+        // ИЛИ живые настройки другой линии (portable туда-обратно). Каталог установки
+        // должен стать чистым, а данные терять запрещено: перемещаем в бэкап в каталоге данных.
         string legacySettings = Path.Combine(legacyRoot, SettingsFileName);
         string newSettings = Path.Combine(dataRoot, SettingsFileName);
         if (File.Exists(legacySettings))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (File.Exists(newSettings) && (FilesHashEqual(legacySettings, newSettings) || IsUntouchedSinceMigration(legacySettings, receipt.MigratedAtUtc)))
+            if (File.Exists(legacySettings) && File.Exists(newSettings))
             {
-                if (TryDeleteFile(legacySettings))
+                if (FilesHashEqual(legacySettings, newSettings))
                 {
-                    deleted++;
+                    if (TryDeleteFile(legacySettings)) { deleted++; } else { kept++; }
                 }
-                else
+                else if (IsUntouchedSinceMigration(legacySettings, receipt.MigratedAtUtc))
                 {
-                    kept++;
+                    // Расходящийся, но нетронутый с момента переноса исходник — это протухший бэкап ИЛИ живые настройки другой линии (portable туда-обратно). Каталог установки должен стать чистым, а данные терять запрещено: перемещаем в бэкап в каталоге данных. Бэкап не затираем: если занят — оставляем исходник и pending.
+                    if (ArchiveLegacySettings(legacyRoot, dataRoot)) { /* удалён из установки, в счётчиках не участвует */ }
+                    else { kept++; }
                 }
+                else { kept++; }
             }
-            else
-            {
-                kept++;
-            }
+            else { kept++; }  // оставить как есть (включая случай отсутствия newSettings)
         }
 
         // Bin: удаляем только файлы, побайтово совпадающие с назначением.
@@ -718,6 +722,18 @@ public sealed class UserDataMigrator : IUserDataMigrator
             LogProps
                 .Create("Count", deleted)
                 .With("Skipped", kept));
+    }
+
+    private bool ArchiveLegacySettings(string legacyRoot, string dataRoot)
+    {
+        try {
+            string source = Path.Combine(legacyRoot, SettingsFileName);
+            string backup = Path.Combine(dataRoot, SettingsBackupFileName);
+            if (!File.Exists(source) || File.Exists(backup)) return false;
+            File.Move(source, backup, overwrite: false);
+            WriteEvent(AppEventIds.MigrationBackupCreated, LogLevel.Info, LogStatus.Succeeded, "Расходящиеся настройки из каталога установки сохранены в резервную копию", null, LogProps.Create("FileName", SettingsBackupFileName));
+            return true;
+        } catch (Exception) { return false; }
     }
 
     /// <summary>

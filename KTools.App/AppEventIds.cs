@@ -55,6 +55,7 @@ public static class AppEventIds
     public const string MigrationProbeFailed = "app.migration.probe_failed";
     public const string MigrationVerified = "app.migration.verified";
     public const string MigrationCleanupCompleted = "app.migration.cleanup_completed";
+    public const string MigrationBackupCreated = "app.migration.backup_created";
 }
 
 /// <summary>
