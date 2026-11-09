@@ -1091,9 +1091,15 @@ public partial class SettingsViewModel : ThreadSafeViewModel
         {
             IsDownloading = false;
             _logService.Write("app.update.download_install_failed", LogLevel.Warning, LogStatus.Failed, "Скачивание или установка обновления не завершены", ex, SourceName, properties: LogProps.Create("ErrorCode", "UPDATE_DOWNLOAD_INSTALL_FAILED").With("Retryable", true));
+
+            // Показываем краткую причину, чтобы пользователь мог сообщить о проблеме без чтения журнала
+            string reason = string.IsNullOrWhiteSpace(ex.Message)
+                ? "Подробности записаны в журнал."
+                : $"{ex.Message}\n\nПодробности записаны в журнал.";
+
             await _dialogService.ShowMessageAsync(
                 "Ошибка",
-                "Не удалось загрузить или установить обновление. Подробности записаны в журнал.");
+                $"Не удалось загрузить или установить обновление.\n\n{reason}");
         }
     }
 

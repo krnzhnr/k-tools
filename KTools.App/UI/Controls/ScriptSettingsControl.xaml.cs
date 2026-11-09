@@ -1063,6 +1063,10 @@ public sealed partial class ScriptSettingsControl : UserControl
                 inputControl = toggle;
                 break;
 
+            case SettingType.KeywordList:
+                inputControl = CreateKeywordListContainer(settingsGroup, field);
+                break;
+
             case SettingType.WhisperModelAction:
                 inputControl = CreateWhisperModelActionControl(field, settingsGroup);
                 break;
