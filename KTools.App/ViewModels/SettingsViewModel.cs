@@ -71,6 +71,25 @@ public sealed class QueueBadgeVisibilityChangedMessage
 }
 
 /// <summary>
+/// Сообщение об изменении переключателя «Запоминать выходные пути».
+/// Открытая панель работы сразу сбрасывает путь при выключении, чтобы
+/// результаты пошли в папки исходных файлов, а не в ранее запомненную.
+/// </summary>
+public sealed class OutputPathRememberingChangedMessage
+{
+    /// <summary>Новое состояние переключателя.</summary>
+    public bool IsEnabled { get; }
+
+    /// <summary>
+    /// Инициализирует новый экземпляр сообщения.
+    /// </summary>
+    public OutputPathRememberingChangedMessage(bool isEnabled)
+    {
+        IsEnabled = isEnabled;
+    }
+}
+
+/// <summary>
 /// Модель представления страницы настроек приложения.
 /// Управляет всеми пользовательскими конфигурациями и синхронизирует их с SettingsManager.
 /// </summary>
@@ -461,7 +480,16 @@ public partial class SettingsViewModel : ThreadSafeViewModel
 
     partial void OnRememberOutputPathsChanged(bool value)
     {
+        if (_isApplyingManagerState)
+        {
+            return;
+        }
+
         CommitSetting("General", "RememberOutputPaths", value, "Запоминание выходного пути");
+
+        // Открытая панель работы сбрасывает текущий путь сразу после выключения
+        // запоминания: иначе до перезапуска файлы уйдут в старую папку.
+        WeakReferenceMessenger.Default.Send(new OutputPathRememberingChangedMessage(value));
     }
 
     partial void OnMaxParallelTasksChanged(int value)

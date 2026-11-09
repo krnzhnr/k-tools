@@ -6,6 +6,7 @@ using System.IO;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using FluentAssertions;
 using Moq;
+using CommunityToolkit.Mvvm.Messaging;
 using KTools_App.Core;
 using KTools_App.Services.Contracts;
 using KTools_App.Tests.TestHelpers;
@@ -248,5 +249,55 @@ public class WorkPanelOutputPathPersistenceTests : IsolatedMessengerTestBase
         // Assert — чистый дефолт, сохранённое не тронуто
         vm.OutputPath.Should().BeEmpty("при выключенном тогле путь из настроек не восстанавливается");
         store[SettingsKey].Should().Be(dir.RootPath, "выключение тогла не стирает ранее сохранённый путь");
+    }
+
+    /// <summary>
+    /// Запоминание выключено: даже внутрисессионная память скрипта не подставляется.
+    /// </summary>
+    [TestMethod]
+    public void RestoreState_WhenRememberingDisabled_IgnoresInMemoryPath()
+    {
+        // Arrange — в памяти скрипта остался путь от прежней сессии
+        var store = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            [WorkPanelViewModel.DefaultOutputPathSettingsGroup + "/" + WorkPanelViewModel.RememberOutputPathsSettingsKey] = false
+        };
+        var settingsMock = CreateStoreSettingsMock(store);
+        var log = MockBuilders.CreateLogServiceMock().Object;
+        var script = CreateScript(settingsMock.Object, log);
+        script.SavedOutputPath = "C:\\output\\results";
+        var vm = CreateViewModel(settingsMock.Object, log);
+
+        // Act
+        vm.Initialize(script, new ObservableCollection<FileQueueItem>());
+
+        // Assert — никакого запомненного пути, каждый файл пойдёт в свою папку
+        vm.OutputPath.Should().BeEmpty("при выключенном запоминании путь не подставляется вообще");
+        script.SavedOutputPath.Should().BeEmpty("память скрипта очищается, иначе путь всплывёт позже");
+    }
+
+    /// <summary>
+    /// Выключение тогла в настройках сразу сбрасывает текущий путь в открытой панели.
+    /// </summary>
+    [TestMethod]
+    public void RememberingDisabledMessage_ClearsCurrentOutputPath()
+    {
+        // Arrange — запоминание включено, путь установлен
+        using var dir = new TempDirectoryScope();
+        var store = new Dictionary<string, object?>(StringComparer.Ordinal);
+        var settingsMock = CreateStoreSettingsMock(store);
+        var log = MockBuilders.CreateLogServiceMock().Object;
+        var vm = CreateViewModel(settingsMock.Object, log);
+        vm.Initialize(CreateScript(settingsMock.Object, log), new ObservableCollection<FileQueueItem>());
+        vm.OutputPath = dir.RootPath;
+        vm.OutputPath.Should().Be(dir.RootPath, "предусловие: путь выбран");
+
+        // Act — настройка уже записана, затем приходит уведомление
+        store[WorkPanelViewModel.DefaultOutputPathSettingsGroup + "/" + WorkPanelViewModel.RememberOutputPathsSettingsKey] = false;
+        CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default
+            .Send(new OutputPathRememberingChangedMessage(false));
+
+        // Assert
+        vm.OutputPath.Should().BeEmpty("выключение запоминания сразу возвращает пустое поле");
     }
 }

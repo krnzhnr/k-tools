@@ -319,6 +319,16 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
             _selectedTracks = m.SelectedTracks;
             _selectedAttachments = m.SelectedAttachments;
         });
+
+        // Выключение запоминания путей возвращает поведение до внедрения сохранения:
+        // текущий путь сбрасывается, файлы идут в папки своих исходников.
+        CommunityToolkit.Mvvm.Messaging.WeakReferenceMessenger.Default.Register<OutputPathRememberingChangedMessage>(this, (r, m) =>
+        {
+            if (!m.IsEnabled && !string.IsNullOrEmpty(OutputPath))
+            {
+                OutputPath = string.Empty;
+            }
+        });
     }
 
     /// <summary>
@@ -442,9 +452,10 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
         string restored;
         if (!IsOutputPathRememberingEnabled())
         {
-            // Тогл выключен: путь из настроек не подставляется. Остаётся только
-            // внутрисессионная память скрипта — после перезапуска поле пустое.
-            restored = script.SavedOutputPath ?? string.Empty;
+            // Тогл выключен: поведение до внедрения сохранения — никакого
+            // запомненного пути нет, поле пустое, каждый файл пишется
+            // в свою папку исходников.
+            restored = string.Empty;
         }
         else
         {
