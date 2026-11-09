@@ -82,6 +82,46 @@ public class SettingsViewModelTests
     }
 
     /// <summary>
+    /// Проверяет загрузку и сохранение переключателя «Запоминать выходные пути».
+    /// </summary>
+    [TestMethod]
+    public void RememberOutputPaths_LoadAndChange_UsesSettingsManager()
+    {
+        // Arrange
+        _settingsManagerMock.SetupGet(m => m.RememberOutputPaths).Returns(true);
+        _settingsManagerMock
+            .Setup(m => m.SetSetting("General", "RememberOutputPaths", It.IsAny<bool>()))
+            .Returns<string, string, bool>((group, key, value) =>
+                PersistenceResult.Succeeded(new[] { group + "/" + key }));
+        var viewModel = new SettingsViewModel(
+            _settingsManagerMock.Object,
+            _dialogServiceMock.Object,
+            _updateServiceMock.Object,
+            _logServiceMock.Object,
+            _pathManagerMock.Object,
+            _scriptRegistryMock.Object,
+            _dependencyManagerMock.Object,
+            Mock.Of<IInstallLocationService>()
+        );
+
+        // Assert — значение загружено без записи
+        viewModel.RememberOutputPaths.Should().BeTrue("значение загружается из менеджера настроек");
+        _settingsManagerMock.Verify(
+            m => m.SetSetting("General", "RememberOutputPaths", It.IsAny<bool>()),
+            Times.Never,
+            "загрузка не является пользовательским изменением и не пишет настройку");
+
+        // Act
+        viewModel.RememberOutputPaths = false;
+
+        // Assert
+        _settingsManagerMock.Verify(
+            m => m.SetSetting("General", "RememberOutputPaths", false),
+            Times.Once,
+            "изменение переключателя сохраняется в настройки");
+    }
+
+    /// <summary>
     /// Проверяет, что изменение свойств во ViewModel фиксируется типизированным
     /// вызовом SetSetting и публикует состояние Persisted без утечки значения в журнал.
     /// </summary>

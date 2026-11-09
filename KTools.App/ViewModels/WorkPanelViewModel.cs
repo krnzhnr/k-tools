@@ -43,6 +43,13 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
     /// </summary>
     public const string DefaultOutputPathSettingsKey = "DefaultOutputPath";
 
+    /// <summary>
+    /// Ключ переключателя «Запоминать выходные пути» в настройках (ишью #42).
+    /// По умолчанию включён — путь сохраняется и восстанавливается;
+    /// при выключенном значении работают только внутрисессионные значения.
+    /// </summary>
+    public const string RememberOutputPathsSettingsKey = "RememberOutputPaths";
+
     private bool _isRestoringOutputPath;
     private readonly INavigationService _navigationService;
     private readonly IDialogService _dialogService;
@@ -194,8 +201,25 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
     /// </summary>
     private void PersistOutputPath(string? value)
     {
+        if (!IsOutputPathRememberingEnabled())
+        {
+            return;
+        }
+
         string normalized = string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
         _settingsManager.SetSetting(DefaultOutputPathSettingsGroup, DefaultOutputPathSettingsKey, normalized);
+    }
+
+    /// <summary>
+    /// Читает переключатель «Запоминать выходные пути» (ишью #42).
+    /// Отсутствие ключа означает включённое поведение: так работают существующие установки.
+    /// </summary>
+    private bool IsOutputPathRememberingEnabled()
+    {
+        return _settingsManager.GetSetting(
+            DefaultOutputPathSettingsGroup,
+            RememberOutputPathsSettingsKey,
+            true);
     }
 
     /// <summary>
@@ -415,23 +439,32 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
     /// </summary>
     private void RestoreGlobalOutputPath(AbstractScript script)
     {
-        string? persisted = _settingsManager.GetSetting<string?>(
-            DefaultOutputPathSettingsGroup,
-            DefaultOutputPathSettingsKey,
-            null);
-
         string restored;
-        if (!string.IsNullOrWhiteSpace(persisted))
+        if (!IsOutputPathRememberingEnabled())
         {
-            restored = Directory.Exists(persisted) ? persisted : string.Empty;
-        }
-        else if (persisted is null)
-        {
+            // Тогл выключен: путь из настроек не подставляется. Остаётся только
+            // внутрисессионная память скрипта — после перезапуска поле пустое.
             restored = script.SavedOutputPath ?? string.Empty;
         }
         else
         {
-            restored = string.Empty;
+            string? persisted = _settingsManager.GetSetting<string?>(
+                DefaultOutputPathSettingsGroup,
+                DefaultOutputPathSettingsKey,
+                null);
+
+            if (!string.IsNullOrWhiteSpace(persisted))
+            {
+                restored = Directory.Exists(persisted) ? persisted : string.Empty;
+            }
+            else if (persisted is null)
+            {
+                restored = script.SavedOutputPath ?? string.Empty;
+            }
+            else
+            {
+                restored = string.Empty;
+            }
         }
 
         _isRestoringOutputPath = true;

@@ -90,6 +90,7 @@ public class SettingsManagerTests
         manager.BackdropType.Should().Be("Mica");
         manager.EnableParallel.Should().BeTrue();
         manager.ClearListOnAdd.Should().BeFalse();
+        manager.RememberOutputPaths.Should().BeTrue();
         manager.AutoCheckUpdates.Should().BeTrue();
         manager.IncludePreReleases.Should().Be(SettingsManager.IsPreviewBuild);
         manager.DebugSimulateOldVersion.Should().BeFalse();

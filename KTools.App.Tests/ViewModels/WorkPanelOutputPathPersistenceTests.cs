@@ -38,6 +38,9 @@ public class WorkPanelOutputPathPersistenceTests : IsolatedMessengerTestBase
         mock.Setup(m => m.GetSetting(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
             .Returns<string, string, string>((group, key, @default) =>
                 store.TryGetValue(group + "/" + key, out object? raw) ? raw as string ?? @default : @default);
+        mock.Setup(m => m.GetSetting(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<bool>()))
+            .Returns<string, string, bool>((group, key, @default) =>
+                store.TryGetValue(group + "/" + key, out object? raw) && raw is bool flag ? flag : @default);
         mock.Setup(m => m.SetSetting(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
             .Returns<string, string, string>((group, key, value) =>
             {
@@ -194,5 +197,56 @@ public class WorkPanelOutputPathPersistenceTests : IsolatedMessengerTestBase
 
         // Assert — поведение в памяти сохранено для обратной совместимости
         vm.OutputPath.Should().Be("C:\\output\\results", "без записи в настройках действует прежнее поведение в памяти");
+    }
+
+    /// <summary>
+    /// Запоминание выключено: смена пути не пишется в настройки, но живёт в памяти скрипта.
+    /// </summary>
+    [TestMethod]
+    public void OutputPath_WhenRememberingDisabled_DoesNotPersist()
+    {
+        // Arrange — тогл «Запоминать выходные пути» выключен
+        using var dir = new TempDirectoryScope();
+        var store = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            [WorkPanelViewModel.DefaultOutputPathSettingsGroup + "/" + WorkPanelViewModel.RememberOutputPathsSettingsKey] = false
+        };
+        var settingsMock = CreateStoreSettingsMock(store);
+        var log = MockBuilders.CreateLogServiceMock().Object;
+        var vm = CreateViewModel(settingsMock.Object, log);
+        var script = CreateScript(settingsMock.Object, log);
+        vm.Initialize(script, new ObservableCollection<FileQueueItem>());
+
+        // Act
+        vm.OutputPath = dir.RootPath;
+
+        // Assert — в настройки не пишем, внутрисессионная память работает
+        store.Should().NotContainKey(SettingsKey, "при выключенном тогле путь не сохраняется");
+        script.SavedOutputPath.Should().Be(dir.RootPath, "внутрисессионная память скрипта остаётся");
+    }
+
+    /// <summary>
+    /// Запоминание выключено: сохранённый ранее путь не подставляется при активации скрипта.
+    /// </summary>
+    [TestMethod]
+    public void RestoreState_WhenRememberingDisabled_IgnoresPersistedPath()
+    {
+        // Arrange — в настройках есть путь, но тогл выключен
+        using var dir = new TempDirectoryScope();
+        var store = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            [SettingsKey] = dir.RootPath,
+            [WorkPanelViewModel.DefaultOutputPathSettingsGroup + "/" + WorkPanelViewModel.RememberOutputPathsSettingsKey] = false
+        };
+        var settingsMock = CreateStoreSettingsMock(store);
+        var log = MockBuilders.CreateLogServiceMock().Object;
+        var vm = CreateViewModel(settingsMock.Object, log);
+
+        // Act
+        vm.Initialize(CreateScript(settingsMock.Object, log), new ObservableCollection<FileQueueItem>());
+
+        // Assert — чистый дефолт, сохранённое не тронуто
+        vm.OutputPath.Should().BeEmpty("при выключенном тогле путь из настроек не восстанавливается");
+        store[SettingsKey].Should().Be(dir.RootPath, "выключение тогла не стирает ранее сохранённый путь");
     }
 }

@@ -176,6 +176,13 @@ public partial class SettingsViewModel : ThreadSafeViewModel
     public partial bool ClearListOnAdd { get; set; }
 
     /// <summary>
+    /// Запоминать ли выходной путь между перезапусками приложения.
+    /// По умолчанию включено.
+    /// </summary>
+    [ObservableProperty]
+    public partial bool RememberOutputPaths { get; set; } = true;
+
+    /// <summary>
     /// Количество параллельно выполняемых задач обработки медиа.
     /// </summary>
     [ObservableProperty]
@@ -390,6 +397,7 @@ public partial class SettingsViewModel : ThreadSafeViewModel
         {
             OverwriteExisting = _settingsManager.OverwriteExisting;
             ClearListOnAdd = _settingsManager.ClearListOnAdd;
+            RememberOutputPaths = _settingsManager.RememberOutputPaths;
             EnableParallel = _settingsManager.EnableParallel;
             MaxParallelTasks = Math.Max(1, _settingsManager.MaxParallelTasks);
             EnableParallelDemux = _settingsManager.EnableParallelDemux;
@@ -449,6 +457,11 @@ public partial class SettingsViewModel : ThreadSafeViewModel
     partial void OnClearListOnAddChanged(bool value)
     {
         CommitSetting("General", "ClearListOnAdd", value, "Очистка списка файлов");
+    }
+
+    partial void OnRememberOutputPathsChanged(bool value)
+    {
+        CommitSetting("General", "RememberOutputPaths", value, "Запоминание выходного пути");
     }
 
     partial void OnMaxParallelTasksChanged(int value)
@@ -820,6 +833,7 @@ public partial class SettingsViewModel : ThreadSafeViewModel
         {
             new("General/OverwriteExisting", false),
             new("General/ClearListOnAdd", false),
+            new("General/RememberOutputPaths", true),
             new("General/EnableParallel", true),
             new("General/MaxParallelTasks", Math.Max(1, Environment.ProcessorCount / 2)),
             new("General/EnableParallelDemux", false),
@@ -862,6 +876,7 @@ public partial class SettingsViewModel : ThreadSafeViewModel
         {
             OverwriteExisting = false;
             ClearListOnAdd = false;
+            RememberOutputPaths = true;
             EnableParallel = true;
             MaxParallelTasks = Math.Max(1, Environment.ProcessorCount / 2);
             EnableParallelDemux = false;

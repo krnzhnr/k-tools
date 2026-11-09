@@ -211,6 +211,16 @@ public sealed class SettingsManager : ISettingsManager
     }
 
     /// <summary>
+    /// Запоминать ли выходной путь между перезапусками приложения.
+    /// По умолчанию включено: глобальный путь пишется в настройки и восстанавливается.
+    /// </summary>
+    public bool RememberOutputPaths
+    {
+        get => GetSetting("General", "RememberOutputPaths", true);
+        set => SetSetting("General", "RememberOutputPaths", value);
+    }
+
+    /// <summary>
     /// Показывать ли в очереди пилюлю частоты кадров.
     /// </summary>
     public bool ShowFrameRateBadge

@@ -65,6 +65,13 @@ public interface ISettingsManager : IDisposable
     bool ClearListOnAdd { get; set; }
 
     /// <summary>
+    /// Запоминать ли выходной путь между перезапусками приложения.
+    /// По умолчанию включено: путь пишется в настройки и восстанавливается при активации скрипта.
+    /// При выключенном значении путь не сохраняется и не восстанавливается из настроек.
+    /// </summary>
+    bool RememberOutputPaths { get; set; }
+
+    /// <summary>
     /// Показывать ли в очереди пилюлю частоты кадров.
     /// </summary>
     bool ShowFrameRateBadge { get; set; }

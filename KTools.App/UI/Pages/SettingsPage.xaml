@@ -52,6 +52,18 @@
                         IsOn="{x:Bind ViewModel.ClearListOnAdd, Mode=TwoWay}" />
                 </community:SettingsCard>
 
+                <!-- Запоминать ли выходной путь между перезапусками -->
+                <community:SettingsCard
+                    Padding="16,12,16,12"
+                    Description="Восстанавливать последний выбранный выходной путь при следующем запуске. Если выключить, путь не сохраняется и результаты пишутся в папку с исходными файлами"
+                    Header="Запоминать выходные пути">
+                    <ToggleSwitch
+                        x:Name="RememberOutputPathsToggle"
+                        OffContent="Выкл"
+                        OnContent="Вкл"
+                        IsOn="{x:Bind ViewModel.RememberOutputPaths, Mode=TwoWay}" />
+                </community:SettingsCard>
+
                 <!-- Интеграция с контекстным меню Проводника -->
                 <community:SettingsCard
                     Padding="16,12,16,12"
