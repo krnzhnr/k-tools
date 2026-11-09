@@ -60,6 +60,7 @@ public sealed class StubScript : AbstractScript
     private readonly bool _supportsParallel;
     private readonly bool _useCustomWidget;
     private readonly string[] _dependencies;
+    private readonly string? _name;
 
     /// <summary>
     /// Инициализирует тестовый скрипт с настраиваемым поведением.
@@ -70,22 +71,25 @@ public sealed class StubScript : AbstractScript
     /// <param name="supportsParallel">Поддержка параллельной обработки.</param>
     /// <param name="useCustomWidget">Использование кастомного виджета дорожек.</param>
     /// <param name="dependencies">Ключи требуемых внешних зависимостей.</param>
+    /// <param name="name">Имя скрипта; если не задано, используется <see cref="DefaultName"/>.</param>
     public StubScript(
         ILogService logService,
         ISettingsManager settingsManager,
         IPathManager pathManager,
         bool supportsParallel = false,
         bool useCustomWidget = false,
-        string[]? dependencies = null)
+        string[]? dependencies = null,
+        string? name = null)
         : base(logService, settingsManager, pathManager)
     {
         _supportsParallel = supportsParallel;
         _useCustomWidget = useCustomWidget;
         _dependencies = dependencies ?? Array.Empty<string>();
+        _name = name;
     }
 
     /// <summary>Отображаемое имя скрипта.</summary>
-    public override string Name => DefaultName;
+    public override string Name => _name ?? DefaultName;
 
     /// <summary>Описание назначения скрипта.</summary>
     public override string Description => "Тестовый скрипт для юнит-тестов";

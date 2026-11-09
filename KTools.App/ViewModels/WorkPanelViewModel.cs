@@ -32,16 +32,40 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
     private const string SourceName = nameof(WorkPanelViewModel);
 
     /// <summary>
-    /// Группа настроек для глобального выходного пути по умолчанию (ишью #42, глобальный скоуп).
+    /// Группа настроек для запоминаемых выходных путей (ишью #42).
     /// Хранение напрямую через ISettingsManager без типизированных свойств.
+    /// Пути лежат в общей группе: нормализация в SettingsManager удаляет
+    /// лишние ключи из групп Script_*, там хранить нельзя.
     /// </summary>
     public const string DefaultOutputPathSettingsGroup = "General";
 
     /// <summary>
-    /// Ключ глобального выходного пути по умолчанию в настройках.
-    /// Один запоминаемый путь для всех скриптов (индивидуально по скриптам — позже, не в этой волне).
+    /// Legacy-ключ общего выходного пути по умолчанию в настройках.
+    /// Используется только для миграции существующих установок:
+    /// старое общее значение подхватывается каждым скриптом,
+    /// дальше пути живут независимо по ключам <see cref="GetScriptOutputPathKey"/>.
     /// </summary>
     public const string DefaultOutputPathSettingsKey = "DefaultOutputPath";
+
+    /// <summary>
+    /// Возвращает ключ запоминаемого выходного пути для скрипта.
+    /// Пустое имя — legacy-ключ (миграция); иначе "DefaultOutputPath_" + имя
+    /// с заменами "/", "\", " ", "→" на "_" (как в SettingsManager.GetSafeGroupName,
+    /// но без префикса Script_). Хранение — в группе General, см. выше.
+    /// </summary>
+    public static string GetScriptOutputPathKey(string? scriptName)
+    {
+        if (string.IsNullOrWhiteSpace(scriptName))
+        {
+            return DefaultOutputPathSettingsKey;
+        }
+
+        return "DefaultOutputPath_" + scriptName
+            .Replace("/", "_")
+            .Replace("\\", "_")
+            .Replace(" ", "_")
+            .Replace("→", "_");
+    }
 
     /// <summary>
     /// Ключ переключателя «Запоминать выходные пути» в настройках (ишью #42).
@@ -174,7 +198,7 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
     public partial string OutputPath { get; set; } = string.Empty;
 
     /// <summary>
-    /// Сохраняет смену выходного пути в глобальные настройки (ишью #42).
+    /// Сохраняет смену выходного пути в настройки скрипта (ишью #42).
     /// Во время восстановления из настроек запись пропускается, чтобы временная
     /// недоступность папки (сеть, отключённый диск) не стирала сохранённое значение.
     /// </summary>
@@ -191,15 +215,15 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
             return;
         }
 
-        PersistOutputPath(path);
+        PersistOutputPath(path, ActiveScript?.Name);
     }
 
     /// <summary>
-    /// Записывает выходной путь в глобальные настройки напрямую через ISettingsManager.
+    /// Записывает выходной путь скрипта в настройки напрямую через ISettingsManager.
     /// Пустое значение затирает сохранённое. Несуществующие пути на записи не отбрасываются:
     /// проверка существования выполняется только при восстановлении.
     /// </summary>
-    private void PersistOutputPath(string? value)
+    private void PersistOutputPath(string? value, string? scriptName)
     {
         if (!IsOutputPathRememberingEnabled())
         {
@@ -207,7 +231,7 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
         }
 
         string normalized = string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
-        _settingsManager.SetSetting(DefaultOutputPathSettingsGroup, DefaultOutputPathSettingsKey, normalized);
+        _settingsManager.SetSetting(DefaultOutputPathSettingsGroup, GetScriptOutputPathKey(scriptName), normalized);
     }
 
     /// <summary>
@@ -432,7 +456,7 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
         }
 
         LogText = ActiveScript.SavedLogText ?? string.Empty;
-        RestoreGlobalOutputPath(ActiveScript);
+        RestoreScriptOutputPath(ActiveScript);
 
         StatusText =
             ActiveScript.SavedStatusText ?? "Ожидание запуска...";
@@ -442,12 +466,13 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
     }
 
     /// <summary>
-    /// Восстанавливает глобальный выходной путь из настроек (ишью #42).
+    /// Восстанавливает запоминаемый выходной путь скрипта из настроек (ишью #42).
     /// Сохранённой папки больше нет — молча откат к дефолту без подстановки битого пути.
-    /// Запись отсутствует (первый запуск) — прежнее поведение в памяти скрипта.
+    /// Per-script запись отсутствует (первый запуск, новый скрипт) — откат к legacy-ключу
+    /// (миграция существующих установок); legacy тоже нет — прежнее поведение в памяти скрипта.
     /// Явная очистка (пустая строка) — дефолт без воскрешения из памяти.
     /// </summary>
-    private void RestoreGlobalOutputPath(AbstractScript script)
+    private void RestoreScriptOutputPath(AbstractScript script)
     {
         string restored;
         if (!IsOutputPathRememberingEnabled())
@@ -461,8 +486,17 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
         {
             string? persisted = _settingsManager.GetSetting<string?>(
                 DefaultOutputPathSettingsGroup,
-                DefaultOutputPathSettingsKey,
+                GetScriptOutputPathKey(script.Name),
                 null);
+
+            if (persisted is null)
+            {
+                // Per-script ключа нет: миграция — подхватить старое общее значение.
+                persisted = _settingsManager.GetSetting<string?>(
+                    DefaultOutputPathSettingsGroup,
+                    DefaultOutputPathSettingsKey,
+                    null);
+            }
 
             if (!string.IsNullOrWhiteSpace(persisted))
             {
@@ -514,7 +548,7 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
             }
 
             script.SavedOutputPath = OutputPath;
-            PersistOutputPath(OutputPath);
+            PersistOutputPath(OutputPath, script.Name);
         }
         finally
         {

@@ -15,18 +15,38 @@ using KTools_App.ViewModels;
 namespace KTools_App.Tests.ViewModels;
 
 /// <summary>
-/// Юнит-тесты глобального запоминаемого выходного пути (ишью #42, глобальный скоуп:
-/// один запоминаемый путь по умолчанию для всех скриптов, индивидуально по скриптам — позже).
-/// Хранение — напрямую через ISettingsManager (группа/ключ
-/// <see cref="WorkPanelViewModel.DefaultOutputPathSettingsGroup"/> /
-/// <see cref="WorkPanelViewModel.DefaultOutputPathSettingsKey"/>),
+/// Юнит-тесты запоминаемого выходного пути (ишью #42, поскриптовый скоуп:
+/// отдельный запоминаемый путь для каждого скрипта, legacy-ключ — только миграция).
+/// Хранение — напрямую через ISettingsManager (группа
+/// <see cref="WorkPanelViewModel.DefaultOutputPathSettingsGroup"/>,
+/// per-script ключ <see cref="WorkPanelViewModel.GetScriptOutputPathKey"/>),
 /// без типизированных свойств (файлы настроек заняты другим агентом).
 /// Все комментарии выполнены на русском языке.
 /// </summary>
 [TestClass]
 public class WorkPanelOutputPathPersistenceTests : IsolatedMessengerTestBase
 {
+    /// <summary>
+    /// Имя второго скрипта для проверки изоляции путей.
+    /// </summary>
+    private const string OtherScriptName = "Другой скрипт";
+
+    /// <summary>
+    /// Ключ per-script пути скрипта по умолчанию.
+    /// </summary>
     private static string SettingsKey =>
+        WorkPanelViewModel.DefaultOutputPathSettingsGroup + "/" + WorkPanelViewModel.GetScriptOutputPathKey(StubScript.DefaultName);
+
+    /// <summary>
+    /// Ключ per-script пути второго скрипта.
+    /// </summary>
+    private static string OtherSettingsKey =>
+        WorkPanelViewModel.DefaultOutputPathSettingsGroup + "/" + WorkPanelViewModel.GetScriptOutputPathKey(OtherScriptName);
+
+    /// <summary>
+    /// Legacy-ключ старого общего пути (только чтение при миграции).
+    /// </summary>
+    private static string LegacySettingsKey =>
         WorkPanelViewModel.DefaultOutputPathSettingsGroup + "/" + WorkPanelViewModel.DefaultOutputPathSettingsKey;
 
     /// <summary>
@@ -66,13 +86,13 @@ public class WorkPanelOutputPathPersistenceTests : IsolatedMessengerTestBase
         return vm;
     }
 
-    private static StubScript CreateScript(ISettingsManager settings, ILogService log)
+    private static StubScript CreateScript(ISettingsManager settings, ILogService log, string? name = null)
     {
-        return new StubScript(log, settings, MockBuilders.CreatePathManagerMock().Object);
+        return new StubScript(log, settings, MockBuilders.CreatePathManagerMock().Object, name: name);
     }
 
     /// <summary>
-    /// Проверяет, что смена выходного пути сохраняется в настройки.
+    /// Проверяет, что смена выходного пути сохраняется в per-script ключ настроек.
     /// </summary>
     [TestMethod]
     public void OutputPath_ExistingFolderSet_PersistsToSettings()
@@ -89,33 +109,76 @@ public class WorkPanelOutputPathPersistenceTests : IsolatedMessengerTestBase
         // Act — смена пути (единая точка для Обзор/перетаскивание/ручной ввод)
         vm.OutputPath = dir.RootPath;
 
-        // Assert — значение сохранено в настройки и синхронизировано с памятью скрипта
-        store.Should().ContainKey(SettingsKey, "смена выходного пути обязана сохраняться в настройки");
+        // Assert — значение сохранено в per-script ключ и синхронизировано с памятью скрипта
+        store.Should().ContainKey(SettingsKey, "смена выходного пути обязана сохраняться в per-script ключ");
         store[SettingsKey].Should().Be(dir.RootPath);
-        script.SavedOutputPath.Should().Be(dir.RootPath, "память скрипта синхронизируется с глобальным путём");
+        script.SavedOutputPath.Should().Be(dir.RootPath, "память скрипта синхронизируется с путём");
     }
 
     /// <summary>
-    /// Проверяет, что сохранённый путь восстанавливается для другого скрипта (глобальность).
+    /// Проверяет изоляцию путей: путь скрипта А не виден скрипту Б с другим именем,
+    /// путь Б пишется в свой ключ и не трогает ключ А.
     /// </summary>
     [TestMethod]
-    public void RestoreState_PersistedExistingFolder_RestoresItForAnotherScript()
+    public void RestoreState_ScriptsWithDifferentNames_PathsAreIsolated()
     {
-        // Arrange — путь заранее сохранён в настройки
+        // Arrange — у скрипта А сохранён существующий путь
+        using var dirA = new TempDirectoryScope();
+        using var dirB = new TempDirectoryScope();
+        var store = new Dictionary<string, object?>(StringComparer.Ordinal);
+        var settingsMock = CreateStoreSettingsMock(store);
+        var log = MockBuilders.CreateLogServiceMock().Object;
+        var vmA = CreateViewModel(settingsMock.Object, log);
+        vmA.Initialize(CreateScript(settingsMock.Object, log), new ObservableCollection<FileQueueItem>());
+        vmA.OutputPath = dirA.RootPath;
+        vmA.OutputPath.Should().Be(dirA.RootPath, "предусловие: путь скрипта А сохранён");
+
+        // Act — активация скрипта Б с другим именем на том же хранилище
+        var vmB = CreateViewModel(settingsMock.Object, log);
+        vmB.Initialize(CreateScript(settingsMock.Object, log, OtherScriptName), new ObservableCollection<FileQueueItem>());
+
+        // Assert — чужой путь не подставляется
+        vmB.OutputPath.Should().BeEmpty("путь скрипта А изолирован и не виден скрипту Б");
+
+        // Act — скрипт Б выбирает свой путь
+        vmB.OutputPath = dirB.RootPath;
+
+        // Assert — ключи независимы
+        store[OtherSettingsKey].Should().Be(dirB.RootPath, "путь скрипта Б пишется в собственный ключ");
+        store[SettingsKey].Should().Be(dirA.RootPath, "ключ скрипта А не тронут выбором скрипта Б");
+    }
+
+    /// <summary>
+    /// Проверяет миграцию: при наличии только legacy-ключа старое общее значение
+    /// подхватывается скриптом; смена пути пишет per-script ключ, legacy не тронут.
+    /// </summary>
+    [TestMethod]
+    public void RestoreState_OnlyLegacyKeyExists_MigratesAndWritesPerScriptKey()
+    {
+        // Arrange — в хранилище только старое общее значение
         using var dir = new TempDirectoryScope();
+        string second = Path.Combine(dir.RootPath, "Второй");
+        Directory.CreateDirectory(second);
         var store = new Dictionary<string, object?>(StringComparer.Ordinal)
         {
-            [SettingsKey] = dir.RootPath
+            [LegacySettingsKey] = dir.RootPath
         };
         var settingsMock = CreateStoreSettingsMock(store);
         var log = MockBuilders.CreateLogServiceMock().Object;
-
-        // Act — активация другого скрипта с тем же хранилищем настроек
         var vm = CreateViewModel(settingsMock.Object, log);
+
+        // Act — активация скрипта
         vm.Initialize(CreateScript(settingsMock.Object, log), new ObservableCollection<FileQueueItem>());
 
-        // Assert — путь общий для всех скриптов
-        vm.OutputPath.Should().Be(dir.RootPath, "глобальный путь восстанавливается независимо от скрипта");
+        // Assert — legacy-значение подхвачено
+        vm.OutputPath.Should().Be(dir.RootPath, "старое общее значение мигрирует в скрипт");
+
+        // Act — смена пути
+        vm.OutputPath = second;
+
+        // Assert — дальше путь живёт в per-script ключе, legacy не перезаписывается
+        store[SettingsKey].Should().Be(second, "смена пути пишет per-script ключ");
+        store[LegacySettingsKey].Should().Be(dir.RootPath, "миграция не трогает legacy-ключ");
     }
 
     /// <summary>
