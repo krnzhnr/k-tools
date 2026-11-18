@@ -45,6 +45,9 @@ jobs:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # В CI некому подтверждать permission-запросы: любое "ask" вешает шаг
+          # до таймаута. Разрешаем агенту писать в /tmp (текст комментария).
+          OPENCODE_CONFIG_CONTENT: '{"permission":{"external_directory":"allow"}}'
         with:
           model: ${{ vars.OPENCODE_MODEL || 'opencode-go/deepseek-v4.1-flash' }}
           use_github_token: true
