@@ -996,11 +996,8 @@ public class DependencyManager : IDependencyManager
 
         try
         {
-            Task completed = await Task.WhenAny(readTask, Task.Delay(TimeSpan.FromSeconds(2)));
-            if (completed == readTask)
-            {
-                return await readTask;
-            }
+            // WaitAsync вместо WhenAny+Delay: таймер не продолжает жить после завершения операции (CA2027).
+            return await readTask.WaitAsync(TimeSpan.FromSeconds(2));
         }
         catch
         {

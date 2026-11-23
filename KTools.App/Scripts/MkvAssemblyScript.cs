@@ -337,11 +337,11 @@ public sealed class MkvAssemblyScript(
                 List<string> mp4InputArgs = [];
                 foreach (string externalAudio in mp4AudioPaths)
                 {
-                    mp4InputArgs.AddRange(["-i", $"\"{externalAudio}\""]);
+                    mp4InputArgs.AddRange((string[])["-i", $"\"{externalAudio}\""]);
                 }
                 foreach (string externalSubs in mp4SubsPaths)
                 {
-                    mp4InputArgs.AddRange(["-i", $"\"{externalSubs}\""]);
+                    mp4InputArgs.AddRange((string[])["-i", $"\"{externalSubs}\""]);
                 }
 
                 List<string> extraArgsMp4 = [.. mp4InputArgs, "-c", "copy", "-movflags", "+faststart"];
@@ -506,7 +506,7 @@ public sealed class MkvAssemblyScript(
             };
             if (!string.IsNullOrWhiteSpace(audioTitle))
             {
-                audioArgs.AddRange(["--track-name", $"\"0:{audioTitle}\""]);
+                audioArgs.AddRange((string[])["--track-name", $"\"0:{audioTitle}\""]);
             }
             mkvInputs.Add(new MkvInputSource(audioPaths[i], audioArgs));
         }
@@ -533,7 +533,7 @@ public sealed class MkvAssemblyScript(
             };
             if (!string.IsNullOrWhiteSpace(trackTitle))
             {
-                subsArgs.AddRange(["--track-name", $"\"0:{trackTitle}\""]);
+                subsArgs.AddRange((string[])["--track-name", $"\"0:{trackTitle}\""]);
             }
             mkvInputs.Add(new MkvInputSource(subsTracks[i].Path, subsArgs));
         }

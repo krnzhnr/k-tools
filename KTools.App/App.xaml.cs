@@ -231,13 +231,8 @@ public partial class App : Application
         TimeSpan effectiveTimeout = timeout <= TimeSpan.Zero ? TimeSpan.FromSeconds(10) : timeout;
         try
         {
-            Task completedTask = await Task.WhenAny(task, Task.Delay(effectiveTimeout)).ConfigureAwait(false);
-            if (!ReferenceEquals(completedTask, task))
-            {
-                return false;
-            }
-
-            CrashShutdownResult result = await task.ConfigureAwait(false);
+            // WaitAsync вместо WhenAny+Delay: таймер не продолжает жить после завершения операции (CA2027).
+            CrashShutdownResult result = await task.WaitAsync(effectiveTimeout).ConfigureAwait(false);
             return result.Succeeded;
         }
         catch (Exception)
@@ -2176,22 +2171,22 @@ public static class ExitRequestExecutor
             }
         }
 
-        Task completed;
         try
         {
-            completed = await Task.WhenAny(completion.Task, Task.Delay(timeout)).ConfigureAwait(false);
+            // WaitAsync вместо WhenAny+Delay: таймер не продолжает жить после завершения операции (CA2027).
+            // TimeoutException означает истечение таймаута, остальные исключения — ошибку самой задачи.
+            await completion.Task.WaitAsync(timeout).ConfigureAwait(false);
         }
-        catch (Exception)
+        catch (TimeoutException)
         {
             Observe(completion.Task);
             Report(onFailure, ErrorTimeout);
             return false;
         }
-
-        if (!ReferenceEquals(completed, completion.Task))
+        catch (Exception)
         {
             Observe(completion.Task);
-            Report(onFailure, ErrorTimeout);
+            Report(onFailure, ErrorExecuteFailed);
             return false;
         }
 

@@ -244,7 +244,7 @@ public sealed class UpdateService : IUpdateService
                 {
                     ["Stage"] = "download",
                     ["ErrorCode"] = "update-failed",
-                    ["FileName"] = target.FileName,
+                    ["FileName"] = LogProps.FileName(target.FileName),
                     ["Retryable"] = true
                 });
 
@@ -349,7 +349,7 @@ public sealed class UpdateService : IUpdateService
             properties: new Dictionary<string, object?>(StringComparer.Ordinal)
             {
                 ["Stage"] = "download",
-                ["FileName"] = target.FileName
+                ["FileName"] = LogProps.FileName(target.FileName)
             });
 
         // Запускаем инсталлятор во внешнем процессе с ключами /SILENT /SUPPRESSMSGBOXES и исключением пересоздания ярлыка рабочего стола
@@ -611,7 +611,7 @@ public sealed class UpdateService : IUpdateService
             properties: LogProps.Create("Stage", "download")
                 .With("ErrorCode", "asset-missing")
                 .With("StatusCode", failure.StatusCode.HasValue ? (int)failure.StatusCode.Value : 0)
-                .With("FileName", staleTarget.FileName)
+                .With("FileName", LogProps.FileName(staleTarget.FileName))
                 .With("HostLabel", SafeHostLabel(staleTarget.Url)));
 
         string? requestedVersion = TryExtractVersionFromFileName(staleTarget.FileName);
@@ -655,7 +655,7 @@ public sealed class UpdateService : IUpdateService
             SourceName,
             properties: LogProps.Create("Stage", "download")
                 .With("Version", LogRedactor.CompactSafeToken(chosen.Version))
-                .With("FileName", chosen.Asset.Name)
+                .With("FileName", LogProps.FileName(chosen.Asset.Name))
                 .With("Reason", "AssetMissing"));
 
         return new DownloadTarget(chosen.Asset.BrowserDownloadUrl, chosen.Asset.Name);
