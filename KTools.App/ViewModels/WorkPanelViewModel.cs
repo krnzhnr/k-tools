@@ -83,39 +83,117 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
     private readonly IMediaProbeService _mediaProbeService;
 
     private ObservableCollection<FileQueueItem> _files = new();
-    private DateTime _startTime;
-    private readonly Dictionary<int, double> _filesProgress = new();
-    private double _progressSumTotal;
-    private int _finishedCountIndex;
-    private readonly Dictionary<int, (int Tick, double Percent, string Msg, double Fps, string Bitrate)> _lastProgressEmit = new();
-    private readonly HashSet<int> _finishedIndices = new();
-    private readonly Dictionary<int, double> _activeFps = new();
-    private readonly Dictionary<int, string> _activeBitrates = new();
+    /// <summary>
+    /// Изолированное состояние одной запущенной очереди.
+    /// Позволяет выполнять несколько скриптов параллельно: каждый запуск
+    /// держит собственные прогресс, счётчики и контексты, а не общие поля модели.
+    /// </summary>
+    private sealed class QueueExecutionSession
+    {
+        public QueueExecutionSession(AbstractScript script, List<FileQueueItem> files)
+        {
+            Script = script;
+            Files = files;
+            BatchContext = ExecutionContext.CreateBatch(script.GetType().Name, files.Count);
+            ItemContexts = files
+                .Select((_, index) => BatchContext.ForItem(index))
+                .ToList();
+        }
+
+        public AbstractScript Script { get; }
+
+        public List<FileQueueItem> Files { get; }
+
+        public DateTime StartTime { get; set; } = DateTime.UtcNow;
+
+        public Dictionary<int, double> FilesProgress { get; } = new();
+
+        public double ProgressSumTotal { get; set; }
+
+        public int FinishedCountIndex { get; set; }
+
+        public Dictionary<int, (int Tick, double Percent, string Msg, double Fps, string Bitrate)> LastProgressEmit { get; } = new();
+
+        public HashSet<int> FinishedIndices { get; } = new();
+
+        public Dictionary<int, double> ActiveFps { get; } = new();
+
+        public Dictionary<int, string> ActiveBitrates { get; } = new();
+
+        public object ResultLock { get; } = new();
+
+        public Dictionary<string, ExecutionResult> ItemResults { get; } = new(StringComparer.Ordinal);
+
+        public List<ExecutionContext> ItemContexts { get; }
+
+        public ExecutionContext BatchContext { get; }
+
+        public int SucceededCount { get; set; }
+
+        public int FailedCount { get; set; }
+
+        public int CancelledCount { get; set; }
+
+        public int SkippedCount { get; set; }
+
+        public int PartiallySucceededCount { get; set; }
+
+        public ExecutionResult? LastQueueResult { get; set; }
+
+        public object ProgressLock { get; } = new();
+    }
+
+    private readonly ConcurrentDictionary<AbstractScript, QueueExecutionSession> _sessions = new();
+
+    private QueueExecutionSession? ActiveSession
+    {
+        get
+        {
+            AbstractScript? active = ActiveScript;
+            if (active is null)
+            {
+                return null;
+            }
+
+            return _sessions.TryGetValue(active, out QueueExecutionSession? session) ? session : null;
+        }
+    }
+
     private Dictionary<string, List<int>> _selectedTracks = new();
     private Dictionary<string, List<int>> _selectedAttachments = new();
-    private readonly object _resultLock = new();
-    private readonly Dictionary<string, ExecutionResult> _itemResults = new(StringComparer.Ordinal);
-    private List<ExecutionContext> _itemContexts = new();
-    private ExecutionContext? _batchContext;
-    private int _succeededCount;
-    private int _failedCount;
-    private int _cancelledCount;
-    private int _skippedCount;
-    private int _partiallySucceededCount;
-    private ExecutionResult? _lastQueueResult;
-    private AbstractScript? _executionScript;
 
-    public string? CurrentOperationId => _batchContext?.OperationId;
+    public string? CurrentOperationId => ActiveSession?.BatchContext.OperationId;
 
-    public ExecutionResult? LastQueueResult => _lastQueueResult;
+    public ExecutionResult? LastQueueResult
+    {
+        get
+        {
+            QueueExecutionSession? session = ActiveSession;
+            if (session is null)
+            {
+                return null;
+            }
+
+            lock (session.ResultLock)
+            {
+                return session.LastQueueResult;
+            }
+        }
+    }
 
     public IReadOnlyList<ExecutionResult> TypedItemResults
     {
         get
         {
-            lock (_resultLock)
+            QueueExecutionSession? session = ActiveSession;
+            if (session is null)
             {
-                return _itemResults.Values
+                return Array.Empty<ExecutionResult>();
+            }
+
+            lock (session.ResultLock)
+            {
+                return session.ItemResults.Values
                     .OrderBy(result => result.Context.ItemIndex)
                     .ToArray();
             }
@@ -126,9 +204,15 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
     {
         get
         {
-            lock (_resultLock)
+            QueueExecutionSession? session = ActiveSession;
+            if (session is null)
             {
-                return _succeededCount;
+                return 0;
+            }
+
+            lock (session.ResultLock)
+            {
+                return session.SucceededCount;
             }
         }
     }
@@ -137,9 +221,15 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
     {
         get
         {
-            lock (_resultLock)
+            QueueExecutionSession? session = ActiveSession;
+            if (session is null)
             {
-                return _failedCount;
+                return 0;
+            }
+
+            lock (session.ResultLock)
+            {
+                return session.FailedCount;
             }
         }
     }
@@ -148,9 +238,15 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
     {
         get
         {
-            lock (_resultLock)
+            QueueExecutionSession? session = ActiveSession;
+            if (session is null)
             {
-                return _cancelledCount;
+                return 0;
+            }
+
+            lock (session.ResultLock)
+            {
+                return session.CancelledCount;
             }
         }
     }
@@ -159,9 +255,15 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
     {
         get
         {
-            lock (_resultLock)
+            QueueExecutionSession? session = ActiveSession;
+            if (session is null)
             {
-                return _skippedCount;
+                return 0;
+            }
+
+            lock (session.ResultLock)
+            {
+                return session.SkippedCount;
             }
         }
     }
@@ -170,9 +272,15 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
     {
         get
         {
-            lock (_resultLock)
+            QueueExecutionSession? session = ActiveSession;
+            if (session is null)
             {
-                return _partiallySucceededCount;
+                return 0;
+            }
+
+            lock (session.ResultLock)
+            {
+                return session.PartiallySucceededCount;
             }
         }
     }
@@ -540,11 +648,8 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
         {
             if (!script.IsProcessing)
             {
-                lock (_progressLock)
-                {
-                    script.SavedStatusText = StatusText;
-                    script.SavedGlobalProgress = GlobalProgressValue;
-                }
+                script.SavedStatusText = StatusText;
+                script.SavedGlobalProgress = GlobalProgressValue;
             }
 
             script.SavedOutputPath = OutputPath;
@@ -573,15 +678,20 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
     /// <summary>
     /// Асинхронная команда запуска обработки файлов.
     /// </summary>
-    [RelayCommand]
+    /// <summary>
+    /// Асинхронная команда запуска обработки файлов.
+    /// Параллельные запуски разрешены: каждый скрипт ведёт собственную сессию
+    /// очереди, повторный старт того же скрипта блокируется его флагом IsProcessing.
+    /// </summary>
+    [RelayCommand(AllowConcurrentExecutions = true)]
     private async Task StartExecutionAsync(
         Dictionary<string, object>? settings)
     {
         AbstractScript? script = ActiveScript;
-        if (script == null || IsProcessing) return;
+        if (script == null || script.IsProcessing) return;
 
         var filesList = new List<FileQueueItem>();
-        bool queueStarted = false;
+        QueueExecutionSession? session = null;
         try
         {
             filesList = script.GetProcessableFiles(Files.ToList());
@@ -591,8 +701,7 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
                 return;
             }
 
-            PrepareExecutionState(script, filesList);
-            queueStarted = true;
+            session = PrepareExecutionState(script, filesList);
 
             var activeSettings = settings ?? new Dictionary<string, object>();
             if (!activeSettings.ContainsKey("selected_tracks_per_file") && _selectedTracks.Count > 0)
@@ -611,17 +720,16 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
             await Task.Run(async () =>
             {
                 await ProcessQueueAsync(
-                    script,
-                    filesList,
+                    session,
                     activeSettings,
                     outPath);
             });
         }
         catch (Exception ex)
         {
-            if (queueStarted)
+            if (session is not null)
             {
-                HandleBatchException(script, filesList, ex);
+                HandleBatchException(session, ex);
             }
             else
             {
@@ -631,41 +739,27 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
     }
 
     /// <summary>
-    /// Инициализирует состояние скрипта перед началом обработки очереди.
+    /// Инициализирует изолированную сессию очереди перед началом обработки.
+    /// Сессия регистрируется по скрипту, поэтому параллельные запуски
+    /// разных скриптов не затирают прогресс и счётчики друг друга.
     /// </summary>
-    private void PrepareExecutionState(AbstractScript script, List<FileQueueItem> filesList)
+    private QueueExecutionSession PrepareExecutionState(AbstractScript script, List<FileQueueItem> filesList)
     {
-        _startTime = DateTime.UtcNow;
-        _filesProgress.Clear();
-        _progressSumTotal = 0.0;
-        _finishedCountIndex = 0;
-        _lastProgressEmit.Clear();
-        _finishedIndices.Clear();
-        _activeFps.Clear();
-        _activeBitrates.Clear();
-        lock (_resultLock)
+        var session = new QueueExecutionSession(script, filesList)
         {
-            _itemResults.Clear();
-            _succeededCount = 0;
-            _failedCount = 0;
-            _cancelledCount = 0;
-            _skippedCount = 0;
-            _partiallySucceededCount = 0;
-            _lastQueueResult = null;
-        }
-
-        _executionScript = script;
-        _batchContext = ExecutionContext.CreateBatch(script.GetType().Name, filesList.Count);
-        _itemContexts = filesList
-            .Select((_, index) => _batchContext!.ForItem(index))
-            .ToList();
-
-        IsLogExpanded = false;
-        IsProcessing = true;
-
+            StartTime = DateTime.UtcNow
+        };
         for (int i = 0; i < filesList.Count; i++)
         {
-            _filesProgress[i] = 0.0;
+            session.FilesProgress[i] = 0.0;
+        }
+
+        _sessions[script] = session;
+
+        if (ReferenceEquals(ActiveScript, script))
+        {
+            IsLogExpanded = false;
+            IsProcessing = true;
         }
 
         foreach (var item in filesList)
@@ -685,22 +779,25 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
         ReportTaskbarProgress(0.0);
 
         AppendJournalText(
+            script,
             $"Начало обработки: {filesList.Count} файлов.",
-            _batchContext);
+            session.BatchContext);
         AppendJournalText(
+            script,
             $"🚀 Запуск скрипта '{script.Name}' для {filesList.Count} файлов.",
-            _batchContext);
+            session.BatchContext);
         WriteQueueEvent(
             "exec.queue.started",
             LogLevel.Info,
             LogStatus.Running,
             "Очередь обработки запущена",
-            _batchContext,
+            session.BatchContext,
             new Dictionary<string, object?>
             {
                 ["Total"] = filesList.Count,
-                ["ScriptId"] = _batchContext.ScriptId
+                ["ScriptId"] = session.BatchContext.ScriptId
             });
+        return session;
     }
 
     /// <summary>
@@ -730,11 +827,12 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
     }
 
     private async Task ProcessQueueAsync(
-        AbstractScript script,
-        List<FileQueueItem> filesList,
+        QueueExecutionSession session,
         Dictionary<string, object> settings,
         string? outPath)
     {
+        AbstractScript script = session.Script;
+        List<FileQueueItem> filesList = session.Files;
         int total = filesList.Count;
         int maxParallel = ResolveMaxParallelism(
             script.SupportsParallel,
@@ -766,13 +864,13 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
 
                 int index = i;
                 FileQueueItem fileItem = filesList[index];
-                ExecutionContext context = _itemContexts[index];
+                ExecutionContext context = session.ItemContexts[index];
                 tasks.Add(Task.Run(async () =>
                 {
                     try
                     {
                         await ProcessQueueItemAsync(
-                            script,
+                            session,
                             fileItem,
                             settings,
                             outPath,
@@ -799,22 +897,22 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
                 }
 
                 await ProcessQueueItemAsync(
-                    script,
+                    session,
                     filesList[i],
                     settings,
                     outPath,
                     i,
                     total,
-                    _itemContexts[i]);
+                    session.ItemContexts[i]);
             }
         }
 
-        MarkUnprocessedItems(script, filesList);
-        FinalizeExecution(script, filesList);
+        MarkUnprocessedItems(session);
+        FinalizeExecution(session);
     }
 
     private async Task ProcessQueueItemAsync(
-        AbstractScript script,
+        QueueExecutionSession session,
         FileQueueItem fileItem,
         Dictionary<string, object> settings,
         string? outPath,
@@ -822,8 +920,10 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
         int total,
         ExecutionContext context)
     {
-        UpdateFileStatus(fileItem, "Обработка...", 0.0, FileProcessingState.Processing);
+        AbstractScript script = session.Script;
+        UpdateFileStatus(fileItem, "Обработка...", 0.0, FileProcessingState.Processing, null);
         UpdateProgressState(
+            session,
             index,
             total,
             $"Обработка файла {index + 1} из {total}",
@@ -846,7 +946,7 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
                 (currIdx, totCount, msg, percent, fps, bitrate) =>
                 {
                     double percentValue = percent ?? 0.0;
-                    if (percentValue < 100.0 && !ShouldEmitProgress(index, percentValue, msg, fps, bitrate))
+                    if (percentValue < 100.0 && !ShouldEmitProgress(session, index, percentValue, msg, fps, bitrate))
                     {
                         return;
                     }
@@ -856,8 +956,9 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
                         msg,
                         percentValue,
                         FileProcessingState.Processing,
-                        syncScriptState: false);
+                        null);
                     UpdateProgressState(
+                        session,
                         index,
                         total,
                         $"Файл {index + 1} из {total} ({percentValue:F0}%)",
@@ -880,7 +981,7 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
             double measuredMs = System.Diagnostics.Stopwatch.GetElapsedTime(startedTimestamp).TotalMilliseconds;
             result = NormalizeResult(result, context, script);
             result = WithMeasuredDuration(result, context, measuredMs);
-            RecordTerminalResult(fileItem, index, total, context, result);
+            RecordTerminalResult(session, fileItem, index, total, context, result);
         }
         catch (Exception ex)
         {
@@ -901,7 +1002,7 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
                 new[] { "Критическая ошибка выполнения." },
                 errorCode: "execution-exception",
                 cleanupState: CleanupState.Unknown);
-            RecordTerminalResult(fileItem, index, total, context, result);
+            RecordTerminalResult(session, fileItem, index, total, context, result);
         }
     }
 
@@ -937,15 +1038,16 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
         return ExecutionResult.FromItemResult(context, measured);
     }
 
-    private void MarkUnprocessedItems(AbstractScript script, List<FileQueueItem> filesList)
+    private void MarkUnprocessedItems(QueueExecutionSession session)
     {
+        List<FileQueueItem> filesList = session.Files;
         for (int index = 0; index < filesList.Count; index++)
         {
-            ExecutionContext context = _itemContexts[index];
+            ExecutionContext context = session.ItemContexts[index];
             bool hasResult;
-            lock (_resultLock)
+            lock (session.ResultLock)
             {
-                hasResult = _itemResults.ContainsKey(context.ItemId);
+                hasResult = session.ItemResults.ContainsKey(context.ItemId);
             }
 
             if (!hasResult)
@@ -955,12 +1057,13 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
                     new[] { "Обработка отменена до запуска элемента." },
                     errorCode: "cancelled-before-start",
                     cleanupState: CleanupState.NotStarted);
-                RecordTerminalResult(filesList[index], index, filesList.Count, context, result);
+                RecordTerminalResult(session, filesList[index], index, filesList.Count, context, result);
             }
         }
     }
 
     private void RecordTerminalResult(
+        QueueExecutionSession session,
         FileQueueItem fileItem,
         int index,
         int total,
@@ -968,27 +1071,27 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
         ExecutionResult result)
     {
         bool added;
-        lock (_resultLock)
+        lock (session.ResultLock)
         {
-            added = _itemResults.TryAdd(context.ItemId, result);
+            added = session.ItemResults.TryAdd(context.ItemId, result);
             if (added)
             {
                 switch (result.Status)
                 {
                     case ExecutionStatus.Succeeded:
-                        _succeededCount++;
+                        session.SucceededCount++;
                         break;
                     case ExecutionStatus.Failed:
-                        _failedCount++;
+                        session.FailedCount++;
                         break;
                     case ExecutionStatus.Cancelled:
-                        _cancelledCount++;
+                        session.CancelledCount++;
                         break;
                     case ExecutionStatus.Skipped:
-                        _skippedCount++;
+                        session.SkippedCount++;
                         break;
                     case ExecutionStatus.PartiallySucceeded:
-                        _partiallySucceededCount++;
+                        session.PartiallySucceededCount++;
                         break;
                 }
             }
@@ -999,16 +1102,17 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
             return;
         }
 
-        AppendJournalMessages(context, result);
+        AppendJournalMessages(session.Script, context, result);
         WriteItemEvent(fileItem, context, ItemEventId(result.Status), ItemLevel(result.Status), result.LogStatus, "Элемент очереди завершён", result, result.DurationMs);
         RunOnUi(() => fileItem.ApplyExecutionResult(result));
         UpdateProgressState(
+            session,
             index,
             total,
             $"Файл {index + 1} из {total} завершён",
             100.0,
             syncScriptState: false);
-        _executionScript?.RaiseStateChanged();
+        session.Script.RaiseStateChanged();
     }
 
     private ExecutionResult NormalizeResult(
@@ -1089,8 +1193,10 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
         return ExecutionResult.FromItemResult(context, recreated);
     }
 
-    private void FinalizeExecution(AbstractScript script, List<FileQueueItem> filesList)
+    private void FinalizeExecution(QueueExecutionSession session)
     {
+        AbstractScript script = session.Script;
+        List<FileQueueItem> filesList = session.Files;
         int total = filesList.Count;
         int succeeded;
         int failed;
@@ -1098,14 +1204,14 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
         int skipped;
         int partial;
         int terminal;
-        lock (_resultLock)
+        lock (session.ResultLock)
         {
-            succeeded = _succeededCount;
-            failed = _failedCount;
-            cancelled = _cancelledCount;
-            skipped = _skippedCount;
-            partial = _partiallySucceededCount;
-            terminal = _itemResults.Count;
+            succeeded = session.SucceededCount;
+            failed = session.FailedCount;
+            cancelled = session.CancelledCount;
+            skipped = session.SkippedCount;
+            partial = session.PartiallySucceededCount;
+            terminal = session.ItemResults.Count;
         }
 
         bool allTerminal = total > 0 && terminal == total;
@@ -1151,8 +1257,7 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
         script.SavedStatusText = finalStatus;
         script.IsProcessing = false;
 
-        ExecutionContext? batch = _batchContext;
-        if (batch is not null)
+        ExecutionContext batch = session.BatchContext;
         {
             // При Succeeded ErrorCode обязан быть пустым: потребитель, ищущий отказы
             // по errorCode != null, иначе получал бы ложное срабатывание на успехе.
@@ -1175,15 +1280,15 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
                 new[] { finalStatus },
                 errorCode: queueErrorCode,
                 cleanupState: queueCleanupState,
-                durationMs: (DateTime.UtcNow - _startTime).TotalMilliseconds);
-            lock (_resultLock)
+                durationMs: (DateTime.UtcNow - session.StartTime).TotalMilliseconds);
+            lock (session.ResultLock)
             {
-                _lastQueueResult = queueResult;
+                session.LastQueueResult = queueResult;
             }
-            AppendJournalText(finalStatus, batch);
+            AppendJournalText(script, finalStatus, batch);
             if (aggregateStatus == ExecutionStatus.Succeeded)
             {
-                AppendJournalText("🎉 Все файлы успешно обработаны.", batch);
+                AppendJournalText(script, "🎉 Все файлы успешно обработаны.", batch);
             }
             WriteQueueEvent(
                 "exec.queue.ended",
@@ -1206,19 +1311,43 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
                 queueErrorCode);
         }
 
+        bool isActive = ReferenceEquals(ActiveScript, script);
         RunOnUi(() =>
         {
             foreach (FileQueueItem item in filesList)
             {
                 item.IsProcessing = false;
             }
-            IsProcessing = false;
-            IsLogExpanded = hasProblems || aggregateStatus != ExecutionStatus.Succeeded;
-            StatusText = finalStatus;
-            GlobalProgressValue = allTerminal ? 100 : 0;
+            if (isActive)
+            {
+                IsProcessing = false;
+                IsLogExpanded = hasProblems || aggregateStatus != ExecutionStatus.Succeeded;
+                StatusText = finalStatus;
+                GlobalProgressValue = allTerminal ? 100 : 0;
+            }
         });
-        ReportTaskbarFinished(failed > 0 || partial > 0, allTerminal ? 100.0 : 0.0);
+        if (!HasOtherActiveSessions(session))
+        {
+            ReportTaskbarFinished(failed > 0 || partial > 0, allTerminal ? 100.0 : 0.0);
+        }
         script.RaiseStateChanged();
+    }
+
+    /// <summary>
+    /// Проверяет, остались ли другие незавершённые сессии кроме указанной.
+    /// Панель задач сбрасывается только после финиша последней очереди.
+    /// </summary>
+    private bool HasOtherActiveSessions(QueueExecutionSession finished)
+    {
+        foreach (var pair in _sessions)
+        {
+            if (!ReferenceEquals(pair.Value, finished) && pair.Value.Script.IsProcessing)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static LogLevel QueueEventLevel(ExecutionStatus status)
@@ -1234,37 +1363,27 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
 
     private void HandleEmptyQueue(AbstractScript script)
     {
-        _executionScript = script;
-        _batchContext = ExecutionContext.CreateBatch(script.GetType().Name, 0);
-        _itemContexts = new List<ExecutionContext>();
-        lock (_resultLock)
-        {
-            _itemResults.Clear();
-            _succeededCount = 0;
-            _failedCount = 0;
-            _cancelledCount = 0;
-            _skippedCount = 0;
-            _partiallySucceededCount = 0;
-        }
+        var session = new QueueExecutionSession(script, new List<FileQueueItem>());
+        _sessions[script] = session;
 
         ExecutionResult queueResult = ExecutionResult.Create(
-            _batchContext,
+            session.BatchContext,
             ExecutionStatus.Failed,
             new[] { "Очередь не содержит файлов для обработки." },
             errorCode: "queue-empty",
             cleanupState: CleanupState.Completed);
-        lock (_resultLock)
+        lock (session.ResultLock)
         {
-            _lastQueueResult = queueResult;
+            session.LastQueueResult = queueResult;
         }
 
-        AppendJournalText(queueResult.Messages[0], _batchContext);
+        AppendJournalText(script, queueResult.Messages[0], session.BatchContext);
         WriteQueueEvent(
             "exec.queue.empty",
             LogLevel.Error,
             LogStatus.Failed,
             "Очередь не содержит файлов для обработки",
-            _batchContext,
+            session.BatchContext,
             new Dictionary<string, object?>
             {
                 ["Total"] = 0,
@@ -1278,23 +1397,22 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
         script.SavedGlobalProgress = 0;
         _taskbarProgress?.Clear();
         script.RaiseStateChanged();
-        RunOnUi(() =>
+        if (ReferenceEquals(ActiveScript, script))
         {
-            IsProcessing = false;
-            IsLogExpanded = true;
-            StatusText = "Очередь пуста";
-            GlobalProgressValue = 0;
-        });
+            RunOnUi(() =>
+            {
+                IsProcessing = false;
+                IsLogExpanded = true;
+                StatusText = "Очередь пуста";
+                GlobalProgressValue = 0;
+            });
+        }
     }
 
-    private void HandleBatchException(AbstractScript script, List<FileQueueItem> filesList, Exception exception)
+    private void HandleBatchException(QueueExecutionSession session, Exception exception)
     {
-        if (_batchContext is null)
-        {
-            _executionScript = script;
-            _batchContext = ExecutionContext.CreateBatch(script.GetType().Name, 0);
-        }
-
+        AbstractScript script = session.Script;
+        List<FileQueueItem> filesList = session.Files;
         _logService.Write(
             "exec.queue.failed",
             LogLevel.Error,
@@ -1302,19 +1420,19 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
             "Очередь обработки прервана непредвиденной ошибкой",
             exception,
             SourceName,
-            context: _batchContext.ToLogContext(),
+            context: session.BatchContext.ToLogContext(),
             properties: LogProps
                 .Create("ErrorCode", "QUEUE_EXECUTION_FAILED")
                 .With("Retryable", true));
 
         int total = filesList.Count;
-        for (int index = 0; index < _itemContexts.Count; index++)
+        for (int index = 0; index < session.ItemContexts.Count; index++)
         {
-            ExecutionContext context = _itemContexts[index];
+            ExecutionContext context = session.ItemContexts[index];
             bool hasResult;
-            lock (_resultLock)
+            lock (session.ResultLock)
             {
-                hasResult = _itemResults.ContainsKey(context.ItemId);
+                hasResult = session.ItemResults.ContainsKey(context.ItemId);
             }
 
             if (!hasResult && index < total)
@@ -1325,11 +1443,11 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
                     new[] { "Критическая ошибка выполнения очереди." },
                     errorCode: "queue-exception",
                     cleanupState: CleanupState.Unknown);
-                RecordTerminalResult(filesList[index], index, total, context, result);
+                RecordTerminalResult(session, filesList[index], index, total, context, result);
             }
         }
 
-        FinalizeExecution(script, filesList);
+        FinalizeExecution(session);
     }
 
     private void HandleQueueStartFailure(
@@ -1338,10 +1456,9 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
         Exception exception)
     {
         List<FileQueueItem> items = filesList.Count > 0 ? filesList : Files.ToList();
-        int total = items.Count;
-        EnsureQueueContexts(script, total);
+        QueueExecutionSession session = EnsureQueueSession(script, items);
 
-        ExecutionContext batch = _batchContext!;
+        ExecutionContext batch = session.BatchContext;
         _logService.Write(
             "exec.queue.start_failed",
             LogLevel.Error,
@@ -1353,15 +1470,16 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
             properties: LogProps
                 .Create("ErrorCode", "QUEUE_START_FAILED")
                 .With("Retryable", true)
-                .With("Total", total));
+                .With("Total", items.Count));
 
+        int total = items.Count;
         for (int index = 0; index < total; index++)
         {
-            ExecutionContext context = _itemContexts[index];
+            ExecutionContext context = session.ItemContexts[index];
             bool hasResult;
-            lock (_resultLock)
+            lock (session.ResultLock)
             {
-                hasResult = _itemResults.ContainsKey(context.ItemId);
+                hasResult = session.ItemResults.ContainsKey(context.ItemId);
             }
 
             if (!hasResult)
@@ -1372,61 +1490,47 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
                     errorCode: "queue-start-failed",
                     retryable: true,
                     cleanupState: CleanupState.NotStarted);
-                RecordTerminalResult(items[index], index, total, context, result);
+                RecordTerminalResult(session, items[index], index, total, context, result);
             }
         }
 
-        FinalizeExecution(script, items);
+        FinalizeExecution(session);
         script.SavedGlobalProgress = 0;
-        RunOnUi(() => GlobalProgressValue = 0);
+        if (ReferenceEquals(ActiveScript, script))
+        {
+            RunOnUi(() => GlobalProgressValue = 0);
+        }
     }
 
     /// <summary>
-    /// Гарантирует наличие контекста очереди и элементов для отчётности о сбое запуска,
+    /// Гарантирует наличие изолированной сессии для отчётности о сбое запуска,
     /// чтобы терминальные события не потеряли корреляцию.
     /// </summary>
-    private void EnsureQueueContexts(AbstractScript script, int total)
+    private QueueExecutionSession EnsureQueueSession(AbstractScript script, List<FileQueueItem> items)
     {
-        if (_batchContext is not null && _executionScript == script && _itemContexts.Count == total)
+        if (_sessions.TryGetValue(script, out QueueExecutionSession? existing)
+            && existing.Files.Count == items.Count)
         {
-            return;
+            return existing;
         }
 
-        _executionScript = script;
-        _batchContext = ExecutionContext.CreateBatch(script.GetType().Name, total);
-        _itemContexts = Enumerable
-            .Range(0, total)
-            .Select(index => _batchContext!.ForItem(index))
-            .ToList();
-        lock (_resultLock)
-        {
-            _itemResults.Clear();
-            _succeededCount = 0;
-            _failedCount = 0;
-            _cancelledCount = 0;
-            _skippedCount = 0;
-            _partiallySucceededCount = 0;
-            _lastQueueResult = null;
-        }
+        var session = new QueueExecutionSession(script, items);
+        _sessions[script] = session;
+        return session;
     }
 
-    private void AppendJournalText(string message, ExecutionContext? context)
+    private void AppendJournalText(AbstractScript script, string message, ExecutionContext? context)
     {
-        AbstractScript? script = _executionScript;
-        if (script is null)
-        {
-            return;
-        }
-
         script.AppendToLog($"{message}{Environment.NewLine}");
         script.RaiseStateChanged();
     }
 
-    private void AppendJournalMessages(ExecutionContext context, ExecutionResult result)
+    private void AppendJournalMessages(AbstractScript script, ExecutionContext context, ExecutionResult result)
     {
         if (result.Messages.Count == 0)
         {
             AppendJournalText(
+                script,
                 result.Status == ExecutionStatus.Succeeded ? "Элемент завершён." : "Элемент не завершён.",
                 context);
             return;
@@ -1434,7 +1538,7 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
 
         foreach (string message in result.Messages)
         {
-            AppendJournalText(message, context);
+            AppendJournalText(script, message, context);
         }
     }
 
@@ -1613,16 +1717,17 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
     /// Метрики (FPS, битрейт) тоже участвуют в решении, иначе их обновления терялись бы.
     /// </summary>
     private bool ShouldEmitProgress(
+        QueueExecutionSession session,
         int fileIndex,
         double percent,
         string msg,
         double? fps = null,
         string? bitrate = null)
     {
-        lock (_progressLock)
+        lock (session.ProgressLock)
         {
             int now = Environment.TickCount;
-            bool isFirst = !_lastProgressEmit.TryGetValue(fileIndex, out var last);
+            bool isFirst = !session.LastProgressEmit.TryGetValue(fileIndex, out var last);
             bool changed = isFirst ||
                 Math.Abs(percent - last.Percent) > 0.0001 ||
                 !string.Equals(last.Msg, msg ?? "", StringComparison.Ordinal) ||
@@ -1633,7 +1738,7 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
 
             if ((changed && (isFirst || elapsed)) || heartbeat)
             {
-                _lastProgressEmit[fileIndex] = (now, percent, msg ?? "", fps ?? 0.0, bitrate ?? "");
+                session.LastProgressEmit[fileIndex] = (now, percent, msg ?? "", fps ?? 0.0, bitrate ?? "");
                 return true;
             }
 
@@ -1646,7 +1751,7 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
         string status,
         double progress,
         FileProcessingState? state = null,
-        bool syncScriptState = true)
+        AbstractScript? notifyScript = null)
     {
         RunOnUi(() =>
         {
@@ -1658,15 +1763,11 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
             }
         });
 
-        if (syncScriptState)
-        {
-            (_executionScript ?? ActiveScript)?.RaiseStateChanged();
-        }
+        notifyScript?.RaiseStateChanged();
     }
 
-    private readonly object _progressLock = new();
-
     private void UpdateProgressState(
+        QueueExecutionSession session,
         int fileIndex,
         int totalCount,
         string status,
@@ -1675,13 +1776,13 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
         string? bitrate = null,
         bool syncScriptState = true)
     {
-        AbstractScript? script = _executionScript ?? ActiveScript;
-        if (script == null || totalCount <= 0) return;
-        if (fileIndex >= 0 && fileIndex < _itemContexts.Count)
+        AbstractScript script = session.Script;
+        if (totalCount <= 0) return;
+        if (fileIndex >= 0 && fileIndex < session.ItemContexts.Count)
         {
-            lock (_resultLock)
+            lock (session.ResultLock)
             {
-                if (_itemResults.ContainsKey(_itemContexts[fileIndex].ItemId))
+                if (session.ItemResults.ContainsKey(session.ItemContexts[fileIndex].ItemId))
                 {
                     return;
                 }
@@ -1695,40 +1796,40 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
         string? displayBitrate = null;
         string metricsText;
 
-        lock (_progressLock)
+        lock (session.ProgressLock)
         {
             // 1. Обновляем индивидуальный прогресс файла в словаре (инкрементально)
-            double oldPercent = _filesProgress.TryGetValue(fileIndex, out var oldVal) ? oldVal : 0.0;
-            _filesProgress[fileIndex] = filePercent;
-            _progressSumTotal += filePercent - oldPercent;
+            double oldPercent = session.FilesProgress.TryGetValue(fileIndex, out var oldVal) ? oldVal : 0.0;
+            session.FilesProgress[fileIndex] = filePercent;
+            session.ProgressSumTotal += filePercent - oldPercent;
 
             if (filePercent >= 100.0)
             {
-                if (_finishedIndices.Add(fileIndex))
+                if (session.FinishedIndices.Add(fileIndex))
                 {
-                    _finishedCountIndex++;
+                    session.FinishedCountIndex++;
                 }
-                _activeFps.Remove(fileIndex);
-                _activeBitrates.Remove(fileIndex);
+                session.ActiveFps.Remove(fileIndex);
+                session.ActiveBitrates.Remove(fileIndex);
             }
             else
             {
                 if (fps.HasValue)
                 {
-                    _activeFps[fileIndex] = fps.Value;
+                    session.ActiveFps[fileIndex] = fps.Value;
                 }
                 if (!string.IsNullOrEmpty(bitrate))
                 {
-                    _activeBitrates[fileIndex] = bitrate;
+                    session.ActiveBitrates[fileIndex] = bitrate;
                 }
             }
 
             // 2. Рассчитываем общий процент очереди (0-100%)
-            overallPercent = (_progressSumTotal / (totalCount * 100.0)) * 100.0;
+            overallPercent = (session.ProgressSumTotal / (totalCount * 100.0)) * 100.0;
             overallPercent = Math.Min(Math.Max(overallPercent, 0.0), 100.0);
 
             // 3. Рассчитываем общее оставшееся время (ETA) для очереди
-            double elapsedSeconds = (DateTime.UtcNow - _startTime).TotalSeconds;
+            double elapsedSeconds = (DateTime.UtcNow - session.StartTime).TotalSeconds;
 
             if (overallPercent > 1.0) // Начинаем расчет после 1% для стабильности
             {
@@ -1751,13 +1852,13 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
                 }
             }
 
-            finishedCount = _finishedCountIndex;
+            finishedCount = session.FinishedCountIndex;
 
             // Находим первый активный файл для отображения его метрик
             int? targetIndex = null;
-            foreach (var idx in _filesProgress.Keys)
+            foreach (var idx in session.FilesProgress.Keys)
             {
-                if (!_finishedIndices.Contains(idx) && _filesProgress[idx] < 100.0)
+                if (!session.FinishedIndices.Contains(idx) && session.FilesProgress[idx] < 100.0)
                 {
                     if (targetIndex == null || idx < targetIndex.Value)
                     {
@@ -1768,8 +1869,8 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
 
             if (targetIndex.HasValue)
             {
-                if (_activeFps.TryGetValue(targetIndex.Value, out double f)) displayFps = f;
-                if (_activeBitrates.TryGetValue(targetIndex.Value, out string? b)) displayBitrate = b;
+                if (session.ActiveFps.TryGetValue(targetIndex.Value, out double f)) displayFps = f;
+                if (session.ActiveBitrates.TryGetValue(targetIndex.Value, out string? b)) displayBitrate = b;
             }
 
             metricsText = "";

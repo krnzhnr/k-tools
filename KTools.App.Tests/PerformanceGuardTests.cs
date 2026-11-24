@@ -121,15 +121,26 @@ public class PerformanceGuardTests
             BindingFlags.NonPublic | BindingFlags.Instance);
         method.Should().NotBeNull();
 
+        var prepare = typeof(WorkPanelViewModel).GetMethod(
+            "PrepareExecutionState",
+            BindingFlags.NonPublic | BindingFlags.Instance);
+        prepare.Should().NotBeNull();
+        var filesList = new List<FileQueueItem>
+        {
+            new FileQueueItem(@"C:\media\a.mkv"),
+            new FileQueueItem(@"C:\media\b.mkv")
+        };
+        object session = prepare!.Invoke(vm, new object[] { script, filesList })!;
+
         // Act: два файла по 25% и 75% => средний прогресс очереди 50%
-        method!.Invoke(vm, new object[] { 0, 2, "тест", 25.0, 0.0, "", false });
-        method.Invoke(vm, new object[] { 1, 2, "тест", 75.0, 0.0, "", false });
+        method!.Invoke(vm, new object[] { session, 0, 2, "тест", 25.0, 0.0, "", false });
+        method.Invoke(vm, new object[] { session, 1, 2, "тест", 75.0, 0.0, "", false });
 
         // Assert
         script.SavedGlobalProgress.Should().BeApproximately(50.0, 0.001);
 
         // Act: обновление значения одного файла не должно «размножать» сумму
-        method.Invoke(vm, new object[] { 0, 2, "тест", 40.0, 0.0, "", false });
+        method.Invoke(vm, new object[] { session, 0, 2, "тест", 40.0, 0.0, "", false });
 
         // Assert: (40 + 75) / 2 = 57.5
         script.SavedGlobalProgress.Should().BeApproximately(57.5, 0.001);
@@ -533,7 +544,7 @@ public class PerformanceGuardTests
         string source = File.ReadAllText(GetRepositoryFile("KTools.App", "ViewModels", "WorkPanelViewModel.cs"));
 
         source.Should().Contain("ShouldEmitProgress");
-        source.Should().Contain("_lastProgressEmit");
+        source.Should().Contain("LastProgressEmit");
     }
 
     /// <summary>

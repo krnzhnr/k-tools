@@ -508,6 +508,54 @@ public class WorkPanelViewModelExecutionTests : IsolatedMessengerTestBase
     }
 
     /// <summary>
+    /// Проверяет, что два разных скрипта выполняются параллельно:
+    /// запуск второго во время кодирования первым не блокируется командой
+    /// и не затирает прогресс и счётчики первой очереди.
+    /// </summary>
+    [TestMethod]
+    public async Task StartExecutionAsync_TwoScripts_ExecuteInParallelWithoutStateCorruption()
+    {
+        // Arrange — первый скрипт блокируется до разрешения
+        var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstStarted = 0;
+        var firstScript = CreateScript(async (file, settings, context) =>
+        {
+            Interlocked.Increment(ref firstStarted);
+            await releaseFirst.Task;
+            return ExecutionResult.Succeeded(context, "Готово");
+        });
+        var secondScript = CreateScript();
+        var vm = CreateViewModel();
+        vm.Initialize(firstScript, CreateFiles("C:\\first\\a.mkv"));
+
+        // Act — старт первой очереди в фоне, затем переключение и старт второй
+        var firstRun = vm.StartExecutionCommand.ExecuteAsync(null);
+        await WaitUntilAsync(() => firstStarted == 1, TimeSpan.FromSeconds(2));
+        firstStarted.Should().Be(1);
+
+        vm.Initialize(secondScript, CreateFiles("C:\\second\\b.mkv"));
+        await vm.StartExecutionCommand.ExecuteAsync(null);
+
+        // Assert — вторая очередь завершилась, пока первая ещё работает
+        secondScript.IsProcessing.Should().BeFalse();
+        secondScript.SavedStatusText.Should().Be("Все файлы успешно обработаны");
+        firstScript.IsProcessing.Should().BeTrue("первая очередь продолжает работу параллельно");
+        vm.SucceededCount.Should().Be(1, "счётчики активной сессии отражают второй скрипт");
+        vm.TypedItemResults.Should().ContainSingle();
+
+        // Act — завершаем первую очередь и возвращаемся на неё
+        vm.Initialize(firstScript, CreateFiles("C:\\first\\a.mkv"));
+        releaseFirst.SetResult();
+        await firstRun;
+
+        // Assert — первая очередь завершилась со своим результатом без подмены
+        firstScript.IsProcessing.Should().BeFalse();
+        firstScript.SavedStatusText.Should().Be("Все файлы успешно обработаны");
+        vm.SucceededCount.Should().Be(1);
+        vm.TypedItemResults.Should().ContainSingle();
+    }
+
+    /// <summary>
     /// Проверяет round-trip SaveState/RestoreState: сохранённые статус,
     /// прогресс и выходной путь восстанавливаются при повторной Initialize,
     /// а журнал панели восстанавливается из журнала скрипта.

@@ -114,8 +114,8 @@ public class PerformanceFixesTests
         script.SavedLogText.Should().Be("короткий журнал");
     }
 
-    /// <summary>Извлекает приватный метод ShouldEmitProgress через рефлексию.</summary>
-    private static (WorkPanelViewModel Vm, MethodInfo ShouldEmit) CreateVmWithShouldEmit()
+    /// <summary>Извлекает приватный метод ShouldEmitProgress через рефлексию и создаёт изолированную сессию.</summary>
+    private static (WorkPanelViewModel Vm, MethodInfo ShouldEmit, object Session) CreateVmWithShouldEmit()
     {
         var vm = new WorkPanelViewModel(
             new Mock<INavigationService>().Object,
@@ -128,7 +128,19 @@ public class PerformanceFixesTests
         var method = typeof(WorkPanelViewModel)
             .GetMethod("ShouldEmitProgress", BindingFlags.NonPublic | BindingFlags.Instance);
         method.Should().NotBeNull("метод троттлинга прогресса должен существовать");
-        return (vm, method!);
+
+        var sessionType = typeof(WorkPanelViewModel)
+            .GetNestedType("QueueExecutionSession", BindingFlags.NonPublic);
+        sessionType.Should().NotBeNull("изолированная сессия очереди должна существовать для параллельных запусков");
+
+        var script = new StubScript(
+            MockBuilders.CreateLogServiceMock().Object,
+            MockBuilders.CreateSettingsManagerMock().Object,
+            new Mock<IPathManager>().Object);
+        var files = new List<FileQueueItem> { new FileQueueItem(@"C:\media\a.mkv") };
+        object session = Activator.CreateInstance(sessionType!, script, files)!;
+        session.Should().NotBeNull();
+        return (vm, method!, session);
     }
 
     /// <summary>
@@ -137,9 +149,9 @@ public class PerformanceFixesTests
     [TestMethod]
     public void ShouldEmitProgress_FirstCall_ReturnsTrue()
     {
-        var (vm, shouldEmit) = CreateVmWithShouldEmit();
+        var (vm, shouldEmit, session) = CreateVmWithShouldEmit();
 
-        var result = (bool)shouldEmit.Invoke(vm, new object[] { 0, 10.0, "msg", 0.0, "" })!;
+        var result = (bool)shouldEmit.Invoke(vm, new object[] { session, 0, 10.0, "msg", 0.0, "" })!;
 
         result.Should().BeTrue();
     }
@@ -150,11 +162,11 @@ public class PerformanceFixesTests
     [TestMethod]
     public void ShouldEmitProgress_ImmediateRepeats_ReturnsFalse()
     {
-        var (vm, shouldEmit) = CreateVmWithShouldEmit();
+        var (vm, shouldEmit, session) = CreateVmWithShouldEmit();
 
-        shouldEmit.Invoke(vm, new object[] { 0, 10.0, "msg1", 0.0, "" }).Should().Be(true);
-        shouldEmit.Invoke(vm, new object[] { 0, 20.0, "msg1", 0.0, "" }).Should().Be(false);
-        shouldEmit.Invoke(vm, new object[] { 0, 30.0, "msg2", 0.0, "" }).Should().Be(false);
+        shouldEmit.Invoke(vm, new object[] { session, 0, 10.0, "msg1", 0.0, "" }).Should().Be(true);
+        shouldEmit.Invoke(vm, new object[] { session, 0, 20.0, "msg1", 0.0, "" }).Should().Be(false);
+        shouldEmit.Invoke(vm, new object[] { session, 0, 30.0, "msg2", 0.0, "" }).Should().Be(false);
     }
 
     /// <summary>
@@ -163,13 +175,13 @@ public class PerformanceFixesTests
     [TestMethod]
     public void ShouldEmitProgress_AfterInterval_ChangedPercent_ReturnsTrue()
     {
-        var (vm, shouldEmit) = CreateVmWithShouldEmit();
+        var (vm, shouldEmit, session) = CreateVmWithShouldEmit();
 
-        shouldEmit.Invoke(vm, new object[] { 1, 10.0, "msg", 0.0, "" }).Should().Be(true);
+        shouldEmit.Invoke(vm, new object[] { session, 1, 10.0, "msg", 0.0, "" }).Should().Be(true);
         Thread.Sleep(170);
 
-        shouldEmit.Invoke(vm, new object[] { 1, 20.0, "msg1", 0.0, "" }).Should().Be(true);
-        shouldEmit.Invoke(vm, new object[] { 1, 30.0, "msg1", 0.0, "" }).Should().Be(false);
+        shouldEmit.Invoke(vm, new object[] { session, 1, 20.0, "msg1", 0.0, "" }).Should().Be(true);
+        shouldEmit.Invoke(vm, new object[] { session, 1, 30.0, "msg1", 0.0, "" }).Should().Be(false);
     }
 
     /// <summary>
@@ -178,10 +190,10 @@ public class PerformanceFixesTests
     [TestMethod]
     public void ShouldEmitProgress_DifferentFiles_EmitIndependently()
     {
-        var (vm, shouldEmit) = CreateVmWithShouldEmit();
+        var (vm, shouldEmit, session) = CreateVmWithShouldEmit();
 
-        shouldEmit.Invoke(vm, new object[] { 0, 10.0, "msg", 0.0, "" }).Should().Be(true);
-        shouldEmit.Invoke(vm, new object[] { 1, 10.0, "msg", 0.0, "" }).Should().Be(true);
+        shouldEmit.Invoke(vm, new object[] { session, 0, 10.0, "msg", 0.0, "" }).Should().Be(true);
+        shouldEmit.Invoke(vm, new object[] { session, 1, 10.0, "msg", 0.0, "" }).Should().Be(true);
     }
 
     /// <summary>
