@@ -109,13 +109,6 @@ public sealed class VideoEncodingScript : AbstractScript
     public override string[] FileExtensions => AppConstants.VideoContainers.ToArray();
     public override string[] RequiredDependencies => new[] { "ffmpeg" };
 
-    /// <summary>
-    /// Видеокодирование поддерживает параллельную обработку очереди,
-    /// но со своим лимитом одновременных кодирований (ишью #145):
-    /// несколько NVENC-сессий драйвер сам раскладывает по движкам GPU.
-    /// </summary>
-    public override bool SupportsParallel => true;
-
     public override List<SettingField> GetSettingsSchema(Dictionary<string, object>? currentSettings = null)
     {
         return GetSettingsSchemaInternal(currentSettings);

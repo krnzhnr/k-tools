@@ -77,6 +77,16 @@ public class VideoEncodingScriptTests
     }
 
     /// <summary>
+    /// Кодирование видео обязано идти строго последовательно: параллельный запуск
+    /// поднимает по энкодеру на каждый файл очереди и кладёт машину.
+    /// </summary>
+    [TestMethod]
+    public void SupportsParallel_Always_ReturnsFalse()
+    {
+        _script.SupportsParallel.Should().BeFalse("видеокодирование не должно распараллеливаться");
+    }
+
+    /// <summary>
     /// Проверяет, что в схеме доступен единый CPU-энкодер с селектором программного кодека.
     /// </summary>
     [TestMethod]
