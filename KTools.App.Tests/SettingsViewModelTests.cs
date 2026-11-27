@@ -586,8 +586,8 @@ public class SettingsViewModelTests
         _scriptRegistryMock.SetupGet(m => m.Scripts).Returns(new List<AbstractScript>());
         IReadOnlyList<KeyValuePair<string, object?>>? captured = null;
         _settingsManagerMock
-            .Setup(m => m.ResetToDefaults(It.IsAny<List<AbstractScript>>(), It.IsAny<IReadOnlyList<KeyValuePair<string, object?>>?>()))
-            .Callback<List<AbstractScript>, IReadOnlyList<KeyValuePair<string, object?>>?>((_, defaults) => captured = defaults)
+            .Setup(m => m.ResetToDefaults(It.IsAny<ISettingsDefaultsProvider>(), It.IsAny<IReadOnlyList<KeyValuePair<string, object?>>?>()))
+            .Callback<ISettingsDefaultsProvider, IReadOnlyList<KeyValuePair<string, object?>>?>((_, defaults) => captured = defaults)
             .Returns(PersistenceResult.Succeeded());
         var viewModel = new SettingsViewModel(
             _settingsManagerMock.Object,

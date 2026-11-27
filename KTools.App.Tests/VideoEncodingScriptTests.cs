@@ -113,7 +113,7 @@ public class VideoEncodingScriptTests
             Duration = 120.0
         };
         structure.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "video", Codec = "h264", Name = "Video stream" });
-        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile)).ReturnsAsync(structure);
+        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile, It.IsAny<CancellationToken>())).ReturnsAsync(structure);
 
         // Перехватываем аргументы запуска FFmpeg
         List<string>? capturedExtraArgs = null;
@@ -180,7 +180,7 @@ public class VideoEncodingScriptTests
 
         var structure = new MediaStructure { FilePath = tempSourceFile, Duration = 60.0 };
         structure.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "video", Codec = "h264", Name = "Video" });
-        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile)).ReturnsAsync(structure);
+        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile, It.IsAny<CancellationToken>())).ReturnsAsync(structure);
 
         List<string>? capturedExtraArgs = null;
         _ffmpegRunnerMock.Setup(r => r.RunAsync(
@@ -237,7 +237,7 @@ public class VideoEncodingScriptTests
 
         var structure = new MediaStructure { FilePath = tempSourceFile, Duration = 60.0 };
         structure.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "video", Codec = "h264", Name = "Video" });
-        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile)).ReturnsAsync(structure);
+        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile, It.IsAny<CancellationToken>())).ReturnsAsync(structure);
 
         List<string>? capturedExtraArgs = null;
         _ffmpegRunnerMock.Setup(r => r.RunAsync(
@@ -292,7 +292,7 @@ public class VideoEncodingScriptTests
 
         var structure = new MediaStructure { FilePath = tempSourceFile, Duration = 60.0 };
         structure.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "video", Codec = "h264", Name = "Video" });
-        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile)).ReturnsAsync(structure);
+        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile, It.IsAny<CancellationToken>())).ReturnsAsync(structure);
 
         List<string>? capturedExtraArgs = null;
         _ffmpegRunnerMock.Setup(r => r.RunAsync(
@@ -352,7 +352,7 @@ public class VideoEncodingScriptTests
 
         var structure = new MediaStructure { FilePath = tempSourceFile, Duration = 60.0 };
         structure.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "video", Codec = "hevc", Name = "Video" });
-        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile)).ReturnsAsync(structure);
+        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile, It.IsAny<CancellationToken>())).ReturnsAsync(structure);
 
         List<string>? capturedExtraArgs = null;
         _ffmpegRunnerMock.Setup(r => r.RunAsync(
@@ -407,7 +407,7 @@ public class VideoEncodingScriptTests
 
         var structure = new MediaStructure { FilePath = tempSourceFile, Duration = 60.0 };
         structure.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "video", Codec = "h264", Name = "Video" });
-        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile)).ReturnsAsync(structure);
+        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile, It.IsAny<CancellationToken>())).ReturnsAsync(structure);
 
         List<string>? capturedExtraArgs = null;
         _ffmpegRunnerMock.Setup(r => r.RunAsync(
@@ -464,7 +464,7 @@ public class VideoEncodingScriptTests
         // Добавляем вложенный шрифт
         structure.Attachments.Add(new MediaAttachment { AttachmentId = 0, FileName = "customfont.ttf", MimeType = "application/x-truetype-font" });
 
-        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile)).ReturnsAsync(structure);
+        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile, It.IsAny<CancellationToken>())).ReturnsAsync(structure);
 
         // Настраиваем извлечение шрифтов: пакетный запуск ничего не извлекает (fallback по одному файлу)
         _ffmpegRunnerMock.Setup(r => r.ExtractAttachmentsBatchAsync(tempSourceFile, It.IsAny<List<(int StreamIndex, string OutputPath)>>(), It.IsAny<CancellationToken>()))
@@ -526,7 +526,7 @@ public class VideoEncodingScriptTests
 
         var structure = new MediaStructure { FilePath = tempSourceFile, Duration = 60.0 };
         structure.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "video", Codec = "h264", Name = "Video" });
-        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile)).ReturnsAsync(structure);
+        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile, It.IsAny<CancellationToken>())).ReturnsAsync(structure);
 
         List<string>? capturedExtraArgs = null;
         _ffmpegRunnerMock.Setup(r => r.RunAsync(
@@ -595,7 +595,7 @@ public class VideoEncodingScriptTests
         // Вторая аудиодорожка: русская, не по умолчанию
         structure.Tracks.Add(new MediaTrack { TrackId = 2, TrackType = "audio", Codec = "aac", Language = "ru", IsDefault = false, Name = "Russian Audio" });
         
-        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile)).ReturnsAsync(structure);
+        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile, It.IsAny<CancellationToken>())).ReturnsAsync(structure);
 
         List<string>? capturedExtraArgs = null;
         _ffmpegRunnerMock.Setup(r => r.RunAsync(
@@ -650,7 +650,7 @@ public class VideoEncodingScriptTests
 
         var structure = new MediaStructure { FilePath = tempSourceFile, Duration = 30.0 };
         structure.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "video", Codec = "h264", Name = "Video" });
-        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile)).ReturnsAsync(structure);
+        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile, It.IsAny<CancellationToken>())).ReturnsAsync(structure);
 
         List<string>? capturedExtraArgs = null;
         _ffmpegRunnerMock.Setup(r => r.RunAsync(
@@ -698,7 +698,7 @@ public class VideoEncodingScriptTests
         var structure = new MediaStructure { FilePath = tempSourceFile, Duration = 30.0 };
         structure.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "video", Codec = "h264", Name = "Video" });
         structure.Tracks.Add(new MediaTrack { TrackId = 1, TrackType = "subtitle", Codec = "ass", Name = "Надписи" });
-        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile)).ReturnsAsync(structure);
+        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile, It.IsAny<CancellationToken>())).ReturnsAsync(structure);
 
         List<string>? capturedExtraArgs = null;
         _ffmpegRunnerMock.Setup(r => r.RunAsync(
@@ -741,7 +741,7 @@ public class VideoEncodingScriptTests
 
         var structure = new MediaStructure { FilePath = tempSourceFile, Duration = 30.0 };
         structure.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "video", Codec = "h264", Name = "Video" });
-        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile)).ReturnsAsync(structure);
+        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile, It.IsAny<CancellationToken>())).ReturnsAsync(structure);
 
         string? capturedOutputPath = null;
         _ffmpegRunnerMock.Setup(r => r.RunAsync(
@@ -832,7 +832,7 @@ public class VideoEncodingScriptTests
 
         var structure = new MediaStructure { FilePath = tempSourceFile, Duration = 60.0 };
         structure.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "video", Codec = "h264", Resolution = "1920x1080", Name = "Video" });
-        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile)).ReturnsAsync(structure);
+        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile, It.IsAny<CancellationToken>())).ReturnsAsync(structure);
 
         _ffmpegRunnerMock.Setup(r => r.DetectCropAsync(
             tempSourceFile,
@@ -892,7 +892,7 @@ public class VideoEncodingScriptTests
 
         var structure = new MediaStructure { FilePath = tempSourceFile, Duration = 60.0 };
         structure.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "video", Codec = "hevc", Resolution = "1920x1080", Name = "Video" });
-        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile)).ReturnsAsync(structure);
+        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile, It.IsAny<CancellationToken>())).ReturnsAsync(structure);
 
         _ffmpegRunnerMock.Setup(r => r.DetectCropAsync(
             tempSourceFile,
@@ -949,7 +949,7 @@ public class VideoEncodingScriptTests
 
         var structure = new MediaStructure { FilePath = tempSourceFile, Duration = 60.0 };
         structure.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "video", Codec = "hevc", Resolution = "1920x1080", Name = "Video" });
-        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile)).ReturnsAsync(structure);
+        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile, It.IsAny<CancellationToken>())).ReturnsAsync(structure);
 
         // Имитируем, что детектор отрезал 8px с боков (1904px) и полосы по высоте (800px)
         _ffmpegRunnerMock.Setup(r => r.DetectCropAsync(
@@ -1014,7 +1014,7 @@ public class VideoEncodingScriptTests
 
         var structure = new MediaStructure { FilePath = tempSourceFile, Duration = 60.0 };
         structure.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "video", Codec = "hevc", Resolution = "1920x1080", Name = "Video" });
-        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile)).ReturnsAsync(structure);
+        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile, It.IsAny<CancellationToken>())).ReturnsAsync(structure);
 
         // В первой точке (15s) - 1920x800, во второй точке (30s) - IMAX полноэкранный 1920x1080
         _ffmpegRunnerMock.SetupSequence(r => r.DetectCropAsync(
@@ -1191,7 +1191,7 @@ public class VideoEncodingScriptTests
     {
         MediaStructure structure = new() { FilePath = path, Duration = 10.0 };
         structure.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "video", Codec = "h264", Name = "Video" });
-        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(path)).ReturnsAsync(structure);
+        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(path, It.IsAny<CancellationToken>())).ReturnsAsync(structure);
     }
 
     /// <summary>
@@ -1226,7 +1226,7 @@ public class VideoEncodingScriptTests
         structure.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "video", Codec = "h264", Name = "Video" });
         // Дорожка не содержит ключевого слова "Надписи"
         structure.Tracks.Add(new MediaTrack { TrackId = 1, TrackType = "subtitles", Codec = "ass", Name = "Full Dialogue", IsDefault = true });
-        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile)).ReturnsAsync(structure);
+        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile, It.IsAny<CancellationToken>())).ReturnsAsync(structure);
 
         List<string>? capturedExtraArgs = null;
         _ffmpegRunnerMock.Setup(r => r.RunAsync(
@@ -1274,7 +1274,7 @@ public class VideoEncodingScriptTests
         structure.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "video", Codec = "h264", Name = "Video" });
         structure.Tracks.Add(new MediaTrack { TrackId = 1, TrackType = "subtitles", Codec = "ass", Name = "Full Dialogue" });
         structure.Tracks.Add(chosenTrack);
-        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile)).ReturnsAsync(structure);
+        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile, It.IsAny<CancellationToken>())).ReturnsAsync(structure);
 
         var dialogMock = new Mock<IDialogService>();
         dialogMock.Setup(d => d.ChooseSubtitleTrackAsync(
@@ -1349,7 +1349,7 @@ public class VideoEncodingScriptTests
         var structure = new MediaStructure { FilePath = tempSourceFile, Duration = 30.0 };
         structure.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "video", Codec = "h264", Name = "Video" });
         structure.Tracks.Add(new MediaTrack { TrackId = 1, TrackType = "subtitles", Codec = "ass", Name = "Full Dialogue" });
-        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile)).ReturnsAsync(structure);
+        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile, It.IsAny<CancellationToken>())).ReturnsAsync(structure);
 
         var dialogMock = new Mock<IDialogService>();
         dialogMock.Setup(d => d.ChooseSubtitleTrackAsync(
@@ -1414,7 +1414,7 @@ public class VideoEncodingScriptTests
     {
         var structure = new MediaStructure { FilePath = file, Duration = 60.0 };
         structure.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "video", Codec = "h264", Resolution = resolution, Name = "Video" });
-        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(file)).ReturnsAsync(structure);
+        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(file, It.IsAny<CancellationToken>())).ReturnsAsync(structure);
         return structure;
     }
 
@@ -1631,7 +1631,7 @@ public class VideoEncodingScriptTests
         var structure = new MediaStructure { FilePath = tempSourceFile, Duration = 60.0 };
         structure.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "video", Codec = "h264", Resolution = "3840x2160", Name = "Video" });
         structure.Tracks.Add(new MediaTrack { TrackId = 1, TrackType = "subtitles", Codec = "ass", Name = "Надписи", IsDefault = true });
-        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile)).ReturnsAsync(structure);
+        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(tempSourceFile, It.IsAny<CancellationToken>())).ReturnsAsync(structure);
         SetupSubtitleExtraction(tempSourceFile);
         SetupCropDetection(tempSourceFile, "3840:1600:0:280");
 
@@ -2023,7 +2023,7 @@ public class VideoEncodingScriptTests
         var structure = new MediaStructure { FilePath = file, Duration = 60.0 };
         structure.Tracks.Add(new MediaTrack { TrackId = 0, TrackType = "video", Codec = "h264", Resolution = resolution, Name = "Video" });
         structure.Tracks.Add(new MediaTrack { TrackId = 1, TrackType = "subtitles", Codec = "ass", Name = "Надписи", IsDefault = true });
-        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(file)).ReturnsAsync(structure);
+        _mediaProbeServiceMock.Setup(p => p.ProbeAsync(file, It.IsAny<CancellationToken>())).ReturnsAsync(structure);
         SetupSubtitleExtraction(file);
         return structure;
     }

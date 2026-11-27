@@ -92,8 +92,17 @@ public sealed class ContainerConversionScript : AbstractScript
         ScriptProgressCallback progressCallback,
         int fileIndex,
         int totalCount,
-        ExecutionContext context)
+        ExecutionContext context,
+        CancellationToken cancellationToken = default)
     {
+        if (IsCancellationRequested(cancellationToken))
+        {
+            return ExecutionResult.Cancelled(
+                context,
+                new[] { "Обработка отменена до запуска элемента." },
+                errorCode: "cancelled-before-start",
+                cleanupState: CleanupState.NotStarted);
+        }
         var results = new List<string>();
 
         // Извлекаем настройки пользователя
@@ -225,7 +234,7 @@ public sealed class ContainerConversionScript : AbstractScript
             extraArgs.Add("dump_extra");
         }
 
-        var cts = new CancellationTokenSource();
+        var cts = CreateLinkedCancellationSource(cancellationToken);
 
         var ffmpegTask = _ffmpegRunner.RunAsync(
             inputPath: filePath,

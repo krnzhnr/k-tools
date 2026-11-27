@@ -9,6 +9,7 @@ public static class ProcessEventIds
     public const string Exit = "process.exit";
     public const string Completed = "process.completed";
     public const string Cancelled = "process.cancelled";
+    public const string TimeoutExceeded = "process.timeout_exceeded";
     public const string TerminationUnverified = "process.termination_unverified";
     public const string OutputSampled = "process.output";
     public const string OutputTruncated = "process.output_truncated";

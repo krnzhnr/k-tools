@@ -337,11 +337,11 @@ public class ServicesIntegrationTests
         logService.InitializeLogFile(Path.Combine(scope.RootPath, "logs"));
 
         // Act
-        logService.Info("информационное сообщение", "TestSource");
-        logService.Warn("предупреждение", "TestSource");
-        logService.Error("ошибка", "TestSource");
-        logService.Fatal("фатальная ошибка", "TestSource");
-        logService.DebugLog("отладка", "TestSource");
+        logService.Write("test.event.recorded", LogLevel.Info, LogStatus.None, "информационное сообщение", source: "TestSource");
+        logService.Write("test.event.recorded", LogLevel.Warning, LogStatus.None, "предупреждение", source: "TestSource");
+        logService.Write("test.event.failed", LogLevel.Error, LogStatus.Failed, "ошибка", source: "TestSource");
+        logService.Write("test.event.failed", LogLevel.Fatal, LogStatus.Failed, "фатальная ошибка", source: "TestSource");
+        logService.Write("test.event.recorded", LogLevel.Debug, LogStatus.None, "отладка", source: "TestSource");
 
         // Assert
         string content = logService.ReadCurrentLog();
@@ -374,7 +374,7 @@ public class ServicesIntegrationTests
         }
 
         // Act
-        logService.Exception(ex, "Контекст сбоя", "Integration");
+        logService.Write("test.event.failed", LogLevel.Error, LogStatus.Failed, "Контекст сбоя", ex, source: "Integration");
 
         // Assert
         string content = logService.ReadCurrentLog();
@@ -393,14 +393,14 @@ public class ServicesIntegrationTests
         using var scope = new TempDirectoryScope();
         var logService = new LogService();
         logService.InitializeLogFile(Path.Combine(scope.RootPath, "logs"));
-        logService.Info("запись до очистки", "Test");
+        logService.Write("test.event.recorded", LogLevel.Info, LogStatus.None, "запись до очистки", source: "Test");
 
         // Act
         logService.ClearCurrentLog();
 
         // Assert
         logService.ReadCurrentLog().Should().BeEmpty("файл должен быть очищен");
-        logService.Info("запись после очистки", "Test");
+        logService.Write("test.event.recorded", LogLevel.Info, LogStatus.None, "запись после очистки", source: "Test");
         logService.ReadCurrentLog().Should().Contain("запись после очистки", "файл остаётся рабочим после очистки");
     }
 
@@ -414,7 +414,7 @@ public class ServicesIntegrationTests
 
         // Act
         logService.InitializeLogFile(customDir);
-        logService.Info("запись в кастомную директорию", "Test");
+        logService.Write("test.event.recorded", LogLevel.Info, LogStatus.None, "запись в кастомную директорию", source: "Test");
         logService.Flush(TimeSpan.FromSeconds(10)).Should().BeTrue("буфер журнала должен быть сброшен на диск");
 
         // Assert
@@ -449,7 +449,7 @@ public class ServicesIntegrationTests
             {
                 for (int i = 0; i < writesPerThread; i++)
                 {
-                    logService.Info($"поток-{t} запись-{i}", "Parallel");
+                    logService.Write("test.event.recorded", LogLevel.Info, LogStatus.None, $"поток-{t} запись-{i}", source: "Parallel");
                 }
             }))
             .ToArray();

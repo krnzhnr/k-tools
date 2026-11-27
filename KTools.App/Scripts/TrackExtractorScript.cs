@@ -105,8 +105,17 @@ public sealed class TrackExtractorScript : AbstractScript
         ScriptProgressCallback progressCallback,
         int fileIndex,
         int totalCount,
-        ExecutionContext context)
+        ExecutionContext context,
+        CancellationToken cancellationToken = default)
     {
+        if (IsCancellationRequested(cancellationToken))
+        {
+            return ExecutionResult.Cancelled(
+                context,
+                new[] { "Обработка отменена до запуска элемента." },
+                errorCode: "cancelled-before-start",
+                cleanupState: CleanupState.NotStarted);
+        }
         var results = new List<string>();
 
         _logService.Write("script.track_extractor.started", LogLevel.Debug, LogStatus.Running, $"Начато извлечение дорожек файла '{LogProps.FileName(filePath)}'", source: Name, properties: LogProps.Create("InputName", LogProps.FileName(filePath)));
@@ -137,7 +146,7 @@ public sealed class TrackExtractorScript : AbstractScript
         }
 
         // 2. Получаем структуру метаданных
-        var structure = await _mediaProbeService.ProbeAsync(filePath);
+        var structure = await _mediaProbeService.ProbeAsync(filePath, cancellationToken);
         if (structure == null)
         {
             string err = $"❌ Ошибка анализа метаданных файла: {Path.GetFileName(filePath)}";
@@ -451,7 +460,7 @@ public sealed class TrackExtractorScript : AbstractScript
 
             double duration = structure.Duration;
 
-            var cts = new CancellationTokenSource();
+            var cts = CreateLinkedCancellationSource(cancellationToken);
 
             Action<ProgressInfo> onProgress = p =>
             {

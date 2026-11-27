@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using Moq;
@@ -95,7 +96,8 @@ public sealed class ExposedScript : AbstractScript
         ScriptProgressCallback progressCallback,
         int fileIndex,
         int totalCount,
-        ExecutionContext context)
+        ExecutionContext context,
+        CancellationToken cancellationToken = default)
     {
         return Task.FromResult(ExecutionResult.Succeeded(context));
     }

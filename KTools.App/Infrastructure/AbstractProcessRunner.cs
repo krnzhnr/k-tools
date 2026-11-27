@@ -54,8 +54,15 @@ public abstract class AbstractProcessRunner
         int maxSuccessExitCode = 0,
         Func<bool>? verifyParseResult = null,
         string? explicitBinaryPath = null,
-        bool emitOutputSamples = false)
+        bool emitOutputSamples = false,
+        TimeSpan? timeout = null)
     {
+        // Невалидный лимит отклоняется сразу: ждать ноль секунд или вечность по ошибке нельзя.
+        if (timeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(timeout), "Лимит времени выполнения должен быть положительным");
+        }
+
         string tool = ProcessExecutionContext.NormalizeToolName(binaryName);
         ProcessExecutionContext baseContext = context ?? ProcessExecutionContext.Create(tool);
         ProcessExecutionContext executionContext = string.IsNullOrWhiteSpace(expectedArtifact)
@@ -160,8 +167,27 @@ public abstract class AbstractProcessRunner
             ProcessResult? cancelled = null;
             try
             {
-                await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
-                await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
+                if (timeout is null)
+                {
+                    await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+                    await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
+                }
+                else
+                {
+                    bool timedOut = await WaitForExitWithTimeoutAsync(process, stdoutTask, stderrTask, timeout.Value, cancellationToken).ConfigureAwait(false);
+                    if (timedOut)
+                    {
+                        cancelled = Terminate(
+                            process,
+                            executionContext,
+                            processId,
+                            osPid,
+                            stopwatch,
+                            stderrBuffer,
+                            expectedArtifact,
+                            timedOut: true);
+                    }
+                }
             }
             catch (OperationCanceledException)
             {
@@ -178,9 +204,13 @@ public abstract class AbstractProcessRunner
             stopwatch.Stop();
             if (cancelled is not null)
             {
+                // Срыв лимита времени виден отдельным событием: причина иная, чем у штатной отмены.
+                bool isTimeout = cancelled.ErrorCode == ProcessResult.ErrorTimeoutExceeded;
                 WriteProcessEvent(
-                    cancelled.TerminationVerified ? ProcessEventIds.Cancelled : ProcessEventIds.TerminationUnverified,
-                    cancelled.TerminationVerified ? LogLevel.Info : LogLevel.Warning,
+                    isTimeout
+                        ? ProcessEventIds.TimeoutExceeded
+                        : cancelled.TerminationVerified ? ProcessEventIds.Cancelled : ProcessEventIds.TerminationUnverified,
+                    isTimeout || !cancelled.TerminationVerified ? LogLevel.Warning : LogLevel.Info,
                     cancelled.Status,
                     cancelled.Message,
                     executionContext,
@@ -309,9 +339,9 @@ public abstract class AbstractProcessRunner
                     Log.Write(
                         ProcessEventIds.OutputSampled,
                         LogLevel.Debug,
+                        LogStatus.Running,
                         line,
-                        stream,
-                        status: LogStatus.Running,
+                        source: stream,
                         context: logContext,
                         properties: new Dictionary<string, object?>(StringComparer.Ordinal)
                         {
@@ -327,6 +357,31 @@ public abstract class AbstractProcessRunner
         }
     }
 
+    /// <summary>
+    /// Ожидает выхода процесса с ограничением по времени.
+    /// Возвращает true, если сработал лимит; отмена через токен пробрасывается исключением.
+    /// </summary>
+    private static async Task<bool> WaitForExitWithTimeoutAsync(
+        Process process,
+        Task stdoutTask,
+        Task stderrTask,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        using var timeoutSource = new CancellationTokenSource(timeout);
+        using var linkedSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutSource.Token);
+        try
+        {
+            await process.WaitForExitAsync(linkedSource.Token).ConfigureAwait(false);
+            await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
+            return false;
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return true;
+        }
+    }
+
     private static ProcessResult Terminate(
         Process process,
         ProcessExecutionContext context,
@@ -334,7 +389,8 @@ public abstract class AbstractProcessRunner
         int osPid,
         Stopwatch stopwatch,
         ProcessOutputBuffer stderrBuffer,
-        string? expectedArtifact)
+        string? expectedArtifact,
+        bool timedOut = false)
     {
         ProcessTerminationResult termination = ActiveProcessTracker.TerminateProcess(process, TimeSpan.FromSeconds(5));
         stopwatch.Stop();
@@ -344,9 +400,18 @@ public abstract class AbstractProcessRunner
         bool? outputExists = string.IsNullOrWhiteSpace(expectedArtifact) ? null : VerifyArtifact(expectedArtifact);
         IReadOnlyList<string> stderrLines = stderrBuffer.Snapshot();
 
+        // Срыв лимита времени — отдельная причина остановки: процесс уже
+        // доказанно завершён через TerminateProcess, отличается только диагноз.
+        string message = timedOut
+            ? ProcessResult.MessageTimeoutExceeded
+            : verified ? ProcessResult.MessageCancelled : ProcessResult.MessageUnverifiedTermination;
+        string errorCode = timedOut
+            ? ProcessResult.ErrorTimeoutExceeded
+            : verified ? ProcessResult.ErrorCancelled : ProcessResult.ErrorTerminationUnverified;
+
         return ProcessResult.Cancelled(
             context,
-            verified ? ProcessResult.MessageCancelled : ProcessResult.MessageUnverifiedTermination,
+            message,
             processId,
             termination.Pid > 0 ? termination.Pid : osPid,
             exitCode,
@@ -357,7 +422,7 @@ public abstract class AbstractProcessRunner
             ProcessOutputPolicy.CountWarnings(stderrLines),
             ProcessOutputPolicy.CountErrors(stderrLines),
             terminationVerified: verified,
-            errorCode: verified ? ProcessResult.ErrorCancelled : ProcessResult.ErrorTerminationUnverified,
+            errorCode: errorCode,
             cleanupState: verified
                 ? (outputExists == false ? CleanupState.Partial : CleanupState.Completed)
                 : CleanupState.Partial,

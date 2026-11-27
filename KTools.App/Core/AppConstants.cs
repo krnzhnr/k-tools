@@ -143,6 +143,7 @@ public static class AppConstants
         public const string SubtitlesShift = "\uE121";
         public const string AudioTransplant = "\uE8AB";
         public const string Calculator = "\uE1D0";
+        public const string BitrateViewer = "\uE9D2";
         public const string MediaDownloader = "\uE128";
         public const string SpeechRecognition = "\uE8D4";
     }
@@ -175,7 +176,15 @@ public static class AppConstants
     }
 
     /// <summary>
-    /// Текстовые метаданные (названия и описания) всех 12 скриптов приложения.
+    /// Общее число скриптов, зарегистрированных в реестре скриптов.
+    /// Используется как начальная ёмкость списка в реестре.
+    /// При регистрации нового скрипта обновить вместе со списком регистрации.
+    /// </summary>
+    public const int ScriptCount = 18;
+
+    /// <summary>
+    /// Текстовые метаданные (названия и описания) скриптов приложения.
+    /// Число записей соответствует <see cref="ScriptCount"/>.
     /// </summary>
     public static class ScriptMetadata
     {
@@ -233,6 +242,10 @@ public static class AppConstants
 
         public const string SpeechRecognitionName = "Распознавание речи";
         public const string SpeechRecognitionDesc = "Транскрибация речи в текст и субтитры (SRT/VTT/TXT) через Whisper AI с поддержкой GPU.";
+
+        // --- Сетевые скрипты ---
+        public const string MediaDownloaderName = "Загрузка медиа";
+        public const string MediaDownloaderDesc = "Загрузка видео- и аудиофайлов из сети по URL-адресам через yt-dlp";
     }
 
     /// <summary>

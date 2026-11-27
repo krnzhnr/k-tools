@@ -500,6 +500,7 @@ public sealed partial class StreamReplaceControl : UserControl
                 combo.Items.Add(defaultOpt);
 
                 // 2. Опции из добавленных файлов-замен
+                var autoCandidates = new List<(ReplacementOption Option, StreamReplacementCandidate Candidate)>();
                 foreach (var repFile in _replacementFiles)
                 {
                     string ext = Path.GetExtension(repFile.FilePath).ToLowerInvariant();
@@ -522,15 +523,26 @@ public sealed partial class StreamReplaceControl : UserControl
                             {
                                 disp += $", {subLang}";
                             }
+                            if (!string.IsNullOrEmpty(subTrack.Name))
+                            {
+                                disp += $", \"{subTrack.Name}\"";
+                            }
                             disp += "]";
 
-                            combo.Items.Add(new ReplacementOption
+                            var option = new ReplacementOption
                             {
                                 DisplayText = disp,
                                 FilePath = repFile.FilePath,
                                 SourceTrackId = subTrack.TrackId,
                                 TrackType = originalTrack.TrackType
-                            });
+                            };
+                            combo.Items.Add(option);
+                            autoCandidates.Add((option, new StreamReplacementCandidate
+                            {
+                                FilePath = repFile.FilePath,
+                                SourceTrackId = subTrack.TrackId,
+                                Track = subTrack
+                            }));
                         }
                     }
                     else
@@ -538,13 +550,20 @@ public sealed partial class StreamReplaceControl : UserControl
                         // Простые файлы: проверяем совместимость по расширению
                         if (IsExtensionCompatibleWithTrackType(ext, originalTrack.TrackType))
                         {
-                            combo.Items.Add(new ReplacementOption
+                            var option = new ReplacementOption
                             {
                                 DisplayText = repFile.FileName,
                                 FilePath = repFile.FilePath,
                                 SourceTrackId = 0,
                                 TrackType = originalTrack.TrackType
-                            });
+                            };
+                            combo.Items.Add(option);
+                            autoCandidates.Add((option, new StreamReplacementCandidate
+                            {
+                                FilePath = repFile.FilePath,
+                                SourceTrackId = 0,
+                                Track = null
+                            }));
                         }
                     }
                 }
@@ -560,6 +579,27 @@ public sealed partial class StreamReplaceControl : UserControl
                     {
                         combo.SelectedItem = found;
                         continue;
+                    }
+                }
+
+                // Ручного выбора нет: для нового списка пробуем автоопределение по названию и языку дорожки.
+                // Явный выбор «Не заменять» здесь не трогаем: он хранится в currentSelected и остаётся как есть.
+                if (currentSelected == null)
+                {
+                    var best = StreamReplacementMatcher.FindBestMatch(
+                        originalTrack,
+                        autoCandidates.Select(p => p.Candidate));
+                    if (best != null)
+                    {
+                        var autoOpt = autoCandidates.Select(p => p.Option).FirstOrDefault(o =>
+                            o.FilePath.Equals(best.FilePath, StringComparison.OrdinalIgnoreCase) &&
+                            o.SourceTrackId == best.SourceTrackId);
+                        if (autoOpt != null)
+                        {
+                            combo.SelectedItem = autoOpt;
+                            _logService.Write("ui.stream_replace.auto_matched", LogLevel.Debug, LogStatus.Succeeded, $"Дорожка #{originalTrack.TrackId} автоматически сопоставлена с вариантом '{autoOpt.DisplayText}'", source: SourceName, properties: LogProps.Create("Index", originalTrack.TrackId).With("FileName", Path.GetFileName(best.FilePath)));
+                            continue;
+                        }
                     }
                 }
 

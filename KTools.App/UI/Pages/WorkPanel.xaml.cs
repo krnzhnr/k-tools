@@ -407,6 +407,15 @@ public sealed partial class WorkPanel : Page
             // (визуальное дерево настроек строится лениво при открытии вкладки)
             FileList.ActiveScript = _script;
             FileList.SetFiles(_script.FilesQueue);
+
+            // Подхватываем файлы, сброшенные на карточку домашнего экрана (ишью #47):
+            // HomePage отфильтровала их по расширениям скрипта и запомнила до навигации.
+            var pendingCardDrop = CardDropHandoff.Take(_script.Name);
+            if (pendingCardDrop is { Count: > 0 })
+            {
+                FileList.AddFiles(pendingCardDrop);
+            }
+
             ScriptSettings.EnsureSettingsUI(_script);
 
             // Если скрипт — Пересадка аудио, подменяем стандартный файл-лист на карточный DubSwap контрол
@@ -851,8 +860,10 @@ public sealed partial class WorkPanel : Page
         }
         else
         {
-            // Если процесс не запущен, собираем настройки из UI и запускаем команду ViewModel на выполнение
-            var settings = ReadCurrentSettings();
+            // Если процесс не запущен, собираем настройки из ViewModel и запускаем команду ViewModel на выполнение.
+            // ViewModel — единственная точка чтения схемы настроек (ишью #121);
+            // Code-Behind добавляет лишь значения из UI-контролов (подмены дорожек).
+            var settings = ViewModel.ReadCurrentSettings();
             if (_script.UseCustomWidget)
             {
                 if (_script is StreamReplacementScript)
@@ -895,48 +906,6 @@ public sealed partial class WorkPanel : Page
             ActionButton.Style = (Style)Application.Current.Resources["AccentButtonStyle"];
             ActionButton.IsEnabled = ViewModel.IsStartButtonEnabled;
         }
-    }
-
-    /// <summary>
-    /// Собирает текущие настройки скрипта из SettingsManager на основе схемы.
-    /// </summary>
-    private Dictionary<string, object> ReadCurrentSettings()
-    {
-        var settings = new Dictionary<string, object>();
-        if (_script == null) return settings;
-
-        string settingsGroup = _settingsManager.GetSafeGroupName(_script.Name);
-
-        // 1. Считываем все сохраненные на диске/в памяти настройки текущей группы скрипта
-        var allGroupSettings = _settingsManager.GetAllSettingsInGroup(settingsGroup);
-        foreach (var kvp in allGroupSettings)
-        {
-            settings[kvp.Key] = kvp.Value;
-        }
-
-        // 2. Дополняем/уточняем значениями по умолчанию из схемы
-        foreach (var field in _script.GetFullSettingsSchema())
-        {
-            if (field.Type != SettingType.Subtitle && !settings.ContainsKey(field.Key))
-            {
-                object val = _settingsManager.GetSetting(settingsGroup, field.Key, field.DefaultValue);
-                settings[field.Key] = val;
-            }
-
-            if (field.ChildFields != null && field.ChildFields.Count > 0)
-            {
-                foreach (var child in field.ChildFields)
-                {
-                    if (child.Type != SettingType.Subtitle && !settings.ContainsKey(child.Key))
-                    {
-                        object childVal = _settingsManager.GetSetting(settingsGroup, child.Key, child.DefaultValue);
-                        settings[child.Key] = childVal;
-                    }
-                }
-            }
-        }
-
-        return settings;
     }
 
     private T? FindParentPage<T>(DependencyObject child) where T : DependencyObject

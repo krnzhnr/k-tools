@@ -111,8 +111,17 @@ public sealed class AudioChannelsScript : AbstractScript
         ScriptProgressCallback progressCallback,
         int fileIndex,
         int totalCount,
-        ExecutionContext context)
+        ExecutionContext context,
+        CancellationToken cancellationToken = default)
     {
+        if (IsCancellationRequested(cancellationToken))
+        {
+            return ExecutionResult.Cancelled(
+                context,
+                new[] { "Обработка отменена до запуска элемента." },
+                errorCode: "cancelled-before-start",
+                cleanupState: CleanupState.NotStarted);
+        }
         var results = new List<string>();
 
         // Извлекаем пользовательские настройки
@@ -251,7 +260,7 @@ public sealed class AudioChannelsScript : AbstractScript
             tempInputWavPath = Path.Combine(tempDir, $"temp_input_{Guid.NewGuid():N}.wav");
 
             var decodeArgs = new List<string> { "-c:a", "pcm_s24le" };
-            using var decodeCts = new CancellationTokenSource();
+            using var decodeCts = CreateLinkedCancellationSource(cancellationToken);
 
             var decodeTask = _ffmpegRunner.RunAsync(
                 inputPath: filePath,
@@ -364,7 +373,7 @@ public sealed class AudioChannelsScript : AbstractScript
             "Разделение каналов через eac3to...",
             0.0);
 
-        using var cts = new CancellationTokenSource();
+        using var cts = CreateLinkedCancellationSource(cancellationToken);
         var eac3toTask = _eac3toRunner.RunAsync(
             eac3toArgs,
             workingDir: tempDir,

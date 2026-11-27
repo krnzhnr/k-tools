@@ -15,7 +15,7 @@
         <!-- Шаблон вертикальной карточки зависимости -->
         <DataTemplate x:Key="DependencyCardTemplate" x:DataType="models:DependencyVM">
             <Border Width="220" 
-                    Height="190" 
+                    Height="230" 
                     CornerRadius="8" 
                     BorderThickness="1"
                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
@@ -109,6 +109,35 @@
 
                     <!-- Секция 4: Кнопки управления -->
                     <StackPanel Grid.Row="3" VerticalAlignment="Bottom">
+                        <!-- Панель своего источника: текущий путь + Изменить/Сбросить -->
+                        <StackPanel Visibility="{x:Bind CustomSourceVisibility, Mode=OneWay}"
+                                    Spacing="4"
+                                    Margin="0,0,0,6">
+                            <TextBlock Text="{x:Bind CurrentBinaryPath, Mode=OneWay}"
+                                       FontFamily="Segoe UI"
+                                       FontSize="9.5"
+                                       TextWrapping="Wrap"
+                                       MaxLines="2"
+                                       TextTrimming="CharacterEllipsis"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       ToolTipService.ToolTip="{x:Bind CurrentBinaryPath, Mode=OneWay}"
+                                       AutomationProperties.Name="Выбранный путь к компоненту" />
+                            <Grid ColumnDefinitions="*, *" ColumnSpacing="6">
+                                <Button Grid.Column="0"
+                                        Content="Изменить"
+                                        HorizontalAlignment="Stretch"
+                                        ToolTipService.ToolTip="Выбрать другой исполняемый файл"
+                                        AutomationProperties.Name="Изменить путь к компоненту"
+                                        Command="{x:Bind SelectCustomPathCommand}" />
+                                <Button Grid.Column="1"
+                                        Content="Сбросить"
+                                        HorizontalAlignment="Stretch"
+                                        ToolTipService.ToolTip="Вернуться к встроенным бинарникам"
+                                        AutomationProperties.Name="Сбросить путь к встроенным бинарникам"
+                                        Command="{x:Bind ResetBinarySourceCommand}" />
+                            </Grid>
+                        </StackPanel>
+
                         <!-- Кнопка Установить (видна при NotInstalled/Error) -->
                         <Button Content="Установить" 
                                 Style="{StaticResource AccentButtonStyle}"
@@ -147,6 +176,25 @@
                                 HorizontalAlignment="Stretch"
                                 Visibility="{x:Bind NormalDeleteButtonVisibility, Mode=OneWay}"
                                 Command="{x:Bind RemoveCommand}" />
+
+                        <!-- Панель выбора своего источника (встроенный режим, вне активных операций) -->
+                        <Grid Visibility="{x:Bind BuiltinSourceVisibility, Mode=OneWay}"
+                              ColumnDefinitions="*, *"
+                              ColumnSpacing="6"
+                              Margin="0,6,0,0">
+                            <Button Grid.Column="0"
+                                    Content="Свой путь…"
+                                    HorizontalAlignment="Stretch"
+                                    ToolTipService.ToolTip="Выбрать свой исполняемый файл вместо встроенного"
+                                    AutomationProperties.Name="Выбрать свой путь к компоненту"
+                                    Command="{x:Bind SelectCustomPathCommand}" />
+                            <Button Grid.Column="1"
+                                    Content="Из PATH"
+                                    HorizontalAlignment="Stretch"
+                                    ToolTipService.ToolTip="Искать исполняемый файл в системном PATH"
+                                    AutomationProperties.Name="Искать компонент в системном PATH"
+                                    Command="{x:Bind UseSystemPathCommand}" />
+                        </Grid>
                     </StackPanel>
                     
                 </Grid>

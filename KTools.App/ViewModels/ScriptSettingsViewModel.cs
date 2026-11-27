@@ -297,7 +297,9 @@ public sealed partial class ScriptSettingsViewModel : ThreadSafeViewModel
             ["ErrorCode"] = result.ErrorCode,
             ["Persisted"] = result.Persisted,
             ["Value"] = displayValue,
-            ["ValueHash"] = PersistenceValueHash.Compute(key)
+            // Хэш считается от сохраняемого значения, а не от ключа:
+            // разные значения одного ключа обязаны давать разные хэши.
+            ["ValueHash"] = PersistenceValueHash.Compute(effectiveValue)
         };
 
         if (result.IsSuccess)

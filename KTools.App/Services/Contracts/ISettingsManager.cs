@@ -1,6 +1,7 @@
 // -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 
 using KTools_App.Core;
 
@@ -13,6 +14,13 @@ namespace KTools_App.Services.Contracts;
 /// </summary>
 public interface ISettingsManager : IDisposable
 {
+    /// <summary>
+    /// Явная инициализация после миграции данных (ишью 142): читает settings.json
+    /// из актуального каталога, настраивает каталог журнала и сообщает итоги загрузки.
+    /// Конструктор побочек не имеет; вызывается один раз после EnsureMigrated.
+    /// </summary>
+    Task InitializeAsync();
+
     /// <summary>
     /// Перезаписывать ли существующие выходные файлы.
     /// </summary>
@@ -202,26 +210,30 @@ public interface ISettingsManager : IDisposable
 
     /// <summary>
     /// Инициализировать настройки по умолчанию на основе схемы скриптов.
-    /// Успех возвращается только после подтверждённой записи на диск.
+    /// Схемы поступают через поставщика поверх реестра скриптов, поэтому уровень
+    /// настроек не зависит от конкретных скриптов. Успех возвращается только после
+    /// подтверждённой записи на диск.
     /// Если предыдущая загрузка была деградированной (повреждённый settings.json),
     /// значения по умолчанию применяются только в памяти и не записываются поверх
     /// повреждённого файла: для этого существует <see cref="ResetToDefaults"/>.
+    /// Секции, не связанные с зарегистрированными скриптами, не удаляются,
+    /// а фиксируются в журнале событием mismatch.
     /// </summary>
-    /// <param name="scripts">Скрипты, для которых создаются значения по умолчанию.</param>
+    /// <param name="defaultsProvider">Поставщик значений по умолчанию зарегистрированных скриптов.</param>
     /// <returns>Результат операции сохранения.</returns>
-    PersistenceResult InitializeDefaults(List<AbstractScript> scripts);
+    PersistenceResult InitializeDefaults(ISettingsDefaultsProvider defaultsProvider);
 
     /// <summary>
     /// Явный сброс настроек к значениям по умолчанию, инициированный пользователем.
     /// Единственный сценарий, который разрешает запись поверх деградированной загрузки.
     /// </summary>
-    /// <param name="scripts">Скрипты, для которых восстанавливаются значения по умолчанию.</param>
+    /// <param name="defaultsProvider">Поставщик значений по умолчанию зарегистрированных скриптов.</param>
     /// <param name="applicationDefaults">
     /// Явные значения в формате «группа/ключ» — «значение». Записи без разделителя игнорируются.
     /// </param>
     /// <returns>Результат операции сохранения.</returns>
     PersistenceResult ResetToDefaults(
-        List<AbstractScript> scripts,
+        ISettingsDefaultsProvider defaultsProvider,
         IReadOnlyList<KeyValuePair<string, object?>>? applicationDefaults);
 
     /// <summary>

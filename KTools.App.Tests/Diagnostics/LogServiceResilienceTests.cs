@@ -49,7 +49,7 @@ public class LogServiceResilienceTests
         {
             for (int index = 0; index < 5; index++)
             {
-                service.Info("бизнес-операция " + index, "Business");
+                service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, "бизнес-операция " + index, source: "Business");
             }
         };
 
@@ -84,7 +84,7 @@ public class LogServiceResilienceTests
 
         for (int index = 0; index < 20; index++)
         {
-            service.Info("событие " + index, "Business");
+            service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, "событие " + index, source: "Business");
         }
 
         service.Flush(TimeSpan.FromSeconds(10)).Should().BeTrue("зависший подписчик не блокирует файл и очередь");
@@ -104,7 +104,7 @@ public class LogServiceResilienceTests
 
         for (int index = 0; index < 2000; index++)
         {
-            service.Info("событие " + index, "Business");
+            service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, "событие " + index, source: "Business");
         }
 
         service.Flush(TimeSpan.FromSeconds(10)).Should().BeTrue();
@@ -123,7 +123,7 @@ public class LogServiceResilienceTests
 
         for (int index = 0; index < 500; index++)
         {
-            service.DebugLog("нагрузка " + index, "Flood");
+            service.Write("test.event.recorded", LogLevel.Debug, LogStatus.None, "нагрузка " + index, source: "Flood");
         }
 
         long droppedWhileBlocked = service.DroppedEventCount;
@@ -154,7 +154,7 @@ public class LogServiceResilienceTests
             options.QueueCapacity = 4096;
         });
 
-        service.Write("test.huge", LogLevel.Warning, new string('я', 200_000), "Business");
+        service.Write("test.huge", LogLevel.Warning, LogStatus.None, new string('я', 200_000), source: "Business");
         service.Flush(TimeSpan.FromSeconds(10)).Should().BeTrue();
 
         service.DroppedEventCount.Should().Be(1, "событие больше байтового лимита очереди отбрасывается");
@@ -171,7 +171,7 @@ public class LogServiceResilienceTests
 
         for (int index = 0; index < 8; index++)
         {
-            service.Info("событие " + index, "Business");
+            service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, "событие " + index, source: "Business");
         }
 
         service.QueuedEventCount.Should().BeLessThanOrEqualTo(16);
@@ -195,7 +195,7 @@ public class LogServiceResilienceTests
         {
             for (int index = 0; index < 10; index++)
             {
-                service.Error("событие при недоступном файле " + index, "Business");
+                service.Write("test.event.failed", LogLevel.Error, LogStatus.Failed, "событие при недоступном файле " + index, source: "Business");
             }
         };
 
@@ -211,7 +211,7 @@ public class LogServiceResilienceTests
     {
         using var scope = new TempDirectoryScope();
         using LogService service = CreateService(scope);
-        service.Info("до сбоя маркера", "Business");
+        service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, "до сбоя маркера", source: "Business");
         service.Flush(TimeSpan.FromSeconds(30)).Should().BeTrue();
         service.ClearCurrentLog().Should().BeTrue();
 
@@ -223,7 +223,7 @@ public class LogServiceResilienceTests
 
         act.Should().NotThrow();
         Directory.Delete(path);
-        service.Info("после сбоя маркера", "Business");
+        service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, "после сбоя маркера", source: "Business");
         service.Flush(TimeSpan.FromSeconds(30)).Should().BeFalse();
 
         File.Exists(path).Should().BeFalse("неуспешный repair запрещает последующую запись в тот же live-файл");
@@ -262,12 +262,12 @@ public class LogServiceResilienceTests
         string path = service.CurrentLogFile!;
         PartialWriteStream stream = InstallPartialWriter(service, path);
 
-        service.Info("первая запись при частичной ошибке", "JsonlTest");
+        service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, "первая запись при частичной ошибке", source: "JsonlTest");
         service.Flush(TimeSpan.FromSeconds(30));
         SpinWaitUntil(() => stream.FailureTriggered);
 
         stream.FailureTriggered.Should().BeTrue();
-        service.Info("после восстановления", "JsonlTest");
+        service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, "после восстановления", source: "JsonlTest");
         service.Flush(TimeSpan.FromSeconds(30)).Should().BeTrue();
 
         string[] lines = ReadPhysicalLines(path);
@@ -292,12 +292,12 @@ public class LogServiceResilienceTests
         string path = service.CurrentLogFile!;
         PartialWriteStream stream = InstallPartialWriter(service, path);
         SetLastFlushTick(service, Environment.TickCount);
-        service.Write("test.periodic", LogLevel.Info, "периодическая запись");
+        service.Write("test.periodic", LogLevel.Info, LogStatus.None, "периодическая запись");
 
         SpinWaitUntil(() => stream.FailureTriggered);
 
         stream.FailureTriggered.Should().BeTrue();
-        service.Info("после периодического сброса", "JsonlTest");
+        service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, "после периодического сброса", source: "JsonlTest");
         service.Flush(TimeSpan.FromSeconds(30)).Should().BeTrue();
         string[] lines = ReadPhysicalLines(path);
         lines.Should().HaveCount(2);
@@ -327,7 +327,7 @@ public class LogServiceResilienceTests
 
         for (int index = 0; index < 50; index++)
         {
-            service.Error("событие " + index, "Business");
+            service.Write("test.event.failed", LogLevel.Error, LogStatus.Failed, "событие " + index, source: "Business");
         }
 
         service.Flush(TimeSpan.FromSeconds(30));
@@ -373,11 +373,11 @@ public class LogServiceResilienceTests
     {
         using var scope = new TempDirectoryScope();
         LogService service = CreateService(scope);
-        service.Info("до освобождения", "Business");
+        service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, "до освобождения", source: "Business");
         service.Flush(TimeSpan.FromSeconds(30)).Should().BeTrue();
 
         service.Dispose();
-        Action act = () => service.Info("после освобождения", "Business");
+        Action act = () => service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, "после освобождения", source: "Business");
 
         act.Should().NotThrow();
         service.DroppedEventCount.Should().BeGreaterThan(0, "события после освобождения считаются отброшенными");
@@ -392,7 +392,7 @@ public class LogServiceResilienceTests
     {
         using var scope = new TempDirectoryScope();
         LogService service = CreateService(scope);
-        service.Info("до освобождения", "Business");
+        service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, "до освобождения", source: "Business");
 
         Task[] disposals = Enumerable.Range(0, 8)
             .Select(_ => Task.Run(service.Dispose))
@@ -412,14 +412,14 @@ public class LogServiceResilienceTests
         Action act = () =>
         {
             service.Write(new LogEvent { EventId = "test.event", Level = LogLevel.Info, Message = "событие" });
-            service.Write("test.event", LogLevel.Info, "событие");
-            service.Exception(new InvalidOperationException("сбой"), "контекст");
-            service.Log(LogLevel.Warning, "уровень");
-            service.DebugLog("отладка");
-            service.Info("информация");
-            service.Warn("предупреждение");
-            service.Error("ошибка");
-            service.Fatal("фатально");
+            service.Write("test.event", LogLevel.Info, LogStatus.None, "событие");
+            service.Write("test.event.failed", LogLevel.Error, LogStatus.Failed, "контекст", new InvalidOperationException("сбой"));
+            service.Write("test.event.recorded", LogLevel.Warning, LogStatus.None, "уровень");
+            service.Write("test.event.recorded", LogLevel.Debug, LogStatus.None, "отладка");
+            service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, "информация");
+            service.Write("test.event.recorded", LogLevel.Warning, LogStatus.None, "предупреждение");
+            service.Write("test.event.failed", LogLevel.Error, LogStatus.Failed, "ошибка");
+            service.Write("test.event.failed", LogLevel.Fatal, LogStatus.Failed, "фатально");
             service.Flush();
             service.InitializeLogFile();
             service.InitializeLogFile(null);
@@ -437,7 +437,7 @@ public class LogServiceResilienceTests
         using var scope = new TempDirectoryScope();
         using LogService service = CreateService(scope);
 
-        Action act = () => service.Info("событие без подписчиков", "Business");
+        Action act = () => service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, "событие без подписчиков", source: "Business");
 
         act.Should().NotThrow();
         service.Flush(TimeSpan.FromSeconds(30)).Should().BeTrue();
@@ -464,7 +464,7 @@ public class LogServiceResilienceTests
         int nested = 0;
         service.LogReceived += OnNested;
 
-        Action act = () => service.Write("test.first", LogLevel.Info, "первая запись");
+        Action act = () => service.Write("test.first", LogLevel.Info, LogStatus.None, "первая запись");
 
         act.Should().NotThrow("логирование из подписчика не должно вызывать рекурсивную ошибку");
         service.Flush(TimeSpan.FromSeconds(10)).Should().BeTrue();
@@ -480,7 +480,7 @@ public class LogServiceResilienceTests
                 return;
             }
 
-            service.Write("test.nested", LogLevel.Debug, "вложенная запись");
+            service.Write("test.nested", LogLevel.Debug, LogStatus.None, "вложенная запись");
             Interlocked.Increment(ref nested);
         }
     }
@@ -504,7 +504,7 @@ public class LogServiceResilienceTests
             subscriberFlushed = true;
         };
 
-        service.Write("test.subscriber.flush", LogLevel.Info, "первая запись");
+        service.Write("test.subscriber.flush", LogLevel.Info, LogStatus.None, "первая запись");
         SpinWaitUntil(() => Volatile.Read(ref subscriberFlushed));
 
         flushResult.Should().BeTrue("Flush с потока подписчика выполняет реальный сброс буфера");
@@ -567,10 +567,8 @@ public class LogServiceResilienceTests
         {
             for (int index = 0; index < PerRound; index++)
             {
-                service.Info(
-                    "событие " + round.ToString("D2", CultureInfo.InvariantCulture)
-                    + "-" + index.ToString("D3", CultureInfo.InvariantCulture),
-                    "BatchOrder");
+                service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, "событие " + round.ToString("D2", CultureInfo.InvariantCulture)
+                    + "-" + index.ToString("D3", CultureInfo.InvariantCulture), source: "BatchOrder");
             }
 
             service.Flush(TimeSpan.FromSeconds(20)).Should().BeTrue();
@@ -626,7 +624,7 @@ public class LogServiceResilienceTests
 
         for (int index = 0; index < Count; index++)
         {
-            service.Info("событие при сбое диска " + index, "DiskFailure");
+            service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, "событие при сбое диска " + index, source: "DiskFailure");
         }
 
         service.Flush(TimeSpan.FromSeconds(20));

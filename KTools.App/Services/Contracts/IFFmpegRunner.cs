@@ -85,6 +85,11 @@ public interface IFFmpegRunner
     Task<bool> CheckNvencTemporalAqSupportAsync();
 
     /// <summary>
+    /// Проверить поддержку аппаратного кодирования AV1 через NVENC (наличие AV1-блока в видеокарте).
+    /// </summary>
+    Task<bool> CheckNvencAv1SupportAsync();
+
+    /// <summary>
     /// Выполнить зондирование и автоматическое определение обрезки черных полос (cropdetect).
     /// </summary>
     Task<string?> DetectCropAsync(

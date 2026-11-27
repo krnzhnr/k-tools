@@ -265,4 +265,17 @@ public class AudioShiftScriptTests
             }
         }
     }
+
+    /// <summary>
+    /// Проверяет, что видеоконтейнер .mkv принимается скриптом сдвига аудио.
+    /// </summary>
+    [TestMethod]
+    public void FileExtensions_VideoContainerMkv_IsAccepted()
+    {
+        // Arrange & Act
+        string[] extensions = _script.FileExtensions;
+
+        // Assert
+        extensions.Should().Contain(".mkv");
+    }
 }

@@ -77,12 +77,14 @@ public interface IUpdateService
     /// <param name="fileName">Имя сохраняемого файла на диске.</param>
     /// <param name="progressCallback">Обратный вызов для уведомления о прогрессе скачивания (значение от 0.0 до 100.0).</param>
     /// <param name="cancellationToken">Токен отмены асинхронной операции.</param>
+    /// <param name="expectedSha256Hex">Ожидаемый SHA-256 хеш установщика; при null сверка пропускается.</param>
     /// <returns>Асинхронная задача выполнения установки.</returns>
     Task DownloadAndInstallUpdateAsync(
         string downloadUrl,
         string fileName,
         Action<double> progressCallback,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        string? expectedSha256Hex = null);
 
     /// <summary>
     /// Удаляет устаревшие файлы собственных установщиков из временной папки.

@@ -31,8 +31,13 @@ namespace KTools_App;
 public partial class App : Application
 {
     /// <summary>
-    /// Глобальный провайдер служб (DI-контейнер).
-    /// Используется для получения зависимостей во Views.
+    /// Корень композиции (composition root): глобальный провайдер служб (DI-контейнер).
+    /// Разрешение зависимостей через него допустимо только в корне композиции:
+    /// конструктор <see cref="App"/>, <see cref="ConfigureServices"/> и синхронная
+    /// часть <see cref="OnLaunched"/>. Фоновые задачи обязаны получать зависимости
+    /// захваченными экземплярами (параметры или замыкания, созданные в корне),
+    /// новый код обязан использовать внедрение через конструктор.
+    /// Прямые обращения к провайдеру вне корня композиции запрещены (ишью 139).
     /// </summary>
     internal static IServiceProvider Services { get; private set; }
         = null!;
@@ -46,7 +51,12 @@ public partial class App : Application
     public const string MinLevelEnvironmentVariable = "KTOOLS_LOG_MIN_LEVEL";
     internal static readonly LogLevel ReleaseMinLevel = LogLevel.Info;
     internal static readonly TimeSpan ProcessTerminationTimeout = TimeSpan.FromSeconds(3);
-    internal static readonly TimeSpan ShutdownFlushTimeout = TimeSpan.FromSeconds(1);
+
+    /// <summary>
+    /// Сброс журнала на контролируемом завершении (ишью 140): единый лимит
+    /// <see cref="LogShutdownOptions"/> вместо усекающей секунды.
+    /// </summary>
+    internal static TimeSpan ShutdownFlushTimeout => LogShutdownOptions.Default.ShutdownFlushTimeout;
 
     private static ILogService? _logService;
     private static ISettingsManager? _settingsManager;
@@ -146,15 +156,19 @@ public partial class App : Application
             Services.GetRequiredService<ILogService>(),
             () =>
             {
-                _logService = Services.GetRequiredService<ILogService>();
+                // Публикация через Volatile: поле читается фоновыми задачами без блокировок (ишью 139).
+                Volatile.Write(ref _logService, Services.GetRequiredService<ILogService>());
                 RegisterCrashHandlers(Services.GetRequiredService<CrashCoordinator>());
             },
             () =>
             {
                 // Ишью 46: перенос данных в LocalAppData — строго до первого чтения настроек.
                 // При сбое мигратор включает legacy-режим, приложение стартует «по-старому».
+                // Ишью 142: конструктор настроек чистый, чтение диска и настройка журнала —
+                // явным вызовом InitializeAsync после миграции (метод завершается синхронно).
                 Services.GetRequiredService<IUserDataMigrator>().EnsureMigrated();
                 _settingsManager = Services.GetRequiredService<ISettingsManager>();
+                _settingsManager.InitializeAsync().GetAwaiter().GetResult();
                 return _settingsManager;
             });
     }
@@ -624,7 +638,8 @@ public partial class App : Application
     {
         try
         {
-            bool flushed = _logService?.Flush(ShutdownFlushTimeout) == true;
+            ILogService? logService = Volatile.Read(ref _logService);
+            bool flushed = logService?.Flush(ShutdownFlushTimeout) == true;
             if (!flushed)
             {
                 WriteAppEvent(
@@ -750,9 +765,22 @@ public partial class App : Application
         Exception? exception,
         IReadOnlyDictionary<string, object?> properties)
     {
+        // Конкурентное чтение при Dispose (ишью 139): после освобождения провайдера
+        // события отбрасываются, экземпляр логгера читается атомарным снимком.
+        if (Volatile.Read(ref _servicesDisposed) != 0)
+        {
+            return;
+        }
+
+        ILogService? logService = Volatile.Read(ref _logService);
+        if (logService is null)
+        {
+            return;
+        }
+
         try
         {
-            _logService?.Write(
+            logService.Write(
                 eventId.Value,
                 level,
                 status,
@@ -854,7 +882,16 @@ public partial class App : Application
         services.AddTransient<TrackSelectionViewModel>();
         services.AddTransient<ScriptSettingsViewModel>();
 
+#if DEBUG
+        // Ишью 139: в диагностической сборке граф DI проверяется при построении:
+        // захват scoped-служб синглтонами из корня падает сразу, а не в рантайме.
+        return services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateScopes = true,
+        });
+#else
         return services.BuildServiceProvider();
+#endif
     }
 
     /// <summary>
@@ -867,7 +904,7 @@ public partial class App : Application
         try
         {
             // Инициализируем логирование при старте приложения
-            ILogService logService = _logService ?? Services.GetRequiredService<ILogService>();
+            ILogService logService = Volatile.Read(ref _logService) ?? Services.GetRequiredService<ILogService>();
             LogLevel startupMinLevel = ResolveStartupLogLevel(
                 IsDiagnosticBuild,
                 Environment.GetEnvironmentVariable(MinLevelEnvironmentVariable));
@@ -949,6 +986,8 @@ public partial class App : Application
             _ = Services.GetRequiredService<IScriptRegistry>().Scripts;
             // PERF-05: проба NVENC отложена на 10 с после старта, результат кэшируется на диске.
             // При раннем закрытии опрос не запускается: проверяем останов перед запуском.
+            // Ишью 139: экземпляр захватывается в корне композиции, в фоне локатор не используется.
+            IHardwareCapabilityCache capabilityCache = Services.GetRequiredService<KTools_App.Encoders.IHardwareCapabilityCache>();
             _ = Task.Run(async () =>
             {
                 try
@@ -959,7 +998,7 @@ public partial class App : Application
                         return;
                     }
 
-                    await Services.GetRequiredService<KTools_App.Encoders.IHardwareCapabilityCache>().InitializeAsync().ConfigureAwait(false);
+                    await capabilityCache.InitializeAsync().ConfigureAwait(false);
 
                     // Проба завершена (из кэша или опросом): схема видео-скрипта,
                     // построенная ранее только с CPU, устарела. Уведомляем интерфейс
@@ -999,6 +1038,9 @@ public partial class App : Application
             // запускается только если квитанция миграции требует проверки (NeedsVerification),
             // поэтому на обычных запусках процессов не создаётся. Оригиналы в каталоге
             // установки удаляются только после версий, полученных по новым путям.
+            // Ишью 139: экземпляры захватываются в корне композиции, в фоне локатор не используется.
+            IUserDataMigrator startupMigrator = Services.GetRequiredService<IUserDataMigrator>();
+            IDependencyManager startupDependencies = Services.GetRequiredService<IDependencyManager>();
             _ = Task.Run(async () =>
             {
                 try
@@ -1008,13 +1050,13 @@ public partial class App : Application
                         return;
                     }
 
-                    var migrator = Services.GetRequiredService<IUserDataMigrator>();
+                    var migrator = startupMigrator;
                     if (!migrator.NeedsVerification())
                     {
                         return;
                     }
 
-                    var dependencies = Services.GetRequiredService<IDependencyManager>();
+                    var dependencies = startupDependencies;
                     using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(2));
                     var probes = await dependencies.ProbeInstalledBinariesAsync(cts.Token).ConfigureAwait(false);
                     await migrator.VerifyAndCleanupAsync(probes, cts.Token).ConfigureAwait(false);
@@ -1484,9 +1526,24 @@ public partial class App : Application
     /// <param name="cancellationToken">Токен отмены при закрытии приложения.</param>
     private static void QueueShellIntegrationRefreshInBackground(CancellationToken cancellationToken)
     {
+        // Ишью 139: разрешение выполняется в корне композиции, в фон уходят готовые экземпляры и снимок имён.
+        IInstallLocationService installLocationService;
+        ISettingsManager settingsManager;
+        List<string> scriptNames;
         try
         {
-            _ = Task.Run(() => RefreshShellIntegrationInBackground(cancellationToken));
+            installLocationService = Services.GetRequiredService<IInstallLocationService>();
+            settingsManager = Volatile.Read(ref _settingsManager) ?? Services.GetRequiredService<ISettingsManager>();
+            scriptNames = Services.GetRequiredService<IScriptRegistry>().Scripts.Select(s => s.Name).ToList();
+        }
+        catch (Exception)
+        {
+            return;
+        }
+
+        try
+        {
+            _ = Task.Run(() => RefreshShellIntegrationInBackground(cancellationToken, installLocationService, settingsManager, scriptNames));
         }
         catch (Exception)
         {
@@ -1506,9 +1563,22 @@ public partial class App : Application
             return;
         }
 
+        // Ишью 139: разрешение выполняется в корне композиции, в фон уходят готовые экземпляры.
+        IInstallLocationService installLocationService;
+        IDialogService dialogService;
         try
         {
-            _ = Task.Run(() => CheckStaleCopyInBackgroundAsync(cancellationToken), cancellationToken);
+            installLocationService = Services.GetRequiredService<IInstallLocationService>();
+            dialogService = Services.GetRequiredService<IDialogService>();
+        }
+        catch (Exception)
+        {
+            return;
+        }
+
+        try
+        {
+            _ = Task.Run(() => CheckStaleCopyInBackgroundAsync(cancellationToken, installLocationService, dialogService), cancellationToken);
         }
         catch (Exception)
         {
@@ -1522,6 +1592,17 @@ public partial class App : Application
     /// <param name="cancellationToken">Токен отмены при закрытии приложения.</param>
     private static void QueueStaleSetupCleanupInBackground(CancellationToken cancellationToken)
     {
+        // Ишью 139: разрешение выполняется в корне композиции, в фон уходит готовый экземпляр.
+        IUpdateService updateService;
+        try
+        {
+            updateService = Services.GetRequiredService<IUpdateService>();
+        }
+        catch (Exception)
+        {
+            return;
+        }
+
         try
         {
             _ = Task.Run(() =>
@@ -1529,7 +1610,7 @@ public partial class App : Application
                 try
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    Services.GetRequiredService<IUpdateService>().CleanupStaleSetupFiles();
+                    updateService.CleanupStaleSetupFiles();
                 }
                 catch (Exception)
                 {
@@ -1546,14 +1627,16 @@ public partial class App : Application
     /// Ждёт settling главного окна и показывает диалог перехода, если текущий запуск выполнен из неосновной копии.
     /// </summary>
     /// <param name="cancellationToken">Токен отмены при закрытии приложения.</param>
-    private static async Task CheckStaleCopyInBackgroundAsync(CancellationToken cancellationToken)
+    private static async Task CheckStaleCopyInBackgroundAsync(
+        CancellationToken cancellationToken,
+        IInstallLocationService installLocationService,
+        IDialogService dialogService)
     {
         try
         {
             await Task.Delay(TimeSpan.FromSeconds(3), cancellationToken).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
 
-            IInstallLocationService installLocationService = Services.GetRequiredService<IInstallLocationService>();
             StaleCopyInfo? staleCopy = installLocationService.DetectStaleCopy();
             if (staleCopy is null || !staleCopy.ShouldWarn)
             {
@@ -1573,7 +1656,6 @@ public partial class App : Application
                     ["Reason"] = "UpdateTargetMismatch"
                 });
 
-            IDialogService dialogService = Services.GetRequiredService<IDialogService>();
             bool openMain = await dialogService.ShowConfirmationAsync(
                 "Запущена не основная копия",
                 $"Вы запустили копию версии {staleCopy.CurrentVersion} из папки:{Environment.NewLine}{staleCopy.CurrentDirectory}"
@@ -1709,13 +1791,20 @@ public partial class App : Application
     /// Неосновная копия контекстное меню на себя не перерегистрирует.
     /// </summary>
     /// <param name="cancellationToken">Токен отмены при закрытии приложения.</param>
-    private static void RefreshShellIntegrationInBackground(CancellationToken cancellationToken)
+    /// <param name="installLocationService">Служба расположения установки (захвачена в корне композиции).</param>
+    /// <param name="settingsManager">Менеджер настроек (захвачен в корне композиции).</param>
+    /// <param name="scriptNames">Снимок имён скриптов для сверки контекстного меню.</param>
+    private static void RefreshShellIntegrationInBackground(
+        CancellationToken cancellationToken,
+        IInstallLocationService installLocationService,
+        ISettingsManager settingsManager,
+        List<string> scriptNames)
     {
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            if (Services.GetRequiredService<IInstallLocationService>().DetectStaleCopy() is not null)
+            if (installLocationService.DetectStaleCopy() is not null)
             {
                 WriteAppEvent(
                     AppEventIds.ShellIntegrationSkippedStaleCopy,
@@ -1731,14 +1820,12 @@ public partial class App : Application
                 return;
             }
 
-            ISettingsManager settingsManager = _settingsManager ?? Services.GetRequiredService<ISettingsManager>();
             if (settingsManager.GetSetting("Shell", "IsContextMenuEnabled", false))
             {
                 var exePath = Environment.ProcessPath;
                 if (!string.IsNullOrEmpty(exePath))
                 {
-                    var scriptRegistry = Services.GetRequiredService<IScriptRegistry>();
-                    var scripts = scriptRegistry.Scripts.Select(s => s.Name).ToList();
+                    var scripts = scriptNames;
                     if (ShellIntegration.NeedsUpdate(exePath, scripts))
                     {
                         ShellIntegration.Register(exePath, scripts);

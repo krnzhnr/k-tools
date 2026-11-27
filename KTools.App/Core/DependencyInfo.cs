@@ -52,6 +52,12 @@ public class DependencyInfo
     public string ArchiveName { get; set; } = string.Empty;
 
     /// <summary>
+    /// Контрольная сумма SHA-256 скачиваемого файла в шестнадцатеричном виде.
+    /// Сверяется после скачивания до распаковки и запуска; пустое значение означает пропуск сверки.
+    /// </summary>
+    public string? Sha256 { get; set; }
+
+    /// <summary>
     /// Относительный путь к исполняемому файлу-маркеру для проверки успешности установки.
     /// </summary>
     public string VerifyBinary { get; set; } = string.Empty;

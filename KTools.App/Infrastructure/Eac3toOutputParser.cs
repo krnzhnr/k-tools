@@ -11,9 +11,9 @@ namespace KTools_App.Infrastructure;
 /// </summary>
 public static class Eac3toOutputParser
 {
-    // Регулярное выражение для извлечения процента прогресса (например, "process: 12%" или "analyze: 4%")
+    // Регулярное выражение для извлечения процента прогресса (например, "process: 12%", "analyze: 4%" или "process: 12,5%" в неанглийской локали)
     private static readonly Regex ProcessRegex = new(
-        @"(?:process|analyze):\s*(\d+)%",
+        @"(?:process|analyze):\s*(\d+(?:[.,]\d+)?)%",
         RegexOptions.Compiled | RegexOptions.IgnoreCase
     );
 
@@ -31,8 +31,10 @@ public static class Eac3toOutputParser
         {
             try
             {
+                // Нормализуем запятую неанглийской локали к точке для инвариантного парсинга
+                string raw = match.Groups[1].Value.Replace(',', '.');
                 double percent = double.Parse(
-                    match.Groups[1].Value,
+                    raw,
                     System.Globalization.NumberStyles.Any,
                     System.Globalization.CultureInfo.InvariantCulture
                 );

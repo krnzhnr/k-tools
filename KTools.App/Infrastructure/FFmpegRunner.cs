@@ -24,6 +24,16 @@ public sealed class FFmpegRunner : AbstractProcessRunner, IFFmpegRunner
     private const string SourceName = nameof(FFmpegRunner);
 
     /// <summary>
+    /// Предельное время зондирования ffprobe: зависший разбор не ждёт вечно.
+    /// </summary>
+    private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// Предельное время ожидания ответа nvidia-smi: зависшая утилита не блокирует детект железа.
+    /// </summary>
+    private static readonly TimeSpan NvidiaSmiTimeout = TimeSpan.FromSeconds(5);
+
+    /// <summary>
     /// Инициализирует новый экземпляр FFmpegRunner с внедрением зависимостей.
     /// </summary>
     /// <param name="logService">Сервис логирования.</param>
@@ -74,7 +84,7 @@ public sealed class FFmpegRunner : AbstractProcessRunner, IFFmpegRunner
         }
 
         argsList.Add("-i");
-        argsList.Add($"\"{inputPath}\"");
+        argsList.Add(inputPath);
 
         if (extraArgs != null)
         {
@@ -83,10 +93,10 @@ public sealed class FFmpegRunner : AbstractProcessRunner, IFFmpegRunner
 
         if (!string.IsNullOrEmpty(outputPath))
         {
-            argsList.Add($"\"{outputPath}\"");
+            argsList.Add(outputPath);
         }
 
-        string arguments = string.Join(" ", argsList);
+        string arguments = CliArgument.Join(argsList);
         string inputName = Path.GetFileName(inputPath);
         ProcessExecutionContext executionContext = (context ?? ProcessExecutionContext.NewOperation("ffmpeg"))
             .WithExpectedArtifact(outputPath);
@@ -221,7 +231,16 @@ public sealed class FFmpegRunner : AbstractProcessRunner, IFFmpegRunner
     /// <returns>Документ JsonDocument со свойствами потоков, или null при сбоях.</returns>
     public async Task<JsonDocument?> GetVideoInfoAsync(string filePath, ProcessExecutionContext? context = null)
     {
-        string arguments = $"-v error -analyzeduration 100M -probesize 100M -show_entries format=duration,bit_rate:stream=index,codec_name,codec_type,duration,bit_rate,disposition,pix_fmt,width,height,channels,r_frame_rate,avg_frame_rate,nb_frames:stream_tags -of json \"{filePath}\"";
+        // Сырые значения без ручных кавычек: квотирование выполняет CliArgument.
+        string arguments = CliArgument.Join(new[]
+        {
+            "-v", "error",
+            "-analyzeduration", "100M",
+            "-probesize", "100M",
+            "-show_entries", "format=duration,bit_rate:stream=index,codec_name,codec_type,duration,bit_rate,disposition,pix_fmt,width,height,channels,r_frame_rate,avg_frame_rate,nb_frames:stream_tags",
+            "-of", "json",
+            filePath
+        });
         string fileName = Path.GetFileName(filePath);
         var outputLines = new List<string>();
 
@@ -232,7 +251,8 @@ public sealed class FFmpegRunner : AbstractProcessRunner, IFFmpegRunner
             onErrorLine: null,
             CancellationToken.None,
             context: context ?? ProcessExecutionContext.NewOperation("ffprobe"),
-            verifyParseResult: () => outputLines.Count > 0);
+            verifyParseResult: () => outputLines.Count > 0,
+            timeout: ProbeTimeout);
 
         if (!result.IsSuccess)
         {
@@ -306,7 +326,7 @@ public sealed class FFmpegRunner : AbstractProcessRunner, IFFmpegRunner
         try
         {
             // Запускаем FFmpeg без декодирования данных, опрашивая заголовочную информацию файла
-            string arguments = $"-hide_banner -loglevel info -i \"{filePath}\" -f null -";
+            string arguments = CliArgument.Join(new[] { "-hide_banner", "-loglevel", "info", "-i", filePath, "-f", "null", "-" });
             await RunProcessAsync(
                 "ffmpeg",
                 arguments,
@@ -356,7 +376,8 @@ public sealed class FFmpegRunner : AbstractProcessRunner, IFFmpegRunner
         ProcessExecutionContext? context = null)
     {
         string mapVal = relative ? $"0:s:{streamIndex}" : $"0:{streamIndex}";
-        string arguments = $"-y -hide_banner -loglevel error -i \"{inputFile}\" -map {mapVal} -c:s ass \"{outputPath}\"";
+        // Сырые пути без ручных кавычек: квотирование выполняет CliArgument.
+        string arguments = CliArgument.Join(new[] { "-y", "-hide_banner", "-loglevel", "error", "-i", inputFile, "-map", mapVal, "-c:s", "ass", outputPath });
 
         return await RunProcessAsync(
             "ffmpeg",
@@ -385,7 +406,9 @@ public sealed class FFmpegRunner : AbstractProcessRunner, IFFmpegRunner
             Directory.CreateDirectory(dir);
         }
 
-        string arguments = $"-y -hide_banner -loglevel error -dump_attachment:{streamIndex} \"{outputPath}\" -i \"{inputFile}\" -t 0 -f null -";
+        // Сырые пути без ручных кавычек: квотирование выполняет CliArgument.
+        // Пустой вывод "-f null -" обязателен: без него ffmpeg возвращает код 1.
+        string arguments = CliArgument.Join(new[] { "-y", "-hide_banner", "-loglevel", "error", $"-dump_attachment:{streamIndex}", outputPath, "-i", inputFile, "-t", "0", "-f", "null", "-" });
 
         return await RunProcessAsync(
             "ffmpeg",
@@ -428,7 +451,7 @@ public sealed class FFmpegRunner : AbstractProcessRunner, IFFmpegRunner
 
         var result = await RunProcessAsync(
             "ffmpeg",
-            string.Join(" ", argsList),
+            CliArgument.Join(argsList),
             null,
             null,
             cancellationToken,
@@ -471,11 +494,11 @@ public sealed class FFmpegRunner : AbstractProcessRunner, IFFmpegRunner
         foreach (var attachment in attachments)
         {
             argsList.Add($"-dump_attachment:{attachment.StreamIndex}");
-            argsList.Add($"\"{attachment.OutputPath}\"");
+            argsList.Add(attachment.OutputPath);
         }
 
         argsList.Add("-i");
-        argsList.Add($"\"{inputFile}\"");
+        argsList.Add(inputFile);
 
         argsList.Add("-t");
         argsList.Add("0");
@@ -529,23 +552,7 @@ public sealed class FFmpegRunner : AbstractProcessRunner, IFFmpegRunner
         bool hasNvidia = false;
         try
         {
-            using var process = new Process
-            {
-                StartInfo = new ProcessStartInfo
-                {
-                    FileName = smiName,
-                    Arguments = "-L",
-                    CreateNoWindow = true,
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    StandardOutputEncoding = ProcessOutputPolicy.ResolveEncoding()
-                }
-            };
-            process.Start();
-            string output = await process.StandardOutput.ReadToEndAsync();
-            await process.WaitForExitAsync();
-
-            hasNvidia = process.ExitCode == 0 && output.Contains("GPU", StringComparison.OrdinalIgnoreCase);
+            hasNvidia = await ProbeNvidiaSmiAsync(smiName, "-L", NvidiaSmiTimeout).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -579,6 +586,75 @@ public sealed class FFmpegRunner : AbstractProcessRunner, IFFmpegRunner
     }
 
     /// <summary>
+    /// Опросить утилиту nvidia-smi с ограниченным временем ожидания.
+    /// Поток stderr перенаправляется и читается параллельно с stdout, чтобы переполнение
+    /// буфера не блокировало дочерний процесс; при превышении таймаута процесс
+    /// принудительно завершается и возвращается false.
+    /// </summary>
+    /// <param name="smiBinaryPath">Путь или имя исполняемого файла опрашиваемой утилиты.</param>
+    /// <param name="arguments">Аргументы запуска (для nvidia-smi: "-L").</param>
+    /// <param name="timeout">Предельное время ожидания завершения процесса.</param>
+    /// <returns>True, если процесс завершился кодом 0 и вывод содержит сведения о GPU.</returns>
+    public async Task<bool> ProbeNvidiaSmiAsync(string smiBinaryPath, string arguments, TimeSpan timeout)
+    {
+        if (string.IsNullOrWhiteSpace(smiBinaryPath))
+        {
+            throw new ArgumentException("Не задан путь к опрашиваемой утилите.", nameof(smiBinaryPath));
+        }
+
+        using var process = new Process
+        {
+            StartInfo = new ProcessStartInfo
+            {
+                FileName = smiBinaryPath,
+                Arguments = arguments,
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                StandardOutputEncoding = ProcessOutputPolicy.ResolveEncoding(),
+                StandardErrorEncoding = ProcessOutputPolicy.ResolveEncoding()
+            }
+        };
+        process.Start();
+        Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync();
+        Task<string> stderrTask = process.StandardError.ReadToEndAsync();
+        using var timeoutCts = new CancellationTokenSource(timeout);
+        try
+        {
+            await process.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            TryTerminateSmiProcess(process);
+            return false;
+        }
+
+        string output = await stdoutTask.ConfigureAwait(false);
+        _ = await stderrTask.ConfigureAwait(false);
+
+        return process.ExitCode == 0 && output.Contains("GPU", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Принудительно завершить зависший процесс опроса, игнорируя гонки выхода.
+    /// </summary>
+    /// <param name="process">Зависший дочерний процесс.</param>
+    private static void TryTerminateSmiProcess(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+        }
+        catch (Exception)
+        {
+        }
+    }
+
+    /// <summary>
     /// Проверить поддержку параметра Temporal AQ для NVENC через вывод помощи FFmpeg.
     /// </summary>
     public async Task<bool> CheckNvencTemporalAqSupportAsync()
@@ -599,6 +675,86 @@ public sealed class FFmpegRunner : AbstractProcessRunner, IFFmpegRunner
         );
 
         return result.IsSuccess && supported;
+    }
+
+    /// <summary>
+    /// Проверить поддержку аппаратного кодирования AV1 через NVENC (наличие AV1-блока в видеокарте).
+    /// Сначала проверяется наличие энкодера av1_nvenc в сборке FFmpeg,
+    /// затем выполняется короткая пробная кодировка: только успешная
+    /// инициализация энкодера подтверждает наличие AV1-блока в железе.
+    /// </summary>
+    public async Task<bool> CheckNvencAv1SupportAsync()
+    {
+        // 1. Проверяем наличие энкодера av1_nvenc в сборке FFmpeg.
+        bool ffmpegSupports = false;
+        var listResult = await RunProcessAsync(
+            "ffmpeg",
+            "-encoders",
+            onOutputLine: line =>
+            {
+                if (line.Contains("av1_nvenc", StringComparison.OrdinalIgnoreCase))
+                {
+                    ffmpegSupports = true;
+                }
+            },
+            onErrorLine: null,
+            CancellationToken.None,
+            timeout: ProbeTimeout
+        );
+
+        if (!listResult.IsSuccess || !ffmpegSupports)
+        {
+            Log.Write(
+                "encoder.nvenc.av1_not_detected",
+                LogLevel.Warning,
+                LogStatus.Skipped,
+                "Сборка FFmpeg не содержит энкодер 'av1_nvenc', аппаратное кодирование AV1 недоступно",
+                source: SourceName,
+                properties: LogProps
+                    .Create("Tool", "ffmpeg")
+                    .With("Codec", "av1_nvenc")
+                    .With("Verified", false));
+            return false;
+        }
+
+        // 2. Короткая пробная кодировка из встроенного источника: без AV1-блока
+        // инициализация энкодера завершается ошибкой и процесс возвращает ненулевой код.
+        var probeResult = await RunProcessAsync(
+            "ffmpeg",
+            "-hide_banner -loglevel error -f lavfi -i nullsrc=s=64x64:r=10 -frames:v 2 -c:v av1_nvenc -f null -",
+            onOutputLine: null,
+            onErrorLine: null,
+            CancellationToken.None,
+            timeout: ProbeTimeout
+        );
+
+        if (probeResult.IsSuccess)
+        {
+            Log.Write(
+                "encoder.nvenc.av1_detected",
+                LogLevel.Info,
+                LogStatus.Succeeded,
+                "Обнаружена поддержка аппаратного кодирования AV1 через NVENC",
+                source: SourceName,
+                properties: LogProps
+                    .Create("Tool", "ffmpeg")
+                    .With("Codec", "av1_nvenc")
+                    .With("Verified", true));
+            return true;
+        }
+
+        Log.Write(
+            "encoder.nvenc.av1_not_detected",
+            LogLevel.Warning,
+            LogStatus.Skipped,
+            "Видеокарта не поддерживает аппаратное кодирование AV1 (AV1-блок отсутствует), будет использовано другое кодирование",
+            source: SourceName,
+            properties: LogProps
+                .Create("Tool", "ffmpeg")
+                .With("Codec", "av1_nvenc")
+                .With("Verified", false)
+                .With("ErrorCode", "NVENC_AV1_NOT_AVAILABLE"));
+        return false;
     }
 
     /// <summary>
@@ -638,14 +794,14 @@ public sealed class FFmpegRunner : AbstractProcessRunner, IFFmpegRunner
 
         argsList.AddRange(new[]
         {
-            "-i", $"\"{filePath}\"",
+            "-i", filePath,
             "-vframes", probeFrames.ToString(),
             "-vf", cropdetectFilter,
             "-f", "null",
             "-"
         });
 
-        string arguments = string.Join(" ", argsList);
+        string arguments = CliArgument.Join(argsList);
         string? lastDetectedCrop = null;
         var cropRegex = new System.Text.RegularExpressions.Regex(@"crop=([0-9]+:[0-9]+:[0-9]+:[0-9]+)", System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 

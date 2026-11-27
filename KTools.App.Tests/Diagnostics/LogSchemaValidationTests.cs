@@ -206,7 +206,7 @@ public sealed class LogSchemaValidationTests
             LogLevel.Error,
             LogStatus.Failed,
             "Очередь завершена с ошибкой");
-        log.Write("app.diagnostics.sample", LogLevel.Info, "Обычное событие");
+        log.Write("app.diagnostics.sample", LogLevel.Info, LogStatus.None, "Обычное событие");
 
         // Assert
         LogServiceStatus status = log.Status;
@@ -321,7 +321,7 @@ public sealed class LogSchemaValidationTests
             Level = LogLevel.Error,
             Message = "Ошибка диагностики"
         });
-        log.Object.Write("app.diagnostics.other", LogLevel.Debug, "Отладочная запись");
+        log.Object.Write("app.diagnostics.other", LogLevel.Debug, LogStatus.None, "Отладочная запись");
 
         // Act / Assert
         Action missing = () => log.VerifyNoEventAtOrAbove(LogLevel.Info, "Отладочная запись");

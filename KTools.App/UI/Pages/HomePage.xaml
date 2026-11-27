@@ -6,6 +6,7 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:core="using:KTools_App.Core"
     xmlns:viewmodels="using:KTools_App.ViewModels"
+    xmlns:controls="using:KTools_App.UI.Controls"
     xmlns:community="using:CommunityToolkit.WinUI.Controls"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     x:DataType="viewmodels:HomeViewModel"
@@ -29,6 +30,10 @@
                     AutomationProperties.Name="{x:Bind Name, Mode=OneTime}"
                     ToolTipService.ToolTip="{x:Bind Description, Mode=OneTime}"
                     Click="Card_Click"
+                    AllowDrop="True"
+                    DragOver="Card_DragOver"
+                    DragLeave="Card_DragLeave"
+                    Drop="Card_Drop"
                     Style="{ThemeResource DefaultButtonStyle}">
                 <Grid>
                     <Grid.ColumnDefinitions>
@@ -66,6 +71,11 @@
                                    TextTrimming="CharacterEllipsis"
                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                     </StackPanel>
+                    <!-- Пунктирный оверлей дроп-зоны: скрыт, подсвечивается только при перетаскивании совместимых файлов -->
+                    <controls:DropZoneOverlay x:Name="CardDropOverlay"
+                                              Grid.ColumnSpan="2"
+                                              Margin="-16,-12,-16,-12"
+                                              Visibility="Collapsed" />
                 </Grid>
             </Button>
         </DataTemplate>

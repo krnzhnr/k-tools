@@ -39,21 +39,21 @@ public static class FFmpegOutputParser
         RegexOptions.Compiled
     );
 
-    // Регулярное выражение для извлечения FPS
+    // Регулярное выражение для извлечения FPS (поддерживает точку и запятую неанглийской локали)
     private static readonly Regex FpsRegex = new(
-        @"fps=\s*([\d\.]+)",
+        @"fps=\s*([\d.,]+)",
         RegexOptions.Compiled
     );
 
-    // Регулярное выражение для извлечения битрейта
+    // Регулярное выражение для извлечения битрейта (поддерживает точку и запятую неанглийской локали)
     private static readonly Regex BitrateRegex = new(
-        @"bitrate=\s*([\d\.N/A]+\s*[kmg]?bits/s|N/A)",
+        @"bitrate=\s*([\d.,N/A]+\s*[kmg]?bits/s|N/A)",
         RegexOptions.Compiled
     );
 
-    // Регулярное выражение для извлечения относительной скорости обработки (например, "1.5x")
+    // Регулярное выражение для извлечения относительной скорости обработки (например, "1.5x" или "1,5x" в неанглийской локали)
     private static readonly Regex SpeedRegex = new(
-        @"speed=\s*([\d\.]+)x",
+        @"speed=\s*([\d.,]+)x",
         RegexOptions.Compiled
     );
 
@@ -143,30 +143,30 @@ public static class FFmpegOutputParser
                 percent = Math.Min(Math.Max(percent, 0.0), 100.0);
             }
 
-            // Извлечение FPS
+            // Извлечение FPS (нормализуем запятую неанглийской локали к точке)
             double? fps = null;
             var fpsMatch = FpsRegex.Match(line);
-            if (fpsMatch.Success && double.TryParse(fpsMatch.Groups[1].Value, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double fpsVal))
+            if (fpsMatch.Success && double.TryParse(fpsMatch.Groups[1].Value.Replace(',', '.'), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double fpsVal))
             {
                 fps = fpsVal;
             }
 
-            // Извлечение битрейта
+            // Извлечение битрейта (нормализуем запятую неанглийской локали к точке)
             string? bitrate = null;
             var bitMatch = BitrateRegex.Match(line);
             if (bitMatch.Success)
             {
-                string bitRaw = bitMatch.Groups[1].Value.Trim();
+                string bitRaw = bitMatch.Groups[1].Value.Trim().Replace(',', '.');
                 if (!bitRaw.Equals("N/A", StringComparison.OrdinalIgnoreCase))
                 {
                     bitrate = bitRaw;
                 }
             }
 
-            // Извлечение скорости
+            // Извлечение скорости (нормализуем запятую неанглийской локали к точке)
             double? speed = null;
             var speedMatch = SpeedRegex.Match(line);
-            if (speedMatch.Success && double.TryParse(speedMatch.Groups[1].Value, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double speedVal))
+            if (speedMatch.Success && double.TryParse(speedMatch.Groups[1].Value.Replace(',', '.'), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double speedVal))
             {
                 speed = speedVal;
             }

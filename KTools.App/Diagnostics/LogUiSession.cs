@@ -93,8 +93,9 @@ public sealed class LogUiSession
                 return false;
             }
 
-            _buffer.Add(logEvent);
-            return true;
+            // Честный результат: сброс из-за переполнения, негабарита или повтора
+            // отличается от доставки, счётчик потерь считывается через Drain.
+            return _buffer.Add(logEvent);
         }
     }
 

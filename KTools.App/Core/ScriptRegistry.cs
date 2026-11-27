@@ -154,7 +154,7 @@ public sealed class ScriptRegistry : IScriptRegistry
     {
         // Создаём локальный список: поле публикуется только после полной сборки,
         // поэтому наблюдатели никогда не видят частично построенный реестр.
-        List<AbstractScript> scripts = new(18);
+        List<AbstractScript> scripts = new(AppConstants.ScriptCount);
 
         // Получаем зарегистрированные скрипты через IServiceProvider
         scripts.Add(_serviceProvider.GetRequiredService<Scripts.MetadataCleanupScript>());
@@ -181,8 +181,13 @@ public sealed class ScriptRegistry : IScriptRegistry
 
         // Инициализируем настройки скриптов по умолчанию в памяти при первом доступе.
         // Результат обязательно потребляется: ошибка не остаётся молчаливой.
+        // Уровень настроек получает схемы через поставщика поверх реестра и не
+        // зависит от конкретных скриптов.
+        // Поставщику передаётся локальный список, а не сам реестр: обращение
+        // к ленивому свойству Scripts изнутри его же фабрики даёт рекурсию
+        // (ValueFactory attempted to access the Value property) и роняет запуск.
         // Отложенный исход не считается сбоем: Persisted=true не требуется.
-        RecordDefaultsOutcome(_settingsManager.InitializeDefaults(scripts), _logService);
+        RecordDefaultsOutcome(_settingsManager.InitializeDefaults(new ScriptRegistrySettingsDefaultsProvider(scripts)), _logService);
 
         ResetScriptStates(scripts);
 

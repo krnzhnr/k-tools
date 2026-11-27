@@ -11,9 +11,9 @@ namespace KTools_App.Infrastructure;
 /// </summary>
 public static class MkvmergeOutputParser
 {
-    // Регулярное выражение для извлечения процентов прогресса (например, "Progress: 42%")
+    // Регулярное выражение для извлечения процентов прогресса (например, "Progress: 42%" или "Progress: 42,5%" в неанглийской локали)
     private static readonly Regex ProgressRegex = new(
-        @"Progress:\s*(\d+)%",
+        @"Progress:\s*(\d+(?:[.,]\d+)?)%",
         RegexOptions.Compiled | RegexOptions.IgnoreCase
     );
 
@@ -31,8 +31,10 @@ public static class MkvmergeOutputParser
         {
             try
             {
+                // Нормализуем запятую неанглийской локали к точке для инвариантного парсинга
+                string raw = match.Groups[1].Value.Replace(',', '.');
                 double percent = double.Parse(
-                    match.Groups[1].Value,
+                    raw,
                     System.Globalization.NumberStyles.Any,
                     System.Globalization.CultureInfo.InvariantCulture
                 );

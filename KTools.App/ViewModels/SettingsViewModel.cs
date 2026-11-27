@@ -826,7 +826,9 @@ public partial class SettingsViewModel : ThreadSafeViewModel
         }
 
         PersistenceResult resetResult = PersistenceResult.Normalize(
-            _settingsManager.ResetToDefaults(_scriptRegistry.Scripts, BuildResetDefaults()));
+            _settingsManager.ResetToDefaults(
+                new ScriptRegistrySettingsDefaultsProvider(_scriptRegistry),
+                BuildResetDefaults()));
 
         ApplyResetToViewModel();
 
@@ -857,7 +859,7 @@ public partial class SettingsViewModel : ThreadSafeViewModel
     /// </summary>
     private static List<KeyValuePair<string, object?>> BuildResetDefaults()
     {
-        return new List<KeyValuePair<string, object?>>(24)
+        return new List<KeyValuePair<string, object?>>(22)
         {
             new("General/OverwriteExisting", false),
             new("General/ClearListOnAdd", false),

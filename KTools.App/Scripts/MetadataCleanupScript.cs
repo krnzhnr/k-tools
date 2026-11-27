@@ -102,8 +102,17 @@ public sealed class MetadataCleanupScript : AbstractScript
         ScriptProgressCallback progressCallback,
         int fileIndex,
         int totalCount,
-        ExecutionContext context)
+        ExecutionContext context,
+        CancellationToken cancellationToken = default)
     {
+        if (IsCancellationRequested(cancellationToken))
+        {
+            return ExecutionResult.Cancelled(
+                context,
+                new[] { "Обработка отменена до запуска элемента." },
+                errorCode: "cancelled-before-start",
+                cleanupState: CleanupState.NotStarted);
+        }
         var results = new List<string>();
 
         _logService.Write("script.metadata_cleanup.started", LogLevel.Debug, LogStatus.Running, $"Начата очистка метаданных файла '{LogProps.FileName(filePath)}'", source: Name, properties: LogProps.Create("InputName", LogProps.FileName(filePath)));
@@ -138,7 +147,7 @@ public sealed class MetadataCleanupScript : AbstractScript
         double? duration = null;
         try
         {
-            var mediaInfo = await _mediaProbeService.ProbeAsync(filePath);
+            var mediaInfo = await _mediaProbeService.ProbeAsync(filePath, cancellationToken);
             if (mediaInfo != null && mediaInfo.Duration > 0)
             {
                 duration = mediaInfo.Duration;
@@ -151,7 +160,7 @@ public sealed class MetadataCleanupScript : AbstractScript
 
         progressCallback(fileIndex, totalCount, $"Очистка метаданных {originalName}...", 0.0);
 
-        using var cts = new CancellationTokenSource();
+        using var cts = CreateLinkedCancellationSource(cancellationToken);
         var cancelMonitorTask = Task.Run(async () =>
         {
             while (!IsCancelled && !cts.IsCancellationRequested)

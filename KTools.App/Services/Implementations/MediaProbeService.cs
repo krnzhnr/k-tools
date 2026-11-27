@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 
 using KTools_App.Diagnostics;
@@ -38,6 +39,12 @@ public sealed class MediaProbeService : IMediaProbeService
     private const int MaxProbeCacheEntries = 512;
 
     /// <summary>
+    /// Выделенный лимит одновременно живых проб: зондирование ограничивается
+    /// единицами процессов, а не общей параллельностью кодирования.
+    /// </summary>
+    private const int MaxProbeParallelism = 4;
+
+    /// <summary>
     /// Инициализирует новый экземпляр класса MediaProbeService с внедрением зависимостей.
     /// </summary>
     public MediaProbeService(
@@ -64,6 +71,10 @@ public sealed class MediaProbeService : IMediaProbeService
             targetParallel = Math.Max(1, _settingsManager.MaxParallelTasks);
         }
 
+        // Пробы ограничиваем выделенным лимитом: дроп сотни файлов не должен
+        // плодить столько же живых процессов ffprobe/mkvmerge.
+        targetParallel = Math.Min(targetParallel, MaxProbeParallelism);
+
         lock (_semaphoreLock)
         {
             if (_probeSemaphore == null || _currentMaxParallel != targetParallel)
@@ -79,11 +90,30 @@ public sealed class MediaProbeService : IMediaProbeService
     /// <summary>
     /// Асинхронно анализирует медиафайл и возвращает его полную структуру.
     /// Автоматически выбирает оптимальную стратегию в зависимости от контейнера.
+    /// Отмена через токен возвращает null: новые процессы не запускаются,
+    /// уже запущенные получают шанс завершиться на ближайшей контрольной точке.
     /// </summary>
     /// <param name="filePath">Абсолютный путь к файлу.</param>
-    /// <returns>Объект MediaStructure с дорожками и вложениями, или null при сбоях.</returns>
-    public async Task<MediaStructure?> ProbeAsync(string filePath)
+    /// <param name="cancellationToken">Токен отмены анализа.</param>
+    /// <returns>Объект MediaStructure с дорожками и вложениями, или null при сбоях и отмене.</returns>
+    public async Task<MediaStructure?> ProbeAsync(string filePath, CancellationToken cancellationToken = default)
     {
+        if (cancellationToken.IsCancellationRequested)
+        {
+            _logService.Write(
+                "media.probe.cancelled",
+                LogLevel.Debug,
+                LogStatus.Cancelled,
+                "Анализ структуры файла отменён до запуска",
+                null,
+                "MediaProbeService",
+                properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["InputName"] = SafeFileName(filePath)
+                });
+            return null;
+        }
+
         if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
         {
             _logService.Write(
@@ -121,7 +151,7 @@ public sealed class MediaProbeService : IMediaProbeService
                 return null;
             }
 
-            var fresh = await ProbeInternalAsync(cacheKey);
+            var fresh = await ProbeInternalAsync(cacheKey, cancellationToken).ConfigureAwait(false);
 
             // Кэшируем только если файл не изменился во время анализа,
             // иначе результат соответствовал бы устаревшей версии файла.
@@ -166,11 +196,18 @@ public sealed class MediaProbeService : IMediaProbeService
     /// <summary>
     /// Асинхронно анализирует медиафайл и возвращает его полную структуру.
     /// Автоматически выбирает оптимальную стратегию в зависимости от контейнера.
+    /// Отмена через токен возвращает null без выброса исключений.
     /// </summary>
     /// <param name="filePath">Абсолютный путь к файлу.</param>
-    /// <returns>Объект MediaStructure с дорожками и вложениями, или null при сбоях.</returns>
-    private async Task<MediaStructure?> ProbeInternalAsync(string filePath)
+    /// <param name="cancellationToken">Токен отмены анализа.</param>
+    /// <returns>Объект MediaStructure с дорожками и вложениями, или null при сбоях и отмене.</returns>
+    private async Task<MediaStructure?> ProbeInternalAsync(string filePath, CancellationToken cancellationToken)
     {
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return null;
+        }
+
         if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
         {
             _logService.Write(
@@ -189,26 +226,38 @@ public sealed class MediaProbeService : IMediaProbeService
         }
 
         var semaphore = GetProbeSemaphore();
-        await semaphore.WaitAsync();
+        try
+        {
+            await semaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return null;
+        }
 
         try
         {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return null;
+            }
+
             string extension = Path.GetExtension(filePath).ToLowerInvariant();
             _logService.Write("media.probe.started", LogLevel.Debug, LogStatus.Running, $"Начат фоновый анализ структуры файла '{LogProps.FileName(filePath)}'", source: SourceName, properties: LogProps.Create("InputName", LogProps.FileName(filePath)));
 
             // Определяем, является ли файл MKV-контейнером
             bool isMkv = extension == ".mkv" || extension == ".mka";
             MediaStructure? result = isMkv
-                ? await ProbeMkvAsync(filePath)
-                : await ProbeGenericAsync(filePath);
+                ? await ProbeMkvAsync(filePath).ConfigureAwait(false)
+                : await ProbeGenericAsync(filePath).ConfigureAwait(false);
 
             // Если первичный метод анализа не смог извлечь длительность (например, сырые потоки DTS/AC3 в ffprobe),
             // выполняем перекрестную проверку через mkvmerge --identify (и наоборот), так как mkvmerge считывает длительность сырых потоков
-            if (result != null && result.Duration <= 0)
+            if (!cancellationToken.IsCancellationRequested && result != null && result.Duration <= 0)
             {
                 var altResult = isMkv
-                    ? await ProbeGenericAsync(filePath)
-                    : await ProbeMkvAsync(filePath);
+                    ? await ProbeGenericAsync(filePath).ConfigureAwait(false)
+                    : await ProbeMkvAsync(filePath).ConfigureAwait(false);
 
                 if (altResult != null && altResult.Duration > 0)
                 {
@@ -219,9 +268,9 @@ public sealed class MediaProbeService : IMediaProbeService
 
             // Дополнительный ультранадежный фоллбэк: если длительность всё ещё не определена (сырые потоки AC3, EAC3, DTS, MP3 VBR без Xing),
             // запускаем быстрый анализ через заголовочный вывод FFmpeg (Duration: HH:MM:SS.ms)
-            if (result != null && result.Duration <= 0)
+            if (!cancellationToken.IsCancellationRequested && result != null && result.Duration <= 0)
             {
-                double ffmpegHeaderDuration = await _ffmpegRunner.ProbeDurationViaFfmpegAsync(filePath);
+                double ffmpegHeaderDuration = await _ffmpegRunner.ProbeDurationViaFfmpegAsync(filePath).ConfigureAwait(false);
                 if (ffmpegHeaderDuration > 0)
                 {
                     result.Duration = ffmpegHeaderDuration;
@@ -229,7 +278,11 @@ public sealed class MediaProbeService : IMediaProbeService
                 }
             }
 
-            return result;
+            return cancellationToken.IsCancellationRequested ? null : result;
+        }
+        catch (OperationCanceledException)
+        {
+            return null;
         }
         catch (Exception ex)
         {

@@ -48,6 +48,24 @@ public partial class DependencySetupViewModel : ThreadSafeViewModel
     private readonly Dictionary<string, DependencyVM> _dependencyLookup = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
+    /// Последние доложенные в UI значения прогресса и скорости по ключу зависимости (ишью 141).
+    /// Фон скачивания шлёт события на каждый чанк: повторы отбрасываются до записи,
+    /// чтобы не штормить очередь диспетчера. Доступ синхронизирован, т.к. события
+    /// приходят с фоновых потоков.
+    /// </summary>
+    private readonly Dictionary<string, int> _lastReportedPercent = new(StringComparer.OrdinalIgnoreCase);
+
+    private readonly Dictionary<string, string> _lastReportedSpeed = new(StringComparer.OrdinalIgnoreCase);
+
+    private readonly object _progressSync = new();
+
+    /// <summary>
+    /// Делегат выбора исполняемого файла через системный диалог (ишью 54).
+    /// По умолчанию открывает диалог *.exe, в юнит-тестах подменяется лямбдой.
+    /// </summary>
+    public Func<Task<string?>> BinaryPathPicker { get; set; }
+
+    /// <summary>
     /// Указывает, доступна ли кнопка установки обязательных компонентов.
     /// </summary>
     [ObservableProperty]
@@ -78,6 +96,7 @@ public partial class DependencySetupViewModel : ThreadSafeViewModel
         _navigationService = navigationService ?? throw new ArgumentNullException(nameof(navigationService));
         _logService = logService ?? throw new ArgumentNullException(nameof(logService));
         _pathManager = pathManager ?? throw new ArgumentNullException(nameof(pathManager));
+        BinaryPathPicker = PickBinaryPathWithDialogAsync;
 
         LoadDependencies();
 
@@ -106,11 +125,19 @@ public partial class DependencySetupViewModel : ThreadSafeViewModel
         RequiredDependencies.Clear();
         OptionalDependencies.Clear();
         _dependencyLookup.Clear();
+        lock (_progressSync)
+        {
+            _lastReportedPercent.Clear();
+            _lastReportedSpeed.Clear();
+        }
 
         var registry = _dependencyManager.GetRegistry();
         foreach (var dep in registry)
         {
-            var vm = new DependencyVM(dep, _dependencyManager);
+            var vm = new DependencyVM(dep, _dependencyManager)
+            {
+                PickCustomBinaryPathAsync = BinaryPathPicker
+            };
             _dependencyLookup[dep.Key] = vm;
             if (dep.IsRequired)
             {
@@ -150,25 +177,59 @@ public partial class DependencySetupViewModel : ThreadSafeViewModel
         if (vm != null)
         {
             vm.Status = status;
+            vm.RefreshBinarySource();
             UpdateUIStates();
         }
     }
 
     private void OnProgressChanged(string key, int percent)
     {
-        var vm = FindViewModel(key);
+        bool isNew;
+        lock (_progressSync)
+        {
+            isNew = !_lastReportedPercent.TryGetValue(key, out int previous) || previous != percent;
+            if (isNew)
+            {
+                _lastReportedPercent[key] = percent;
+            }
+        }
+
+        if (!isNew)
+        {
+            return;
+        }
+
+        DependencyVM? vm = FindViewModel(key);
         if (vm != null)
         {
+            // Присвоение безопасно с любого потока: DependencyVM наследует
+            // ThreadSafeViewModel и маршалит уведомление через DispatcherQueue.
             vm.Progress = percent;
         }
     }
 
-    private void OnSpeedUpdated(string key, string speedStr)
+    private void OnSpeedUpdated(string key, string speedText)
     {
-        var vm = FindViewModel(key);
+        bool isNew;
+        lock (_progressSync)
+        {
+            isNew = !_lastReportedSpeed.TryGetValue(key, out string? previous)
+                || !string.Equals(previous, speedText, StringComparison.Ordinal);
+            if (isNew)
+            {
+                _lastReportedSpeed[key] = speedText;
+            }
+        }
+
+        if (!isNew)
+        {
+            return;
+        }
+
+        DependencyVM? vm = FindViewModel(key);
         if (vm != null)
         {
-            vm.Speed = speedStr;
+            vm.Speed = speedText;
         }
     }
 
@@ -263,6 +324,53 @@ public partial class DependencySetupViewModel : ThreadSafeViewModel
         _dependencyManager.RefreshAllStatuses();
         await _dependencyManager.CheckAllDependencyUpdatesAsync(force: true);
         LoadDependencies();
+    }
+
+    /// <summary>
+    /// Открывает системный диалог выбора исполняемого файла компонента (ишью 54).
+    /// Возвращает путь к выбранному файлу или null при отмене/ошибке.
+    /// </summary>
+    private async Task<string?> PickBinaryPathWithDialogAsync()
+    {
+        _logService.Write(
+            "ui.file_picker.opening",
+            LogLevel.Debug,
+            LogStatus.Running,
+            "Открывается системный диалог выбора исполняемого файла компонента",
+            source: SourceName,
+            properties: LogProps.Create("Control", "BinaryPathPicker"));
+        try
+        {
+            Microsoft.UI.Xaml.Window? window = App.CurrentMainWindow;
+            if (window == null)
+            {
+                return null;
+            }
+
+            nint hwnd = WinRT.Interop.WindowNative.GetWindowHandle(window);
+            var windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(hwnd);
+            var picker = new Microsoft.Windows.Storage.Pickers.FileOpenPicker(windowId);
+            picker.ViewMode = Microsoft.Windows.Storage.Pickers.PickerViewMode.List;
+            picker.SuggestedStartLocation = Microsoft.Windows.Storage.Pickers.PickerLocationId.ComputerFolder;
+            picker.FileTypeFilter.Add(".exe");
+
+            var file = await picker.PickSingleFileAsync();
+            return file?.Path;
+        }
+        catch (Exception ex)
+        {
+            _logService.Write(
+                "ui.file_picker.failed",
+                LogLevel.Warning,
+                LogStatus.Failed,
+                "Исполняемый файл компонента не выбран",
+                ex,
+                SourceName,
+                properties: LogProps
+                    .Create("ErrorCode", "BINARY_PICKER_FAILED")
+                    .With("Control", "BinaryPathPicker"));
+            return null;
+        }
     }
 
     /// <summary>

@@ -11,7 +11,7 @@
   <Identity
     Name="KTools-WinUI"
     Publisher="CN=AppPublisher"
-    Version="2.0.0.0" />
+    Version="2.3.1.0" />
 
   <mp:PhoneIdentity PhoneProductId="FC4F6FA0-C109-454F-A986-B9D1A24F7CF1" PhonePublisherId="00000000-0000-0000-0000-000000000000"/>
 

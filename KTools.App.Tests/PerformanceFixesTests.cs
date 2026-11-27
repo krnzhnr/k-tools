@@ -324,6 +324,7 @@ public class PerformanceFixesTests
         public void SaveSettings_ExplicitCall_WritesImmediately()
         {
             var manager = new SettingsManager(_logServiceMock.Object, _pathManagerMock.Object);
+            manager.InitializeAsync().GetAwaiter().GetResult();
 
             manager.SetSetting("General", "_test_immediate", "значение");
 
@@ -339,6 +340,7 @@ public class PerformanceFixesTests
         public void SetSetting_RapidChanges_InMemoryImmediateAndDiskEventuallyUpdated()
         {
             var manager = new SettingsManager(_logServiceMock.Object, _pathManagerMock.Object);
+            manager.InitializeAsync().GetAwaiter().GetResult();
 
             manager.SetSetting("General", "_test_key_1", "a");
             manager.SetSetting("General", "_test_key_2", "b");
@@ -360,6 +362,7 @@ public class PerformanceFixesTests
 
             // Повторная загрузка в новый менеджер читает сохраненные значения
             var reloaded = new SettingsManager(_logServiceMock.Object, _pathManagerMock.Object);
+            reloaded.InitializeAsync().GetAwaiter().GetResult();
             reloaded.GetSetting("General", "_test_key_2", "?").Should().Be("c");
             reloaded.GetSetting("General", "_test_key_1", "?").Should().Be("a");
         }

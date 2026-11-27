@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -38,7 +39,8 @@ public sealed class DirectProcessRunner
         string? workingDir = null,
         string? expectedArtifact = null,
         int maxSuccessExitCode = 0,
-        Func<bool>? verifyPostcondition = null)
+        Func<bool>? verifyPostcondition = null,
+        TimeSpan? timeout = null)
     {
         ProcessExecutionContext executionContext = string.IsNullOrWhiteSpace(expectedArtifact)
             ? context
@@ -69,6 +71,215 @@ public sealed class DirectProcessRunner
             WorkingDirectory = workingDir ?? Path.GetDirectoryName(binaryPath) ?? AppContext.BaseDirectory
         };
 
+        int argumentCount = ProcessExecutionContext.CountArguments(arguments);
+        string workingDirLabel = ProcessExecutionContext.LabelDirectory(workingDir);
+        string commandLine = $"\"{binaryPath}\" {arguments}";
+
+        return await RunCoreAsync(
+            startInfo,
+            tool,
+            executionContext,
+            processId,
+            commandLine,
+            argumentCount,
+            workingDirLabel,
+            onOutputLine,
+            onErrorLine,
+            isCancellationRequested,
+            cancellationToken,
+            expectedArtifact,
+            maxSuccessExitCode,
+            verifyPostcondition,
+            timeout).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Запускает внешний процесс со списком аргументов через <c>ProcessStartInfo.ArgumentList</c>.
+    /// Каждый элемент списка передаётся процессу ровно одним аргументом без разбора кавычек,
+    /// поэтому враждебные значения (ссылки, коды субтитров) не могут добавить произвольные флаги.
+    /// </summary>
+    public async Task<ProcessResult> RunAsync(
+        string binaryPath,
+        string tool,
+        IReadOnlyList<string> argumentList,
+        ProcessExecutionContext context,
+        Action<string>? onOutputLine = null,
+        Action<string>? onErrorLine = null,
+        Func<bool>? isCancellationRequested = null,
+        CancellationToken cancellationToken = default,
+        string? workingDir = null,
+        string? expectedArtifact = null,
+        int maxSuccessExitCode = 0,
+        Func<bool>? verifyPostcondition = null,
+        TimeSpan? timeout = null)
+    {
+        // Проверка аргументов выполняется в начале: пустой список недопустим.
+        ArgumentNullException.ThrowIfNull(argumentList);
+
+        ProcessExecutionContext executionContext = string.IsNullOrWhiteSpace(expectedArtifact)
+            ? context
+            : context.WithExpectedArtifact(expectedArtifact);
+        string processId = ProcessExecutionContext.CreateProcessId();
+
+        if (string.IsNullOrWhiteSpace(binaryPath) || !File.Exists(binaryPath))
+        {
+            ProcessResult missing = ProcessResult.NotStarted(
+                executionContext,
+                ProcessResult.ErrorBinaryMissing,
+                $"Отсутствует исполняемый файл внешней утилиты '{tool}'",
+                processId: processId);
+            WriteEvent(ProcessEventIds.StartFailed, LogLevel.Error, LogStatus.Failed, missing.Message, executionContext, missing, includeOutputTail: false);
+            return missing;
+        }
+
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = binaryPath,
+            CreateNoWindow = true,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            StandardOutputEncoding = ProcessOutputPolicy.ResolveEncoding(),
+            StandardErrorEncoding = ProcessOutputPolicy.ResolveEncoding(),
+            WorkingDirectory = workingDir ?? Path.GetDirectoryName(binaryPath) ?? AppContext.BaseDirectory
+        };
+
+        foreach (string argument in argumentList)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        string commandLine = $"\"{binaryPath}\" {BuildCommandLine(argumentList)}";
+        string workingDirLabel = ProcessExecutionContext.LabelDirectory(workingDir);
+
+        return await RunCoreAsync(
+            startInfo,
+            tool,
+            executionContext,
+            processId,
+            commandLine,
+            argumentList.Count,
+            workingDirLabel,
+            onOutputLine,
+            onErrorLine,
+            isCancellationRequested,
+            cancellationToken,
+            expectedArtifact,
+            maxSuccessExitCode,
+            verifyPostcondition,
+            timeout).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Экранирует одиночный аргумент по правилам <c>CommandLineToArgvW</c>:
+    /// значение в кавычках с удвоением обратных слешей перед кавычками.
+    /// </summary>
+    public static string EscapeArgument(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return "\"\"";
+        }
+
+        bool needQuotes = false;
+        foreach (char character in value)
+        {
+            if (char.IsWhiteSpace(character) || character == '"')
+            {
+                needQuotes = true;
+                break;
+            }
+        }
+
+        if (!needQuotes)
+        {
+            return value;
+        }
+
+        var builder = new StringBuilder(value.Length + 2);
+        builder.Append('"');
+        int backslashes = 0;
+        foreach (char character in value)
+        {
+            if (character == '\\')
+            {
+                backslashes++;
+                continue;
+            }
+
+            if (character == '"')
+            {
+                builder.Append('\\', (backslashes * 2) + 1);
+                builder.Append('"');
+                backslashes = 0;
+                continue;
+            }
+
+            if (backslashes > 0)
+            {
+                builder.Append('\\', backslashes);
+                backslashes = 0;
+            }
+
+            builder.Append(character);
+        }
+
+        if (backslashes > 0)
+        {
+            builder.Append('\\', backslashes * 2);
+        }
+
+        builder.Append('"');
+        return builder.ToString();
+    }
+
+    /// <summary>
+    /// Собирает отображаемую командную строку из списка аргументов для журнала.
+    /// </summary>
+    public static string BuildCommandLine(IEnumerable<string>? arguments)
+    {
+        if (arguments is null)
+        {
+            return string.Empty;
+        }
+
+        var builder = new StringBuilder();
+        foreach (string argument in arguments)
+        {
+            if (builder.Length > 0)
+            {
+                builder.Append(' ');
+            }
+
+            builder.Append(EscapeArgument(argument));
+        }
+
+        return builder.ToString();
+    }
+
+    private async Task<ProcessResult> RunCoreAsync(
+        ProcessStartInfo startInfo,
+        string tool,
+        ProcessExecutionContext executionContext,
+        string processId,
+        string commandLine,
+        int argumentCount,
+        string workingDirLabel,
+        Action<string>? onOutputLine,
+        Action<string>? onErrorLine,
+        Func<bool>? isCancellationRequested,
+        CancellationToken cancellationToken,
+        string? expectedArtifact,
+        int maxSuccessExitCode,
+        Func<bool>? verifyPostcondition,
+        TimeSpan? timeout = null)
+    {
+        // Невалидный лимит отклоняется сразу: ждать ноль секунд или вечность по ошибке нельзя.
+        if (timeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(timeout), "Лимит времени выполнения должен быть положительным");
+        }
+
         using var process = new Process { StartInfo = startInfo };
         ProcessOutputBuffer stdoutBuffer = new() { Stream = "stdout" };
         ProcessOutputBuffer stderrBuffer = new() { Stream = "stderr" };
@@ -94,11 +305,12 @@ public sealed class DirectProcessRunner
             return startFailure;
         }
 
+        // Привязка к заданию с KILL_ON_JOB_CLOSE идёт сразу после запуска:
+        // ОС завершит дочерний процесс при гибели приложения даже без штатного завершения.
+        // Отказ безопасен: кооперативное завершение через реестр продолжает работать.
+        ActiveProcessTracker.TryAttachToJob(process);
         ActiveProcessTracker.Register(process);
         int osPid = SafePid(process);
-        int argumentCount = ProcessExecutionContext.CountArguments(arguments);
-        string workingDirLabel = ProcessExecutionContext.LabelDirectory(workingDir);
-        string commandLine = $"\"{binaryPath}\" {arguments}";
 
         WriteEvent(
             osPid > 0 ? ProcessEventIds.Started : ProcessEventIds.Launched,
@@ -131,9 +343,21 @@ public sealed class DirectProcessRunner
             Task stdoutTask = PumpAsync(process.StandardOutput, stdoutBuffer, onOutputLine, isCancellationRequested, process, () => cancelled = true);
             Task stderrTask = PumpAsync(process.StandardError, stderrBuffer, onErrorLine, isCancellationRequested, process, () => cancelled = true);
 
+            bool timedOut = false;
             try
             {
-                await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+                if (timeout is null)
+                {
+                    await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+                }
+                else
+                {
+                    timedOut = await WaitForExitWithTimeoutAsync(process, timeout.Value, cancellationToken).ConfigureAwait(false);
+                    if (timedOut)
+                    {
+                        cancelled = true;
+                    }
+                }
             }
             catch (OperationCanceledException)
             {
@@ -152,9 +376,18 @@ public sealed class DirectProcessRunner
                 await Task.WhenAll(Swallow(stdoutTask), Swallow(stderrTask)).ConfigureAwait(false);
                 stopwatch.Stop();
 
+                // Срыв лимита времени — отдельная причина остановки: процесс уже
+                // доказанно завершён через TerminateProcess, отличается только диагноз.
+                string cancelMessage = timedOut
+                    ? ProcessResult.MessageTimeoutExceeded
+                    : verified ? ProcessResult.MessageCancelled : ProcessResult.MessageUnverifiedTermination;
+                string cancelErrorCode = timedOut
+                    ? ProcessResult.ErrorTimeoutExceeded
+                    : verified ? ProcessResult.ErrorCancelled : ProcessResult.ErrorTerminationUnverified;
+
                 ProcessResult cancelResult = ProcessResult.Cancelled(
                     executionContext,
-                    verified ? ProcessResult.MessageCancelled : ProcessResult.MessageUnverifiedTermination,
+                    cancelMessage,
                     processId,
                     terminatedPid,
                     terminatedExit,
@@ -165,7 +398,7 @@ public sealed class DirectProcessRunner
                     ProcessOutputPolicy.CountWarnings(stderrBuffer.Snapshot()),
                     ProcessOutputPolicy.CountErrors(stderrBuffer.Snapshot()),
                     terminationVerified: verified,
-                    errorCode: verified ? ProcessResult.ErrorCancelled : ProcessResult.ErrorTerminationUnverified,
+                    errorCode: cancelErrorCode,
                     cleanupState: verified
                         ? (string.IsNullOrWhiteSpace(expectedArtifact) || FileExistsNonEmpty(expectedArtifact) == true
                             ? CleanupState.Completed
@@ -174,8 +407,10 @@ public sealed class DirectProcessRunner
                     outputMetrics: ProcessOutputMetrics.Combine(stderrBuffer.Metrics(), stdoutBuffer.Metrics()));
 
                 WriteEvent(
-                    verified ? ProcessEventIds.Cancelled : ProcessEventIds.TerminationUnverified,
-                    verified ? LogLevel.Info : LogLevel.Warning,
+                    timedOut
+                        ? ProcessEventIds.TimeoutExceeded
+                        : verified ? ProcessEventIds.Cancelled : ProcessEventIds.TerminationUnverified,
+                    timedOut || !verified ? LogLevel.Warning : LogLevel.Info,
                     LogStatus.Cancelled,
                     cancelResult.Message,
                     executionContext,
@@ -327,6 +562,25 @@ public sealed class DirectProcessRunner
         }
         catch (Exception)
         {
+        }
+    }
+
+    /// <summary>
+    /// Ожидает выхода процесса с ограничением по времени.
+    /// Возвращает true, если сработал лимит; отмена через токен пробрасывается исключением.
+    /// </summary>
+    private static async Task<bool> WaitForExitWithTimeoutAsync(Process process, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        using var timeoutSource = new CancellationTokenSource(timeout);
+        using var linkedSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutSource.Token);
+        try
+        {
+            await process.WaitForExitAsync(linkedSource.Token).ConfigureAwait(false);
+            return false;
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return true;
         }
     }
 

@@ -68,13 +68,7 @@ public class LogServiceStructuredTests
         using var scope = new TempDirectoryScope();
         using LogService service = CreateService(scope);
 
-        service.Write(
-            "exec.queue.started",
-            LogLevel.Info,
-            "Очередь обработки запущена",
-            "WorkPanel",
-            LogStatus.Running,
-            LogContext.Empty.WithOperation("op-1"));
+        service.Write("exec.queue.started", LogLevel.Info, LogStatus.Running, "Очередь обработки запущена", source: "WorkPanel", context: LogContext.Empty.WithOperation("op-1"));
         service.Flush(TimeSpan.FromSeconds(30)).Should().BeTrue();
 
         IReadOnlyList<LogEvent> events = service.ReadRecentEvents(10);
@@ -86,36 +80,35 @@ public class LogServiceStructuredTests
     }
 
     [TestMethod]
-    public void Write_LegacyCalls_UseStableLevelSourceEventId()
+    public void Write_StructuredEvents_PreserveExplicitEventIds()
     {
         using var scope = new TempDirectoryScope();
         using LogService service = CreateService(scope);
 
-        service.Info("первое сообщение", "SettingsManager");
-        service.Info("второе сообщение", "SettingsManager");
-        service.Warn("предупреждение", "SettingsManager");
+        service.Write("test.settings.first", LogLevel.Info, LogStatus.None, "первое сообщение", source: "SettingsManager");
+        service.Write("test.settings.second", LogLevel.Info, LogStatus.None, "второе сообщение", source: "SettingsManager");
+        service.Write("test.settings.warning", LogLevel.Warning, LogStatus.None, "предупреждение", source: "SettingsManager");
         service.Flush(TimeSpan.FromSeconds(30)).Should().BeTrue();
 
         IReadOnlyList<LogEvent> events = service.ReadRecentEvents(10);
         events.Should().HaveCount(3);
-        events[0].EventId.Should().Be("legacy.settingsmanager.info");
-        events[1].EventId.Should().Be("legacy.settingsmanager.info", "идентификатор зависит от уровня и источника, а не от текста");
-        events[2].EventId.Should().Be("legacy.settingsmanager.warning");
-        events.Should().OnlyContain(e => e.IsLegacy);
+        events[0].EventId.Should().Be("test.settings.first");
+        events[1].EventId.Should().Be("test.settings.second", "идентификатор зависит от вызова, а не от текста");
+        events[2].EventId.Should().Be("test.settings.warning");
+        events.Should().OnlyContain(e => !e.IsLegacy);
     }
 
     [TestMethod]
-    public void LegacyCoreApis_NullAndUnsafeInputs_RemainNonThrowing()
+    public void Write_NullAndUnsafeInputs_RemainNonThrowing()
     {
         using var scope = new TempDirectoryScope();
         using LogService service = CreateService(scope);
 
         Action act = () =>
         {
-            LogService.BuildLegacyEventId("C:secret.txt", LogLevel.Info).Should().Be("legacy.unknown.info");
-            service.Log(LogLevel.Info, null!, "C:secret.txt");
-            service.Exception(null!, null!, "Z:foo");
-            service.Write(null!, LogLevel.Info, null!, "C:secret.txt");
+            service.Write(null!, LogLevel.Info, LogStatus.None, null!, source: "C:secret.txt");
+            service.Write("test.event.failed", LogLevel.Error, LogStatus.Failed, null!, null!, source: "Z:foo");
+            service.Write((LogEvent)null!);
         };
 
         act.Should().NotThrow();
@@ -130,7 +123,7 @@ public class LogServiceStructuredTests
 
         for (int index = 0; index < 25; index++)
         {
-            service.Info("событие " + index, "Business");
+            service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, "событие " + index, source: "Business");
         }
 
         service.Flush(TimeSpan.FromSeconds(30)).Should().BeTrue();
@@ -155,7 +148,7 @@ public class LogServiceStructuredTests
             {
                 for (int item = 0; item < perThread; item++)
                 {
-                    service.Info($"поток {index} запись {item}", "Parallel");
+                    service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, $"поток {index} запись {item}", source: "Parallel");
                 }
             }))
             .ToArray();
@@ -305,7 +298,7 @@ public class LogServiceStructuredTests
         using LogService service = CreateService(scope);
         var hostile = new HostileProperties();
 
-        Action act = () => service.Write("test.hostile.properties", LogLevel.Info, "событие", "Business", LogStatus.None, null, hostile);
+        Action act = () => service.Write("test.hostile.properties", LogLevel.Info, LogStatus.None, "событие", source: "Business", properties: hostile);
 
         act.Should().NotThrow("мутабельный словарь вызывающего кода не должен ломать логгер");
         service.Flush(TimeSpan.FromSeconds(30)).Should().BeTrue();
@@ -411,7 +404,7 @@ public class LogServiceStructuredTests
     }
 
     [TestMethod]
-    public void Write_LegacyExceptionMethod_KeepsContextWithoutAppendingMessage()
+    public void Write_StructuredException_KeepsContextWithoutAppendingMessage()
     {
         using var scope = new TempDirectoryScope();
         using LogService service = CreateService(scope);
@@ -425,7 +418,7 @@ public class LogServiceStructuredTests
             exception = caught;
         }
 
-        service.Exception(exception, "контекст сбоя", "Integration");
+        service.Write("test.event.failed", LogLevel.Error, LogStatus.Failed, "контекст сбоя", exception, source: "Integration");
         service.Flush(TimeSpan.FromSeconds(30)).Should().BeTrue();
 
         IReadOnlyList<LogEvent> events = service.ReadRecentEvents(10);
@@ -447,7 +440,7 @@ public class LogServiceStructuredTests
             exception = new InvalidOperationException("уровень " + index, exception);
         }
 
-        service.Exception(exception, "сбой", "Business");
+        service.Write("test.event.failed", LogLevel.Error, LogStatus.Failed, "сбой", exception, source: "Business");
         service.Flush(TimeSpan.FromSeconds(30)).Should().BeTrue();
 
         LogEvent result = service.ReadRecentEvents(1).Should().ContainSingle().Subject;
@@ -464,10 +457,10 @@ public class LogServiceStructuredTests
         using LogService service = CreateService(scope);
         service.MinLevel = LogLevel.Warning;
 
-        service.DebugLog("отладочная запись", "Business");
-        service.Info("информационная запись", "Business");
-        service.Warn("предупреждение", "Business");
-        service.Error("ошибка", "Business");
+        service.Write("test.event.recorded", LogLevel.Debug, LogStatus.None, "отладочная запись", source: "Business");
+        service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, "информационная запись", source: "Business");
+        service.Write("test.event.recorded", LogLevel.Warning, LogStatus.None, "предупреждение", source: "Business");
+        service.Write("test.event.failed", LogLevel.Error, LogStatus.Failed, "ошибка", source: "Business");
         service.Flush(TimeSpan.FromSeconds(30)).Should().BeTrue();
 
         IReadOnlyList<LogEvent> events = service.ReadRecentEvents(10);
@@ -476,16 +469,16 @@ public class LogServiceStructuredTests
     }
 
     [TestMethod]
-    public void MinLevel_Default_IsDebugForLegacyCompatibility()
+    public void MinLevel_Default_IsDebug()
     {
         using var scope = new TempDirectoryScope();
         using LogService service = CreateService(scope);
 
-        service.DebugLog("отладочная запись", "Business");
+        service.Write("test.event.recorded", LogLevel.Debug, LogStatus.None, "отладочная запись", source: "Business");
         service.Flush(TimeSpan.FromSeconds(30)).Should().BeTrue();
 
         service.MinLevel.Should().Be(LogLevel.Debug);
-        service.ReadRecentEvents(10).Should().HaveCount(1, "legacy DebugLog по умолчанию не отбрасывается");
+        service.ReadRecentEvents(10).Should().HaveCount(1, "структурированная запись уровня Debug по умолчанию не отбрасывается");
     }
 
     [TestMethod]
@@ -495,8 +488,8 @@ public class LogServiceStructuredTests
         using LogService service = CreateService(scope);
 
         service.MinLevel = (LogLevel)99;
-        service.Error("ошибка", "Business");
-        service.Fatal("фатальная ошибка", "Business");
+        service.Write("test.event.failed", LogLevel.Error, LogStatus.Failed, "ошибка", source: "Business");
+        service.Write("test.event.failed", LogLevel.Fatal, LogStatus.Failed, "фатальная ошибка", source: "Business");
         service.Flush(TimeSpan.FromSeconds(30)).Should().BeTrue();
 
         service.MinLevel.Should().Be(LogLevel.Fatal);
@@ -514,7 +507,7 @@ public class LogServiceStructuredTests
         using ManualResetEventSlim delivered = new(false);
         service.LogReceived += OnEvent;
 
-        service.Write("test.redaction", LogLevel.Info, @"Файл C:\Users\ivan\secret.mkv обработан", "Business");
+        service.Write("test.redaction", LogLevel.Info, LogStatus.None, @"Файл C:\Users\ivan\secret.mkv обработан", source: "Business");
         delivered.Wait(TimeSpan.FromSeconds(30)).Should().BeTrue();
 
         received.Should().NotBeNull();
@@ -604,7 +597,7 @@ public class LogServiceStructuredTests
         using LogService service = new();
 
         service.EffectiveLogDirectory.Should().NotBeNullOrEmpty();
-        Action act = () => service.Info("проверка конструирования по умолчанию", "DiTest");
+        Action act = () => service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, "проверка конструирования по умолчанию", source: "DiTest");
         act.Should().NotThrow();
         service.Dispose();
     }

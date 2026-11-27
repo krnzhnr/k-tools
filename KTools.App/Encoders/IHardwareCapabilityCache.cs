@@ -20,6 +20,11 @@ public interface IHardwareCapabilityCache
     bool IsNvencTemporalAqSupported { get; }
 
     /// <summary>
+    /// Возвращает true, если видеокарта и драйвер NVIDIA поддерживают аппаратное кодирование AV1 (av1_nvenc).
+    /// </summary>
+    bool IsNvencAv1Supported { get; }
+
+    /// <summary>
     /// Асинхронно инициализирует кэш, выполняя необходимые системные проверки.
     /// Должно вызываться один раз при старте приложения.
     /// </summary>

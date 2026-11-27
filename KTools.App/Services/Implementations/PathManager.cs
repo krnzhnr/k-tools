@@ -38,6 +38,9 @@ public sealed class PathManager : IPathManager
     private readonly object _modeLoggedLock = new();
     private readonly Dictionary<string, string> _binaryPathCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _shortPathCache = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _customBinaryPaths = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _systemPathBinaries = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _binarySourceLock = new();
 
     /// <summary>
     /// Инициализирует новый экземпляр класса <see cref="PathManager"/> с внедрением зависимостей.
@@ -286,16 +289,15 @@ public sealed class PathManager : IPathManager
 
     /// <summary>
     /// Найти путь к исполняемому файлу утилиты (ffmpeg, mkvmerge, eac3to и др.).
+    /// Приоритет (ишью 54): явный путь пользователя, затем системный PATH
+    /// (если включён для бинарника), затем цепочка bin/ приложения.
     /// Проверяет как папку bin приложения, так и пользовательскую директорию LocalAppData.
     /// </summary>
     /// <param name="binaryName">Имя бинарного файла утилиты.</param>
     /// <returns>Полный абсолютный путь к файлу утилиты на диске.</returns>
     public string GetBinaryPath(string binaryName)
     {
-        if (OperatingSystem.IsWindows() && !binaryName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
-        {
-            binaryName += ".exe";
-        }
+        binaryName = NormalizeBinaryName(binaryName);
 
         lock (_binaryPathCache)
         {
@@ -312,6 +314,26 @@ public sealed class PathManager : IPathManager
             }
         }
 
+        string? customPath;
+        bool useSystemPath;
+        lock (_binarySourceLock)
+        {
+            _customBinaryPaths.TryGetValue(binaryName, out customPath);
+            useSystemPath = _systemPathBinaries.Contains(binaryName);
+        }
+
+        // Явный путь пользователя (высший приоритет): возвращается как есть,
+        // наличие файла проверяет статус зависимости, а не резолв.
+        if (!string.IsNullOrWhiteSpace(customPath))
+        {
+            lock (_binaryPathCache)
+            {
+                _binaryPathCache[binaryName] = customPath;
+            }
+
+            return customPath;
+        }
+
         // Замена имени в соответствии с соглашением именования K-Tools
         string targetName = binaryName.ToLowerInvariant() switch
         {
@@ -319,6 +341,22 @@ public sealed class PathManager : IPathManager
             "ffprobe.exe" => "kt-ffprobe.exe",
             _ => binaryName
         };
+
+        // Поиск в системном PATH (только при явном включении для бинарника):
+        // при отсутствии файла откатываемся на встроенную цепочку.
+        if (useSystemPath)
+        {
+            string? fromPath = ResolveFromSystemPath(binaryName, targetName);
+            if (fromPath != null)
+            {
+                lock (_binaryPathCache)
+                {
+                    _binaryPathCache[binaryName] = fromPath;
+                }
+
+                return fromPath;
+            }
+        }
 
         // Определение подпапки в зависимости от типа утилиты
         string subfolder = GetSubfolderName(targetName);
@@ -358,6 +396,211 @@ public sealed class PathManager : IPathManager
 
         // 3. Резервный возврат имени файла (поиск в системном PATH операционной системы)
         return targetName;
+    }
+
+    /// <summary>
+    /// Задать путь к исполняемому файлу, указанный вручную (ишью 54).
+    /// Наличие файла не проверяется: статус зависимости определяется
+    /// проверкой файла, а смена настройки инвалидирует кэш резолва.
+    /// </summary>
+    /// <param name="binaryName">Имя бинарного файла утилиты.</param>
+    /// <param name="fullPath">Абсолютный путь к файлу или null/пусто для сброса.</param>
+    public void SetCustomBinaryPath(string binaryName, string? fullPath)
+    {
+        if (string.IsNullOrWhiteSpace(binaryName))
+        {
+            throw new ArgumentException("Имя бинарного файла не задано.", nameof(binaryName));
+        }
+
+        string key = NormalizeBinaryName(binaryName);
+        bool cleared;
+        lock (_binarySourceLock)
+        {
+            if (string.IsNullOrWhiteSpace(fullPath))
+            {
+                cleared = _customBinaryPaths.Remove(key);
+            }
+            else
+            {
+                _customBinaryPaths[key] = fullPath;
+                cleared = false;
+            }
+        }
+
+        _logService.Write(
+            "path.binary_source.changed",
+            LogLevel.Debug,
+            LogStatus.Changed,
+            cleared
+                ? "Источник бинарника сброшен к встроенным из bin/"
+                : "Для бинарника задан путь, указанный вручную",
+            source: SourceName,
+            properties: cleared
+                ? LogProps.Create("Key", key)
+                : LogProps.Create("Key", key).With("FileName", LogProps.FileName(fullPath)));
+
+        InvalidateBinaryPathCache(binaryName);
+    }
+
+    /// <summary>
+    /// Включить или выключить поиск бинарника в системном PATH (ишью 54).
+    /// </summary>
+    /// <param name="binaryName">Имя бинарного файла утилиты.</param>
+    /// <param name="enabled">True — искать в системном PATH.</param>
+    public void SetUseSystemPath(string binaryName, bool enabled)
+    {
+        if (string.IsNullOrWhiteSpace(binaryName))
+        {
+            throw new ArgumentException("Имя бинарного файла не задано.", nameof(binaryName));
+        }
+
+        string key = NormalizeBinaryName(binaryName);
+        lock (_binarySourceLock)
+        {
+            if (enabled)
+            {
+                _systemPathBinaries.Add(key);
+            }
+            else
+            {
+                _systemPathBinaries.Remove(key);
+            }
+        }
+
+        _logService.Write(
+            "path.binary_source.changed",
+            LogLevel.Debug,
+            LogStatus.Changed,
+            enabled
+                ? "Для бинарника включён поиск в системном PATH"
+                : "Поиск бинарника в системном PATH выключен, используются встроенные из bin/",
+            source: SourceName,
+            properties: LogProps
+                .Create("Key", key)
+                .With("Mode", enabled ? "system" : "builtin"));
+
+        InvalidateBinaryPathCache(binaryName);
+    }
+
+    /// <summary>
+    /// Инвалидировать кэш резолва бинарных путей (ишью 54).
+    /// </summary>
+    /// <param name="binaryName">Имя бинарника или null для очистки всего кэша.</param>
+    public void InvalidateBinaryPathCache(string? binaryName = null)
+    {
+        if (binaryName == null)
+        {
+            lock (_binaryPathCache)
+            {
+                _binaryPathCache.Clear();
+            }
+
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(binaryName))
+        {
+            throw new ArgumentException("Имя бинарного файла не задано.", nameof(binaryName));
+        }
+
+        lock (_binaryPathCache)
+        {
+            _binaryPathCache.Remove(NormalizeBinaryName(binaryName));
+        }
+    }
+
+    /// <summary>
+    /// Приводит имя бинарника к каноническому виду (на Windows добавляет .exe).
+    /// </summary>
+    /// <param name="binaryName">Исходное имя бинарного файла.</param>
+    /// <returns>Нормализованное имя для кэша и переопределений.</returns>
+    private static string NormalizeBinaryName(string binaryName)
+    {
+        if (OperatingSystem.IsWindows() && !binaryName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+        {
+            return binaryName + ".exe";
+        }
+
+        return binaryName;
+    }
+
+    /// <summary>
+    /// Ищет бинарник в каталогах системного PATH (аналог where.exe, без запуска процессов).
+    /// </summary>
+    /// <param name="binaryName">Запрошенное имя бинарного файла.</param>
+    /// <param name="targetName">Имя после маппинга K-Tools (kt-ffmpeg.exe и т.д.).</param>
+    /// <returns>Полный путь к первому найденному файлу или null.</returns>
+    private static string? ResolveFromSystemPath(string binaryName, string targetName)
+    {
+        string? pathEnv = Environment.GetEnvironmentVariable("PATH");
+        if (string.IsNullOrEmpty(pathEnv))
+        {
+            return null;
+        }
+
+        List<string> candidates = new(3) { binaryName };
+        if (!targetName.Equals(binaryName, StringComparison.OrdinalIgnoreCase))
+        {
+            candidates.Add(targetName);
+        }
+
+        string? alias = GetSystemAlias(binaryName);
+        if (alias != null && !candidates.Contains(alias, StringComparer.OrdinalIgnoreCase))
+        {
+            candidates.Add(alias);
+        }
+
+        foreach (string rawDir in pathEnv.Split(Path.PathSeparator))
+        {
+            string dir = rawDir.Trim().Trim('"');
+            if (string.IsNullOrWhiteSpace(dir))
+            {
+                continue;
+            }
+
+            foreach (string candidate in candidates)
+            {
+                string full;
+                try
+                {
+                    full = Path.Combine(dir, candidate);
+                }
+                catch (Exception)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    if (File.Exists(full))
+                    {
+                        return Path.GetFullPath(full);
+                    }
+                }
+                catch (Exception)
+                {
+                    // Недоступный каталог PATH пропускается.
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Возвращает системный псевдоним встроенного бинарника K-Tools
+    /// (kt-ffmpeg.exe в PATH лежит как ffmpeg.exe).
+    /// </summary>
+    /// <param name="binaryName">Запрошенное имя бинарного файла.</param>
+    /// <returns>Системное имя или null, если псевдонима нет.</returns>
+    private static string? GetSystemAlias(string binaryName)
+    {
+        return binaryName.ToLowerInvariant() switch
+        {
+            "kt-ffmpeg.exe" => "ffmpeg.exe",
+            "kt-ffprobe.exe" => "ffprobe.exe",
+            _ => null
+        };
     }
 
     /// <summary>

@@ -21,8 +21,8 @@
                     DragOver="Card_DragOver">
                 <StackPanel Spacing="10">
                     <StackPanel Orientation="Horizontal" Spacing="8">
-                        <FontIcon Glyph="&#xE189;" FontFamily="Segoe Fluent Icons" Foreground="#00E5FF" />
-                        <TextBlock Text="1. Исходное видео/аудио" FontWeight="SemiBold" FontSize="14" Foreground="#00E5FF" />
+                        <FontIcon Glyph="&#xE189;" FontFamily="Segoe Fluent Icons" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                        <TextBlock Text="1. Исходное видео/аудио" FontWeight="SemiBold" FontSize="14" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
                     </StackPanel>
 
                     <Grid ColumnSpacing="8">
@@ -58,8 +58,8 @@
                     DragOver="Card_DragOver">
                 <StackPanel Spacing="10">
                     <StackPanel Orientation="Horizontal" Spacing="8">
-                        <FontIcon Glyph="&#xE116;" FontFamily="Segoe Fluent Icons" Foreground="#81C784" />
-                        <TextBlock Text="2. Целевое видео" FontWeight="SemiBold" FontSize="14" Foreground="#81C784" />
+                        <FontIcon Glyph="&#xE116;" FontFamily="Segoe Fluent Icons" Foreground="{ThemeResource SystemFillColorSuccessBrush}" />
+                        <TextBlock Text="2. Целевое видео" FontWeight="SemiBold" FontSize="14" Foreground="{ThemeResource SystemFillColorSuccessBrush}" />
                     </StackPanel>
 
                     <Grid ColumnSpacing="8">
@@ -95,8 +95,8 @@
                     DragOver="Card_DragOver">
                 <StackPanel Spacing="10">
                     <StackPanel Orientation="Horizontal" Spacing="8">
-                        <FontIcon Glyph="&#xE8D2;" FontFamily="Segoe Fluent Icons" Foreground="#A878E8" />
-                        <TextBlock Text="3. Файл субтитров (необязательно)" FontWeight="SemiBold" FontSize="14" Foreground="#A878E8" />
+                        <FontIcon Glyph="&#xE8D2;" FontFamily="Segoe Fluent Icons" Foreground="{ThemeResource AccentTextFillColorSecondaryBrush}" />
+                        <TextBlock Text="3. Файл субтитров (необязательно)" FontWeight="SemiBold" FontSize="14" Foreground="{ThemeResource AccentTextFillColorSecondaryBrush}" />
                     </StackPanel>
 
                     <Grid ColumnSpacing="8">
@@ -123,8 +123,8 @@
                     Padding="16">
                 <StackPanel Spacing="12">
                     <StackPanel Orientation="Horizontal" Spacing="8">
-                        <FontIcon Glyph="&#xE8B9;" FontFamily="Segoe Fluent Icons" Foreground="#FF4081" />
-                        <TextBlock Text="4. Визуальная синхронизация осциллограмм" FontWeight="SemiBold" FontSize="14" Foreground="#FF4081" />
+                        <FontIcon Glyph="&#xE8B9;" FontFamily="Segoe Fluent Icons" Foreground="{ThemeResource AccentTextFillColorSecondaryBrush}" />
+                        <TextBlock Text="4. Визуальная синхронизация осциллограмм" FontWeight="SemiBold" FontSize="14" Foreground="{ThemeResource AccentTextFillColorSecondaryBrush}" />
                     </StackPanel>
 
                     <StackPanel Orientation="Horizontal" Spacing="16" VerticalAlignment="Center">

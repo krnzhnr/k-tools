@@ -12,6 +12,7 @@ using FluentAssertions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Moq;
 using KTools_App.Core;
+using KTools_App.Diagnostics;
 using KTools_App.Infrastructure;
 using KTools_App.Models;
 using KTools_App.Services.Contracts;
@@ -133,14 +134,14 @@ public class PerformanceGuardTests
         object session = prepare!.Invoke(vm, new object[] { script, filesList })!;
 
         // Act: два файла по 25% и 75% => средний прогресс очереди 50%
-        method!.Invoke(vm, new object[] { session, 0, 2, "тест", 25.0, 0.0, "", false });
-        method.Invoke(vm, new object[] { session, 1, 2, "тест", 75.0, 0.0, "", false });
+        method!.Invoke(vm, new object[] { session, 0, 2, "тест", 25.0, 0.0, "" });
+        method.Invoke(vm, new object[] { session, 1, 2, "тест", 75.0, 0.0, "" });
 
         // Assert
         script.SavedGlobalProgress.Should().BeApproximately(50.0, 0.001);
 
         // Act: обновление значения одного файла не должно «размножать» сумму
-        method.Invoke(vm, new object[] { session, 0, 2, "тест", 40.0, 0.0, "", false });
+        method.Invoke(vm, new object[] { session, 0, 2, "тест", 40.0, 0.0, "" });
 
         // Assert: (40 + 75) / 2 = 57.5
         script.SavedGlobalProgress.Should().BeApproximately(57.5, 0.001);
@@ -271,7 +272,7 @@ public class PerformanceGuardTests
         const int lines = 500;
         for (int i = 0; i < lines; i++)
         {
-            service.Info($"Запись номер {i}", "GuardTest");
+            service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, $"Запись номер {i}", source: "GuardTest");
         }
 
         // До Flush часть данных может быть в буфере — после Flush обязана быть в файле
@@ -519,6 +520,37 @@ public class PerformanceGuardTests
 
         offenders.Should().BeEmpty(
             "в Scripts/Infrastructure нельзя использовать блокирующие ожидания: " + string.Join(", ", offenders));
+    }
+
+    /// <summary>
+    /// Синхронные обёртки GetInstalledVersion()/RemoveDependency() блокировали
+    /// вызывающий поток через GetAwaiter().GetResult() поверх async-кода с запуском
+    /// внешних процессов (ишью 97, нарушение RULES п.5): с UI-потока это deadlock.
+    /// Остаются только Async-версии.
+    /// </summary>
+    [TestMethod]
+    public void SourceGuard_DependencyManager_ContainsNoSyncWrappers()
+    {
+        // Синхронных методов не должно быть ни в контракте, ни в реализации.
+        typeof(IDependencyManager).GetMethod("GetInstalledVersion").Should().BeNull(
+            "синхронная обёртка GetInstalledVersion блокирует вызывающий поток, используйте GetInstalledVersionAsync");
+        typeof(IDependencyManager).GetMethod("RemoveDependency").Should().BeNull(
+            "синхронная обёртка RemoveDependency блокирует вызывающий поток, используйте RemoveDependencyAsync");
+        typeof(DependencyManager).GetMethod("GetInstalledVersion").Should().BeNull(
+            "синхронная обёртка GetInstalledVersion блокирует вызывающий поток, используйте GetInstalledVersionAsync");
+        typeof(DependencyManager).GetMethod("RemoveDependency").Should().BeNull(
+            "синхронная обёртка RemoveDependency блокирует вызывающий поток, используйте RemoveDependencyAsync");
+
+        // Асинхронные версии обязаны остаться на месте.
+        typeof(IDependencyManager).GetMethod("GetInstalledVersionAsync").Should().NotBeNull();
+        typeof(IDependencyManager).GetMethod("RemoveDependencyAsync").Should().NotBeNull();
+
+        // В исходнике реализации не должно быть блокирующих ожиданий.
+        string source = File.ReadAllText(GetRepositoryFile("KTools.App", "Core", "DependencyManager.cs"));
+        source.Should().NotContain("GetAwaiter().GetResult",
+            "в DependencyManager нельзя синхронно ждать async-код: это вешает UI-поток");
+        source.Should().NotContain("Thread.Sleep",
+            "в DependencyManager нельзя блокировать поток сном");
     }
 
     /// <summary>

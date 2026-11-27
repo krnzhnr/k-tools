@@ -39,7 +39,7 @@
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
-                    <TextBlock Text="Целевое видео (Оригинал)" FontWeight="SemiBold" Margin="0,0,0,5" Foreground="#00E5FF" />
+                    <TextBlock Text="Целевое видео (Оригинал)" FontWeight="SemiBold" Margin="0,0,0,5" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
                     <canvas:CanvasControl x:Name="SourceCanvas" Grid.Row="1" CreateResources="SourceCanvas_CreateResources" Draw="SourceCanvas_Draw" PointerWheelChanged="Canvas_PointerWheelChanged" PointerPressed="Canvas_PointerPressed" PointerMoved="Canvas_PointerMoved" PointerReleased="Canvas_PointerReleased" />
                 </Grid>
             </Border>
@@ -52,7 +52,7 @@
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
-                    <TextBlock Text="Пересаживаемая дорожка (Сдвигаемая)" FontWeight="SemiBold" Margin="0,0,0,5" Foreground="#FF4081" />
+                    <TextBlock Text="Пересаживаемая дорожка (Сдвигаемая)" FontWeight="SemiBold" Margin="0,0,0,5" Foreground="{ThemeResource AccentTextFillColorSecondaryBrush}" />
                     <canvas:CanvasControl x:Name="TransplantCanvas" Grid.Row="1" CreateResources="TransplantCanvas_CreateResources" Draw="TransplantCanvas_Draw" PointerWheelChanged="Canvas_PointerWheelChanged" PointerPressed="Canvas_PointerPressed" PointerMoved="Canvas_PointerMoved" PointerReleased="Canvas_PointerReleased" />
                 </Grid>
             </Border>
@@ -85,12 +85,12 @@
 
                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
                     <TextBlock Text="Компенсация AAC:" VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                    <TextBlock Text="-21.33 мс" VerticalAlignment="Center" FontWeight="Bold" Foreground="#FFB74D" />
+                    <TextBlock Text="-21.33 мс" VerticalAlignment="Center" FontWeight="Bold" Foreground="{ThemeResource SystemFillColorCautionBrush}" />
                 </StackPanel>
 
                 <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8">
                     <TextBlock Text="Фактический сдвиг:" VerticalAlignment="Center" FontWeight="Bold" />
-                    <TextBlock x:Name="NetOffsetTextBlock" Text="-21.33 мс" VerticalAlignment="Center" FontWeight="Bold" Foreground="#81C784" />
+                    <TextBlock x:Name="NetOffsetTextBlock" Text="-21.33 мс" VerticalAlignment="Center" FontWeight="Bold" Foreground="{ThemeResource SystemFillColorSuccessBrush}" />
                 </StackPanel>
             </Grid>
         </StackPanel>

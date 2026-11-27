@@ -1,4 +1,5 @@
 ﻿// -*- coding: utf-8 -*-
+using System.Threading;
 using System.Threading.Tasks;
 
 using KTools_App.Core;
@@ -12,8 +13,9 @@ public interface IMediaProbeService
 {
     /// <summary>
     /// Асинхронно анализирует медиафайл и возвращает его структуру (дорожки, вложения, длительность).
+    /// Отмена через токен прерывает ожидание и возвращает null без запуска новых процессов.
     /// </summary>
-    Task<MediaStructure?> ProbeAsync(string filePath);
+    Task<MediaStructure?> ProbeAsync(string filePath, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Дополнительно обогащает названия дорожек из ffprobe, если они отсутствуют.

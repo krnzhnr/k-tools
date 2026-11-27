@@ -238,23 +238,21 @@ public class CpuH264Capabilities : BaseSoftwareCapabilities
             {
                 int vBr = GetSettingValue(settings, "x264_v_bitrate", 4000);
                 bool autoBitrate = GetSettingValue(settings, "x264_auto_bitrate", true);
-                int minBr = autoBitrate ? vBr : GetSettingValue(settings, "x264_min_bitrate", 4000);
-                int maxBr = autoBitrate ? vBr * 2 : GetSettingValue(settings, "x264_max_bitrate", 8000);
-                int bufSize = autoBitrate ? maxBr * 2 : GetSettingValue(settings, "x264_bufsize", 16000);
+                int minBr;
+                int maxBr;
+                int bufSize;
+                if (autoBitrate)
+                {
+                    EncoderBitrateHelper.ResolveAutoBounds(vBr, collapseForCbr: false, out minBr, out maxBr, out bufSize);
+                }
+                else
+                {
+                    minBr = GetSettingValue(settings, "x264_min_bitrate", 4000);
+                    maxBr = GetSettingValue(settings, "x264_max_bitrate", 8000);
+                    bufSize = GetSettingValue(settings, "x264_bufsize", 16000);
+                }
 
-                args.AddRange(new[] { "-b:v", $"{vBr}k" });
-                if (minBr > 0)
-                {
-                    args.AddRange(new[] { "-minrate", $"{minBr}k" });
-                }
-                if (maxBr > 0)
-                {
-                    args.AddRange(new[] { "-maxrate", $"{maxBr}k" });
-                }
-                if (bufSize > 0)
-                {
-                    args.AddRange(new[] { "-bufsize", $"{bufSize}k" });
-                }
+                EncoderBitrateHelper.AppendBitrateArguments(args, vBr, minBr, maxBr, bufSize);
             }
         }
 

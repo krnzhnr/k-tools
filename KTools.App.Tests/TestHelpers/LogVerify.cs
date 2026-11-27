@@ -12,7 +12,8 @@ namespace KTools_App.Tests.TestHelpers;
 
 /// <summary>
 /// Проверки структурированных вызовов журнала для Moq-моков ILogService.
-/// Учитывают обе формы записи: Write(LogEvent) и явную перегрузку Write(eventId, ...),
+/// Учитывают обе формы записи: Write(LogEvent) и каноническую перегрузку
+/// Write(eventId, level, status, message, ...) по LOGGING 2.2,
 /// чтобы проверка не проходила вхолостую при смене формы вызова.
 /// </summary>
 public static class LogVerify
@@ -183,20 +184,6 @@ public static class LogVerify
 
             if (invocation.Arguments.Count < 8 || invocation.Arguments[0] is not string eventId)
             {
-                continue;
-            }
-
-            if (invocation.Arguments[2] is string message)
-            {
-                yield return new WriteCall(
-                    eventId,
-                    (LogLevel)invocation.Arguments[1]!,
-                    (LogStatus)invocation.Arguments[4]!,
-                    message,
-                    (string)invocation.Arguments[3]!,
-                    invocation.Arguments[6] as IReadOnlyDictionary<string, object?>,
-                    invocation.Arguments[7] is Exception,
-                    (invocation.Arguments[7] as Exception)?.Message);
                 continue;
             }
 

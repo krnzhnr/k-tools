@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
 using KTools_App.Core;
@@ -35,6 +36,16 @@ public sealed partial class AudioTransplantControl : UserControl
     private AbstractScript? _activeScript;
     private bool _isUpdatingUi = false;
 
+    // Защита от гонки проб дорожек при быстром вводе пути (ишью #90).
+    // Каждая сторона имеет свой CTS и порядковый номер пробы: опоздавшая проба
+    // после await сверяется с актуальным номером и текстом поля и отбрасывается.
+    // Все обращения выполняются в UI-потоке, поэтому блокировки не требуются.
+    private CancellationTokenSource? _sourceProbeCts;
+    private CancellationTokenSource? _destProbeCts;
+    private int _sourceProbeSeq;
+    private int _destProbeSeq;
+    private const int ProbeDebounceMs = 250;
+
     /// <summary>
     /// Активный скрипт пересадки аудио.
     /// </summary>
@@ -62,7 +73,9 @@ public sealed partial class AudioTransplantControl : UserControl
 
                 if (!string.IsNullOrWhiteSpace(SourcePathTextBox.Text) && File.Exists(SourcePathTextBox.Text.Trim()))
                 {
-                    _ = PopulateSourceTracksAsync(SourcePathTextBox.Text.Trim());
+                    CancelSourceProbe();
+                    _sourceProbeCts = new CancellationTokenSource();
+                    _ = PopulateSourceTracksAsync(SourcePathTextBox.Text.Trim(), _sourceProbeSeq, _sourceProbeCts.Token);
                 }
 
                 if (!string.IsNullOrWhiteSpace(DestPathTextBox.Text) && File.Exists(DestPathTextBox.Text.Trim()))
@@ -73,7 +86,9 @@ public sealed partial class AudioTransplantControl : UserControl
                         _activeScript.FilesQueue.Clear();
                         _activeScript.FilesQueue.Add(new FileQueueItem(trimmedDest));
                     }
-                    _ = PopulateDestTracksAsync(trimmedDest);
+                    CancelDestProbe();
+                    _destProbeCts = new CancellationTokenSource();
+                    _ = PopulateDestTracksAsync(trimmedDest, _destProbeSeq, _destProbeCts.Token);
                 }
             }
         }
@@ -93,6 +108,8 @@ public sealed partial class AudioTransplantControl : UserControl
     private void ResetFormState()
     {
         _isUpdatingUi = true;
+        CancelSourceProbe();
+        CancelDestProbe();
         try
         {
             SourcePathTextBox.Text = string.Empty;
@@ -242,6 +259,43 @@ public sealed partial class AudioTransplantControl : UserControl
 
     #region Изменение текстов и сканирование дорожек
 
+    /// <summary>
+    /// Проверяет, можно ли применять результат завершившейся пробы дорожек.
+    /// Проба применяется только если она последняя запущенная и её путь совпадает
+    /// с текущим текстом поля: иначе быстрый ввод перемешивает дорожки (ишью #90).
+    /// </summary>
+    public static bool ShouldApplyProbeResult(int probeSeq, int currentSeq, string? probedPath, string? currentPath)
+    {
+        if (probeSeq != currentSeq)
+        {
+            return false;
+        }
+
+        return string.Equals(probedPath?.Trim(), currentPath?.Trim(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Отменяет активную пробу источника и обесценивает её порядковый номер.
+    /// </summary>
+    private void CancelSourceProbe()
+    {
+        _sourceProbeCts?.Cancel();
+        _sourceProbeCts?.Dispose();
+        _sourceProbeCts = null;
+        _sourceProbeSeq++;
+    }
+
+    /// <summary>
+    /// Отменяет активную пробу целевого видео и обесценивает её порядковый номер.
+    /// </summary>
+    private void CancelDestProbe()
+    {
+        _destProbeCts?.Cancel();
+        _destProbeCts?.Dispose();
+        _destProbeCts = null;
+        _destProbeSeq++;
+    }
+
     private async void SourcePathTextBox_TextChanged(object sender, TextChangedEventArgs e)
     {
         if (_isUpdatingUi || _activeScript is not AudioTransplantScript script) return;
@@ -249,18 +303,34 @@ public sealed partial class AudioTransplantControl : UserControl
         string path = SourcePathTextBox.Text.Trim();
         script.SourceFilePath = path;
 
-        if (File.Exists(path))
+        if (!File.Exists(path))
         {
-            await PopulateSourceTracksAsync(path);
-        }
-        else
-        {
+            CancelSourceProbe();
             SourceTrackComboBox.Items.Clear();
             SourceTrackComboBox.PlaceholderText = "Сначала выберите файл источника...";
+            return;
         }
+
+        // Debounce быстрого ввода: предыдущая отложенная проба отменяется,
+        // актуальная забирает свежий порядковый номер (ишью #90).
+        CancelSourceProbe();
+        _sourceProbeCts = new CancellationTokenSource();
+        CancellationToken probeToken = _sourceProbeCts.Token;
+        int probeSeq = _sourceProbeSeq;
+
+        try
+        {
+            await Task.Delay(ProbeDebounceMs, probeToken);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+
+        await PopulateSourceTracksAsync(path, probeSeq, probeToken);
     }
 
-    private async Task PopulateSourceTracksAsync(string filePath)
+    private async Task PopulateSourceTracksAsync(string filePath, int probeSeq, CancellationToken probeToken)
     {
         SourceTrackComboBox.Items.Clear();
         SourceTrackComboBox.PlaceholderText = "Анализ дорожек источника...";
@@ -268,6 +338,11 @@ public sealed partial class AudioTransplantControl : UserControl
         try
         {
             var mediaStructure = await _mediaProbeService.ProbeAsync(filePath);
+            // Сверка после await (ишью #90): опоздавшая проба список не трогает.
+            if (probeToken.IsCancellationRequested || !ShouldApplyProbeResult(probeSeq, _sourceProbeSeq, filePath, SourcePathTextBox.Text))
+            {
+                return;
+            }
             if (mediaStructure != null && mediaStructure.Tracks.Count > 0)
             {
                 var audioTracks = mediaStructure.Tracks.Where(t => t.TrackType.Equals("audio", StringComparison.OrdinalIgnoreCase)).ToList();
@@ -304,6 +379,12 @@ public sealed partial class AudioTransplantControl : UserControl
         }
         catch (Exception ex)
         {
+            // Ошибка устаревшей пробы не должна затирать актуальный список значением по умолчанию.
+            if (probeToken.IsCancellationRequested || !ShouldApplyProbeResult(probeSeq, _sourceProbeSeq, filePath, SourcePathTextBox.Text))
+            {
+                return;
+            }
+
             _logService.Write(
                 "ui.audio_transplant.source_scan_failed",
                 LogLevel.Warning,
@@ -327,19 +408,36 @@ public sealed partial class AudioTransplantControl : UserControl
         script.DestFilePath = path;
 
         script.FilesQueue.Clear();
-        if (File.Exists(path))
+        if (!File.Exists(path))
         {
-            script.FilesQueue.Add(new FileQueueItem(path));
-            await PopulateDestTracksAsync(path);
-        }
-        else
-        {
+            CancelDestProbe();
             DestTrackComboBox.Items.Clear();
             DestTrackComboBox.PlaceholderText = "Сначала выберите целевое видео...";
+            return;
         }
+
+        script.FilesQueue.Add(new FileQueueItem(path));
+
+        // Debounce быстрого ввода: предыдущая отложенная проба отменяется,
+        // актуальная забирает свежий порядковый номер (ишью #90).
+        CancelDestProbe();
+        _destProbeCts = new CancellationTokenSource();
+        CancellationToken probeToken = _destProbeCts.Token;
+        int probeSeq = _destProbeSeq;
+
+        try
+        {
+            await Task.Delay(ProbeDebounceMs, probeToken);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+
+        await PopulateDestTracksAsync(path, probeSeq, probeToken);
     }
 
-    private async Task PopulateDestTracksAsync(string filePath)
+    private async Task PopulateDestTracksAsync(string filePath, int probeSeq, CancellationToken probeToken)
     {
         DestTrackComboBox.Items.Clear();
         DestTrackComboBox.PlaceholderText = "Анализ дорожек целевого видео...";
@@ -347,6 +445,11 @@ public sealed partial class AudioTransplantControl : UserControl
         try
         {
             var mediaStructure = await _mediaProbeService.ProbeAsync(filePath);
+            // Сверка после await (ишью #90): опоздавшая проба список не трогает.
+            if (probeToken.IsCancellationRequested || !ShouldApplyProbeResult(probeSeq, _destProbeSeq, filePath, DestPathTextBox.Text))
+            {
+                return;
+            }
             if (mediaStructure != null && mediaStructure.Tracks.Count > 0)
             {
                 var audioTracks = mediaStructure.Tracks.Where(t => t.TrackType.Equals("audio", StringComparison.OrdinalIgnoreCase)).ToList();
@@ -383,6 +486,12 @@ public sealed partial class AudioTransplantControl : UserControl
         }
         catch (Exception ex)
         {
+            // Ошибка устаревшей пробы не должна затирать актуальный список значением по умолчанию.
+            if (probeToken.IsCancellationRequested || !ShouldApplyProbeResult(probeSeq, _destProbeSeq, filePath, DestPathTextBox.Text))
+            {
+                return;
+            }
+
             _logService.Write(
                 "ui.audio_transplant.target_scan_failed",
                 LogLevel.Warning,

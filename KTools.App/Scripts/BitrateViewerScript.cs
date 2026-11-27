@@ -41,7 +41,7 @@ public sealed class BitrateViewerScript : AbstractScript
     public override string Name => AppConstants.ScriptMetadata.BitrateViewerName;
     public override string Description => AppConstants.ScriptMetadata.BitrateViewerDesc;
     public override string Category => AppConstants.ScriptCategory.Tools;
-    public override string IconName => "\uE9D2"; // Analytics icon
+    public override string IconName => AppConstants.ScriptIcons.BitrateViewer;
 
     /// <summary>
     /// Поддержка ВСЕХ видео и аудио контейнеров/потоков.
@@ -73,8 +73,17 @@ public sealed class BitrateViewerScript : AbstractScript
         ScriptProgressCallback progressCallback,
         int fileIndex,
         int totalCount,
-        ExecutionContext context)
+        ExecutionContext context,
+        CancellationToken cancellationToken = default)
     {
+        if (IsCancellationRequested(cancellationToken))
+        {
+            return ExecutionResult.Cancelled(
+                context,
+                new[] { "Обработка отменена до запуска элемента." },
+                errorCode: "cancelled-before-start",
+                cleanupState: CleanupState.NotStarted);
+        }
         var results = new List<string>();
 
         _logService.Write("script.bitrate_viewer.started", LogLevel.Debug, LogStatus.Running, $"Начат анализ битрейта файла '{LogProps.FileName(filePath)}'", source: Name, properties: LogProps.Create("InputName", LogProps.FileName(filePath)));
@@ -83,15 +92,16 @@ public sealed class BitrateViewerScript : AbstractScript
         _logService.Write("script.bitrate_viewer.drive_detected", LogLevel.Debug, LogStatus.Succeeded, $"Накопитель для файла определён: {driveType}", source: Name, properties: LogProps.Create("Container", driveType.ToString()));
         try
         {
+            using var linkedCts = CreateLinkedCancellationSource(cancellationToken);
             var analysisResult = await _bitrateAnalyzerService.AnalyzeBitrateAsync(
                 filePath,
                 (pct, status) =>
                 {
                     progressCallback(fileIndex, totalCount, status, pct);
                 },
-                CancellationToken.None);
+                linkedCts.Token);
 
-            if (IsCancelled)
+            if (IsCancellationRequested(linkedCts.Token))
             {
                 results.Add($"⚠ Прервано пользователем: {Path.GetFileName(filePath)}");
                 return ExecutionResult.Cancelled(
@@ -132,6 +142,15 @@ public sealed class BitrateViewerScript : AbstractScript
                 _logService.Write("script.bitrate_viewer.failed", LogLevel.Error, LogStatus.Failed, errMsg, source: Name, properties: LogProps.Create("ErrorCode", "BITRATE_VIEW_FAILED").With("InputName", LogProps.FileName(filePath)));
                 results.Add(errMsg);
             }
+        }
+        catch (OperationCanceledException)
+        {
+            results.Add($"⚠ Прервано пользователем: {Path.GetFileName(filePath)}");
+            return ExecutionResult.Cancelled(
+                context,
+                results,
+                errorCode: "cancelled",
+                cleanupState: CleanupState.Completed);
         }
         catch (Exception ex)
         {

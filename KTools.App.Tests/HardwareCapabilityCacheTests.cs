@@ -26,6 +26,7 @@ public class HardwareCapabilityCacheTests
     private string _cacheFile = null!;
     private string _ffmpegVersion = null!;
     private string _driverVersion = null!;
+    private string _deviceFingerprint = null!;
 
     [TestInitialize]
     public void Setup()
@@ -42,6 +43,7 @@ public class HardwareCapabilityCacheTests
 
         _ffmpegVersion = "7.1";
         _driverVersion = "560.94";
+        _deviceFingerprint = "NVIDIA GeForce RTX 4070|pci\\ven_10de&dev_2684";
     }
 
     [TestCleanup]
@@ -182,10 +184,30 @@ public class HardwareCapabilityCacheTests
             _pathManagerMock.Object,
             ffmpegVersionProvider: () => _ffmpegVersion,
             driverVersionProvider: () => _driverVersion,
+            deviceFingerprintProvider: () => _deviceFingerprint,
             cacheFilePath: _cacheFile);
     }
 
-    private void WriteCacheFile(bool nvenc, bool temporalAq, string ffmpeg, string driver)
+    private void WriteCacheFile(bool nvenc, bool temporalAq, string ffmpeg, string driver, string? device = null, bool av1 = false)
+    {
+        using var stream = File.Create(_cacheFile);
+        using var writer = new Utf8JsonWriter(stream);
+        writer.WriteStartObject();
+        writer.WriteBoolean("Nvenc", nvenc);
+        writer.WriteBoolean("TemporalAq", temporalAq);
+        writer.WriteBoolean("Av1", av1);
+        writer.WriteString("FfmpegVersion", ffmpeg);
+        writer.WriteString("DriverVersion", driver);
+        writer.WriteString("DeviceFingerprint", device ?? _deviceFingerprint);
+        writer.WriteString("Timestamp", DateTimeOffset.UtcNow);
+        writer.WriteEndObject();
+    }
+
+    /// <summary>
+    /// Кэш старого формата: без отпечатка оборудования и флага AV1.
+    /// Такой файл обязан считаться недействительным и вызывать повторный опрос.
+    /// </summary>
+    private void WriteLegacyCacheFile(bool nvenc, bool temporalAq, string ffmpeg, string driver)
     {
         using var stream = File.Create(_cacheFile);
         using var writer = new Utf8JsonWriter(stream);
@@ -198,9 +220,131 @@ public class HardwareCapabilityCacheTests
         writer.WriteEndObject();
     }
 
+    [TestMethod]
+    public async Task InitializeAsync_GpuSwappedSameDriver_Reprobes()
+    {
+        // Arrange: драйвер и FFmpeg совпали, но видеокарта заменена (другое имя/PCI-ID).
+        WriteCacheFile(nvenc: true, temporalAq: true, ffmpeg: _ffmpegVersion, driver: _driverVersion, device: "NVIDIA GeForce RTX 3090|pci\\ven_10de&dev_2204");
+        _runnerMock.Setup(r => r.CheckNvencSupportAsync()).ReturnsAsync(true);
+        _runnerMock.Setup(r => r.CheckNvencTemporalAqSupportAsync()).ReturnsAsync(true);
+        _runnerMock.Setup(r => r.CheckNvencAv1SupportAsync()).ReturnsAsync(true);
+        var cache = CreateCache();
+
+        // Act.
+        await cache.InitializeAsync();
+
+        // Assert: ложного попадания нет, опрос выполнен заново и кэш перезаписан новым отпечатком.
+        _runnerMock.Verify(r => r.CheckNvencSupportAsync(), Times.Once);
+        cache.IsNvencSupported.Should().BeTrue();
+        cache.IsNvencAv1Supported.Should().BeTrue();
+        ReadCacheField("DeviceFingerprint").Should().Be(_deviceFingerprint);
+    }
+
+    [TestMethod]
+    public async Task InitializeAsync_LegacyCacheWithoutDeviceFingerprint_Reprobes()
+    {
+        // Arrange: кэш старого формата без отпечатка оборудования и флага AV1.
+        WriteLegacyCacheFile(nvenc: true, temporalAq: true, ffmpeg: _ffmpegVersion, driver: _driverVersion);
+        _runnerMock.Setup(r => r.CheckNvencSupportAsync()).ReturnsAsync(true);
+        _runnerMock.Setup(r => r.CheckNvencTemporalAqSupportAsync()).ReturnsAsync(false);
+        _runnerMock.Setup(r => r.CheckNvencAv1SupportAsync()).ReturnsAsync(false);
+        var cache = CreateCache();
+
+        // Act.
+        await cache.InitializeAsync();
+
+        // Assert: старый формат недействителен, опрос выполнен заново в новом формате.
+        _runnerMock.Verify(r => r.CheckNvencSupportAsync(), Times.Once);
+        ReadCacheField("DeviceFingerprint").Should().Be(_deviceFingerprint);
+    }
+
+    [TestMethod]
+    public async Task InitializeAsync_Av1Supported_CachesFlagAndHitsCache()
+    {
+        // Arrange: кэша нет, видеокарта с AV1-блоком.
+        _runnerMock.Setup(r => r.CheckNvencSupportAsync()).ReturnsAsync(true);
+        _runnerMock.Setup(r => r.CheckNvencTemporalAqSupportAsync()).ReturnsAsync(true);
+        _runnerMock.Setup(r => r.CheckNvencAv1SupportAsync()).ReturnsAsync(true);
+        var cache = CreateCache();
+
+        // Act.
+        await cache.InitializeAsync();
+
+        // Assert: флаг AV1 определён и записан на диск.
+        cache.IsNvencAv1Supported.Should().BeTrue();
+        ReadCacheBool("Av1").Should().BeTrue();
+
+        // Act: повторная инициализация обязана брать всё из кэша без запуска процессов.
+        var cached = CreateCache();
+        await cached.InitializeAsync();
+
+        // Assert.
+        cached.IsNvencAv1Supported.Should().BeTrue();
+        _runnerMock.Verify(r => r.CheckNvencSupportAsync(), Times.Once);
+        _runnerMock.Verify(r => r.CheckNvencAv1SupportAsync(), Times.Once);
+    }
+
+    [TestMethod]
+    public async Task InitializeAsync_Av1BlockMissing_ReportsFalse()
+    {
+        // Arrange: NVENC есть, но AV1-блока нет (старая видеокарта).
+        _runnerMock.Setup(r => r.CheckNvencSupportAsync()).ReturnsAsync(true);
+        _runnerMock.Setup(r => r.CheckNvencTemporalAqSupportAsync()).ReturnsAsync(true);
+        _runnerMock.Setup(r => r.CheckNvencAv1SupportAsync()).ReturnsAsync(false);
+        var cache = CreateCache();
+
+        // Act.
+        await cache.InitializeAsync();
+
+        // Assert: AV1 недоступен и это зафиксировано в кэше.
+        cache.IsNvencSupported.Should().BeTrue();
+        cache.IsNvencAv1Supported.Should().BeFalse();
+        ReadCacheBool("Av1").Should().BeFalse();
+    }
+
+    [TestMethod]
+    public async Task InitializeAsync_NvencMissing_SkipsAv1Probe()
+    {
+        // Arrange: NVENC отсутствует.
+        _runnerMock.Setup(r => r.CheckNvencSupportAsync()).ReturnsAsync(false);
+        var cache = CreateCache();
+
+        // Act.
+        await cache.InitializeAsync();
+
+        // Assert: проба AV1 не запускается, флаг сброшен.
+        _runnerMock.Verify(r => r.CheckNvencAv1SupportAsync(), Times.Never);
+        cache.IsNvencAv1Supported.Should().BeFalse();
+    }
+
+    [TestMethod]
+    public async Task Invalidate_ClearsAv1Flag()
+    {
+        // Arrange: опрос определил поддержку AV1.
+        _runnerMock.Setup(r => r.CheckNvencSupportAsync()).ReturnsAsync(true);
+        _runnerMock.Setup(r => r.CheckNvencTemporalAqSupportAsync()).ReturnsAsync(true);
+        _runnerMock.Setup(r => r.CheckNvencAv1SupportAsync()).ReturnsAsync(true);
+        var cache = CreateCache();
+        await cache.InitializeAsync();
+        cache.IsNvencAv1Supported.Should().BeTrue();
+
+        // Act.
+        cache.Invalidate();
+
+        // Assert: флаг AV1 сброшен вместе с остальным кэшем.
+        cache.IsNvencAv1Supported.Should().BeFalse();
+        File.Exists(_cacheFile).Should().BeFalse();
+    }
+
     private string ReadCacheField(string field)
     {
         using JsonDocument document = JsonDocument.Parse(File.ReadAllText(_cacheFile));
         return document.RootElement.GetProperty(field).GetString() ?? string.Empty;
+    }
+
+    private bool ReadCacheBool(string field)
+    {
+        using JsonDocument document = JsonDocument.Parse(File.ReadAllText(_cacheFile));
+        return document.RootElement.GetProperty(field).GetBoolean();
     }
 }

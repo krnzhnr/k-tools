@@ -598,7 +598,7 @@ public class SettingsManagerTests
         var manager = CreateManager();
 
         // Act
-        PersistenceResult result = manager.InitializeDefaults(new List<AbstractScript>());
+        PersistenceResult result = manager.InitializeDefaults(StubSettingsDefaultsProvider.Empty);
 
         // Assert
         result.IsSuccess.Should().BeTrue();
@@ -627,7 +627,7 @@ public class SettingsManagerTests
         using (new FileStream(_tempSettingsFile, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
         {
             // Act
-            PersistenceResult result = manager.InitializeDefaults(new List<AbstractScript>());
+            PersistenceResult result = manager.InitializeDefaults(StubSettingsDefaultsProvider.Empty);
 
             // Assert
             result.IsFailure.Should().BeTrue();
@@ -898,9 +898,46 @@ public class SettingsManagerTests
         lowered.Should().Be("Acrylic");
     }
 
+    /// <summary>
+    /// Проверяет, что кэш настроек нечувствителен к регистру ключей:
+    /// значение, сохранённое в легаси-регистре, читается каноническим ключом схемы.
+    /// </summary>
+    [TestMethod]
+    public void GetSetting_LegacyKeyCasing_ReturnsValue()
+    {
+        // Arrange: в файле ключ в легаси-регистре, схема использует нижний регистр
+        File.WriteAllText(_tempSettingsFile, "{ \"Script_Test\": { \"CRF\": 18 } }");
+        var manager = CreateManager();
+
+        // Act & Assert: оба регистра находят одно и то же значение
+        manager.GetSetting("Script_Test", "crf", 23).Should().Be(18);
+        manager.GetSetting("Script_Test", "CRF", 23).Should().Be(18);
+    }
+
+    /// <summary>
+    /// Проверяет, что запись каноническим ключом не плодит дубликат легаси-ключа:
+    /// «CRF» и «crf» обязаны быть одним слотом кэша.
+    /// </summary>
+    [TestMethod]
+    public void SetSetting_LegacyKeyCasing_DoesNotDuplicateKey()
+    {
+        // Arrange
+        File.WriteAllText(_tempSettingsFile, "{ \"Script_Test\": { \"CRF\": 18 } }");
+        var manager = CreateManager();
+
+        // Act
+        manager.SetSetting("Script_Test", "crf", 20);
+
+        // Assert: дубликата нет, значение обновлено в том же слоте
+        Dictionary<string, object> group = manager.GetAllSettingsInGroup("Script_Test");
+        group.Should().HaveCount(1);
+        manager.GetSetting("Script_Test", "CRF", 23).Should().Be(20);
+    }
+
     private SettingsManager CreateManager()
     {
         var manager = new SettingsManager(_logService, _pathManagerMock.Object);
+        manager.InitializeAsync().GetAwaiter().GetResult();
         _managers.Add(manager);
         return manager;
     }

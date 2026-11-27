@@ -39,7 +39,8 @@ def get_current_version() -> str:
     """Получить текущую версию из файла."""
     if VERSION_FILE.exists():
         return VERSION_FILE.read_text().strip()
-    return "2.0.0"
+    # Резервное значение обязано совпадать с <Version> в KTools.App.csproj (ишью #93).
+    return "2.3.1"
 
 
 def save_version(version: str) -> None:

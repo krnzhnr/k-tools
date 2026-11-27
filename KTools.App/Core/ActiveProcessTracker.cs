@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
+using System.Runtime.InteropServices;
 
 namespace KTools_App.Core;
 
@@ -20,8 +21,14 @@ public static class ActiveProcessTracker
     public const string ErrorPidReuse = "pid-reuse-detected";
     public const string ErrorCapacityEvicted = "capacity-evicted";
 
+    private const int JobObjectBasicLimitInformationClass = 2;
+    private const uint JobObjectLimitKillOnJobClose = 0x2000;
+
     private static readonly object Gate = new();
     private static readonly Dictionary<int, TrackedProcess> Tracked = new();
+
+    private static IntPtr _jobHandle;
+    private static long _jobAttachFailures;
 
     private static int _shutdownRequested;
     private static int _nextRegistrationId;
@@ -73,6 +80,38 @@ public static class ActiveProcessTracker
 
     public static long CapacityEvictionCount => Interlocked.Read(ref _capacityEvictions);
 
+    /// <summary>
+    /// Признак активного задания Job Object: пока задание существует, ОС завершит
+    /// привязанные дочерние процессы при гибели приложения.
+    /// </summary>
+    public static bool IsJobObjectActive
+    {
+        get
+        {
+            if (!OperatingSystem.IsWindows())
+            {
+                return false;
+            }
+
+            lock (Gate)
+            {
+                return _jobHandle != IntPtr.Zero;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Число неудачных попыток привязки процессов к заданию. Привязка добровольная:
+    /// отказ не мешает кооперативному завершению через реестр процессов.
+    /// </summary>
+    public static long JobAttachFailureCount => Interlocked.Read(ref _jobAttachFailures);
+
+    /// <summary>
+    /// Точка расширения для тестов: реализация системных вызовов Job Object.
+    /// По умолчанию используются реальные вызовы kernel32.
+    /// </summary>
+    internal static IJobObjectApi JobObjectApi { get; set; } = new WindowsJobObjectApi();
+
     public static bool IsAcceptingRegistrations => !IsShutdownRequested;
 
     public static bool TryBeginShutdown()
@@ -96,6 +135,35 @@ public static class ActiveProcessTracker
             }
 
             Tracked.Clear();
+        }
+    }
+
+    /// <summary>
+    /// Сбрасывает задание Job Object и точку расширения в состояние по умолчанию.
+    /// Используется только в тестах для изоляции: закрывает текущий дескриптор
+    /// через активную реализацию и возвращает реальные системные вызовы.
+    /// </summary>
+    internal static void ResetJobObjectForTests()
+    {
+        IntPtr job;
+        IJobObjectApi api;
+        lock (Gate)
+        {
+            job = _jobHandle;
+            _jobHandle = IntPtr.Zero;
+            api = JobObjectApi;
+            JobObjectApi = new WindowsJobObjectApi();
+        }
+
+        if (job != IntPtr.Zero)
+        {
+            try
+            {
+                api.CloseJobObject(job);
+            }
+            catch (Exception)
+            {
+            }
         }
     }
 
@@ -147,6 +215,7 @@ public static class ActiveProcessTracker
             EnforceCapacity();
             int registrationId = NextRegistrationId();
             Tracked[registrationId] = new TrackedProcess(registrationId, process, owned, osPid, startTimeUtc);
+            AttachToJobLocked(process);
             return true;
         }
     }
@@ -169,6 +238,69 @@ public static class ActiveProcessTracker
                     return;
                 }
             }
+        }
+    }
+
+    /// <summary>
+    /// Привязывает запущенный процесс к заданию приложения с флагом KILL_ON_JOB_CLOSE.
+    /// После привязки ОС завершит процесс при гибели приложения даже без штатного завершения.
+    /// Отказ безопасен: кооперативное завершение через реестр продолжает работать.
+    /// </summary>
+    /// <param name="process">Запущенный дочерний процесс.</param>
+    /// <returns>True, если процесс привязан к заданию.</returns>
+    public static bool TryAttachToJob(Process? process)
+    {
+        if (process is null || !OperatingSystem.IsWindows())
+        {
+            return false;
+        }
+
+        lock (Gate)
+        {
+            return AttachToJobLocked(process);
+        }
+    }
+
+    /// <summary>
+    /// Проверяет, привязан ли процесс к заданию приложения.
+    /// </summary>
+    /// <param name="process">Проверяемый процесс.</param>
+    /// <returns>True, если процесс числится в задании приложения.</returns>
+    public static bool IsAttachedToJob(Process? process)
+    {
+        if (process is null || !OperatingSystem.IsWindows())
+        {
+            return false;
+        }
+
+        IntPtr job;
+        lock (Gate)
+        {
+            job = _jobHandle;
+        }
+
+        if (job == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        IntPtr processHandle;
+        try
+        {
+            processHandle = process.Handle;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+
+        try
+        {
+            return JobObjectApi.IsProcessInJob(processHandle, job);
+        }
+        catch (Exception)
+        {
+            return false;
         }
     }
 
@@ -671,6 +803,209 @@ public static class ActiveProcessTracker
         return string.Create(
             CultureInfo.InvariantCulture,
             $"{exception.GetType().Name}:0x{exception.HResult:X8}");
+    }
+
+    /// <summary>
+    /// Создаёт задание приложения с флагом KILL_ON_JOB_CLOSE при первом обращении.
+    /// Дескриптор живёт до завершения процесса: его закрытие сняло бы гарантию ОС.
+    /// Вызывать только под блокировкой <see cref="Gate"/>.
+    /// </summary>
+    /// <returns>True, если задание существует и настроено.</returns>
+    private static bool EnsureJobObjectLocked()
+    {
+        if (_jobHandle != IntPtr.Zero)
+        {
+            return true;
+        }
+
+        IntPtr job;
+        try
+        {
+            job = JobObjectApi.CreateJobObject();
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+
+        if (job == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        bool configured;
+        try
+        {
+            configured = JobObjectApi.ConfigureKillOnClose(job);
+        }
+        catch (Exception)
+        {
+            configured = false;
+        }
+
+        if (!configured)
+        {
+            try
+            {
+                JobObjectApi.CloseJobObject(job);
+            }
+            catch (Exception)
+            {
+            }
+
+            return false;
+        }
+
+        _jobHandle = job;
+        return true;
+    }
+
+    /// <summary>
+    /// Привязывает процесс к заданию приложения. Неудача фиксируется в счётчике,
+    /// но не мешает кооперативному завершению через реестр.
+    /// Вызывать только под блокировкой <see cref="Gate"/>.
+    /// </summary>
+    /// <param name="process">Запущенный дочерний процесс.</param>
+    /// <returns>True, если процесс привязан к заданию.</returns>
+    private static bool AttachToJobLocked(Process process)
+    {
+        bool attached = TryAttachCore(process);
+        if (!attached)
+        {
+            Interlocked.Increment(ref _jobAttachFailures);
+        }
+
+        return attached;
+    }
+
+    private static bool TryAttachCore(Process process)
+    {
+        if (!EnsureJobObjectLocked())
+        {
+            return false;
+        }
+
+        IntPtr processHandle;
+        try
+        {
+            if (process.HasExited)
+            {
+                return false;
+            }
+
+            processHandle = process.Handle;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+
+        try
+        {
+            return JobObjectApi.AssignProcessToJobObject(_jobHandle, processHandle);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Системные вызовы Job Object. Реализация по умолчанию работает через kernel32,
+    /// подмена используется только в тестах.
+    /// </summary>
+    internal interface IJobObjectApi
+    {
+        IntPtr CreateJobObject();
+
+        bool ConfigureKillOnClose(IntPtr job);
+
+        bool AssignProcessToJobObject(IntPtr job, IntPtr processHandle);
+
+        bool IsProcessInJob(IntPtr processHandle, IntPtr jobHandle);
+
+        void CloseJobObject(IntPtr job);
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct JobObjectBasicLimitInformation
+    {
+        public long PerProcessUserTimeLimit;
+        public long PerJobUserTimeLimit;
+        public uint LimitFlags;
+        public UIntPtr MinimumWorkingSetSize;
+        public UIntPtr MaximumWorkingSetSize;
+        public uint ActiveProcessLimit;
+        public UIntPtr Affinity;
+    }
+
+    private static class NativeMethods
+    {
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        internal static extern IntPtr CreateJobObject(IntPtr jobAttributes, string? name);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool SetInformationJobObject(
+            IntPtr job,
+            int jobObjectInformationClass,
+            ref JobObjectBasicLimitInformation jobObjectInformation,
+            uint jobObjectInformationLength);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool IsProcessInJob(
+            IntPtr processHandle,
+            IntPtr jobHandle,
+            [MarshalAs(UnmanagedType.Bool)] out bool result);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool CloseHandle(IntPtr handle);
+    }
+
+    /// <summary>
+    /// Реальные системные вызовы Job Object через kernel32.
+    /// </summary>
+    internal sealed class WindowsJobObjectApi : IJobObjectApi
+    {
+        public IntPtr CreateJobObject()
+        {
+            return NativeMethods.CreateJobObject(IntPtr.Zero, null);
+        }
+
+        public bool ConfigureKillOnClose(IntPtr job)
+        {
+            var limits = new JobObjectBasicLimitInformation
+            {
+                LimitFlags = JobObjectLimitKillOnJobClose
+            };
+
+            return NativeMethods.SetInformationJobObject(
+                job,
+                JobObjectBasicLimitInformationClass,
+                ref limits,
+                (uint)Marshal.SizeOf<JobObjectBasicLimitInformation>());
+        }
+
+        public bool AssignProcessToJobObject(IntPtr job, IntPtr processHandle)
+        {
+            return NativeMethods.AssignProcessToJobObject(job, processHandle);
+        }
+
+        public bool IsProcessInJob(IntPtr processHandle, IntPtr jobHandle)
+        {
+            return NativeMethods.IsProcessInJob(processHandle, jobHandle, out bool attached) && attached;
+        }
+
+        public void CloseJobObject(IntPtr job)
+        {
+            NativeMethods.CloseHandle(job);
+        }
     }
 
     private sealed class TrackedProcess

@@ -99,6 +99,7 @@ public static class SettingsEventIds
     public const string PersistenceFailed = "settings.persistence.failed";
     public const string DefaultsPersisted = "settings.defaults.persisted";
     public const string DefaultsDeferred = "settings.defaults.deferred";
+    public const string DefaultsMismatch = "settings.defaults.mismatch";
     public const string Normalized = "settings.normalized";
     public const string DirectoryConfigured = "settings.directory.configured";
     public const string CommitFallback = "settings.persistence.fallback_failed";
@@ -106,7 +107,7 @@ public static class SettingsEventIds
 
 /// <summary>
 /// Безопасный стабильный хэш значения параметра настроек.
-/// В журнал попадает только хэш: исходное значение никогда не логируется.
+/// В журнал попадает понятное значение через свойство Value, хэш сохраняется как дополнение для обратной совместимости.
 /// </summary>
 public static class PersistenceValueHash
 {

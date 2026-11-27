@@ -55,7 +55,7 @@ public class LogServiceJsonlTests
 
         for (int index = 0; index < count; index++)
         {
-            service.Info("событие " + index, "JsonlTest");
+            service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, "событие " + index, source: "JsonlTest");
         }
 
         service.Flush(TimeSpan.FromSeconds(10)).Should().BeTrue();
@@ -73,7 +73,7 @@ public class LogServiceJsonlTests
         using LogService service = CreateService(scope);
         string multiline = "первая строка\nвторая строка\r\nтретья строка\tс табуляцией";
 
-        service.Error(multiline, "JsonlTest");
+        service.Write("test.event.failed", LogLevel.Error, LogStatus.Failed, multiline, source: "JsonlTest");
         service.Flush(TimeSpan.FromSeconds(30)).Should().BeTrue();
 
         string[] lines = ReadLinesShared(service.CurrentLogFile!);
@@ -127,7 +127,7 @@ public class LogServiceJsonlTests
             options.RotationTriggerRatio = 0.99d;
         });
 
-        service.Write("app.oversized", LogLevel.Info, new string('я', 3000), "JsonlTest");
+        service.Write("app.oversized", LogLevel.Info, LogStatus.None, new string('я', 3000), source: "JsonlTest");
         service.Flush(TimeSpan.FromSeconds(30)).Should().BeTrue();
 
         string[] lines = ReadLinesShared(service.CurrentLogFile!);
@@ -146,15 +146,15 @@ public class LogServiceJsonlTests
         using LogService service = CreateService(scope);
         string injection = "{\"schemaVersion\":999,\"eventId\":\"forged.event\",\"message\":\"подделка\"}\n{\"schemaVersion\":1}";
 
-        service.Info(injection, "JsonlTest");
-        service.Info("обычное событие", "JsonlTest");
+        service.Write("test.jsonl.injection", LogLevel.Info, LogStatus.None, injection, source: "JsonlTest");
+        service.Write("test.jsonl.event", LogLevel.Info, LogStatus.None, "обычное событие", source: "JsonlTest");
         service.Flush(TimeSpan.FromSeconds(30)).Should().BeTrue();
 
         string[] lines = ReadLinesShared(service.CurrentLogFile!);
         lines.Should().HaveCount(2, "инъекция не создаёт дополнительных физических строк");
 
         using JsonDocument forged = JsonDocument.Parse(lines[0]);
-        forged.RootElement.GetProperty("eventId").GetString().Should().Be("legacy.jsonltest.info", "поддельное событие не интерпретируется как протокол");
+        forged.RootElement.GetProperty("eventId").GetString().Should().Be("test.jsonl.injection", "поддельное событие не интерпретируется как протокол");
         forged.RootElement.GetProperty("message").GetString().Should().Be(injection);
 
         using JsonDocument real = JsonDocument.Parse(lines[1]);
@@ -269,8 +269,8 @@ public class LogServiceJsonlTests
     {
         using var scope = new TempDirectoryScope();
         using LogService service = CreateService(scope);
-        service.Write("app.first", LogLevel.Info, "первое", "JsonlTest");
-        service.Write("app.second", LogLevel.Info, "второе", "JsonlTest");
+        service.Write("app.first", LogLevel.Info, LogStatus.None, "первое", source: "JsonlTest");
+        service.Write("app.second", LogLevel.Info, LogStatus.None, "второе", source: "JsonlTest");
         service.Flush(TimeSpan.FromSeconds(30)).Should().BeTrue();
         AppendRaw(service.CurrentLogFile!, "{\"schemaVersion\":1,\"channel\":\"app_diag\",\"session\":\"broken\"\n");
 
@@ -285,8 +285,8 @@ public class LogServiceJsonlTests
     {
         using var scope = new TempDirectoryScope();
         using LogService service = CreateService(scope);
-        service.Write("app.first", LogLevel.Info, "первое", "JsonlTest");
-        service.Write("app.second", LogLevel.Info, "второе", "JsonlTest");
+        service.Write("app.first", LogLevel.Info, LogStatus.None, "первое", source: "JsonlTest");
+        service.Write("app.second", LogLevel.Info, LogStatus.None, "второе", source: "JsonlTest");
         service.Flush(TimeSpan.FromSeconds(30)).Should().BeTrue();
 
         string[] valid = ReadLinesShared(service.CurrentLogFile!);
@@ -305,7 +305,7 @@ public class LogServiceJsonlTests
     {
         using var scope = new TempDirectoryScope();
         using LogService service = CreateService(scope);
-        service.Write("app.valid", LogLevel.Info, "валидное", "JsonlTest");
+        service.Write("app.valid", LogLevel.Info, LogStatus.None, "валидное", source: "JsonlTest");
         service.Flush(TimeSpan.FromSeconds(30)).Should().BeTrue();
 
         string[] valid = ReadLinesShared(service.CurrentLogFile!);
@@ -387,7 +387,7 @@ public class LogServiceJsonlTests
     {
         using var scope = new TempDirectoryScope();
         using LogService service = CreateService(scope);
-        service.Write("app.valid", LogLevel.Info, "валидное", "JsonlTest");
+        service.Write("app.valid", LogLevel.Info, LogStatus.None, "валидное", source: "JsonlTest");
         service.Flush(TimeSpan.FromSeconds(30)).Should().BeTrue();
 
         string[] valid = ReadLinesShared(service.CurrentLogFile!);
@@ -410,7 +410,7 @@ public class LogServiceJsonlTests
         using var scope = new TempDirectoryScope();
         using LogService service = CreateService(scope);
 
-        service.Info("проверка кодировки", "JsonlTest");
+        service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, "проверка кодировки", source: "JsonlTest");
         service.Flush(TimeSpan.FromSeconds(30)).Should().BeTrue();
 
         using FileStream stream = new(service.CurrentLogFile!, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
@@ -427,7 +427,7 @@ public class LogServiceJsonlTests
         using LogService service = CreateService(scope);
         string message = "первая" + (char)0 + "строка" + (char)7 + "вторая";
 
-        service.Warn(message, "JsonlTest");
+        service.Write("test.event.recorded", LogLevel.Warning, LogStatus.None, message, source: "JsonlTest");
         service.Flush(TimeSpan.FromSeconds(30)).Should().BeTrue();
 
         string[] lines = ReadLinesShared(service.CurrentLogFile!);
@@ -451,7 +451,7 @@ public class LogServiceJsonlTests
             ["Reason"] = new string('e', 8000)
         };
 
-        service.Write("app.large.properties", LogLevel.Warning, "большие свойства", "JsonlTest", LogStatus.Failed, null, properties);
+        service.Write("app.large.properties", LogLevel.Warning, LogStatus.Failed, "большие свойства", source: "JsonlTest", properties: properties);
         service.Flush(TimeSpan.FromSeconds(30)).Should().BeTrue();
 
         IReadOnlyList<LogEvent> events = service.ReadRecentEvents(10);

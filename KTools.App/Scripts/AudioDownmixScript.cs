@@ -139,8 +139,17 @@ public sealed class AudioDownmixScript : AbstractScript
         ScriptProgressCallback progressCallback,
         int fileIndex,
         int totalCount,
-        ExecutionContext context)
+        ExecutionContext context,
+        CancellationToken cancellationToken = default)
     {
+        if (IsCancellationRequested(cancellationToken))
+        {
+            return ExecutionResult.Cancelled(
+                context,
+                new[] { "Обработка отменена до запуска элемента." },
+                errorCode: "cancelled-before-start",
+                cleanupState: CleanupState.NotStarted);
+        }
         var results = new List<string>();
 
         // Извлекаем настройки
@@ -247,7 +256,7 @@ public sealed class AudioDownmixScript : AbstractScript
         try
         {
             var structure = await _mediaProbeService.ProbeAsync(
-                filePath);
+                filePath, cancellationToken);
             if (structure != null)
             {
                 duration = structure.Duration;
@@ -268,7 +277,7 @@ public sealed class AudioDownmixScript : AbstractScript
                 .With("Retryable", false));
         }
 
-        using var cts = new CancellationTokenSource();
+        using var cts = CreateLinkedCancellationSource(cancellationToken);
         ProcessResult? success = null;
 
         if (mode == "Dolby Encoding Engine (DEE)")

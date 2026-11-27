@@ -4,7 +4,9 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 
 using KTools_App.Core;
@@ -24,9 +26,15 @@ public sealed class MediaDownloaderScript : AbstractScript
 {
     private static readonly Regex ProgressRegex = new(@"\[download\]\s+(\d+(?:\.\d+)?)%\s+of", RegexOptions.Compiled);
 
-    public override string Name => "Загрузка медиа";
-    public override string Description => "Загрузка видео- и аудиофайлов из сети по URL-адресам через yt-dlp";
-    public override string Category => "Сеть";
+    /// <summary>
+    /// Вайтлист кодов языков субтитров: 2-8 латинских букв с необязательным регионом через дефис.
+    /// Всё, что не подошло (кавычки, пробелы, флаги), отбрасывается и в командную строку не попадает.
+    /// </summary>
+    private static readonly Regex SubtitleCodeAllowlist = new(@"^[A-Za-z]{2,8}(?:-[A-Za-z]{2,8})?$", RegexOptions.Compiled);
+
+    public override string Name => AppConstants.ScriptMetadata.MediaDownloaderName;
+    public override string Description => AppConstants.ScriptMetadata.MediaDownloaderDesc;
+    public override string Category => AppConstants.ScriptCategory.Network;
     public override string IconName => AppConstants.ScriptIcons.MediaDownloader;
     public override string[] FileExtensions => new[] { ".url", ".html" }; // Виртуальные расширения
 
@@ -60,6 +68,100 @@ public sealed class MediaDownloaderScript : AbstractScript
     {
     }
 
+    /// <summary>
+    /// Проверяет ссылку до первого запуска yt-dlp: только http/https без пробелов, кавычек и управляющих символов.
+    /// </summary>
+    public static bool IsValidDownloadUrl(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            return false;
+        }
+
+        string candidate = url.Trim();
+        foreach (char character in candidate)
+        {
+            if (char.IsWhiteSpace(character) || char.IsControl(character))
+            {
+                return false;
+            }
+
+            if (character is '"' or '\'' or '<' or '>' or '\\' or '^' or '`')
+            {
+                return false;
+            }
+        }
+
+        if (!Uri.TryCreate(candidate, UriKind.Absolute, out Uri? uri))
+        {
+            return false;
+        }
+
+        if (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
+        {
+            return false;
+        }
+
+        return !string.IsNullOrEmpty(uri.Host);
+    }
+
+    /// <summary>
+    /// Проверяет код языка субтитров из JSON сайта по вайтлисту.
+    /// </summary>
+    public static bool IsSafeSubtitleCode(string? code)
+    {
+        if (string.IsNullOrWhiteSpace(code))
+        {
+            return false;
+        }
+
+        string candidate = code.Trim();
+        if (candidate.Length is < 2 or > 10)
+        {
+            return false;
+        }
+
+        return SubtitleCodeAllowlist.IsMatch(candidate);
+    }
+
+    /// <summary>
+    /// Разбивает дополнительные аргументы пользователя на токены с учётом кавычек.
+    /// </summary>
+    private static List<string> SplitAdditionalArgs(string additionalArgs)
+    {
+        var tokens = new List<string>();
+        var current = new StringBuilder();
+        bool inQuotes = false;
+        foreach (char character in additionalArgs)
+        {
+            if (character == '"')
+            {
+                inQuotes = !inQuotes;
+                continue;
+            }
+
+            if (char.IsWhiteSpace(character) && !inQuotes)
+            {
+                if (current.Length > 0)
+                {
+                    tokens.Add(current.ToString());
+                    current.Clear();
+                }
+
+                continue;
+            }
+
+            current.Append(character);
+        }
+
+        if (current.Length > 0)
+        {
+            tokens.Add(current.ToString());
+        }
+
+        return tokens;
+    }
+
     public override async Task<ExecutionResult> ExecuteSingleAsync(
         string filePath,
         Dictionary<string, object> settings,
@@ -67,8 +169,17 @@ public sealed class MediaDownloaderScript : AbstractScript
         ScriptProgressCallback progressCallback,
         int fileIndex,
         int totalCount,
-        ExecutionContext context)
+        ExecutionContext context,
+        CancellationToken cancellationToken = default)
     {
+        if (IsCancellationRequested(cancellationToken))
+        {
+            return ExecutionResult.Cancelled(
+                context,
+                new[] { "Обработка отменена до запуска элемента." },
+                errorCode: "cancelled-before-start",
+                cleanupState: CleanupState.NotStarted);
+        }
         var results = new List<string>();
         string hostLabel = SafeHostLabel(filePath);
         ProcessExecutionContext processContext = ProcessExecutionContext.FromOperation(
@@ -76,9 +187,7 @@ public sealed class MediaDownloaderScript : AbstractScript
             "yt-dlp",
             context.ItemId);
 
-        if (string.IsNullOrWhiteSpace(filePath) ||
-            !Uri.TryCreate(filePath, UriKind.Absolute, out var validatedUri) ||
-            (validatedUri.Scheme != Uri.UriSchemeHttp && validatedUri.Scheme != Uri.UriSchemeHttps))
+        if (!IsValidDownloadUrl(filePath))
         {
             WriteOutcome(
                 "media_download.rejected",
@@ -113,7 +222,10 @@ public sealed class MediaDownloaderScript : AbstractScript
         var queueItem = FilesQueue.FirstOrDefault(f => f.FilePath == filePath);
         string formatArgValue = queueItem?.SelectedFormat?.FormatArg ?? "bv*+ba/b";
         bool isAudioOnly = queueItem?.SelectedFormat?.IsAudioOnly ?? (formatArgValue == "ba" || formatArgValue == "ba/b");
-        string subtitleCode = queueItem?.SelectedSubtitle?.Code ?? "none";
+        string rawSubtitleCode = queueItem?.SelectedSubtitle?.Code ?? "none";
+        string subtitleCode = rawSubtitleCode is "all" or "none"
+            ? rawSubtitleCode
+            : IsSafeSubtitleCode(rawSubtitleCode) ? rawSubtitleCode : "none";
 
         // Определяем директорию сохранения
         string targetDir = string.IsNullOrEmpty(outputPath)
@@ -182,17 +294,19 @@ public sealed class MediaDownloaderScript : AbstractScript
 
         progressCallback(fileIndex, totalCount, "Запуск скачивания...", 0.0);
 
-        // Формируем аргументы. Пользовательские AdditionalArgs, адрес ссылки и её
+        // Формируем аргументы списком токенов: каждый элемент уходит в процесс
+        // ровно одним аргументом через ProcessStartInfo.ArgumentList без разбора кавычек.
+        // Пользовательские AdditionalArgs, адрес ссылки и её
         // query-часть в журнал не попадают: только количество аргументов и их хеш.
         var args = new List<string>
         {
-            $"-f \"{formatArgValue}\"",
-            $"--paths \"{targetDir}\"",
-            "--output \"%(title)s.%(ext)s\"",
-            "--http-chunk-size 10M",
-            "--concurrent-fragments 4",
-            "--retries 25",
-            "--fragment-retries 25"
+            "-f", formatArgValue,
+            "--paths", targetDir,
+            "--output", "%(title)s.%(ext)s",
+            "--http-chunk-size", "10M",
+            "--concurrent-fragments", "4",
+            "--retries", "25",
+            "--fragment-retries", "25"
         };
 
         if (forceOverwrite)
@@ -256,7 +370,8 @@ public sealed class MediaDownloaderScript : AbstractScript
             {
                 args.Add("--write-subs");
                 args.Add("--write-auto-subs");
-                args.Add($"--sub-langs \"{subtitleCode}\"");
+                args.Add("--sub-langs");
+                args.Add(subtitleCode);
             }
 
             if (subtitleCode != "none" && embedSubs && !isAudioOnly)
@@ -276,23 +391,24 @@ public sealed class MediaDownloaderScript : AbstractScript
         string ffmpegPath = _pathManager.GetBinaryPath("ffmpeg");
         if (File.Exists(ffmpegPath))
         {
-            args.Add($"--ffmpeg-location \"{ffmpegPath}\"");
+            args.Add("--ffmpeg-location");
+            args.Add(ffmpegPath);
         }
 
         if (!string.IsNullOrWhiteSpace(additionalArgs))
         {
-            args.Add(additionalArgs);
+            args.AddRange(SplitAdditionalArgs(additionalArgs));
         }
 
         string nodePath = _pathManager.GetBinaryPath("node");
         if (File.Exists(nodePath))
         {
-            args.Add($"--js-runtimes \"node:{nodePath}\"");
+            args.Add("--js-runtimes");
+            args.Add($"node:{nodePath}");
         }
 
-        args.Add($"\"{filePath}\"");
+        args.Add(filePath);
 
-        string argumentsString = string.Join(" ", args);
         var runner = new DirectProcessRunner(_logService);
         var journalLimiter = new ProcessOutputRateLimiter(4, 1000);
         int lastRaiseTick = Environment.TickCount;
@@ -313,12 +429,13 @@ public sealed class MediaDownloaderScript : AbstractScript
         }
 
         ProcessResult runResult;
+        using var linkedCts = CreateLinkedCancellationSource(cancellationToken);
         try
         {
             runResult = await runner.RunAsync(
                 ytdlpPath,
                 "yt-dlp",
-                argumentsString,
+                (IReadOnlyList<string>)args,
                 processContext,
                 onOutputLine: line =>
                 {
@@ -339,8 +456,8 @@ public sealed class MediaDownloaderScript : AbstractScript
                     }
                 },
                 onErrorLine: line => AppendJournal("[stderr] ", line),
-                isCancellationRequested: () => IsCancelled,
-                cancellationToken: CancellationToken,
+                isCancellationRequested: () => IsCancellationRequested(cancellationToken),
+                cancellationToken: linkedCts.Token,
                 workingDir: targetDir);
         }
         catch (Exception ex)

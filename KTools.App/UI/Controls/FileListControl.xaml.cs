@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
@@ -7,6 +8,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
+using System.Threading;
 using System.Threading.Tasks;
 
 using CommunityToolkit.Mvvm.Messaging;
@@ -448,6 +450,18 @@ public sealed partial class FileListControl : UserControl
     private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _syncMuxingTimer;
 
     /// <summary>
+    /// Источник отмены фоновых задач контрола (ишью #122).
+    /// Пересоздаётся при каждой загрузке контрола.
+    /// </summary>
+    private CancellationTokenSource _lifetimeCts = new();
+
+    /// <summary>
+    /// Источники отмены фоновых запросов метаданных ссылок по элементам (ишью #122).
+    /// Отмена убивает процесс yt-dlp и запрещает запись в отсоединённые элементы.
+    /// </summary>
+    private readonly ConcurrentDictionary<FileQueueItem, CancellationTokenSource> _urlInfoSources = new();
+
+    /// <summary>
     /// Инициализирует FileListControl.
     /// </summary>
     public FileListControl()
@@ -472,9 +486,77 @@ public sealed partial class FileListControl : UserControl
 
         // Пилюли FPS/CFR-VFR переключаются из персонализации, пока список открыт:
         // обновляем бейджики живым сообщением, не дожидаясь возврата на вкладку.
+        // Страница кэшируется навигационным фреймом: без отписки в Unloaded
+        // контрол оставался получателем сообщений до сборки мусора (ишью #125).
+        RegisterMessenger();
+
+        Unloaded += FileListControl_Unloaded;
+        Loaded += FileListControl_Loaded;
+    }
+
+    /// <summary>
+    /// Подписывается на сообщения мессенджера. Идемпотентно:
+    /// перед подпиской снимает прежние, чтобы повторный Loaded не дублировал получателя.
+    /// </summary>
+    private void RegisterMessenger()
+    {
+        WeakReferenceMessenger.Default.UnregisterAll(this);
         WeakReferenceMessenger.Default.Register<FileListControl, QueueBadgeVisibilityChangedMessage>(
             this,
             (r, m) => r._dispatcherQueue.TryEnqueue(r.NotifyBadgeSettingsChanged));
+    }
+
+    /// <summary>
+    /// Детерминированно снимает подписки мессенджера при выгрузке контрола (ишью #125).
+    /// </summary>
+    private void UnregisterMessenger()
+    {
+        WeakReferenceMessenger.Default.UnregisterAll(this);
+    }
+
+    private void FileListControl_Loaded(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
+    {
+        RegisterMessenger();
+        CancellationTokenSource previous = _lifetimeCts;
+        _lifetimeCts = new CancellationTokenSource();
+        try
+        {
+            previous.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+
+        try
+        {
+            previous.Dispose();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }
+
+    private void FileListControl_Unloaded(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
+    {
+        UnregisterMessenger();
+        try
+        {
+            _lifetimeCts.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+
+        foreach (var pair in _urlInfoSources)
+        {
+            try
+            {
+                pair.Value.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        }
     }
 
     /// <summary>
@@ -510,6 +592,34 @@ public sealed partial class FileListControl : UserControl
         object? sender,
         NotifyCollectionChangedEventArgs e)
     {
+        if (e.Action == NotifyCollectionChangedAction.Remove && e.OldItems != null)
+        {
+            foreach (FileQueueItem item in e.OldItems)
+            {
+                CancelUrlInfo(item);
+            }
+        }
+        else if (e.Action == NotifyCollectionChangedAction.Replace && e.OldItems != null)
+        {
+            foreach (FileQueueItem item in e.OldItems)
+            {
+                CancelUrlInfo(item);
+            }
+        }
+        else if (e.Action == NotifyCollectionChangedAction.Reset)
+        {
+            foreach (var pair in _urlInfoSources)
+            {
+                try
+                {
+                    pair.Value.Cancel();
+                }
+                catch (ObjectDisposedException)
+                {
+                }
+            }
+        }
+
         if (e.Action == NotifyCollectionChangedAction.Reset)
         {
             _syncMuxingTimer.Stop();
@@ -522,6 +632,24 @@ public sealed partial class FileListControl : UserControl
         }
 
         UpdateEmptyState();
+    }
+
+    /// <summary>
+    /// Гасит фоновый запрос метаданных удалённого элемента (ишью #122).
+    /// Освобождением источника занимается только владеющая им задача.
+    /// </summary>
+    private void CancelUrlInfo(FileQueueItem item)
+    {
+        if (_urlInfoSources.TryGetValue(item, out CancellationTokenSource? source) && source is not null)
+        {
+            try
+            {
+                source.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        }
     }
 
     /// <summary>
@@ -623,6 +751,7 @@ public sealed partial class FileListControl : UserControl
     /// <summary>
     /// Добавить файлы в очередь с валидацией допустимых расширений скрипта.
     /// </summary>
+    /// <param name="filePaths">Пути добавляемых файлов.</param>
     public void AddFiles(IEnumerable<string> filePaths)
     {
         // Скрипты с накапливаемой очередью (например, сборка MKV) игнорируют
@@ -633,6 +762,11 @@ public sealed partial class FileListControl : UserControl
         }
 
         bool addedAny = false;
+
+        // Дедупликация за O(n): линейный поиск по списку при каждом дропе
+        // сотни файлов вырождался в квадрат. Хеш-множество строится один раз
+        // и пополняется по мере добавления, включая дубли внутри пакета.
+        var knownPaths = new HashSet<string>(Files.Select(f => f.FilePath), StringComparer.OrdinalIgnoreCase);
         foreach (string path in filePaths)
         {
             if (!File.Exists(path)) continue;
@@ -648,7 +782,7 @@ public sealed partial class FileListControl : UserControl
             }
 
             // Исключаем дубликаты
-            if (Files.Any(f => f.FilePath.Equals(path, StringComparison.OrdinalIgnoreCase)))
+            if (!knownPaths.Add(path))
             {
                 continue;
             }
@@ -670,20 +804,25 @@ public sealed partial class FileListControl : UserControl
 
     /// <summary>
     /// Запустить фоновый асинхронный анализ технической структуры медиафайла.
+    /// Результат не записывается в элементы, удалённые из очереди.
     /// Все логи и обработка ошибок на русском языке.
     /// </summary>
     private void StartFileAnalysis(FileQueueItem item)
     {
+        CancellationToken token = _lifetimeCts.Token;
         _ = Task.Run(async () =>
         {
             try
             {
-                var structure = await _mediaProbeService.ProbeAsync(item.FilePath);
+                var structure = await _mediaProbeService.ProbeAsync(item.FilePath, token).ConfigureAwait(false);
                 if (structure != null)
                 {
                     _dispatcherQueue.TryEnqueue(() =>
                     {
-                        item.MediaInfo = structure;
+                        if (Files.Contains(item))
+                        {
+                            item.MediaInfo = structure;
+                        }
                     });
                     _logService.Write("media.probe.completed", LogLevel.Debug, LogStatus.Succeeded, $"Фоновый анализ завершён для '{LogProps.FileName(item.FilePath)}': дорожек {structure.Tracks.Count}, вложений {structure.Attachments.Count}", source: SourceName, properties: LogProps.Create("FileName", LogProps.FileName(item.FilePath)).With("Count", structure.Tracks.Count).With("Total", structure.Attachments.Count));
                 }
@@ -1599,6 +1738,13 @@ public sealed partial class FileListControl : UserControl
     {
         if (string.IsNullOrWhiteSpace(url)) return;
 
+        // Валидация до первого запуска yt-dlp: инъекционная строка отклоняется здесь.
+        if (!MediaDownloaderScript.IsValidDownloadUrl(url))
+        {
+            _logService.Write("file_list.url_rejected", LogLevel.Warning, LogStatus.Skipped, "Отклонена невалидная ссылка: поддерживаются только http(s) адреса без пробелов и кавычек", source: SourceName, properties: LogProps.Create("ErrorCode", "invalid-url").With("Stage", "validate"));
+            return;
+        }
+
         var item = new FileQueueItem(url);
 
         // Добавляем дефолтные варианты качеств
@@ -1625,11 +1771,43 @@ public sealed partial class FileListControl : UserControl
 
         Files.Add(item);
 
-        // Запуск фонового получения информации
-        _ = Task.Run(() => FetchUrlInfoAsync(item));
+        // Запуск фонового получения информации: отмена убивает процесс yt-dlp,
+        // результат не пишется в удалённые из очереди элементы.
+        CancellationTokenSource urlCts = CancellationTokenSource.CreateLinkedTokenSource(_lifetimeCts.Token);
+        if (_urlInfoSources.TryGetValue(item, out CancellationTokenSource? previous) && previous is not null)
+        {
+            try
+            {
+                previous.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        }
+
+        _urlInfoSources[item] = urlCts;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await FetchUrlInfoAsync(item, urlCts.Token).ConfigureAwait(false);
+            }
+            finally
+            {
+                var pair = new KeyValuePair<FileQueueItem, CancellationTokenSource>(item, urlCts);
+                ((System.Collections.Generic.ICollection<KeyValuePair<FileQueueItem, CancellationTokenSource>>)_urlInfoSources).Remove(pair);
+                try
+                {
+                    urlCts.Dispose();
+                }
+                catch (ObjectDisposedException)
+                {
+                }
+            }
+        });
     }
 
-    private async Task FetchUrlInfoAsync(FileQueueItem item)
+    private async Task FetchUrlInfoAsync(FileQueueItem item, CancellationToken token)
     {
         string processId = ProcessExecutionContext.CreateProcessId();
         ProcessExecutionContext context = ProcessExecutionContext.Create(
@@ -1637,6 +1815,12 @@ public sealed partial class FileListControl : UserControl
             itemId: ProcessExecutionContext.HashArguments(item.FilePath),
             attempt: 1);
         string hostLabel = SafeHostLabel(item.FilePath);
+
+        // Повторная валидация перед запуском зондирования: ссылка могла прийти не через AddUrl.
+        if (!MediaDownloaderScript.IsValidDownloadUrl(item.FilePath))
+        {
+            return;
+        }
 
         try
         {
@@ -1647,8 +1831,17 @@ public sealed partial class FileListControl : UserControl
             }
 
             string nodePath = _pathManager.GetBinaryPath("node");
-            string jsRuntimeArg = File.Exists(nodePath) ? "--js-runtimes \"node:node\" " : string.Empty;
-            string arguments = $"{jsRuntimeArg}--dump-json \"{item.FilePath}\"";
+
+            // Список токенов уходит в процесс через ArgumentList: ссылка передаётся
+            // ровно одним аргументом и не может добавить флаги yt-dlp.
+            var probeArgs = new List<string> { "--dump-json" };
+            if (File.Exists(nodePath))
+            {
+                probeArgs.Add("--js-runtimes");
+                probeArgs.Add($"node:{nodePath}");
+            }
+
+            probeArgs.Add(item.FilePath);
 
             var runner = new DirectProcessRunner(_logService);
             string stdout = string.Empty;
@@ -1660,10 +1853,10 @@ public sealed partial class FileListControl : UserControl
             ProcessResult result = await runner.RunAsync(
                 ytdlpPath,
                 "yt-dlp",
-                arguments,
+                (IReadOnlyList<string>)probeArgs,
                 context,
                 onOutputLine: line => collector.Append(line),
-                cancellationToken: CancellationToken.None,
+                cancellationToken: token,
                 workingDir: Path.GetDirectoryName(ytdlpPath));
 
             stdout = string.Join(string.Empty, collector.Snapshot());
@@ -1683,7 +1876,10 @@ public sealed partial class FileListControl : UserControl
                 {
                     _dispatcherQueue.TryEnqueue(() =>
                     {
-                        item.DisplayName = title;
+                        if (Files.Contains(item))
+                        {
+                            item.DisplayName = title;
+                        }
                     });
                 }
             }
@@ -1796,7 +1992,13 @@ public sealed partial class FileListControl : UserControl
             {
                 foreach (var prop in subsProp.EnumerateObject())
                 {
+                    // Ключи JSON враждебного сайта проходят вайтлист: мусор отбрасывается.
                     string code = prop.Name;
+                    if (!MediaDownloaderScript.IsSafeSubtitleCode(code))
+                    {
+                        continue;
+                    }
+
                     addedCodes.Add(code);
                     string name = TranslateLanguageCode(code);
                     tempSubtitles.Add(new DownloadSubtitleItem { Code = code, DisplayName = $"{name} ({code})" });
@@ -1808,6 +2010,11 @@ public sealed partial class FileListControl : UserControl
                 foreach (var prop in autoSubsProp.EnumerateObject())
                 {
                     string code = prop.Name;
+                    if (!MediaDownloaderScript.IsSafeSubtitleCode(code))
+                    {
+                        continue;
+                    }
+
                     if (!addedCodes.Contains(code))
                     {
                         addedCodes.Add(code);
@@ -1819,6 +2026,11 @@ public sealed partial class FileListControl : UserControl
 
             _dispatcherQueue.TryEnqueue(() =>
             {
+                if (!Files.Contains(item))
+                {
+                    return;
+                }
+
                 item.AvailableFormats.Clear();
                 foreach (var f in tempFormats)
                 {

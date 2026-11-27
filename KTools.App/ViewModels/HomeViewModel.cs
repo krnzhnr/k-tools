@@ -1,5 +1,7 @@
 ﻿// -*- coding: utf-8 -*-
+using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -20,6 +22,11 @@ public partial class HomeViewModel : ThreadSafeViewModel
 {
     private readonly INavigationService _navigationService;
     private readonly IScriptRegistry _scriptRegistry;
+
+    /// <summary>
+    /// Имя синтетической карточки без реального скрипта: дроп на неё не принимается.
+    /// </summary>
+    private const string CalculatorScriptName = "Калькулятор сдвига";
 
     /// <summary>
     /// Список скриптов категории «Видео».
@@ -97,7 +104,7 @@ public partial class HomeViewModel : ThreadSafeViewModel
     {
         if (arg is ScriptInfo script)
         {
-            if (script.Name == "Калькулятор сдвига")
+            if (script.Name == CalculatorScriptName)
             {
                 _navigationService.NavigateTo(typeof(TimingCalculatorPage));
                 return;
@@ -111,7 +118,7 @@ public partial class HomeViewModel : ThreadSafeViewModel
         }
         else if (arg is string scriptName)
         {
-            if (scriptName == "Калькулятор сдвига")
+            if (scriptName == CalculatorScriptName)
             {
                 _navigationService.NavigateTo(typeof(TimingCalculatorPage));
                 return;
@@ -123,5 +130,76 @@ public partial class HomeViewModel : ThreadSafeViewModel
                 _navigationService.NavigateTo(typeof(WorkPanel), realScript);
             }
         }
+    }
+
+    /// <summary>
+    /// Разрешает целевой скрипт для приёма дропа на карточке домашнего экрана.
+    /// Возвращает null для недоступных карточек, синтетической карточки калькулятора
+    /// и неизвестных имён: такие карточки файлы не принимают.
+    /// </summary>
+    /// <param name="info">Карточка, на которую перетаскивают файлы.</param>
+    /// <returns>Скрипт реестра или null, если дроп принимать нельзя.</returns>
+    public AbstractScript? ResolveDropScript(ScriptInfo? info)
+    {
+        if (info is null || !info.IsAvailable)
+        {
+            return null;
+        }
+
+        if (string.Equals(info.Name, CalculatorScriptName, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        return _scriptRegistry.GetScriptByName(info.Name);
+    }
+
+    /// <summary>
+    /// Отфильтровывает пути файлов по допустимым расширениям скрипта (без учёта регистра).
+    /// Скрипт без списка расширений принимает все файлы, как диалог выбора файлов.
+    /// </summary>
+    /// <param name="script">Целевой скрипт.</param>
+    /// <param name="paths">Пути-кандидаты для добавления в очередь.</param>
+    /// <returns>Только совместимые непустые пути.</returns>
+    public IReadOnlyList<string> FilterDropPaths(AbstractScript script, IEnumerable<string> paths)
+    {
+        ArgumentNullException.ThrowIfNull(script);
+        ArgumentNullException.ThrowIfNull(paths);
+
+        var cleaned = paths.Where(p => !string.IsNullOrWhiteSpace(p)).ToList();
+        if (script.FileExtensions is not { Length: > 0 })
+        {
+            return cleaned;
+        }
+
+        var allowed = new HashSet<string>(script.FileExtensions, StringComparer.OrdinalIgnoreCase);
+        return cleaned.Where(p => allowed.Contains(Path.GetExtension(p))).ToList();
+    }
+
+    /// <summary>
+    /// Запоминает совместимые пути для скрипта карточки, чтобы WorkPanel забрал их при навигации.
+    /// Возвращает false, если дроп принимать нельзя или ни один файл не подошёл по расширению.
+    /// </summary>
+    /// <param name="info">Карточка, на которую сбросили файлы.</param>
+    /// <param name="paths">Пути сброшенных файлов.</param>
+    /// <returns>True — пути запомнены, можно переходить к скрипту.</returns>
+    public bool TryStageCardDrop(ScriptInfo? info, IEnumerable<string> paths)
+    {
+        ArgumentNullException.ThrowIfNull(paths);
+
+        var script = ResolveDropScript(info);
+        if (script is null)
+        {
+            return false;
+        }
+
+        var compatible = FilterDropPaths(script, paths);
+        if (compatible.Count == 0)
+        {
+            return false;
+        }
+
+        CardDropHandoff.Stage(script.Name, compatible);
+        return true;
     }
 }

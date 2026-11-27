@@ -108,14 +108,6 @@ public class CpuEncoder : IVideoEncoder
 
     private ISoftwareCodecCapabilities GetCapabilityProvider(Dictionary<string, object>? settings)
     {
-        if (settings != null && settings.TryGetValue(CodecSettingKey, out object? codecObj) && codecObj != null)
-        {
-            string codecStr = KTools_App.Core.SettingValue.AsString(codecObj, "");
-            if (_capabilitiesMap.TryGetValue(codecStr, out var cap))
-            {
-                return cap;
-            }
-        }
-        return _defaultCapabilities;
+        return EncoderCapabilitySelector.Resolve(settings, CodecSettingKey, _capabilitiesMap, _defaultCapabilities);
     }
 }

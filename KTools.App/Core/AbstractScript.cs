@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 
 using KTools_App.Diagnostics;
@@ -228,6 +229,23 @@ public abstract class AbstractScript
         }
         catch { }
         _cts = new System.Threading.CancellationTokenSource();
+    }
+
+    /// <summary>
+    /// Проверить, запрошена ли отмена: флагом скрипта или сквозным токеном элемента.
+    /// </summary>
+    protected bool IsCancellationRequested(CancellationToken cancellationToken)
+    {
+        return IsCancelled || cancellationToken.IsCancellationRequested;
+    }
+
+    /// <summary>
+    /// Создаёт связанный источник отмены для локальных процессов скрипта:
+    /// срабатывает от отмены скрипта и от сквозного токена элемента очереди.
+    /// </summary>
+    protected CancellationTokenSource CreateLinkedCancellationSource(CancellationToken cancellationToken)
+    {
+        return CancellationTokenSource.CreateLinkedTokenSource(CancellationToken, cancellationToken);
     }
 
     protected ILogService _logService { get; }
@@ -539,7 +557,31 @@ public abstract class AbstractScript
             }
         }
 
-        return stem;
+        return SanitizeRenameStem(stem);
+    }
+
+    /// <summary>
+    /// Очищает результат PowerRename от разделителей, корневых путей и последовательностей "..".
+    /// Сохраняет пробелы, кириллицу, эмодзи и двоеточия переменных, режет только вывод из папки.
+    /// </summary>
+    private static string SanitizeRenameStem(string stem)
+    {
+        if (string.IsNullOrEmpty(stem)) return stem;
+        string clean = stem.Replace('/', '_').Replace('\\', '_');
+        if (clean.Length >= 2 && clean[1] == ':' && ((clean[0] >= 'A' && clean[0] <= 'Z') || (clean[0] >= 'a' && clean[0] <= 'z')))
+        {
+            clean = clean.Substring(0, 1) + "_" + clean.Substring(2);
+        }
+        var builder = new System.Text.StringBuilder(clean.Length);
+        foreach (char ch in clean)
+        {
+            builder.Append(char.IsControl(ch) ? '_' : ch);
+        }
+        clean = builder.ToString();
+        clean = clean.Replace("..", "__", StringComparison.Ordinal);
+        clean = clean.Trim().TrimStart('.').TrimEnd('.', ' ');
+        if (string.IsNullOrWhiteSpace(clean)) return "_renamed";
+        return clean;
     }
 
     /// <summary>
@@ -616,17 +658,51 @@ public abstract class AbstractScript
             }
 
             // Переименование выходных файлов (PowerRename логика)
-            string renamedStem = ApplyPowerRename(stem, fileNum, settings);
-            if (renamedStem != stem)
+            string renamedStem = SanitizeRenameStem(ApplyPowerRename(stem, fileNum, settings));
+            bool wasRenamed = !renamedStem.Equals(stem, StringComparison.Ordinal);
+            if (wasRenamed)
             {
                 stem = renamedStem;
                 outResolved = Path.Combine(dir, $"{stem}{ext}");
             }
 
+            // Защита от выхода из целевой папки через шаблон (разделители, корневые пути, "..").
+            try
+            {
+                string dirFull = Path.GetFullPath(dir);
+                string outFull = Path.GetFullPath(outResolved);
+                if (!outFull.StartsWith(dirFull + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+                    && !outFull.Equals(dirFull, StringComparison.OrdinalIgnoreCase))
+                {
+                    stem = SanitizeRenameStem(stem);
+                    outResolved = Path.Combine(dirFull, $"{stem}{ext}");
+                    dir = dirFull;
+                    _logService.Write(
+                        "script.output.traversal_blocked",
+                        LogLevel.Warning,
+                        LogStatus.Skipped,
+                        "Шаблон переименования пытался вывести запись из целевой папки, применено безопасное имя",
+                        source: ScriptSource,
+                        properties: LogProps
+                            .Create("ErrorCode", "TRAVERSAL_BLOCKED")
+                            .With("OutputName", LogProps.FileName(outResolved)));
+                }
+                else
+                {
+                    dir = dirFull;
+                    outResolved = outFull;
+                }
+            }
+            catch
+            {
+            }
+
             // 1. Защита исходного файла от перезаписи
+            bool autoProtected = false;
             if (inResolved.Equals(outResolved, StringComparison.OrdinalIgnoreCase))
             {
                 outResolved = Path.Combine(dir, $"{stem}_processed{ext}");
+                autoProtected = true;
                 _logService.Write(
                     "script.output.collision_avoided",
                     LogLevel.Debug,
@@ -638,18 +714,39 @@ public abstract class AbstractScript
                         .With("OutputName", LogProps.FileName(outResolved)));
             }
 
-            // 2. Защита от коллизий имен при пакетной обработке
+            // 2. Защита от коллизий имен при пакетной обработке и с файлами на диске вне очереди.
+            // Дисковая проверка действует только для переименованных или автозащищённых путей,
+            // обычные выводы обрабатываются штатной логикой пропуска/перезаписи в скриптах.
             lock (_batchLock)
             {
                 string originalDir = Path.GetDirectoryName(outResolved) ?? "";
                 string originalStem = Path.GetFileNameWithoutExtension(outResolved);
                 ext = Path.GetExtension(outResolved);
                 int counter = 1;
+                bool diskCollision = false;
 
-                while (_batchReservedPaths.Contains(outResolved))
+                while (_batchReservedPaths.Contains(outResolved)
+                    || ((wasRenamed || autoProtected) && File.Exists(outResolved)))
                 {
+                    if (File.Exists(outResolved) && !_batchReservedPaths.Contains(outResolved))
+                    {
+                        diskCollision = true;
+                    }
                     outResolved = Path.Combine(originalDir, $"{originalStem}_{counter}{ext}");
                     counter++;
+                }
+
+                if (diskCollision)
+                {
+                    _logService.Write(
+                        "script.output.disk_collision_avoided",
+                        LogLevel.Debug,
+                        LogStatus.Changed,
+                        "Выходной путь совпал с существующим файлом на диске, к имени результата добавлен числовой суффикс",
+                        source: ScriptSource,
+                        properties: LogProps
+                            .Create("InputName", LogProps.FileName(inResolved))
+                            .With("OutputName", LogProps.FileName(outResolved)));
                 }
 
                 _batchReservedPaths.Add(outResolved);
@@ -663,12 +760,74 @@ public abstract class AbstractScript
                 "script.output.path_resolve_failed",
                 LogLevel.Warning,
                 LogStatus.Failed,
-                $"Не удалось определить безопасный выходной путь для '{LogProps.FileName(inputPath)}', используется исходный путь результата",
+                "Не удалось определить безопасный выходной путь, возвращён резервный путь с суффиксом _processed",
                 ex,
                 ScriptSource,
                 properties: LogProps
                     .Create("InputName", LogProps.FileName(inputPath))
                     .With("ErrorCode", "OUTPUT_PATH_RESOLVE_FAILED"));
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(inputPath))
+                {
+                    string inFull = Path.GetFullPath(inputPath);
+                    string inDir = Path.GetDirectoryName(inFull) ?? "";
+                    string inStem = Path.GetFileNameWithoutExtension(inFull);
+                    string fallbackExt = "";
+                    try
+                    {
+                        fallbackExt = Path.GetExtension(outputPath ?? string.Empty);
+                    }
+                    catch
+                    {
+                        fallbackExt = "";
+                    }
+                    if (string.IsNullOrEmpty(fallbackExt))
+                    {
+                        try
+                        {
+                            fallbackExt = Path.GetExtension(inFull);
+                        }
+                        catch
+                        {
+                            fallbackExt = ".mkv";
+                        }
+                    }
+                    if (string.IsNullOrWhiteSpace(inStem))
+                    {
+                        inStem = "result";
+                    }
+                    else
+                    {
+                        inStem = SanitizeRenameStem(inStem);
+                    }
+                    if (string.IsNullOrWhiteSpace(inStem))
+                    {
+                        inStem = "result";
+                    }
+                    string baseDir = string.IsNullOrEmpty(inDir) ? Path.GetTempPath() : inDir;
+                    string candidate = Path.Combine(baseDir, $"{inStem}_processed{fallbackExt}");
+                    string candidateFull = Path.GetFullPath(candidate);
+                    if (!candidateFull.Equals(inFull, StringComparison.OrdinalIgnoreCase))
+                    {
+                        lock (_batchLock)
+                        {
+                            _batchReservedPaths.Add(candidateFull);
+                        }
+                        return candidateFull;
+                    }
+                    string numbered = Path.Combine(baseDir, $"{inStem}_processed_1{fallbackExt}");
+                    string numberedFull = Path.GetFullPath(numbered);
+                    lock (_batchLock)
+                    {
+                        _batchReservedPaths.Add(numberedFull);
+                    }
+                    return numberedFull;
+                }
+            }
+            catch
+            {
+            }
             return outputPath;
         }
     }
@@ -683,6 +842,7 @@ public abstract class AbstractScript
 
     /// <summary>
     /// Возвращает гипотетический выходной путь для предпросмотра переименования (без изменения состояния).
+    /// Учитывает автопапку и занятые имена текущего батча, как в <see cref="GetSafeOutputPath"/>.
     /// </summary>
     public string GetPreviewOutputPath(string inputPath, string outputPath, int fileNum, Dictionary<string, object>? settings = null)
     {
@@ -695,16 +855,54 @@ public abstract class AbstractScript
             string stem = Path.GetFileNameWithoutExtension(outResolved);
             string ext = GetOutputExtension(inputPath);
 
-            stem = ApplyPowerRename(stem, fileNum, settings);
+            // Учёт автопапки как в GetSafeOutputPath, но без создания каталога:
+            // предпросмотр не меняет состояние файловой системы.
+            if (_settingsManager.UseAutoSubfolder)
+            {
+                string inputDir = Path.GetDirectoryName(inResolved) ?? "";
+                if (string.IsNullOrEmpty(dir) || dir.Equals(inputDir, StringComparison.OrdinalIgnoreCase))
+                {
+                    string subfolderName = _settingsManager.DefaultOutputSubfolder;
+                    if (string.IsNullOrWhiteSpace(subfolderName))
+                    {
+                        subfolderName = "KTools_Result";
+                    }
+
+                    dir = Path.Combine(inputDir, subfolderName);
+                }
+            }
+
+            string renamedStem = SanitizeRenameStem(ApplyPowerRename(stem, fileNum, settings));
+            bool wasRenamed = !renamedStem.Equals(stem, StringComparison.Ordinal);
+            stem = renamedStem;
 
             outResolved = Path.Combine(dir, $"{stem}{ext}");
 
+            bool autoProtected = false;
             if (inResolved.Equals(outResolved, StringComparison.OrdinalIgnoreCase))
             {
                 outResolved = Path.Combine(dir, $"{stem}_processed{ext}");
+                autoProtected = true;
             }
 
-            return outResolved;
+            // Учёт занятых имён текущего батча без изменения состояния:
+            // только чтение зарезервированных путей, без добавления новых.
+            string previewResolved = outResolved;
+            lock (_batchLock)
+            {
+                string originalDir = Path.GetDirectoryName(previewResolved) ?? "";
+                string originalStem = Path.GetFileNameWithoutExtension(previewResolved);
+                string previewExt = Path.GetExtension(previewResolved);
+                int counter = 1;
+                while (_batchReservedPaths.Contains(previewResolved)
+                    || ((wasRenamed || autoProtected) && File.Exists(previewResolved)))
+                {
+                    previewResolved = Path.Combine(originalDir, $"{originalStem}_{counter}{previewExt}");
+                    counter++;
+                }
+            }
+
+            return previewResolved;
         }
         catch (Exception ex)
         {
@@ -1242,6 +1440,7 @@ public abstract class AbstractScript
 
     /// <summary>
     /// Асинхронный запуск обработки одного файла.
+    /// Сквозной токен связан с батчем очереди: отмена убивает запущенные процессы.
     /// </summary>
     /// <param name="filePath">Абсолютный путь к файлу.</param>
     /// <param name="settings">Словарь текущих настроек пользователя.</param>
@@ -1249,6 +1448,8 @@ public abstract class AbstractScript
     /// <param name="progressCallback">Делегат для отправки прогресса (индекс, всего, сообщение, процент).</param>
     /// <param name="fileIndex">Порядковый индекс обрабатываемого файла в очереди.</param>
     /// <param name="totalCount">Общее число файлов в очереди.</param>
+    /// <param name="context">Контекст выполнения элемента очереди.</param>
+    /// <param name="cancellationToken">Сквозной токен отмены элемента очереди.</param>
     /// <returns>Список сообщений о результатах выполнения (ошибки, успехи, пути подмены).</returns>
     public abstract Task<ExecutionResult> ExecuteSingleAsync(
         string filePath,
@@ -1257,7 +1458,8 @@ public abstract class AbstractScript
         ScriptProgressCallback progressCallback,
         int fileIndex,
         int totalCount,
-        ExecutionContext context);
+        ExecutionContext context,
+        CancellationToken cancellationToken = default);
 
     public Task<ExecutionResult> ExecuteSingleAsync(
         string filePath,

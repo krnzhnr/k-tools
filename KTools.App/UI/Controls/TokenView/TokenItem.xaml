@@ -293,6 +293,7 @@
                                     Padding="2"
                                     CornerRadius="99"
                                     IsTabStop="False"
+                                    AutomationProperties.Name="Удалить"
                                     Style="{StaticResource SubtleButtonStyle}"
                                     Visibility="Collapsed">
                                 <FontIcon FontSize="12"

@@ -36,20 +36,21 @@ public sealed class LogService : ILogService, IDisposable
     public const int MaxEmergencyReports = 3;
 
     private const string DefaultSource = "System";
-    private const int DefaultFlushTimeoutMilliseconds = 5000;
     private const int WriterBufferSize = 16 * 1024;
     private const int LineBatchBytes = 128 * 1024;
-    private const int ReadChunkBytes = 64 * 1024;
     private const int BaseEventEstimate = 512;
-    private const int DisposeWaitMilliseconds = 750;
     private const int LifecycleAccepting = 0;
     private const int LifecycleStopping = 1;
     private const int LifecycleDisposed = 2;
+
+    private static readonly LogShutdownOptions ShutdownOptions = LogShutdownOptions.Default;
 
     private readonly LogServiceOptions _options;
     private readonly LogRedactor _redactor;
     private readonly LogFilePolicy _policy;
     private readonly EmergencyLogSink _emergency;
+    private readonly LogSubscriberHub _subscriberHub;
+    private readonly LogFileReader _fileReader;
     private readonly Channel<LogWorkItem> _queue;
     private readonly CancellationTokenSource _shutdown = new();
     private readonly Task _writerTask;
@@ -57,8 +58,6 @@ public sealed class LogService : ILogService, IDisposable
     private readonly TaskCompletionSource<bool> _disposeCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly object _writerLock = new();
     private readonly object _stateLock = new();
-    private readonly object _subscriberLock = new();
-    private readonly List<SubscriberSink> _subscribers = new();
     private readonly List<LogWorkItem> _batch = new(256);
     private readonly Guid _sessionId = Guid.NewGuid();
     private readonly int _processId = Environment.ProcessId;
@@ -114,9 +113,20 @@ public sealed class LogService : ILogService, IDisposable
         _redactor = new LogRedactor(_options);
         _policy = new LogFilePolicy(_options);
         _emergency = new EmergencyLogSink(_options.EmergencyDirectory, _options);
+        _subscriberHub = new LogSubscriberHub(this, ReportSubscriberFailure, ReportSubscriberDrop);
         _baseFileName = _policy.BuildBaseName(_sessionStartUtc, _processId, _sessionId);
         _sessionText = _sessionId.ToString("D", CultureInfo.InvariantCulture);
         _maxLineBytes = ComputeMaxLineBytes(_options);
+        _fileReader = new LogFileReader(
+            _options,
+            _policy,
+            _redactor,
+            _maxLineBytes,
+            GetSessionPaths,
+            Prepare,
+            ValidateConditionalSchemaForRead,
+            CreateReadRejectedEvent,
+            () => Interlocked.Increment(ref _readErrorCount));
         _queue = Channel.CreateBounded<LogWorkItem>(new BoundedChannelOptions(_options.QueueCapacity)
         {
             SingleReader = true,
@@ -154,10 +164,7 @@ public sealed class LogService : ILogService, IDisposable
                     return;
                 }
 
-                lock (_subscriberLock)
-                {
-                    _subscribers.Add(new SubscriberSink(this, value, _options.SubscriberQueueCapacity, _options.MaxQueuedBytes / 4));
-                }
+                _subscriberHub.Add(value, _options.SubscriberQueueCapacity, _options.MaxQueuedBytes / 4);
             }
             catch (Exception)
             {
@@ -170,26 +177,12 @@ public sealed class LogService : ILogService, IDisposable
                 return;
             }
 
-            SubscriberSink? sink = null;
             try
             {
-                lock (_subscriberLock)
-                {
-                    int index = _subscribers.FindIndex(candidate => candidate.Matches(value));
-                    if (index >= 0)
-                    {
-                        sink = _subscribers[index];
-                        _subscribers.RemoveAt(index);
-                    }
-                }
+                _subscriberHub.Remove(value);
             }
             catch (Exception)
             {
-            }
-
-            if (sink is not null)
-            {
-                sink.Complete();
             }
         }
     }
@@ -321,68 +314,6 @@ public sealed class LogService : ILogService, IDisposable
         }
     }
 
-    public void Log(LogLevel level, string message, string source = DefaultSource)
-    {
-        try
-        {
-            Write(new LogEvent
-            {
-                EventId = BuildLegacyEventId(source, level),
-                Level = level,
-                Status = level >= LogLevel.Error ? LogStatus.Failed : LogStatus.None,
-                Source = source ?? DefaultSource,
-                Message = message ?? string.Empty
-            });
-        }
-        catch (Exception)
-        {
-            WriteLegacyFallback(level, LogStatus.None, message, source);
-        }
-    }
-
-    public void DebugLog(string message, string source = DefaultSource) => Log(LogLevel.Debug, message, source);
-
-    public void Info(string message, string source = DefaultSource) => Log(LogLevel.Info, message, source);
-
-    public void Warn(string message, string source = DefaultSource) => Log(LogLevel.Warning, message, source);
-
-    public void Error(string message, string source = DefaultSource) => Log(LogLevel.Error, message, source);
-
-    public void Fatal(string message, string source = DefaultSource) => Log(LogLevel.Fatal, message, source);
-
-    public void Exception(Exception ex, string message, string source = DefaultSource)
-    {
-        try
-        {
-            ExceptionInfo? info = null;
-            try
-            {
-                if (ex is not null)
-                {
-                    info = ExceptionInfo.FromException(ex, _options.MaxExceptionDepth);
-                }
-            }
-            catch (Exception)
-            {
-                info = null;
-            }
-
-            Write(new LogEvent
-            {
-                EventId = BuildLegacyEventId(source, LogLevel.Error),
-                Level = LogLevel.Error,
-                Status = LogStatus.Failed,
-                Source = source ?? DefaultSource,
-                Message = message ?? string.Empty,
-                Exception = info
-            });
-        }
-        catch (Exception)
-        {
-            WriteLegacyFallback(LogLevel.Error, LogStatus.Failed, message, source);
-        }
-    }
-
     public void Write(LogEvent logEvent)
     {
         if (logEvent is null)
@@ -423,26 +354,6 @@ public sealed class LogService : ILogService, IDisposable
     public void Write(
         string eventId,
         LogLevel level,
-        string message,
-        string source = DefaultSource,
-        LogStatus status = LogStatus.None,
-        LogContext? context = null,
-        IReadOnlyDictionary<string, object?>? properties = null,
-        Exception? exception = null)
-    {
-        try
-        {
-            Write(BuildEvent(eventId, level, status, message, exception, source, context, properties));
-        }
-        catch (Exception)
-        {
-            WriteLegacyFallback(level, status, message, source);
-        }
-    }
-
-    public void Write(
-        string eventId,
-        LogLevel level,
         LogStatus status,
         string message,
         Exception? exception = null,
@@ -462,7 +373,7 @@ public sealed class LogService : ILogService, IDisposable
 
     public void Flush()
     {
-        if (!Flush(TimeSpan.FromMilliseconds(DefaultFlushTimeoutMilliseconds)))
+        if (!Flush(ShutdownOptions.FlushTimeout))
         {
             Interlocked.Increment(ref _writeErrorCount);
         }
@@ -532,7 +443,7 @@ public sealed class LogService : ILogService, IDisposable
             TaskCompletionSource<bool> completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
             LogWorkItem request = new(LogWorkKind.Clear, null, 0, completion);
             Stopwatch deadline = Stopwatch.StartNew();
-            TimeSpan effective = TimeSpan.FromMilliseconds(DefaultFlushTimeoutMilliseconds);
+            TimeSpan effective = ShutdownOptions.FlushTimeout;
 
             while (!_queue.Writer.TryWrite(request))
             {
@@ -566,34 +477,7 @@ public sealed class LogService : ILogService, IDisposable
                 return string.Empty;
             }
 
-            if (!TryGetSessionFiles(out IReadOnlyList<string> files))
-            {
-                return string.Empty;
-            }
-
-            List<string> rawLines = new();
-            int budget = _options.MaxRecentReadBytes;
-            for (int index = files.Count - 1; index >= 0; index--)
-            {
-                if (!TryReadTailLines(files[index], _options.MaxExportLines, budget, rawLines, static _ => true, out int consumed))
-                {
-                    return string.Empty;
-                }
-
-                budget -= consumed;
-                if (rawLines.Count >= _options.MaxExportLines || budget <= 0)
-                {
-                    break;
-                }
-            }
-
-            List<string> rendered = new(rawLines.Count);
-            for (int index = rawLines.Count - 1; index >= 0; index--)
-            {
-                rendered.Add(RenderLine(rawLines[index]));
-            }
-
-            return string.Join(Environment.NewLine, rendered);
+            return _fileReader.ReadCurrentLog();
         }
         catch (Exception)
         {
@@ -603,45 +487,14 @@ public sealed class LogService : ILogService, IDisposable
 
     public IReadOnlyList<LogEvent> ReadRecentEvents(int maxCount)
     {
-        List<LogEvent> result = new();
         try
         {
             if (maxCount <= 0 || !PrepareForRead())
             {
-                return result;
+                return new List<LogEvent>();
             }
 
-            if (!TryGetSessionFiles(out IReadOnlyList<string> files))
-            {
-                return result;
-            }
-
-            List<string> rawLines = new();
-            int budget = _options.MaxRecentReadBytes;
-            for (int index = files.Count - 1; index >= 0; index--)
-            {
-                if (!TryReadTailLines(files[index], maxCount, budget, rawLines, IsValidLine, out int consumed))
-                {
-                    return new List<LogEvent>();
-                }
-
-                budget -= consumed;
-                if (rawLines.Count >= maxCount || budget <= 0)
-                {
-                    break;
-                }
-            }
-
-            for (int index = rawLines.Count - 1; index >= 0; index--)
-            {
-                LogEvent? parsed = LogEventJson.TryParse(rawLines[index], ValidateConditionalSchemaForRead);
-                if (parsed is not null)
-                {
-                    result.Add(Prepare(parsed));
-                }
-            }
-
-            return result;
+            return _fileReader.ReadRecentEvents(maxCount);
         }
         catch (Exception)
         {
@@ -660,15 +513,23 @@ public sealed class LogService : ILogService, IDisposable
         bool onWriterThread = Environment.CurrentManagedThreadId == _writerThreadId;
         try
         {
-            if (!onWriterThread && !Flush(TimeSpan.FromMilliseconds(DefaultFlushTimeoutMilliseconds)))
+            // Сброс перед завершением: таймаут Flush сам по себе не ошибка Dispose —
+            // очередь добирается через TryComplete ниже; DisposeError учитывает
+            // только итоговую потерю (незавершённый дренаж, незакрытый писатель,
+            // несохранённый маркер потерь). Иначе медленный диск давал бы ложный
+            // DisposeError даже при полном сохранении краш-событий.
+            if (!onWriterThread)
             {
-                Interlocked.Increment(ref _disposeErrorCount);
+                Flush(ShutdownOptions.FlushTimeout);
             }
 
             Interlocked.CompareExchange(ref _lifecycleState, LifecycleStopping, LifecycleAccepting);
             try
             {
-                _queue.Writer.TryComplete();
+                if (!_queue.Writer.TryComplete())
+                {
+                    Interlocked.Increment(ref _disposeErrorCount);
+                }
             }
             catch (Exception ex)
             {
@@ -687,13 +548,14 @@ public sealed class LogService : ILogService, IDisposable
             DisposeSubscribers();
             if (!onWriterThread)
             {
-                WaitBounded(_writerTask);
+                WaitBounded(_writerTask, ShutdownOptions.DisposeDrainTimeout);
             }
 
+            EnsureDroppedMarkerPersisted();
             TryCloseWriterBestEffort();
             if (!onWriterThread)
             {
-                WaitBounded(_flusherTask);
+                WaitBounded(_flusherTask, ShutdownOptions.DisposeDrainTimeout);
             }
 
             try
@@ -716,7 +578,7 @@ public sealed class LogService : ILogService, IDisposable
         }
     }
 
-    public static string BuildLegacyEventId(string? source, LogLevel level)
+    private static string BuildLegacyEventId(string? source, LogLevel level)
     {
         try
         {
@@ -2484,45 +2346,10 @@ public sealed class LogService : ILogService, IDisposable
         }
     }
 
-    /// <summary>
-    /// Доставка подписчикам не бросает исключений: сбой одного подписчика не должен
-    /// прерывать ни сериализацию, ни файловую запись остальных событий батча.
-    /// </summary>
     private void Publish(LogEvent logEvent, int estimatedBytes)
     {
-        try
-        {
-            SubscriberSink[] sinks;
-            lock (_subscriberLock)
-            {
-                if (_subscribers.Count == 0)
-                {
-                    return;
-                }
-
-                sinks = _subscribers.ToArray();
-            }
-
-            LogEvent published = FreezeForSubscribers(logEvent);
-            foreach (SubscriberSink sink in sinks)
-            {
-                sink.TryEnqueue(new SubscriberItem(published, estimatedBytes));
-            }
-        }
-        catch (Exception)
-        {
-        }
+        _subscriberHub.Publish(logEvent, estimatedBytes);
     }
-
-    /// <summary>
-    /// Подписчики получают один и тот же неизменяемый экземпляр события:
-    /// свойства после redaction уже иммутабельны, поэтому копировать словарь
-    /// на каждого подписчика не требуется.
-    /// </summary>
-    private static LogEvent FreezeForSubscribers(LogEvent logEvent) =>
-        logEvent.Properties is LogPropertyCollection
-            ? logEvent
-            : logEvent with { Properties = LogPropertyCollection.Freeze(logEvent.Properties) };
 
     private void ReportSubscriberFailure()
     {
@@ -2534,6 +2361,14 @@ public sealed class LogService : ILogService, IDisposable
         Interlocked.Increment(ref _subscriberDroppedCount);
     }
 
+    private (string Directory, string BaseName) GetSessionPaths()
+    {
+        lock (_stateLock)
+        {
+            return (_effectiveDirectory, _baseFileName);
+        }
+    }
+
     private bool PrepareForRead()
     {
         if (!IsAccepting())
@@ -2541,7 +2376,7 @@ public sealed class LogService : ILogService, IDisposable
             return _writerTask.IsCompleted;
         }
 
-        bool flushed = Flush(TimeSpan.FromMilliseconds(DefaultFlushTimeoutMilliseconds));
+        bool flushed = Flush(ShutdownOptions.FlushTimeout);
         if (flushed || Environment.CurrentManagedThreadId == _writerThreadId)
         {
             return true;
@@ -2549,32 +2384,6 @@ public sealed class LogService : ILogService, IDisposable
 
         Interlocked.Increment(ref _writeErrorCount);
         return false;
-    }
-
-    private bool TryGetSessionFiles(out IReadOnlyList<string> files)
-    {
-        files = Array.Empty<string>();
-        string directory;
-        string baseName;
-        lock (_stateLock)
-        {
-            directory = _effectiveDirectory;
-            baseName = _baseFileName;
-        }
-
-        if (directory.Length == 0)
-        {
-            return false;
-        }
-
-        IReadOnlyList<string> found = _policy.EnumerateSessionFiles(directory, baseName, out bool completed);
-        files = found;
-        if (!completed)
-        {
-            Interlocked.Increment(ref _readErrorCount);
-        }
-
-        return completed;
     }
 
     private bool ClearPersisted()
@@ -2756,44 +2565,16 @@ public sealed class LogService : ILogService, IDisposable
 
     private void DisposeSubscribers()
     {
-        SubscriberSink[] sinks;
-        try
+        if (Environment.CurrentManagedThreadId == _writerThreadId)
         {
-            lock (_subscriberLock)
-            {
-                sinks = _subscribers.ToArray();
-                _subscribers.Clear();
-            }
-        }
-        catch (Exception ex)
-        {
-            RecordDisposeError(ex);
+            _subscriberHub.CompleteWithoutWait();
             return;
         }
 
-        List<Task> pumps = new(sinks.Length);
-        foreach (SubscriberSink sink in sinks)
-        {
-            sink.Complete();
-            pumps.Add(sink.Pump);
-        }
-
-        if (pumps.Count == 0 || Environment.CurrentManagedThreadId == _writerThreadId)
-        {
-            return;
-        }
-
-        try
-        {
-            if (!Task.WaitAll(pumps.ToArray(), DisposeWaitMilliseconds))
-            {
-                Interlocked.Increment(ref _disposeErrorCount);
-            }
-        }
-        catch (Exception ex)
-        {
-            RecordDisposeError(ex);
-        }
+        _subscriberHub.CompleteAndWait(
+            ShutdownOptions.SubscriberDrainTimeout,
+            () => Interlocked.Increment(ref _disposeErrorCount),
+            RecordDisposeError);
     }
 
     private void RecordDisposeError(Exception? exception)
@@ -2834,105 +2615,24 @@ public sealed class LogService : ILogService, IDisposable
         }
     }
 
-    private void RecordSubscriberError(SinkErrorKind kind)
+    private void EnsureDroppedMarkerPersisted()
     {
-        if (kind == SinkErrorKind.Dropped)
-        {
-            ReportSubscriberDrop();
-        }
-        else
-        {
-            ReportSubscriberFailure();
-        }
-    }
-
-    private string RenderLine(string rawLine)
-    {
-        LogEvent? parsed = LogEventJson.TryParse(rawLine);
-        if (parsed is not null)
-        {
-            string? error = ValidateConditionalSchemaForRead(parsed);
-            return LogEvent.Format(
-                Prepare(error is null ? parsed : CreateReadRejectedEvent(parsed, error)),
-                true);
-        }
-
         try
         {
-            return LogRedactor.Truncate(_redactor.RedactToken(rawLine), _options.MaxMessageLength);
-        }
-        catch (Exception)
-        {
-            return LogRedactor.RedactedMarker;
-        }
-    }
-
-    private bool IsValidLine(string line) => LogEventJson.TryParse(line, ValidateConditionalSchemaForRead) is not null;
-
-    private bool TryReadTailLines(
-        string path,
-        int maxLines,
-        int byteBudget,
-        List<string> sink,
-        Func<string, bool> accept,
-        out int consumed)
-    {
-        consumed = 0;
-        if (maxLines <= 0 || byteBudget <= 0)
-        {
-            return true;
-        }
-
-        try
-        {
-            using FileStream stream = new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            long position = stream.Length;
-            byte[] chunk = new byte[ReadChunkBytes];
-            List<byte> reversed = new(1024);
-            int limit = Math.Max(_maxLineBytes, ReadChunkBytes);
-
-            while (position > 0 && consumed < byteBudget && sink.Count < maxLines)
+            if (Interlocked.Read(ref _droppedCount) <= Interlocked.Read(ref _reportedDroppedCount))
             {
-                int remaining = byteBudget - consumed;
-                int want = (int)Math.Min(Math.Min(chunk.Length, position), remaining);
-                position -= want;
-                stream.Seek(position, SeekOrigin.Begin);
-                int read = FillBuffer(stream, chunk, want);
-                consumed += read;
-
-                for (int index = read - 1; index >= 0; index--)
-                {
-                    byte current = chunk[index];
-                    if (current == (byte)'\n')
-                    {
-                        if (AppendLine(reversed, sink, maxLines, accept))
-                        {
-                            break;
-                        }
-                    }
-                    else if (current != (byte)'\r')
-                    {
-                        reversed.Add(current);
-                        if (reversed.Count > limit)
-                        {
-                            reversed.Clear();
-                        }
-                    }
-                }
+                return;
             }
 
-            if (sink.Count < maxLines && position == 0 && reversed.Count > 0)
+            if (!PersistDroppedMarker())
             {
-                AppendLine(reversed, sink, maxLines, accept);
+                Interlocked.Increment(ref _disposeErrorCount);
             }
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            Interlocked.Increment(ref _readErrorCount);
-            return false;
+            RecordDisposeError(ex);
         }
-
-        return true;
     }
 
     private static int FillBuffer(FileStream stream, byte[] buffer, int count)
@@ -2950,29 +2650,6 @@ public sealed class LogService : ILogService, IDisposable
         }
 
         return total;
-    }
-
-    private static bool AppendLine(List<byte> reversed, List<string> sink, int maxLines, Func<string, bool> accept)
-    {
-        if (reversed.Count == 0)
-        {
-            return false;
-        }
-
-        byte[] bytes = new byte[reversed.Count];
-        for (int index = 0; index < reversed.Count; index++)
-        {
-            bytes[index] = reversed[reversed.Count - 1 - index];
-        }
-
-        reversed.Clear();
-        string line = Encoding.UTF8.GetString(bytes);
-        if (accept(line))
-        {
-            sink.Add(line);
-        }
-
-        return sink.Count >= maxLines;
     }
 
     private static long SafeFileLength(string path)
@@ -3007,7 +2684,7 @@ public sealed class LogService : ILogService, IDisposable
 
     private bool TryCloseWriterBestEffort()
     {
-        bool entered = Monitor.TryEnter(_writerLock, DisposeWaitMilliseconds);
+        bool entered = Monitor.TryEnter(_writerLock, ShutdownOptions.DisposeDrainTimeout);
         if (!entered)
         {
             Interlocked.Exchange(ref _writerStopping, 1);
@@ -3036,7 +2713,7 @@ public sealed class LogService : ILogService, IDisposable
     {
         try
         {
-            if (!_disposeCompletion.Task.Wait(DisposeWaitMilliseconds))
+            if (!_disposeCompletion.Task.Wait(ShutdownOptions.DisposeDrainTimeout))
             {
                 Interlocked.Increment(ref _disposeErrorCount);
             }
@@ -3047,11 +2724,11 @@ public sealed class LogService : ILogService, IDisposable
         }
     }
 
-    private void WaitBounded(Task task)
+    private void WaitBounded(Task task, TimeSpan timeout)
     {
         try
         {
-            if (!task.Wait(DisposeWaitMilliseconds))
+            if (!task.Wait(timeout))
             {
                 Interlocked.Increment(ref _disposeErrorCount);
             }
@@ -3076,12 +2753,6 @@ public sealed class LogService : ILogService, IDisposable
         Clear = 2
     }
 
-    internal enum SinkErrorKind
-    {
-        Error = 0,
-        Dropped = 1
-    }
-
     private sealed class LogWorkItem
     {
         public LogWorkItem(LogWorkKind kind, LogEvent? logEvent, int estimatedBytes, TaskCompletionSource<bool>? completion)
@@ -3099,19 +2770,6 @@ public sealed class LogService : ILogService, IDisposable
         public int EstimatedBytes { get; }
 
         public TaskCompletionSource<bool>? Completion { get; }
-    }
-
-    private readonly struct SubscriberItem
-    {
-        public SubscriberItem(LogEvent logEvent, int estimatedBytes)
-        {
-            LogEvent = logEvent;
-            EstimatedBytes = estimatedBytes;
-        }
-
-        public LogEvent LogEvent { get; }
-
-        public int EstimatedBytes { get; }
     }
 
     /// <summary>
@@ -3167,150 +2825,6 @@ public sealed class LogService : ILogService, IDisposable
             int required = _owner._lineBatchCount + sizeHint;
             Array.Resize(ref batch, Math.Max(batch.Length * 2, required));
             _owner._lineBatch = batch;
-        }
-    }
-
-    private sealed class SubscriberSink : IDisposable
-    {
-        private readonly LogService _owner;
-        private readonly EventHandler<LogEvent> _handler;
-        private readonly Channel<SubscriberItem> _channel;
-        private readonly long _maxBytes;
-        private long _queuedBytes;
-        private int _disposed;
-
-        public SubscriberSink(LogService owner, EventHandler<LogEvent> handler, int capacity, long maxBytes)
-        {
-            _owner = owner;
-            _handler = handler;
-            _maxBytes = Math.Max(64 * 1024, maxBytes);
-            _channel = Channel.CreateBounded<SubscriberItem>(new BoundedChannelOptions(Math.Max(16, capacity))
-            {
-                SingleReader = true,
-                SingleWriter = false,
-                AllowSynchronousContinuations = false,
-                FullMode = BoundedChannelFullMode.Wait
-            });
-            Pump = Task.Factory.StartNew(
-                Run,
-                CancellationToken.None,
-                TaskCreationOptions.LongRunning,
-                TaskScheduler.Default);
-        }
-
-        public Task Pump { get; }
-
-        public bool Matches(EventHandler<LogEvent> handler) => _handler.Equals(handler);
-
-        public bool TryEnqueue(SubscriberItem item)
-        {
-            if (Volatile.Read(ref _disposed) != 0)
-            {
-                return false;
-            }
-
-            int estimate = item.EstimatedBytes;
-            if (!Reserve(estimate))
-            {
-                _owner.RecordSubscriberError(SinkErrorKind.Dropped);
-                return false;
-            }
-
-            try
-            {
-                if (_channel.Writer.TryWrite(item))
-                {
-                    return true;
-                }
-            }
-            catch (Exception)
-            {
-            }
-
-            Release(estimate);
-            _owner.RecordSubscriberError(SinkErrorKind.Dropped);
-            return false;
-        }
-
-        public void Complete()
-        {
-            if (Interlocked.Exchange(ref _disposed, 1) != 0)
-            {
-                return;
-            }
-
-            try
-            {
-                _channel.Writer.TryComplete();
-            }
-            catch (Exception)
-            {
-            }
-        }
-
-        public void Dispose()
-        {
-            Complete();
-        }
-
-        private bool Reserve(int estimate)
-        {
-            long current = Interlocked.Read(ref _queuedBytes);
-            while (true)
-            {
-                long next = current + estimate;
-                if (next > _maxBytes)
-                {
-                    return false;
-                }
-
-                long actual = Interlocked.CompareExchange(ref _queuedBytes, next, current);
-                if (actual == current)
-                {
-                    return true;
-                }
-
-                current = actual;
-            }
-        }
-
-        private void Release(int estimate)
-        {
-            if (estimate > 0)
-            {
-                Interlocked.Add(ref _queuedBytes, -estimate);
-            }
-        }
-
-        private void Run()
-        {
-            try
-            {
-                ChannelReader<SubscriberItem> reader = _channel.Reader;
-                while (reader.WaitToReadAsync().AsTask().GetAwaiter().GetResult())
-                {
-                    while (reader.TryRead(out SubscriberItem item))
-                    {
-                        Release(item.EstimatedBytes);
-                        if (Volatile.Read(ref _disposed) != 0)
-                        {
-                            continue;
-                        }
-
-                        try
-                        {
-                            _handler(_owner, item.LogEvent);
-                        }
-                        catch (Exception)
-                        {
-                            _owner.RecordSubscriberError(SinkErrorKind.Error);
-                        }
-                    }
-                }
-            }
-            catch (Exception)
-            {
-            }
         }
     }
 

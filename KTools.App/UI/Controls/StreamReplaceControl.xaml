@@ -185,7 +185,9 @@
                                                 Padding="0"
                                                 MinWidth="0"
                                                 MinHeight="0"
-                                                VerticalAlignment="Center">
+                                                VerticalAlignment="Center"
+                                                AutomationProperties.Name="Удалить файл замены"
+                                                AutomationProperties.AutomationId="DeleteReplacementFileButton">
                                             <FontIcon Glyph="&#xE711;" FontSize="12" FontFamily="{ThemeResource SymbolThemeFontFamily}" />
                                         </Button>
                                     </Grid>

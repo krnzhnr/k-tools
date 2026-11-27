@@ -91,7 +91,7 @@ public sealed class StructuredLoggingDefectTests
         // ждём первую потерю, а не рассчитываем на фиксированное число событий.
         for (int index = 0; index < OverflowProbeLimit && service.DroppedEventCount == 0; index++)
         {
-            service.Info("переполнение " + index, "Defect");
+            service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, "переполнение " + index, source: "Defect");
         }
 
         service.Flush(TimeSpan.FromSeconds(20)).Should().BeTrue();

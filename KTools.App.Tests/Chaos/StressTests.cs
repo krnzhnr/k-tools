@@ -235,6 +235,7 @@ public sealed class StressTests
             AppConstants.ScriptMetadata.AssToVttName,
             AppConstants.ScriptMetadata.SubtitleShiftName,
             AppConstants.ScriptMetadata.BitrateViewerName,
+            AppConstants.ScriptMetadata.MediaDownloaderName,
         };
 
         foreach (string expected in expectedNames)
@@ -299,6 +300,7 @@ public sealed class StressTests
         var settings = new SettingsManager(
             MockBuilders.CreateLogServiceMock().Object,
             CreatePathManagerForDir(tempDir).Object);
+        settings.InitializeAsync().GetAwaiter().GetResult();
 
         // Act / Assert
         settings.SetSetting("Group", "k_bool", true);
@@ -330,6 +332,7 @@ public sealed class StressTests
         var first = new SettingsManager(
             MockBuilders.CreateLogServiceMock().Object,
             pathMock.Object);
+        first.InitializeAsync().GetAwaiter().GetResult();
         first.SetSetting("Group", "key", "persisted");
         first.SaveSettings();
 
@@ -337,6 +340,7 @@ public sealed class StressTests
         var second = new SettingsManager(
             MockBuilders.CreateLogServiceMock().Object,
             pathMock.Object);
+        second.InitializeAsync().GetAwaiter().GetResult();
 
         // Assert
         second.GetSetting("Group", "key", string.Empty).Should().Be("persisted",
@@ -356,6 +360,7 @@ public sealed class StressTests
         var settings = new SettingsManager(
             MockBuilders.CreateLogServiceMock().Object,
             pathMock.Object);
+        settings.InitializeAsync().GetAwaiter().GetResult();
         const int threads = 10;
         const int perThread = 10;
 
@@ -375,6 +380,7 @@ public sealed class StressTests
         var reloaded = new SettingsManager(
             MockBuilders.CreateLogServiceMock().Object,
             pathMock.Object);
+        await reloaded.InitializeAsync();
         for (int key = 0; key < threads * perThread; key++)
         {
             reloaded.GetSetting("Stress", $"key_{key}", string.Empty)

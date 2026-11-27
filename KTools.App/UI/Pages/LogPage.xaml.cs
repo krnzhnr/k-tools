@@ -9,7 +9,9 @@ using KTools_App.Services.Contracts;
 using KTools_App.ViewModels;
 
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Navigation;
 
 namespace KTools_App.UI.Pages;
@@ -20,6 +22,7 @@ public sealed partial class LogPage
     private const int PendingQueueCapacity = 4096;
     private const long PendingQueueMaxBytes = 4L * 1024 * 1024;
     private const int BatchIntervalMilliseconds = 200;
+    private const double AutoScrollEndTolerance = 2.0;
 
     private readonly LogUiSession _session = new(PendingQueueCapacity, PendingQueueMaxBytes);
 
@@ -28,6 +31,8 @@ public sealed partial class LogPage
     private EventHandler<LogEvent>? _logReceivedHandler;
     private long _generation;
     private long _timerGeneration;
+    private ScrollViewer? _logScrollViewer;
+    private bool _followTail = true;
 
     public LogViewModel ViewModel { get; }
 
@@ -67,10 +72,12 @@ public sealed partial class LogPage
 
         logService.Write("ui.log_page.opened", LogLevel.Debug, LogStatus.Succeeded, "Панель журнала событий открыта", source: SourceName);
 
+        _followTail = true;
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
         {
             if (_session.IsCurrent(generation))
             {
+                EnsureLogScrollTracking();
                 ScrollToEnd();
             }
         });
@@ -93,6 +100,7 @@ public sealed partial class LogPage
     {
         long generation = _generation;
         _session.Deactivate(generation);
+        DetachLogScrollTracking();
 
         if (_logBatchTimer is { IsRunning: true })
         {
@@ -213,8 +221,12 @@ public sealed partial class LogPage
         }
 
         items.AddRange(batch);
+        bool followTail = ShouldFollowTail();
         ViewModel.AddLogs(items);
-        ScrollToEnd();
+        if (followTail)
+        {
+            ScrollToEnd();
+        }
     }
 
     private void ScrollToEnd()
@@ -225,8 +237,7 @@ public sealed partial class LogPage
             {
                 LogListView.ScrollIntoView(ViewModel.Logs[ViewModel.Logs.Count - 1]);
             }
-        }
-        catch (ObjectDisposedException)
+        }        catch (ObjectDisposedException)
         {
             // Гашение при закрытии: провайдер уже disposed, логировать некуда.
         }
@@ -249,7 +260,90 @@ public sealed partial class LogPage
         }
     }
 
-    private void CopySelectedLogs_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
+    // Умный автоскролл: новый батч тянет список вниз только если пользователь
+    // уже находится у конца. Чтение середины журнала не срывается.
+    private void EnsureLogScrollTracking()
+    {
+        if (_logScrollViewer is not null)
+        {
+            return;
+        }
+
+        ScrollViewer? viewer = FindVisualChild<ScrollViewer>(LogListView);
+        if (viewer is null)
+        {
+            return;
+        }
+
+        _logScrollViewer = viewer;
+        _logScrollViewer.ViewChanged += LogScrollViewer_ViewChanged;
+        _followTail = true;
+    }
+
+    private void DetachLogScrollTracking()
+    {
+        if (_logScrollViewer is not null)
+        {
+            _logScrollViewer.ViewChanged -= LogScrollViewer_ViewChanged;
+            _logScrollViewer = null;
+        }
+    }
+
+    private void LogScrollViewer_ViewChanged(object? sender, ScrollViewerViewChangedEventArgs e)
+    {
+        _followTail = IsScrolledToEnd();
+    }
+
+    private bool ShouldFollowTail()
+    {
+        EnsureLogScrollTracking();
+        if (_logScrollViewer is null)
+        {
+            return _followTail;
+        }
+
+        _followTail = IsScrolledToEnd();
+        return _followTail;
+    }
+
+    private bool IsScrolledToEnd()
+    {
+        ScrollViewer? viewer = _logScrollViewer;
+        if (viewer is null)
+        {
+            return true;
+        }
+
+        if (viewer.ScrollableHeight <= 0)
+        {
+            return true;
+        }
+
+        return viewer.VerticalOffset + viewer.ViewportHeight >= viewer.ScrollableHeight - AutoScrollEndTolerance;
+    }
+
+    private static T? FindVisualChild<T>(DependencyObject parent) where T : DependencyObject
+    {
+        int count = VisualTreeHelper.GetChildrenCount(parent);
+        for (int i = 0; i < count; i++)
+        {
+            DependencyObject child = VisualTreeHelper.GetChild(parent, i);
+            if (child is T typed)
+            {
+                return typed;
+            }
+
+            T? nested = FindVisualChild<T>(child);
+            if (nested is not null)
+            {
+                return nested;
+            }
+        }
+
+        return null;
+    }
+
+    private void CopySelectedLogs_Click(object sender, RoutedEventArgs e)
     {
         CopySelectedLogs();
     }

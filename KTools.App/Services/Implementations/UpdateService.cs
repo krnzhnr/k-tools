@@ -4,7 +4,6 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
-using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
@@ -98,9 +97,11 @@ public sealed class UpdateService : IUpdateService
 
         // Настраиваем заголовки по умолчанию для HttpClient.
         // GitHub API требует наличие User-Agent для всех запросов.
+        // Версия берётся из единого источника AppVersion (AssemblyInformationalVersion сборки),
+        // захардкоженные номера версий здесь запрещены (ишью #93).
         if (_httpClient.DefaultRequestHeaders.UserAgent.Count == 0)
         {
-            _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("K-Tools-App/2.0.0");
+            _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd($"K-Tools-App/{AppVersion.Resolve()}");
         }
     }
 
@@ -168,7 +169,8 @@ public sealed class UpdateService : IUpdateService
         string downloadUrl,
         string fileName,
         Action<double> progressCallback,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? expectedSha256Hex = null)
     {
         _logService.Write(
             "update.download_started",
@@ -220,7 +222,7 @@ public sealed class UpdateService : IUpdateService
             // и тогда цель восстанавливается по свежему списку релизов, а скачивание повторяется один раз.
             try
             {
-                await DownloadAndInstallCoreAsync(target, tempFilePath, progressCallback, cancellationToken);
+                await DownloadAndInstallCoreAsync(target, tempFilePath, progressCallback, cancellationToken, expectedSha256Hex);
                 return;
             }
             catch (HttpRequestException ex) when (IsAssetMissing(ex))
@@ -229,7 +231,7 @@ public sealed class UpdateService : IUpdateService
                 tempFilePath = Path.Combine(Path.GetTempPath(), target.FileName);
             }
 
-            await DownloadAndInstallCoreAsync(target, tempFilePath, progressCallback, cancellationToken);
+            await DownloadAndInstallCoreAsync(target, tempFilePath, progressCallback, cancellationToken, expectedSha256Hex);
         }
         catch (Exception ex)
         {
@@ -285,11 +287,13 @@ public sealed class UpdateService : IUpdateService
     /// <param name="tempFilePath">Полный путь временного файла установщика.</param>
     /// <param name="progressCallback">Обратный вызов для уведомления о прогрессе (значение от 0.0 до 100.0).</param>
     /// <param name="cancellationToken">Токен отмены асинхронной операции.</param>
+    /// <param name="expectedSha256Hex">Ожидаемый SHA-256 хеш установщика; при null сверка пропускается.</param>
     private async Task DownloadAndInstallCoreAsync(
         DownloadTarget target,
         string tempFilePath,
         Action<double> progressCallback,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? expectedSha256Hex = null)
     {
         // Скачиваем файл с отслеживанием прогресса
         using (var response = await _httpClient.GetAsync(
@@ -351,6 +355,70 @@ public sealed class UpdateService : IUpdateService
                 ["Stage"] = "download",
                 ["FileName"] = LogProps.FileName(target.FileName)
             });
+
+        // Сверка целостности до запуска: подмена установщика детектируется здесь,
+        // отбракованный файл удаляется и установка прерывается до Process.Start.
+        if (!string.IsNullOrWhiteSpace(expectedSha256Hex))
+        {
+            try
+            {
+                FileIntegrity.VerifySha256(tempFilePath, expectedSha256Hex);
+                _logService.Write(
+                    "update.hash.verified",
+                    LogLevel.Debug,
+                    LogStatus.Succeeded,
+                    "Контрольная сумма установщика обновления совпала с ожидаемой",
+                    null,
+                    "UpdateService",
+                    properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                    {
+                        ["Stage"] = "verify",
+                        ["FileName"] = LogProps.FileName(target.FileName),
+                        ["Fingerprint"] = LogProps.Fingerprint(expectedSha256Hex)
+                    });
+            }
+            catch (Exception ex) when (ex is InvalidDataException || ex is FileNotFoundException || ex is IOException || ex is UnauthorizedAccessException)
+            {
+                _logService.Write(
+                    "update.hash.mismatch",
+                    LogLevel.Error,
+                    LogStatus.Failed,
+                    "Установщик обновления не прошёл проверку целостности и удалён, запуск отменён",
+                    ex,
+                    "UpdateService",
+                    properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                    {
+                        ["Stage"] = "verify",
+                        ["ErrorCode"] = "UPDATE_HASH_MISMATCH",
+                        ["FileName"] = LogProps.FileName(target.FileName)
+                    });
+                try
+                {
+                    if (File.Exists(tempFilePath))
+                    {
+                        File.Delete(tempFilePath);
+                    }
+                }
+                catch { /* Игнорируем ошибки удаления отбракованного файла */ }
+                throw new InvalidDataException("Установщик обновления не прошёл проверку целостности (хеш SHA-256 не совпал). Запуск отменён, файл удалён.", ex);
+            }
+        }
+        else
+        {
+            _logService.Write(
+                "update.hash.skipped",
+                LogLevel.Warning,
+                LogStatus.Skipped,
+                "Ожидаемый хеш установщика не задан, проверка целостности пропущена",
+                null,
+                "UpdateService",
+                properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["Stage"] = "verify",
+                    ["FileName"] = LogProps.FileName(target.FileName),
+                    ["Reason"] = "HashNotPinned"
+                });
+        }
 
         // Запускаем инсталлятор во внешнем процессе с ключами /SILENT /SUPPRESSMSGBOXES и исключением пересоздания ярлыка рабочего стола
         var processStartInfo = new System.Diagnostics.ProcessStartInfo
@@ -689,22 +757,11 @@ public sealed class UpdateService : IUpdateService
             return "1.0.0";
         }
 
-        try
-        {
-            var assembly = Assembly.GetExecutingAssembly();
-            var infoVersion = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
-            if (!string.IsNullOrEmpty(infoVersion))
-            {
-                int plusIdx = infoVersion.IndexOf('+');
-                return plusIdx > 0 ? infoVersion.Substring(0, plusIdx) : infoVersion;
-            }
-            return assembly.GetName().Version?.ToString() ?? "2.0.0";
-        }
-        catch (Exception ex)
-        {
-            _logService.Write("app.version.resolve_failed", LogLevel.Warning, LogStatus.PartiallySucceeded, "Версию текущей сборки определить не удалось, проверка обновлений может быть неточной", ex, SourceName, properties: LogProps.Create("ErrorCode", "VERSION_RESOLVE_FAILED"));
-            return "2.0.0";
-        }
+        // Единый источник версии — AppVersion (AssemblyInformationalVersion сборки,
+        // заданный свойством <Version> в csproj). Дублирование логики чтения версии
+        // и захардкоженные фолбэки запрещены (ишью #93): при недоступности версии
+        // возвращается "0.0.0", что безопасно склоняет сравнение в сторону предложения обновления.
+        return AppVersion.Resolve();
     }
 
     /// <summary>

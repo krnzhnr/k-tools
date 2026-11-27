@@ -73,11 +73,36 @@ public class LogUiSessionTests
         long generation = session.Activate();
         LogEvent oversized = CreateEvent(1, new string('я', 100_000));
 
-        session.TryAdd(generation, oversized).Should().BeTrue();
+        session.TryAdd(generation, oversized).Should().BeFalse("сброс виден вызывающему коду, потеря измеряется счётчиком");
         session.TryBeginBatch(generation).Should().BeTrue();
         session.TryDrain(generation, out var items, out long dropped).Should().BeTrue();
 
         items.Should().BeEmpty();
         dropped.Should().Be(1);
+    }
+
+    [TestMethod]
+    public void TryAdd_DroppedEvent_ReturnsFalseAndKeepsDropCounter()
+    {
+        var session = new LogUiSession(capacity: 16, maxBytes: 64 * 1024);
+        long generation = session.Activate();
+        LogEvent oversized = CreateEvent(1, new string('я', 100_000));
+
+        session.TryAdd(generation, oversized).Should().BeFalse("сброшенное событие обязано отличаться от доставленного");
+        session.TryDrain(generation, out var items, out long dropped).Should().BeTrue();
+        items.Should().BeEmpty();
+        dropped.Should().Be(1, "потеря измеряется счётчиком даже при честном результате TryAdd");
+    }
+
+    [TestMethod]
+    public void TryAdd_DuplicateEvent_ReturnsFalse()
+    {
+        var session = new LogUiSession();
+        long generation = session.Activate();
+
+        session.TryAdd(generation, CreateEvent(1)).Should().BeTrue();
+        session.TryAdd(generation, CreateEvent(1)).Should().BeFalse("повтор не доставляется заново");
+        session.TryDrain(generation, out var items, out _).Should().BeTrue();
+        items.Should().HaveCount(1);
     }
 }

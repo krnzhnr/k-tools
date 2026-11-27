@@ -22,13 +22,16 @@ namespace KTools_App.Encoders;
 ///
 /// Дисковый кэш (PERF-05): файл nvenc-capabilities.json рядом с настройками
 /// (каталог IPathManager.GetSettingsDirectory(), НЕ settings.json) вида
-/// {nvenc, temporalAq, ffmpegVersion, driverVersion, timestamp}.
-/// Запись действительна, только пока совпадают версия FFmpeg и версия
-/// драйвера NVIDIA; смена любой из них делает кэш недействительным и
-/// запускает повторный опрос. Проверки версий дешёвые и не запускают
-/// процессы: версия FFmpeg читается из метаданных бинарника, версия
-/// драйвера — из реестра. Метка времени хранится справочно и на
-/// действительность кэша не влияет.
+/// {nvenc, temporalAq, av1, ffmpegVersion, driverVersion, deviceFingerprint, timestamp}.
+/// Запись действительна, только пока совпадают версия FFmpeg, версия
+/// драйвера NVIDIA и отпечаток видеооборудования (имена адаптеров и PCI-ID
+/// из реестра): смена любой из них, включая замену видеокарты на том же
+/// драйвере, делает кэш недействительным и запускает повторный опрос.
+/// Кэш старого формата без отпечатка также недействителен. Проверки версий
+/// и отпечатка дешёвые и не запускают процессы: версия FFmpeg читается
+/// из метаданных бинарника, версия драйвера и состав оборудования — из
+/// реестра. Метка времени хранится справочно и на действительность кэша
+/// не влияет.
 /// </summary>
 public class HardwareCapabilityCache : IHardwareCapabilityCache
 {
@@ -51,13 +54,25 @@ public class HardwareCapabilityCache : IHardwareCapabilityCache
 
     private const string CacheMissNoFile = "no-file";
     private const string CacheMissVersionChanged = "version-changed";
+    private const string CacheMissHardwareChanged = "hardware-changed";
     private const string CacheMissCorrupted = "corrupted";
+
+    /// <summary>
+    /// Имя значения реестра с описанием видеоадаптера (например, "NVIDIA GeForce RTX 4070").
+    /// </summary>
+    private const string RegistryDriverDescValue = "DriverDesc";
+
+    /// <summary>
+    /// Имя значения реестра с PCI-идентификатором устройства (например, "pci\ven_10de&dev_2684...").
+    /// </summary>
+    private const string RegistryMatchingIdValue = "MatchingDeviceId";
 
     private readonly IFFmpegRunner _ffmpegRunner;
     private readonly ILogService _logService;
     private readonly IPathManager? _pathManager;
     private readonly Func<string>? _ffmpegVersionProvider;
     private readonly Func<string>? _driverVersionProvider;
+    private readonly Func<string>? _deviceFingerprintProvider;
     private readonly string? _cacheFilePathOverride;
     private readonly SemaphoreSlim _initLock = new(1, 1);
     private bool _isInitialized = false;
@@ -82,18 +97,21 @@ public class HardwareCapabilityCache : IHardwareCapabilityCache
         IPathManager? pathManager,
         Func<string>? ffmpegVersionProvider,
         Func<string>? driverVersionProvider,
-        string? cacheFilePath)
+        string? cacheFilePath,
+        Func<string>? deviceFingerprintProvider = null)
     {
         _ffmpegRunner = ffmpegRunner ?? throw new ArgumentNullException(nameof(ffmpegRunner));
         _logService = logService ?? throw new ArgumentNullException(nameof(logService));
         _pathManager = pathManager;
         _ffmpegVersionProvider = ffmpegVersionProvider;
         _driverVersionProvider = driverVersionProvider;
+        _deviceFingerprintProvider = deviceFingerprintProvider;
         _cacheFilePathOverride = cacheFilePath;
     }
 
     public bool IsNvencSupported { get; private set; }
     public bool IsNvencTemporalAqSupported { get; private set; }
+    public bool IsNvencAv1Supported { get; private set; }
 
     public async Task InitializeAsync()
     {
@@ -113,10 +131,11 @@ public class HardwareCapabilityCache : IHardwareCapabilityCache
                     LogStatus.Running,
                     "Начинается опрос аппаратных возможностей кодирования",
                     source: SourceName);
-                if (TryLoadValidCache(out bool cachedNvenc, out bool cachedTemporalAq))
+                if (TryLoadValidCache(out bool cachedNvenc, out bool cachedTemporalAq, out bool cachedAv1))
                 {
                     IsNvencSupported = cachedNvenc;
                     IsNvencTemporalAqSupported = cachedTemporalAq;
+                    IsNvencAv1Supported = cachedAv1;
                     _isInitialized = true;
                     _logService.Write(
                         "encoder.capabilities.cache_hit",
@@ -155,10 +174,21 @@ public class HardwareCapabilityCache : IHardwareCapabilityCache
                         properties: LogProps
                             .Create("Verified", IsNvencTemporalAqSupported)
                             .With("Codec", "h264_nvenc"));
+                    IsNvencAv1Supported = await CheckNvencAv1Async().ConfigureAwait(false);
+                    _logService.Write(
+                        "encoder.capabilities.av1_detected",
+                        LogLevel.Debug,
+                        LogStatus.Succeeded,
+                        $"NVENC AV1 {(IsNvencAv1Supported ? "доступен" : "недоступен")}",
+                        source: SourceName,
+                        properties: LogProps
+                            .Create("Verified", IsNvencAv1Supported)
+                            .With("Codec", "av1_nvenc"));
                 }
                 else
                 {
                     IsNvencTemporalAqSupported = false;
+                    IsNvencAv1Supported = false;
                 }
 
                 _isInitialized = true;
@@ -178,6 +208,7 @@ public class HardwareCapabilityCache : IHardwareCapabilityCache
                         .With("Tool", "ffmpeg"));
                 IsNvencSupported = false;
                 IsNvencTemporalAqSupported = false;
+                IsNvencAv1Supported = false;
             }
         }
         finally
@@ -195,6 +226,7 @@ public class HardwareCapabilityCache : IHardwareCapabilityCache
         _isInitialized = false;
         IsNvencSupported = false;
         IsNvencTemporalAqSupported = false;
+        IsNvencAv1Supported = false;
         try
         {
             string cachePath = ResolveCacheFilePath();
@@ -241,15 +273,30 @@ public class HardwareCapabilityCache : IHardwareCapabilityCache
         }
     }
 
+    private async Task<bool> CheckNvencAv1Async()
+    {
+        try
+        {
+            return await _ffmpegRunner.CheckNvencAv1SupportAsync().ConfigureAwait(false);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     /// <summary>
     /// Пытается взять результат из дискового кэша без запуска процессов.
-    /// Возвращает true, только если версии FFmpeg и драйвера совпали с записанными.
+    /// Возвращает true, только если версии FFmpeg и драйвера, а также
+    /// отпечаток видеооборудования совпали с записанными. Кэш старого
+    /// формата без отпечатка считается недействительным.
     /// Никогда не бросает исключений: любая неполадка означает промах кэша.
     /// </summary>
-    private bool TryLoadValidCache(out bool nvenc, out bool temporalAq)
+    private bool TryLoadValidCache(out bool nvenc, out bool temporalAq, out bool av1)
     {
         nvenc = false;
         temporalAq = false;
+        av1 = false;
         try
         {
             string cachePath = ResolveCacheFilePath();
@@ -289,6 +336,7 @@ public class HardwareCapabilityCache : IHardwareCapabilityCache
 
             string currentFfmpeg = ReadFfmpegVersion();
             string currentDriver = ReadDriverVersion();
+            string currentDevices = ReadDeviceFingerprint();
             if (!string.Equals(snapshot.FfmpegVersion, currentFfmpeg, StringComparison.Ordinal)
                 || !string.Equals(snapshot.DriverVersion, currentDriver, StringComparison.Ordinal))
             {
@@ -305,8 +353,24 @@ public class HardwareCapabilityCache : IHardwareCapabilityCache
                 return false;
             }
 
+            if (string.IsNullOrWhiteSpace(snapshot.DeviceFingerprint)
+                || !string.Equals(snapshot.DeviceFingerprint, currentDevices, StringComparison.Ordinal))
+            {
+                _logService.Write(
+                    "encoder.capabilities.cache_missed",
+                    LogLevel.Debug,
+                    LogStatus.Skipped,
+                    "Состав видеооборудования изменился или кэш записан в старом формате без отпечатка, выполняется повторный опрос оборудования",
+                    source: SourceName,
+                    properties: LogProps
+                        .Create("Reason", CacheMissHardwareChanged)
+                        .With("Tool", "ffmpeg"));
+                return false;
+            }
+
             nvenc = snapshot.Nvenc;
             temporalAq = snapshot.TemporalAq;
+            av1 = snapshot.Av1;
             return true;
         }
         catch (Exception ex)
@@ -350,8 +414,10 @@ public class HardwareCapabilityCache : IHardwareCapabilityCache
             {
                 Nvenc = IsNvencSupported,
                 TemporalAq = IsNvencTemporalAqSupported,
+                Av1 = IsNvencAv1Supported,
                 FfmpegVersion = ReadFfmpegVersion(),
                 DriverVersion = ReadDriverVersion(),
+                DeviceFingerprint = ReadDeviceFingerprint(),
                 Timestamp = DateTimeOffset.UtcNow,
             };
             string cachePath = ResolveCacheFilePath();
@@ -484,7 +550,7 @@ public class HardwareCapabilityCache : IHardwareCapabilityCache
                     try
                     {
                         using RegistryKey? subKey = baseKey.OpenSubKey(name);
-                        string description = subKey?.GetValue("DriverDesc")?.ToString() ?? string.Empty;
+                        string description = subKey?.GetValue(RegistryDriverDescValue)?.ToString() ?? string.Empty;
                         if (!description.Contains(NvidiaAdapterMarker, StringComparison.OrdinalIgnoreCase))
                         {
                             return null;
@@ -510,6 +576,112 @@ public class HardwareCapabilityCache : IHardwareCapabilityCache
     }
 
     /// <summary>
+    /// Дешёвый отпечаток состава видеооборудования без запуска процессов:
+    /// имена адаптеров NVIDIA и их PCI-идентификаторы из реестра.
+    /// Замена видеокарты на том же драйвере меняет отпечаток и делает
+    /// кэш недействительным. Пустая строка означает, что состав неизвестен
+    /// и кэш недействителен.
+    /// </summary>
+    private string ReadDeviceFingerprint()
+    {
+        if (_deviceFingerprintProvider is not null)
+        {
+            try
+            {
+                return _deviceFingerprintProvider() ?? string.Empty;
+            }
+            catch
+            {
+                return string.Empty;
+            }
+        }
+
+        try
+        {
+            if (!OperatingSystem.IsWindows())
+            {
+                return NoNvidiaDriverMarker;
+            }
+
+            using RegistryKey? baseKey = Registry.LocalMachine.OpenSubKey(
+                @"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}");
+            if (baseKey is null)
+            {
+                return string.Empty;
+            }
+
+            var adapters = baseKey.GetSubKeyNames()
+                .Where(name => name.Length == 4 && char.IsDigit(name[0]))
+                .Select(name =>
+                {
+                    try
+                    {
+                        using RegistryKey? subKey = baseKey.OpenSubKey(name);
+                        string description = subKey?.GetValue(RegistryDriverDescValue)?.ToString() ?? string.Empty;
+                        if (!description.Contains(NvidiaAdapterMarker, StringComparison.OrdinalIgnoreCase))
+                        {
+                            return null;
+                        }
+
+                        string deviceId = ReadAdapterDeviceId(subKey);
+                        return string.IsNullOrWhiteSpace(deviceId)
+                            ? description.Trim()
+                            : $"{description.Trim()}|{deviceId}";
+                    }
+                    catch
+                    {
+                        return null;
+                    }
+                })
+                .Where(adapter => !string.IsNullOrWhiteSpace(adapter))
+                .Select(adapter => adapter!.Trim())
+                .OrderBy(adapter => adapter, StringComparer.Ordinal)
+                .ToArray();
+            return adapters.Length == 0 ? NoNvidiaDriverMarker : string.Join(";", adapters);
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    /// <summary>
+    /// Читает PCI-идентификатор видеоадаптера из ключа реестра.
+    /// Пустая строка означает отсутствие идентификатора.
+    /// </summary>
+    private static string ReadAdapterDeviceId(RegistryKey? subKey)
+    {
+        if (subKey is null)
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            string? matchingId = subKey.GetValue(RegistryMatchingIdValue)?.ToString();
+            if (!string.IsNullOrWhiteSpace(matchingId))
+            {
+                return matchingId.Trim();
+            }
+
+            if (subKey.GetValue("HardwareID") is string[] hardwareIds)
+            {
+                string? firstId = hardwareIds.FirstOrDefault(id => !string.IsNullOrWhiteSpace(id));
+                if (!string.IsNullOrWhiteSpace(firstId))
+                {
+                    return firstId.Trim();
+                }
+            }
+        }
+        catch
+        {
+            return string.Empty;
+        }
+
+        return string.Empty;
+    }
+
+    /// <summary>
     /// Снимок результата опроса для дискового кэша рядом с настройками.
     /// </summary>
     private sealed class NvencCapabilitySnapshot
@@ -518,9 +690,13 @@ public class HardwareCapabilityCache : IHardwareCapabilityCache
 
         public bool TemporalAq { get; set; }
 
+        public bool Av1 { get; set; }
+
         public string FfmpegVersion { get; set; } = string.Empty;
 
         public string DriverVersion { get; set; } = string.Empty;
+
+        public string DeviceFingerprint { get; set; } = string.Empty;
 
         public DateTimeOffset Timestamp { get; set; }
     }

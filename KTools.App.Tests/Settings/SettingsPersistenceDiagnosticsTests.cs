@@ -111,9 +111,11 @@ public class SettingsPersistenceDiagnosticsTests
     public void SettingsEventIds_AreValidForStructuredJournal()
     {
         // Arrange
+        // Поле Source — имя источника (параметр Source:), а не идентификатор события,
+        // поэтому из сверки по схеме EventId исключается.
         string[] ids = typeof(SettingsEventIds)
             .GetFields(BindingFlags.Public | BindingFlags.Static)
-            .Where(f => f.IsLiteral && f.FieldType == typeof(string))
+            .Where(f => f.IsLiteral && f.FieldType == typeof(string) && f.Name != nameof(SettingsEventIds.Source))
             .Select(f => (string)f.GetRawConstantValue()!)
             .ToArray();
 

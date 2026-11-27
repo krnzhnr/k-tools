@@ -165,8 +165,17 @@ public sealed class MkvAssemblyScript(
         ScriptProgressCallback progressCallback,
         int fileIndex,
         int totalCount,
-        ExecutionContext context)
+        ExecutionContext context,
+        CancellationToken cancellationToken = default)
     {
+        if (IsCancellationRequested(cancellationToken))
+        {
+            return ExecutionResult.Cancelled(
+                context,
+                new[] { "Обработка отменена до запуска элемента." },
+                errorCode: "cancelled-before-start",
+                cleanupState: CleanupState.NotStarted);
+        }
         List<string> results = [];
 
         string ext = Path.GetExtension(filePath).ToLowerInvariant();
@@ -328,7 +337,7 @@ public sealed class MkvAssemblyScript(
 
             progressCallback(fileIndex, totalCount, $"Сборка MP4: {stem}...", 0.0);
 
-            using var ctsMp4 = CancellationTokenSource.CreateLinkedTokenSource(CancellationToken);
+            using var ctsMp4 = CancellationTokenSource.CreateLinkedTokenSource(CancellationToken, cancellationToken);
 
             ProcessResult? mp4Success = null;
             try
@@ -484,7 +493,7 @@ public sealed class MkvAssemblyScript(
             bool isMain = i == 0;
             string audioStem = Path.GetFileNameWithoutExtension(audioPaths[i]);
             string manualTitle = SanitizeTrackTitle(audioCandidates[i].ManualTitle);
-            string embeddedTitle = await GetEmbeddedAudioTitleAsync(audioPaths[i]);
+            string embeddedTitle = await GetEmbeddedAudioTitleAsync(audioPaths[i], cancellationToken);
             string audioTitle = !string.IsNullOrWhiteSpace(manualTitle)
                 ? manualTitle
                 : !string.IsNullOrWhiteSpace(defaultAudioTitle)
@@ -533,7 +542,8 @@ public sealed class MkvAssemblyScript(
             };
             if (!string.IsNullOrWhiteSpace(trackTitle))
             {
-                subsArgs.AddRange((string[])["--track-name", $"\"0:{trackTitle}\""]);
+                // Сырой заголовок без ручных кавычек: квотирование выполняет CliArgument в раннере.
+                subsArgs.AddRange((string[])["--track-name", $"0:{trackTitle}"]);
             }
             mkvInputs.Add(new MkvInputSource(subsTracks[i].Path, subsArgs));
         }
@@ -544,7 +554,7 @@ public sealed class MkvAssemblyScript(
         {
             try
             {
-                var mediaStructure = await _mediaProbeService.ProbeAsync(filePath);
+                var mediaStructure = await _mediaProbeService.ProbeAsync(filePath, cancellationToken);
                 if (mediaStructure != null)
                 {
                     List<string> orderParts = [];
@@ -613,7 +623,7 @@ public sealed class MkvAssemblyScript(
         // 7. Запуск процесса сборки через MkvmergeRunner с мониторингом отмены
         progressCallback(fileIndex, totalCount, $"Сборка MKV: {stem}...", 0.0);
 
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(CancellationToken);
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(CancellationToken, cancellationToken);
 
         ProcessResult? success = null;
         try
@@ -749,11 +759,11 @@ public sealed class MkvAssemblyScript(
     /// вызывающий код использует заголовок из имени файла.
     /// Кавычки вычищаются, так как заголовок подставляется в кавычках в аргументы mkvmerge.
     /// </summary>
-    private async Task<string> GetEmbeddedAudioTitleAsync(string audioPath)
+    private async Task<string> GetEmbeddedAudioTitleAsync(string audioPath, CancellationToken cancellationToken = default)
     {
         try
         {
-            var structure = await _mediaProbeService.ProbeAsync(audioPath);
+            var structure = await _mediaProbeService.ProbeAsync(audioPath, cancellationToken);
             var track = structure?.Tracks.FirstOrDefault(t => t.TrackType.Equals("audio", System.StringComparison.OrdinalIgnoreCase));
             string title = track?.Name?.Trim() ?? string.Empty;
             return title.Replace("\"", "'", StringComparison.Ordinal);

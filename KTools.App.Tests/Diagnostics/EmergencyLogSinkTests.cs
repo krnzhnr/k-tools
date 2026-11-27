@@ -99,6 +99,7 @@ public class EmergencyLogSinkTests
         Directory.GetFiles(Path.Combine(scope.RootPath, "emergency"), EmergencyLogSink.FileSearchPattern).Should().HaveCount(1);
         sink.WrittenCount.Should().Be(1);
         sink.DroppedCount.Should().Be(1);
+        sink.DuplicateCount.Should().Be(1, "подавление повтора измеряется отдельным счётчиком");
     }
 
     [TestMethod]
@@ -379,6 +380,26 @@ public class EmergencyLogSinkTests
         using JsonDocument document = JsonDocument.Parse(payload);
         document.RootElement.GetProperty("crashId").GetString().Should().Be("crash-json");
         Encoding.UTF8.GetByteCount(payload).Should().BeLessThanOrEqualTo(EmergencyLogSink.DefaultReasonLimit * 8);
+    }
+
+    [TestMethod]
+    public void Write_FailedAttempt_DoesNotBurnCrashIdForRetry()
+    {
+        using var scope = new TempDirectoryScope();
+        string blocker = scope.GetFullPath("blocked");
+        File.WriteAllText(blocker, "file-instead-of-directory");
+        var sink = new EmergencyLogSink(Path.Combine(blocker, "nested"), new LogServiceOptions());
+        Guid session = Guid.NewGuid();
+
+        sink.Write("первый сбой записи", null, "App", "crash-retry", session)
+            .Should().BeFalse("отказ диска виден вызывающему коду");
+        File.Delete(blocker);
+
+        sink.Write("повтор после восстановления", null, "App", "crash-retry", session)
+            .Should().BeTrue("неудавшаяся попытка не сжигает CrashId: повтор разрешён");
+        Directory.GetFiles(
+                Path.Combine(scope.RootPath, "blocked", "nested"),
+                EmergencyLogSink.FileSearchPattern).Should().HaveCount(1);
     }
 
     [TestMethod]

@@ -2,6 +2,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 
 using CommunityToolkit.Mvvm.Messaging;
 using CommunityToolkit.WinUI.Controls;
@@ -47,6 +49,12 @@ public sealed partial class ScriptSettingsControl : UserControl
     private bool _isInternalNumberBoxUpdate;
     private static readonly Dictionary<string, string> _lastActiveTabs = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, (Button ActionBtn, ProgressRing Ring, TextBlock PText, Button CancelBtn)> _whisperActionControls = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Источники отмены загрузок моделей Whisper по ключам (ишью #122).
+    /// Токен пробрасывается в менеджер загрузки; кнопка отмены гасит его вместе с менеджером.
+    /// </summary>
+    private readonly Dictionary<string, CancellationTokenSource> _whisperDownloadSources = new(StringComparer.OrdinalIgnoreCase);
     private AbstractScript? _pendingBuildScript;
     private AbstractScript? _builtScript;
 
@@ -73,9 +81,7 @@ public sealed partial class ScriptSettingsControl : UserControl
         // Проба NVENC завершается в фоне уже после построения схемы настроек:
         // ранняя схема содержит только CPU и скрывает чужие поля. По сообщению
         // пересобираем интерфейс через штатный механизм смены набора ключей.
-        WeakReferenceMessenger.Default.Register<ScriptSettingsControl, HardwareCapabilitiesChangedMessage>(
-            this,
-            (r, m) => r.OnHardwareCapabilitiesChanged());
+        RegisterMessenger();
 
         // Сброс фокуса только при клике по свободной области формы.
         // OriginalSource клика в поле ввода — внутренний элемент шаблона TextBox,
@@ -105,6 +111,10 @@ public sealed partial class ScriptSettingsControl : UserControl
                 _whisperModelManager.DownloadCompleted -= OnWhisperDownloadCompleted;
             }
 
+            // Без детерминированной отписки контрол оставался получателем
+            // сообщений до сборки мусора (ишью #125).
+            UnregisterMessenger();
+
             // Несохранённые правки фиксируются одним проходом при уходе со вкладки.
             ViewModel.FlushStaged();
         };
@@ -115,11 +125,34 @@ public sealed partial class ScriptSettingsControl : UserControl
     }
 
     /// <summary>
+    /// Подписывается на сообщения мессенджера. Идемпотентно:
+    /// перед подпиской снимает прежние, чтобы повторный Loaded не дублировал получателя.
+    /// </summary>
+    private void RegisterMessenger()
+    {
+        WeakReferenceMessenger.Default.UnregisterAll(this);
+        WeakReferenceMessenger.Default.Register<ScriptSettingsControl, HardwareCapabilitiesChangedMessage>(
+            this,
+            (r, m) => r.OnHardwareCapabilitiesChanged());
+    }
+
+    /// <summary>
+    /// Детерминированно снимает подписки мессенджера при выгрузке контрола (ишью #125).
+    /// </summary>
+    private void UnregisterMessenger()
+    {
+        WeakReferenceMessenger.Default.UnregisterAll(this);
+    }
+
+    /// <summary>
     /// Восстанавливает подписки после выгрузки страницы и актуализирует состояние
     /// элементов управления моделями Whisper (загрузка могла завершиться, пока вкладка была скрыта).
     /// </summary>
     private void RestoreSubscriptions()
     {
+        // Мессенджер отписан в Unloaded: восстанавливаем приём сообщений (ишью #125).
+        RegisterMessenger();
+
         if (_activeScript != null)
         {
             _activeScript.FilesQueue.CollectionChanged -= OnFilesQueueCollectionChanged;
@@ -1030,6 +1063,15 @@ public sealed partial class ScriptSettingsControl : UserControl
                     {
                         string selectedVal = comboBox.SelectedItem.ToString() ?? string.Empty;
                         ViewModel.CommitSetting(field.Key, selectedVal);
+                        // AV1 (NVENC) не поддерживает Lossless: сбрасываем флаг,
+                        // иначе чекбокс остаётся визуально включённым в disabled-состоянии.
+                        if (field.Key == "nvenc_codec"
+                            && selectedVal.Equals("AV1", StringComparison.OrdinalIgnoreCase)
+                            && _settingsManager.GetSetting(settingsGroup, "lossless", false))
+                        {
+                            ResetLosslessToOff(settingsGroup);
+                        }
+
                         UpdateVisibility(settingsGroup);
                         if (field.Key == "encoder" && _settingsManager.GetSetting(settingsGroup, "lossless", false))
                         {
@@ -1898,6 +1940,45 @@ public sealed partial class ScriptSettingsControl : UserControl
         }
     }
 
+    /// <summary>
+    /// Сбрасывает флаг Lossless при выборе AV1 (NVENC): аппаратно не поддерживается,
+    /// чекбокс обязан стать визуально выключенным, а не зависнуть включённым в disabled.
+    /// Все комментарии на русском языке.
+    /// </summary>
+    private void ResetLosslessToOff(string settingsGroup)
+    {
+        if (!_settingsManager.GetSetting(settingsGroup, "lossless", false))
+        {
+            return;
+        }
+
+        ViewModel.CommitSetting("lossless", false);
+        var losslessItem = _generatedElements.FirstOrDefault(x => x.Field.Key == "lossless");
+        if (losslessItem.Element == null)
+        {
+            return;
+        }
+
+        CheckBox? box = losslessItem.Element as CheckBox;
+        if (box == null && losslessItem.Element is Grid grid)
+        {
+            box = grid.Children.OfType<CheckBox>().FirstOrDefault();
+        }
+
+        if (box != null && box.IsChecked != false)
+        {
+            _isInternalCheckBoxUpdate = true;
+            box.IsChecked = false;
+            _isInternalCheckBoxUpdate = false;
+        }
+
+        ToggleSwitch? toggle = FindChildElement<ToggleSwitch>(losslessItem.Element);
+        if (toggle != null && toggle.IsOn)
+        {
+            toggle.IsOn = false;
+        }
+    }
+
     private void UpdateIntSettingAndUI(string settingsGroup, string key, int value)
     {
         ViewModel.CommitSetting(key, value);
@@ -2267,7 +2348,7 @@ public sealed partial class ScriptSettingsControl : UserControl
 
         cancelButton.Click += (s, e) =>
         {
-            _whisperModelManager.CancelDownload(modelKey);
+            CancelWhisperDownload(modelKey);
         };
 
         actionButton.Click += async (s, e) =>
@@ -2298,9 +2379,33 @@ public sealed partial class ScriptSettingsControl : UserControl
             progressText.Text = "0%";
             cancelButton.Visibility = Visibility.Visible;
 
+            // Запуск скачивания модели через центральный менеджер.
+            // Сквозной токен связывает кнопку отмены с ожидающей задачей (ишью #122).
+            CancellationTokenSource downloadCts = new();
+            _whisperDownloadSources[modelKey] = downloadCts;
+
             _ = Task.Run(async () =>
             {
-                await _whisperModelManager.DownloadModelAsync(modelKey);
+                try
+                {
+                    await _whisperModelManager.DownloadModelAsync(modelKey, cancellationToken: downloadCts.Token).ConfigureAwait(false);
+                }
+                finally
+                {
+                    if (_whisperDownloadSources.TryGetValue(modelKey, out CancellationTokenSource? current) &&
+                        ReferenceEquals(current, downloadCts))
+                    {
+                        _whisperDownloadSources.Remove(modelKey);
+                    }
+
+                    try
+                    {
+                        downloadCts.Dispose();
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                    }
+                }
             });
         };
 
@@ -2310,6 +2415,26 @@ public sealed partial class ScriptSettingsControl : UserControl
         container.Children.Add(cancelButton);
 
         return container;
+    }
+
+    /// <summary>
+    /// Отменяет загрузку модели Whisper: гасит локальный токен ожидания
+    /// и просит менеджер прервать сетевую операцию (ишью #122).
+    /// </summary>
+    private void CancelWhisperDownload(string modelKey)
+    {
+        if (_whisperDownloadSources.TryGetValue(modelKey, out CancellationTokenSource? source) && source is not null)
+        {
+            try
+            {
+                source.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        }
+
+        _whisperModelManager?.CancelDownload(modelKey);
     }
 
     private void OnFilesQueueCollectionChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)

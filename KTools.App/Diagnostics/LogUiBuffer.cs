@@ -78,16 +78,18 @@ public sealed class LogUiBuffer
         long estimate = EstimateSize(logEvent);
         lock (_lock)
         {
+            // Бюджет проверяется до дедупликации: сброшенное событие не представлено
+            // в очереди и не занимает слот seen, повторная доставка снова измеряется.
+            if (estimate > _maxItemBytes)
+            {
+                _dropped++;
+                return false;
+            }
+
             LogItemKey key;
             try
             {
                 key = new LogItemKey(logEvent.SessionId, logEvent.Sequence);
-                if (!_seen.Add(key))
-                {
-                    return false;
-                }
-
-                RememberSeen(key);
             }
             catch (Exception)
             {
@@ -95,9 +97,9 @@ public sealed class LogUiBuffer
                 return false;
             }
 
-            if (estimate > _maxItemBytes)
+            // Повтор уже представленного события — не потеря: счётчик не растёт.
+            if (!_seen.Add(key))
             {
-                _dropped++;
                 return false;
             }
 
@@ -107,10 +109,12 @@ public sealed class LogUiBuffer
                 long itemSize = Math.Max(estimate, EstimateSize(item.Message) + 128L);
                 if (itemSize > _maxItemBytes)
                 {
+                    _seen.Remove(key);
                     _dropped++;
                     return false;
                 }
 
+                RememberSeen(key);
                 _items.Add(item);
                 _itemBytes.Add(itemSize);
                 _bytes += itemSize;
@@ -119,6 +123,7 @@ public sealed class LogUiBuffer
             }
             catch (Exception)
             {
+                _seen.Remove(key);
                 _dropped++;
                 return false;
             }

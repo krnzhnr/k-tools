@@ -176,7 +176,7 @@ public class ScriptSettingsViewModelTests
         _settingsManagerMock.Verify(
             m => m.SetSetting(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<object>()),
             Times.Never);
-        _logServiceMock.Verify(l => l.Info(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+        _logServiceMock.VerifyEvent(LogLevel.Info, "сохранён в настройках", Times.Never());
     }
 
     /// <summary>
@@ -342,5 +342,47 @@ public class ScriptSettingsViewModelTests
                 It.IsAny<LogContext?>(),
                 It.IsAny<IReadOnlyDictionary<string, object?>>()),
             Times.Once);
+    }
+
+    /// <summary>
+    /// Проверяет, что ValueHash считается от сохраняемого значения, а не от ключа:
+    /// разные значения одного ключа обязаны давать разные хэши (issue #130).
+    /// </summary>
+    [TestMethod]
+    public void CommitSetting_DifferentValues_ProducesDifferentValueHash()
+    {
+        // Arrange
+        _vm.InitializeScript(CreateScript());
+        var captured = new List<IReadOnlyDictionary<string, object?>>();
+        _logServiceMock
+            .Setup(l => l.Write(
+                "settings.script_parameter.committed",
+                LogLevel.Info,
+                LogStatus.Changed,
+                It.IsAny<string>(),
+                It.IsAny<Exception?>(),
+                "ScriptSettingsViewModel",
+                It.IsAny<LogContext?>(),
+                It.IsAny<IReadOnlyDictionary<string, object?>>()))
+            .Callback<string, LogLevel, LogStatus, string, Exception?, string, LogContext?, IReadOnlyDictionary<string, object?>>(
+                (eventId, level, status, message, exception, source, context, properties) =>
+                {
+                    if (properties is not null)
+                    {
+                        captured.Add(properties);
+                    }
+                });
+
+        // Act
+        _vm.CommitSetting("crf", "23");
+        _vm.CommitSetting("crf", "28");
+
+        // Assert
+        captured.Should().HaveCount(2, "обе фиксации должны журналироваться как committed");
+        string firstHash = captured[0]["ValueHash"]?.ToString() ?? string.Empty;
+        string secondHash = captured[1]["ValueHash"]?.ToString() ?? string.Empty;
+        firstHash.Should().Be(PersistenceValueHash.Compute("23"));
+        secondHash.Should().Be(PersistenceValueHash.Compute("28"));
+        firstHash.Should().NotBe(secondHash, "разные значения обязаны давать разные хэши");
     }
 }

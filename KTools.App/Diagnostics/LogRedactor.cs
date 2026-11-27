@@ -70,8 +70,27 @@ public sealed class LogRedactor
         RegexOptions.CultureInvariant | RegexOptions.IgnoreCase,
         MatchTimeout);
 
+    /// <summary>
+    /// Маскирует только имя пользователя в профиле Windows, сохраняя остальную структуру пути
+    /// для воспроизводимости команды: <c>C:\Users\ivan\Videos\a.mkv</c> превращается
+    /// в <c>C:\Users\[redacted]\Videos\a.mkv</c>.
+    /// </summary>
+    private static readonly Regex WindowsUserProfileRegex = new(
+        @"(?<prefix>(?:[A-Za-z]:[\\/]+)?Users[\\/]+)(?<user>[^\\/""'\s?:*|<>]+)",
+        RegexOptions.CultureInvariant | RegexOptions.IgnoreCase,
+        MatchTimeout);
+
+    /// <summary>
+    /// Маскирует только имя пользователя в домашнем каталоге Unix, сохраняя остальной путь:
+    /// <c>/home/ivan/a.mkv</c> превращается в <c>/home/[redacted]/a.mkv</c>.
+    /// </summary>
+    private static readonly Regex UnixHomeRegex = new(
+        @"(?<prefix>/(?:home|Users)/)(?<user>[^/""'\s?:*|<>]+)",
+        RegexOptions.CultureInvariant | RegexOptions.IgnoreCase,
+        MatchTimeout);
+
     private static readonly Regex EventIdRegex = new(
-        @"^[A-Za-z][A-Za-z0-9]*([._][A-Za-z0-9]+)*$",
+        @"^[a-z][a-z0-9]*([._-][a-z0-9][a-z0-9]*)+$",
         RegexOptions.CultureInvariant,
         MatchTimeout);
 
@@ -144,6 +163,14 @@ public sealed class LogRedactor
     public string RedactToken(string? value) => SingleLine(Bound(Pipeline(value), _maxMessageLength));
 
     public string RedactDetailToken(string? value) => SingleLine(Bound(Pipeline(value), _maxDetailLength));
+
+    /// <summary>
+    /// Редактирует командную строку для журнала без срезки путей (issue #131).
+    /// Сохраняет полные каталоги для воспроизводимости команды, но маскирует
+    /// секреты (пароли, токены, заголовки, query-строки URL) и имя пользователя
+    /// в профиле. Обычные пути через <see cref="Pipeline"/> здесь не режутся.
+    /// </summary>
+    public string RedactCommandLine(string? value) => SingleLine(Bound(PipelineCommandLine(value), _maxMessageLength));
 
     public string SanitizeIdentifier(string? value)
     {
@@ -355,7 +382,7 @@ public sealed class LogRedactor
             object? value;
             if (string.Equals(rawKey, "CommandLine", StringComparison.OrdinalIgnoreCase) && pair.Value is string cmd)
             {
-                value = RedactToken(cmd);
+                value = RedactCommandLine(cmd);
             }
             else if (string.Equals(rawKey, "Value", StringComparison.OrdinalIgnoreCase) && pair.Value is string val)
             {
@@ -747,6 +774,36 @@ public sealed class LogRedactor
             result = DrivePathRegex.Replace(result, m => FileNameOnly(m.Groups["path"].Value));
             result = DriveRelativePathRegex.Replace(result, m => DriveRelativeFileNameOnly(m.Groups["path"].Value));
             result = UncPathRegex.Replace(result, m => FileNameOnly(m.Groups["path"].Value));
+        }
+        catch (Exception)
+        {
+            return RedactedMarker;
+        }
+
+        return RemoveControlCharacters(result);
+    }
+
+    /// <summary>
+    /// Конвейер для <c>CommandLine</c> без срезки путей: маскирует секреты
+    /// и имя пользователя, но сохраняет каталоги для повтора команды.
+    /// Пути вида <c>C:\...\файл</c>, UNC и расширенные префиксы здесь
+    /// не сводятся к именам файлов — иначе команду не воспроизвести.
+    /// </summary>
+    private string PipelineCommandLine(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return string.Empty;
+        }
+
+        string result = value;
+        try
+        {
+            result = SensitiveHeaderRegex.Replace(result, m => m.Groups["key"].Value + m.Groups["sep"].Value + RedactedMarker);
+            result = SensitiveAssignmentRegex.Replace(result, m => m.Groups["key"].Value + m.Groups["sep"].Value + RedactedMarker);
+            result = UrlRegex.Replace(result, RedactUrlMatch);
+            result = WindowsUserProfileRegex.Replace(result, m => m.Groups["prefix"].Value + RedactedMarker);
+            result = UnixHomeRegex.Replace(result, m => m.Groups["prefix"].Value + RedactedMarker);
         }
         catch (Exception)
         {

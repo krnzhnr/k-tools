@@ -21,6 +21,16 @@ public abstract class BaseNvencCapabilities : INvencCodecCapabilities
     protected static readonly List<string> RateControlOptions = new() { "cbr", "vbr", "constqp" };
     protected static readonly List<string> MultipassOptions = new() { "disabled", "qres", "fullres" };
 
+    /// <summary>
+    /// Единый дефолтный пресет NVENC: одно значение для схемы настроек и командной строки.
+    /// </summary>
+    protected const string DefaultPreset = "p4";
+
+    /// <summary>
+    /// Единый дефолтный пресет NVENC в режиме Lossless: одно значение для схемы настроек и командной строки.
+    /// </summary>
+    protected const string DefaultLosslessPreset = "p1";
+
     public abstract string CodecName { get; }
     public abstract string FfmpegCodecName { get; }
     public abstract bool Supports10Bit { get; }
@@ -71,7 +81,7 @@ public abstract class BaseNvencCapabilities : INvencCodecCapabilities
 
         args.AddRange(new[] { "-c:v", FfmpegCodecName, "-pix_fmt", pixFmt });
 
-        string preset = GetSettingValue(settings, "nvenc_preset", "p7");
+        string preset = GetSettingValue(settings, "nvenc_preset", context.IsLossless ? DefaultLosslessPreset : DefaultPreset);
         args.AddRange(new[] { "-preset", preset });
 
         if (context.IsLossless)
@@ -102,23 +112,26 @@ public abstract class BaseNvencCapabilities : INvencCodecCapabilities
                 int vBr = GetSettingValue(settings, "v_bitrate", 4000);
                 bool autoBitrate = GetSettingValue(settings, "auto_bitrate", true);
 
-                int minBr = autoBitrate ? vBr : GetSettingValue(settings, "min_bitrate", 4000);
-                int maxBr = autoBitrate ? vBr * 2 : GetSettingValue(settings, "max_bitrate", 8000);
-                int bufSize = autoBitrate ? maxBr * 2 : GetSettingValue(settings, "bufsize", 16000);
+                int minBr;
+                int maxBr;
+                int bufSize;
+                if (autoBitrate)
+                {
+                    EncoderBitrateHelper.ResolveAutoBounds(
+                        vBr,
+                        collapseForCbr: rc.Equals("cbr", StringComparison.OrdinalIgnoreCase),
+                        out minBr,
+                        out maxBr,
+                        out bufSize);
+                }
+                else
+                {
+                    minBr = GetSettingValue(settings, "min_bitrate", 4000);
+                    maxBr = GetSettingValue(settings, "max_bitrate", 8000);
+                    bufSize = GetSettingValue(settings, "bufsize", 16000);
+                }
 
-                args.AddRange(new[] { "-b:v", $"{vBr}k" });
-                if (minBr > 0)
-                {
-                    args.AddRange(new[] { "-minrate", $"{minBr}k" });
-                }
-                if (maxBr > 0)
-                {
-                    args.AddRange(new[] { "-maxrate", $"{maxBr}k" });
-                }
-                if (bufSize > 0)
-                {
-                    args.AddRange(new[] { "-bufsize", $"{bufSize}k" });
-                }
+                EncoderBitrateHelper.AppendBitrateArguments(args, vBr, minBr, maxBr, bufSize);
             }
         }
 
@@ -214,7 +227,7 @@ public abstract class BaseNvencCapabilities : INvencCodecCapabilities
                 "nvenc_preset",
                 "Пресет скорости",
                 SettingType.Combo,
-                isLossless ? "p1" : "p4",
+                isLossless ? DefaultLosslessPreset : DefaultPreset,
                 "Видео:Кодирование",
                 options: PresetOptions,
                 comment: "Баланс между скоростью кодирования и сжатием/качеством (p1 - самый быстрый, p7 - максимальное сжатие)",
@@ -400,6 +413,37 @@ public abstract class BaseNvencCapabilities : INvencCodecCapabilities
                 column: 1,
                 colSpan: 1,
                 disableConditions: temporalAqDisableConditions
+            ),
+            new SettingField(
+                "nv_lookahead",
+                "Глубина lookahead",
+                SettingType.Int,
+                32,
+                "Видео:Расширенные параметры",
+                comment: "Число кадров предпросмотра для rate control (0 — выключено; большие значения требуют больше видеопамяти)",
+                column: 0,
+                colSpan: 1,
+                disableConditions: new List<SettingDisableCondition>
+                {
+                    new("lossless", "True")
+                },
+                minimum: 0,
+                maximum: 32
+            ),
+            new SettingField(
+                "nv_multipass",
+                "Двухпроходный режим",
+                SettingType.Combo,
+                "fullres",
+                "Видео:Расширенные параметры",
+                options: MultipassOptions,
+                comment: "Двухпроходный rate control (qres — четверть разрешения, fullres — полное; fullres требует больше видеопамяти)",
+                column: 1,
+                colSpan: 1,
+                disableConditions: new List<SettingDisableCondition>
+                {
+                    new("lossless", "True")
+                }
             )
         };
     }

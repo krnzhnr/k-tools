@@ -341,23 +341,21 @@ public class CpuHevcCapabilities : BaseSoftwareCapabilities
             {
                 int vBr = GetSettingValue(settings, "x265_v_bitrate", 4000);
                 bool autoBitrate = GetSettingValue(settings, "x265_auto_bitrate", GetSettingValue(settings, "auto_bitrate", true));
-                int minBr = autoBitrate ? vBr : GetSettingValue(settings, "x265_min_bitrate", GetSettingValue(settings, "min_bitrate", 4000));
-                int maxBr = autoBitrate ? vBr * 2 : GetSettingValue(settings, "x265_max_bitrate", GetSettingValue(settings, "max_bitrate", 8000));
-                int bufSize = autoBitrate ? maxBr * 2 : GetSettingValue(settings, "x265_bufsize", GetSettingValue(settings, "bufsize", 16000));
+                int minBr;
+                int maxBr;
+                int bufSize;
+                if (autoBitrate)
+                {
+                    EncoderBitrateHelper.ResolveAutoBounds(vBr, collapseForCbr: false, out minBr, out maxBr, out bufSize);
+                }
+                else
+                {
+                    minBr = GetSettingValue(settings, "x265_min_bitrate", GetSettingValue(settings, "min_bitrate", 4000));
+                    maxBr = GetSettingValue(settings, "x265_max_bitrate", GetSettingValue(settings, "max_bitrate", 8000));
+                    bufSize = GetSettingValue(settings, "x265_bufsize", GetSettingValue(settings, "bufsize", 16000));
+                }
 
-                args.AddRange(new[] { "-b:v", $"{vBr}k" });
-                if (minBr > 0)
-                {
-                    args.AddRange(new[] { "-minrate", $"{minBr}k" });
-                }
-                if (maxBr > 0)
-                {
-                    args.AddRange(new[] { "-maxrate", $"{maxBr}k" });
-                }
-                if (bufSize > 0)
-                {
-                    args.AddRange(new[] { "-bufsize", $"{bufSize}k" });
-                }
+                EncoderBitrateHelper.AppendBitrateArguments(args, vBr, minBr, maxBr, bufSize);
             }
         }
 
@@ -445,10 +443,6 @@ public class CpuHevcCapabilities : BaseSoftwareCapabilities
 
     public override string? GetContainerTag(Dictionary<string, object> settings, EncoderSharedContext context)
     {
-        if (context.ContainerExtension.EndsWith("mp4", StringComparison.OrdinalIgnoreCase))
-        {
-            return "hvc1";
-        }
-        return null;
+        return ContainerTagHelper.GetHevcContainerTag(context.ContainerExtension);
     }
 }

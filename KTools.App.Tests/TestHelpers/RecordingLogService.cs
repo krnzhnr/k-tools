@@ -49,8 +49,6 @@ public sealed record RecordedRejection(string EventId, string ErrorCode);
 /// </summary>
 public sealed class RecordingLogService : ILogService
 {
-    private const string LegacyEventId = "legacy.log";
-
     private static readonly Guid RecordingSessionId = Guid.NewGuid();
 
     private readonly ConcurrentQueue<RecordedLogEvent> _events = new();
@@ -112,35 +110,6 @@ public sealed class RecordingLogService : ILogService
 
         Interlocked.Exchange(ref _rejectedEventCount, 0);
         Interlocked.Exchange(ref _droppedEventCount, 0);
-    }
-
-    /// <inheritdoc />
-    public void Write(
-        string eventId,
-        LogLevel level,
-        string message,
-        string source = "System",
-        LogStatus status = LogStatus.None,
-        LogContext? context = null,
-        IReadOnlyDictionary<string, object?>? properties = null,
-        Exception? exception = null)
-    {
-        Record(
-            new LogEvent
-            {
-                EventId = eventId ?? string.Empty,
-                Level = level,
-                Status = status,
-                Message = message ?? string.Empty,
-                Source = source,
-                OperationId = context?.ResolveOperationId(),
-                ItemId = context?.ResolveItemId(),
-                ProcessId = context?.ResolveProcessId(),
-                Tool = context?.ResolveTool(),
-                Properties = MergeContextProperties(context, properties),
-                Exception = exception is null ? null : ExceptionInfo.FromException(exception)
-            },
-            exception);
     }
 
     /// <inheritdoc />
@@ -220,44 +189,6 @@ public sealed class RecordingLogService : ILogService
         _initializeLogFileCalls.Enqueue(customLogDir);
         _callOrder.Enqueue("init:" + (customLogDir ?? string.Empty));
     }
-
-    /// <inheritdoc />
-    public void Log(LogLevel level, string message, string source = "System") =>
-        Record(new LogEvent { EventId = LegacyEventId, Level = level, Message = message, Source = source });
-
-    /// <inheritdoc />
-    public void DebugLog(string message, string source = "System") =>
-        Record(new LogEvent { EventId = LegacyEventId, Level = LogLevel.Debug, Message = message, Source = source });
-
-    /// <inheritdoc />
-    public void Info(string message, string source = "System") =>
-        Record(new LogEvent { EventId = LegacyEventId, Level = LogLevel.Info, Message = message, Source = source });
-
-    /// <inheritdoc />
-    public void Warn(string message, string source = "System") =>
-        Record(new LogEvent { EventId = LegacyEventId, Level = LogLevel.Warning, Message = message, Source = source });
-
-    /// <inheritdoc />
-    public void Error(string message, string source = "System") =>
-        Record(new LogEvent { EventId = LegacyEventId, Level = LogLevel.Error, Message = message, Source = source });
-
-    /// <inheritdoc />
-    public void Fatal(string message, string source = "System") =>
-        Record(new LogEvent { EventId = LegacyEventId, Level = LogLevel.Fatal, Message = message, Source = source });
-
-    /// <inheritdoc />
-    public void Exception(Exception ex, string message, string source = "System") =>
-        Record(
-            new LogEvent
-            {
-                EventId = LegacyEventId,
-                Level = LogLevel.Error,
-                Status = LogStatus.Failed,
-                Message = message,
-                Source = source,
-                Exception = ex is null ? null : ExceptionInfo.FromException(ex)
-            },
-            ex);
 
     /// <inheritdoc />
     public string ReadCurrentLog() => string.Empty;

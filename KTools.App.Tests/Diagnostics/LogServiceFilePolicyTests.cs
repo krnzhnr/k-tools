@@ -89,7 +89,7 @@ public class LogServiceFilePolicyTests
     {
         using var scope = new TempDirectoryScope();
         using LogService service = CreateService(scope);
-        service.Info("первое событие фиксирует сессию", "Policy");
+        service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, "первое событие фиксирует сессию", source: "Policy");
         service.Flush(TimeSpan.FromSeconds(30)).Should().BeTrue();
         string? originalFile = service.CurrentLogFile;
         string originalDirectory = Path.Combine(scope.RootPath, "logs");
@@ -97,7 +97,7 @@ public class LogServiceFilePolicyTests
         Directory.CreateDirectory(other);
 
         service.InitializeLogFile(other);
-        service.Info("второе событие", "Policy");
+        service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, "второе событие", source: "Policy");
         service.Flush(TimeSpan.FromSeconds(30)).Should().BeTrue();
 
         service.CurrentLogFile.Should().Be(originalFile, "после начала сессии путь зафиксирован");
@@ -111,7 +111,7 @@ public class LogServiceFilePolicyTests
     {
         using var scope = new TempDirectoryScope();
         using LogService service = CreateService(scope);
-        service.Info("событие", "Policy");
+        service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, "событие", source: "Policy");
         service.Flush(TimeSpan.FromSeconds(30)).Should().BeTrue();
 
         string name = Path.GetFileName(service.CurrentLogFile!);
@@ -134,7 +134,7 @@ public class LogServiceFilePolicyTests
 
         for (int index = 0; index < count; index++)
         {
-            service.Info("синхронная запись " + index, "Policy");
+            service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, "синхронная запись " + index, source: "Policy");
         }
 
         bool flushed = service.Flush(TimeSpan.FromSeconds(10));
@@ -148,7 +148,7 @@ public class LogServiceFilePolicyTests
     {
         using var scope = new TempDirectoryScope();
         using LogService service = CreateService(scope);
-        service.Info("событие", "Policy");
+        service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, "событие", source: "Policy");
 
         Action act = () =>
         {
@@ -169,7 +169,7 @@ public class LogServiceFilePolicyTests
 
         for (int index = 0; index < 500; index++)
         {
-            service.Info("событие " + index, "Policy");
+            service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, "событие " + index, source: "Policy");
         }
 
         bool flushed = service.Flush(TimeSpan.FromSeconds(20));
@@ -192,7 +192,7 @@ public class LogServiceFilePolicyTests
 
         for (int index = 0; index < 200; index++)
         {
-            service.Info(payload + " " + index, "Rotation");
+            service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, payload + " " + index, source: "Rotation");
         }
 
         service.Flush(TimeSpan.FromSeconds(30)).Should().BeTrue();
@@ -226,7 +226,7 @@ public class LogServiceFilePolicyTests
         File.WriteAllText(planned, new string('x', 3000));
         File.WriteAllText(Path.Combine(scope.RootPath, "logs", baseName + LogFilePolicy.SegmentMarker + "1" + LogFilePolicy.FileNameExtension), "segment");
 
-        service.Info("после повторного открытия", "Rotation");
+        service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, "после повторного открытия", source: "Rotation");
         service.Flush(TimeSpan.FromSeconds(10)).Should().BeTrue();
 
         string segmentTwo = Path.Combine(scope.RootPath, "logs", baseName + LogFilePolicy.SegmentMarker + "2" + LogFilePolicy.FileNameExtension);
@@ -248,7 +248,7 @@ public class LogServiceFilePolicyTests
 
         for (int index = 0; index < 400; index++)
         {
-            service.Info(payload + " " + index, "Rotation");
+            service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, payload + " " + index, source: "Rotation");
         }
 
         service.Flush(TimeSpan.FromSeconds(30)).Should().BeTrue();
@@ -272,7 +272,7 @@ public class LogServiceFilePolicyTests
         };
 
         using LogService active = new(options);
-        active.Info("активная сессия", "Retention");
+        active.Write("test.event.recorded", LogLevel.Info, LogStatus.None, "активная сессия", source: "Retention");
         active.Flush(TimeSpan.FromSeconds(30)).Should().BeTrue();
         string? activeFile = active.CurrentLogFile;
         File.SetLastWriteTimeUtc(activeFile!, DateTime.UtcNow.AddDays(-5));
@@ -514,7 +514,7 @@ public class LogServiceFilePolicyTests
 
         for (int index = 0; index < 400; index++)
         {
-            service.Info(payload + " " + index, "Budget");
+            service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, payload + " " + index, source: "Budget");
         }
 
         service.Flush(TimeSpan.FromSeconds(60)).Should().BeTrue();
@@ -542,13 +542,13 @@ public class LogServiceFilePolicyTests
         using var scope = new TempDirectoryScope();
         using LogService service = CreateService(scope);
         Guid session = service.SessionId;
-        service.Info("до очистки", "Policy");
-        service.Info("до очистки 2", "Policy");
+        service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, "до очистки", source: "Policy");
+        service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, "до очистки 2", source: "Policy");
         service.Flush(TimeSpan.FromSeconds(30)).Should().BeTrue();
         long lastBefore = service.ReadRecentEvents(10).Max(e => e.Sequence);
 
         bool cleared = service.ClearCurrentLog();
-        service.Info("после очистки", "Policy");
+        service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, "после очистки", source: "Policy");
         service.Flush(TimeSpan.FromSeconds(30)).Should().BeTrue();
 
         cleared.Should().BeTrue("очистка выполняется успешно");
@@ -569,7 +569,7 @@ public class LogServiceFilePolicyTests
         {
             for (int index = 0; index < 300; index++)
             {
-                service.Info("событие " + index, "Concurrent");
+                service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, "событие " + index, source: "Concurrent");
             }
         });
 
@@ -604,7 +604,7 @@ public class LogServiceFilePolicyTests
     {
         using var scope = new TempDirectoryScope();
         LogService service = CreateService(scope);
-        service.Info("до освобождения", "Policy");
+        service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, "до освобождения", source: "Policy");
 
         service.Dispose();
 
@@ -620,7 +620,7 @@ public class LogServiceFilePolicyTests
         using var scope = new TempDirectoryScope();
         using LogService service = CreateService(scope, options => options.FlushIntervalMilliseconds = 50);
 
-        service.Info("периодический сброс", "Policy");
+        service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, "периодический сброс", source: "Policy");
         Thread.Sleep(800);
 
         LengthShared(service.CurrentLogFile!).Should().BeGreaterThan(0, "периодический сброс не требует явного Flush");

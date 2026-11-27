@@ -157,6 +157,7 @@ public class DemuxScrollTipTrackerTests
     private SettingsManager CreateManager(IPathManager pathManager)
     {
         var manager = new SettingsManager(new RecordingLogService(), pathManager);
+        manager.InitializeAsync().GetAwaiter().GetResult();
         _managers.Add(manager);
         return manager;
     }

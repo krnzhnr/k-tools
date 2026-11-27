@@ -359,4 +359,61 @@ public class NvencEncoderTests
 
         _encoder.GetFfmpegCodecName(settings).Should().Be("h264_nvenc");
     }
+
+    [TestMethod]
+    public void GetPixelFormat_H264With10Bit_Returns8BitFormat()
+    {
+        // H.264 NVENC не поддерживает 10 бит: интерфейс обязан вернуть 8-битный формат,
+        // как это уже делает командная строка.
+        var context = new EncoderSharedContext(IsLossless: false, Force10Bit: true, ContainerExtension: ".mkv", CodecName: "AVC / H.264");
+
+        _encoder.GetPixelFormat(context).Should().Be("yuv420p");
+    }
+
+    [TestMethod]
+    public void GetPixelFormat_HevcWith10Bit_Returns10BitFormat()
+    {
+        var context = new EncoderSharedContext(IsLossless: false, Force10Bit: true, ContainerExtension: ".mkv", CodecName: "HEVC / H.265");
+
+        _encoder.GetPixelFormat(context).Should().Be("p010le");
+    }
+
+    [TestMethod]
+    public void GetPixelFormat_Av1With10Bit_Returns10BitFormat()
+    {
+        var context = new EncoderSharedContext(IsLossless: false, Force10Bit: true, ContainerExtension: ".mkv", CodecName: "AV1");
+
+        _encoder.GetPixelFormat(context).Should().Be("p010le");
+    }
+
+    [TestMethod]
+    public void GetPixelFormat_EmptyCodec_DefaultsToHevc()
+    {
+        // Старые конфигурации без ключа nvenc_codec резолвятся в HEVC-дефолт.
+        var context = new EncoderSharedContext(IsLossless: false, Force10Bit: true, ContainerExtension: ".mkv");
+
+        _encoder.GetPixelFormat(context).Should().Be("p010le");
+    }
+
+    [TestMethod]
+    public void Nvenc_AllCodecsForce10Bit_GetPixelFormatMatchesCommandLine()
+    {
+        // Интерфейсный резолв обязан совпадать с командой для каждого кодека:
+        // H.264 + force_10bit даёт yuv420p, а не p010le.
+        var cases = new Dictionary<string, string>
+        {
+            { "AVC / H.264", "yuv420p" },
+            { "HEVC / H.265", "p010le" },
+            { "AV1", "p010le" }
+        };
+        foreach (var kv in cases)
+        {
+            var context = new EncoderSharedContext(IsLossless: false, Force10Bit: true, ContainerExtension: ".mkv", CodecName: kv.Key);
+            _encoder.GetPixelFormat(context).Should().Be(kv.Value, $"интерфейс для кодека {kv.Key} при force_10bit");
+
+            var settings = new Dictionary<string, object> { { "nvenc_codec", kv.Key } };
+            var args = _encoder.BuildEncoderArguments(settings, context);
+            args.Should().ContainInOrder(new[] { "-pix_fmt", kv.Value }, $"команда для кодека {kv.Key}");
+        }
+    }
 }

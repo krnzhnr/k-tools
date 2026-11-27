@@ -81,7 +81,7 @@ public sealed class LogFilenameOnlyPolicyTests
         string userPath = @"C:\Users\" + PathMarker + @"\Videos\" + FileName;
 
         // Act — путь попадает и в текст сообщения, и в allowlisted-свойства
-        service.Info($"Файл для обработки: {userPath}", "FilenameOnly");
+        service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, $"Файл для обработки: {userPath}", source: "FilenameOnly");
         service.Write(
             "filename_only.properties",
             LogLevel.Info,
@@ -132,7 +132,7 @@ public sealed class LogFilenameOnlyPolicyTests
         string userPath = @"C:\Users\" + PathMarker + @"\Videos\" + FileName;
 
         // Act
-        service.Info($"Файл для обработки: {userPath}", "FilenameOnly");
+        service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, $"Файл для обработки: {userPath}", source: "FilenameOnly");
         service.Flush(TimeSpan.FromSeconds(10)).Should().BeTrue();
         string export = service.ReadCurrentLog();
 

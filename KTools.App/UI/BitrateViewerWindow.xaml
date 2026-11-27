@@ -36,19 +36,19 @@
                 <Border Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}" CornerRadius="6" Padding="10,6">
                     <StackPanel Orientation="Horizontal" Spacing="6">
                         <TextBlock Text="Средний:" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" />
-                        <TextBlock x:Name="MeanTextBlock" Text="0 Mbps" FontWeight="Bold" FontSize="12" Foreground="#00E5FF" />
+                        <TextBlock x:Name="MeanTextBlock" Text="0 Mbps" FontWeight="Bold" FontSize="12" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
                     </StackPanel>
                 </Border>
                 <Border Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}" CornerRadius="6" Padding="10,6">
                     <StackPanel Orientation="Horizontal" Spacing="6">
                         <TextBlock Text="Макс:" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" />
-                        <TextBlock x:Name="MaxTextBlock" Text="0 Mbps" FontWeight="Bold" FontSize="12" Foreground="#FF4081" />
+                        <TextBlock x:Name="MaxTextBlock" Text="0 Mbps" FontWeight="Bold" FontSize="12" Foreground="{ThemeResource AccentTextFillColorSecondaryBrush}" />
                     </StackPanel>
                 </Border>
                 <Border Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}" CornerRadius="6" Padding="10,6">
                     <StackPanel Orientation="Horizontal" Spacing="6">
                         <TextBlock Text="Мин:" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" />
-                        <TextBlock x:Name="MinTextBlock" Text="0 Mbps" FontWeight="Bold" FontSize="12" Foreground="#7C4DFF" />
+                        <TextBlock x:Name="MinTextBlock" Text="0 Mbps" FontWeight="Bold" FontSize="12" Foreground="{ThemeResource AccentTextFillColorTertiaryBrush}" />
                     </StackPanel>
                 </Border>
             </StackPanel>

@@ -7,6 +7,7 @@ using System.Collections.Specialized;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -27,7 +28,7 @@ namespace KTools_App.ViewModels;
 /// Модель представления универсальной рабочей панели для выполнения скриптов обработки медиа.
 /// Полностью изолирована от UI-элементов, управляет ходом асинхронного выполнения CLI-процессов.
 /// </summary>
-public partial class WorkPanelViewModel : ThreadSafeViewModel
+public partial class WorkPanelViewModel : ThreadSafeViewModel, IDisposable
 {
     private const string SourceName = nameof(WorkPanelViewModel);
 
@@ -98,6 +99,42 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
             ItemContexts = files
                 .Select((_, index) => BatchContext.ForItem(index))
                 .ToList();
+            BatchCts = new CancellationTokenSource();
+        }
+
+        /// <summary>
+        /// Источник отмены всего батча очереди (ишью #122).
+        /// Отменяется командой отмены; per-item токены связаны с ним.
+        /// </summary>
+        public CancellationTokenSource BatchCts { get; }
+
+        /// <summary>
+        /// Источники отмены отдельных элементов очереди по индексу (ишью #122).
+        /// Создаются при старте элемента и связаны с <see cref="BatchCts"/>.
+        /// </summary>
+        public Dictionary<int, CancellationTokenSource> ItemSources { get; } = new();
+
+        /// <summary>
+        /// Отменяет выполнение отдельного элемента очереди, если он ещё работает.
+        /// </summary>
+        public void TryCancelItem(int index)
+        {
+            CancellationTokenSource? source;
+            lock (ItemSources)
+            {
+                ItemSources.TryGetValue(index, out source);
+            }
+
+            if (source is not null)
+            {
+                try
+                {
+                    source.Cancel();
+                }
+                catch (ObjectDisposedException)
+                {
+                }
+            }
         }
 
         public AbstractScript Script { get; }
@@ -144,6 +181,21 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
     }
 
     private readonly ConcurrentDictionary<AbstractScript, QueueExecutionSession> _sessions = new();
+
+    /// <summary>
+    /// Элементы, удалённые из очереди во время обработки (ишью #122).
+    /// Завершающиеся задачи не дописывают состояние в отсоединённые элементы.
+    /// Доступ синхронизирован: пополняется в UI-потоке, читается из фоновых задач.
+    /// </summary>
+    private readonly HashSet<FileQueueItem> _detachedItems = new();
+
+    private readonly object _detachedLock = new();
+
+    /// <summary>
+    /// Источник отмены фоновых зондов восстановления (ишью #122).
+    /// Пересоздаётся при каждой инициализации панели.
+    /// </summary>
+    private CancellationTokenSource _probeCts = new();
 
     private QueueExecutionSession? ActiveSession
     {
@@ -426,6 +478,24 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
     private readonly ITaskbarProgressService? _taskbarProgress;
 
     /// <summary>
+    /// Владельцы индикатора панели задач по идентификаторам операций (ишью #123).
+    /// Параллельные сессии делят один значок окна: каждая регистрируется первым
+    /// отчётом о прогрессе и снимается при финише (счётчик по
+    /// BatchContext.OperationId). Индикатор ведёт самая ранняя живая сессия,
+    /// чужая сессия не сбрасывает и не перекрашивает чужой прогресс.
+    /// Доступ синхронизирован: отчёты идут из фоновых задач.
+    /// </summary>
+    private readonly Dictionary<string, int> _taskbarRefCounts = new(StringComparer.Ordinal);
+
+    private readonly Dictionary<string, double> _taskbarPercents = new(StringComparer.Ordinal);
+
+    private readonly List<string> _taskbarOrder = new();
+
+    private string? _taskbarOwnerId;
+
+    private readonly object _taskbarLock = new();
+
+    /// <summary>
     /// Инициализирует новый экземпляр WorkPanelViewModel с внедрением зависимостей.
     /// </summary>
     public WorkPanelViewModel(
@@ -483,6 +553,13 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
 
         ActiveScript = script;
         Files = files;
+
+        lock (_detachedLock)
+        {
+            _detachedItems.RemoveWhere(item => files.Contains(item));
+        }
+
+        ResetProbeCts();
 
         if (Files != null)
         {
@@ -566,11 +643,57 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
         LogText = ActiveScript.SavedLogText ?? string.Empty;
         RestoreScriptOutputPath(ActiveScript);
 
-        StatusText =
-            ActiveScript.SavedStatusText ?? "Ожидание запуска...";
-        GlobalProgressValue = ActiveScript.SavedGlobalProgress;
-        IsProcessing = ActiveScript.IsProcessing;
+        ProjectExecutionState(ActiveScript);
         IsStartButtonEnabled = !IsProcessing && CheckDependencies();
+    }
+
+    /// <summary>
+    /// Собирает текущие настройки активного скрипта из SettingsManager на основе схемы (ишью #121).
+    /// Единственная точка чтения настроек очереди: Code-Behind делегирует сюда,
+    /// чтобы знание о схеме настроек не дублировалось между View и ViewModel.
+    /// Возвращает пустой словарь, если активный скрипт не задан.
+    /// </summary>
+    public Dictionary<string, object> ReadCurrentSettings()
+    {
+        var settings = new Dictionary<string, object>();
+        AbstractScript? script = ActiveScript;
+        if (script is null)
+        {
+            return settings;
+        }
+
+        string settingsGroup = _settingsManager.GetSafeGroupName(script.Name);
+
+        // 1. Считываем все сохранённые на диске/в памяти настройки текущей группы скрипта.
+        var allGroupSettings = _settingsManager.GetAllSettingsInGroup(settingsGroup);
+        foreach (var kvp in allGroupSettings)
+        {
+            settings[kvp.Key] = kvp.Value;
+        }
+
+        // 2. Дополняем/уточняем значениями по умолчанию из схемы.
+        foreach (var field in script.GetFullSettingsSchema())
+        {
+            if (field.Type != SettingType.Subtitle && !settings.ContainsKey(field.Key))
+            {
+                object val = _settingsManager.GetSetting(settingsGroup, field.Key, field.DefaultValue);
+                settings[field.Key] = val;
+            }
+
+            if (field.ChildFields != null && field.ChildFields.Count > 0)
+            {
+                foreach (var child in field.ChildFields)
+                {
+                    if (child.Type != SettingType.Subtitle && !settings.ContainsKey(child.Key))
+                    {
+                        object childVal = _settingsManager.GetSetting(settingsGroup, child.Key, child.DefaultValue);
+                        settings[child.Key] = childVal;
+                    }
+                }
+            }
+        }
+
+        return settings;
     }
 
     /// <summary>
@@ -663,12 +786,24 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
 
     /// <summary>
     /// Команда отмены выполнения активного скрипта.
+    /// Гасит батч-токен очереди (убийство процессов) и флаг скрипта.
     /// </summary>
     [RelayCommand]
     private void CancelExecution()
     {
         if (ActiveScript != null && IsProcessing)
         {
+            if (_sessions.TryGetValue(ActiveScript, out QueueExecutionSession? session) && session is not null)
+            {
+                try
+                {
+                    session.BatchCts.Cancel();
+                }
+                catch (ObjectDisposedException)
+                {
+                }
+            }
+
             ActiveScript.SavedStatusText = "Отмена выполнения...";
             ActiveScript.RaiseStateChanged();
             ActiveScript.Cancel();
@@ -776,7 +911,7 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
         script.PrepareBatch(filesList.Select(f => f.FilePath));
         script.ResetCancellation();
         script.RaiseStateChanged();
-        ReportTaskbarProgress(0.0);
+        ReportTaskbarProgress(0.0, session.BatchContext.OperationId);
 
         AppendJournalText(
             script,
@@ -826,6 +961,7 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
         return enableParallel ? Math.Max(1, maxParallelTasks) : 1;
     }
 
+
     private async Task ProcessQueueAsync(
         QueueExecutionSession session,
         Dictionary<string, object> settings,
@@ -841,70 +977,100 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
             _settingsManager.MaxParallelTasks,
             _settingsManager.EnableParallelDemux,
             _settingsManager.MaxParallelDemuxTasks);
+        CancellationToken batchToken = session.BatchCts.Token;
 
-        if (maxParallel > 1 && total > 1)
+        try
         {
-            using var semaphore = new System.Threading.SemaphoreSlim(maxParallel);
-            var tasks = new List<Task>(total);
-
-            for (int i = 0; i < total; i++)
+            if (maxParallel > 1 && total > 1)
             {
-                if (script.IsCancelled)
+                using var semaphore = new System.Threading.SemaphoreSlim(maxParallel);
+                var tasks = new List<Task>(total);
+
+                for (int i = 0; i < total; i++)
                 {
-                    break;
+                    batchToken.ThrowIfCancellationRequested();
+
+                    await semaphore.WaitAsync(batchToken).ConfigureAwait(false);
+
+                    if (script.IsCancelled || batchToken.IsCancellationRequested)
+                    {
+                        semaphore.Release();
+                        break;
+                    }
+
+                    int index = i;
+                    FileQueueItem fileItem = filesList[index];
+                    ExecutionContext context = session.ItemContexts[index];
+                    CancellationTokenSource itemCts = CancellationTokenSource.CreateLinkedTokenSource(batchToken);
+                    lock (session.ItemSources)
+                    {
+                        session.ItemSources[index] = itemCts;
+                    }
+                    tasks.Add(Task.Run(async () =>
+                    {
+                        try
+                        {
+                            await ProcessQueueItemAsync(
+                                session,
+                                fileItem,
+                                settings,
+                                outPath,
+                                index,
+                                total,
+                                context,
+                                itemCts.Token).ConfigureAwait(false);
+                        }
+                        finally
+                        {
+                            semaphore.Release();
+                            lock (session.ItemSources)
+                            {
+                                session.ItemSources.Remove(index);
+                            }
+                            itemCts.Dispose();
+                        }
+                    }));
                 }
 
-                await semaphore.WaitAsync();
-
-                if (script.IsCancelled)
+                await Task.WhenAll(tasks).ConfigureAwait(false);
+            }
+            else
+            {
+                for (int i = 0; i < total; i++)
                 {
-                    semaphore.Release();
-                    break;
-                }
+                    batchToken.ThrowIfCancellationRequested();
 
-                int index = i;
-                FileQueueItem fileItem = filesList[index];
-                ExecutionContext context = session.ItemContexts[index];
-                tasks.Add(Task.Run(async () =>
-                {
+                    using var itemCts = CancellationTokenSource.CreateLinkedTokenSource(batchToken);
+                    lock (session.ItemSources)
+                    {
+                        session.ItemSources[i] = itemCts;
+                    }
+
                     try
                     {
                         await ProcessQueueItemAsync(
                             session,
-                            fileItem,
+                            filesList[i],
                             settings,
                             outPath,
-                            index,
+                            i,
                             total,
-                            context);
+                            session.ItemContexts[i],
+                            itemCts.Token).ConfigureAwait(false);
                     }
                     finally
                     {
-                        semaphore.Release();
+                        lock (session.ItemSources)
+                        {
+                            session.ItemSources.Remove(i);
+                        }
                     }
-                }));
-            }
-
-            await Task.WhenAll(tasks);
-        }
-        else
-        {
-            for (int i = 0; i < total; i++)
-            {
-                if (script.IsCancelled)
-                {
-                    break;
                 }
-
-                await ProcessQueueItemAsync(
-                    session,
-                    filesList[i],
-                    settings,
-                    outPath,
-                    i,
-                    total,
-                    session.ItemContexts[i]);
             }
+        }
+        catch (OperationCanceledException)
+        {
+            // Батч отменён: незапущенные элементы помечаются отменой ниже.
         }
 
         MarkUnprocessedItems(session);
@@ -918,10 +1084,26 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
         string? outPath,
         int index,
         int total,
-        ExecutionContext context)
+        ExecutionContext context,
+        CancellationToken itemToken)
     {
         AbstractScript script = session.Script;
-        UpdateFileStatus(fileItem, "Обработка...", 0.0, FileProcessingState.Processing, null);
+
+        if (itemToken.IsCancellationRequested || script.IsCancelled)
+        {
+            ExecutionResult preCancelled = ExecutionResult.Cancelled(
+                context,
+                new[] { "Обработка отменена до запуска элемента." },
+                errorCode: "cancelled-before-start",
+                cleanupState: CleanupState.NotStarted);
+            RecordTerminalResult(session, fileItem, index, total, context, preCancelled);
+            return;
+        }
+
+        if (!IsItemDetached(fileItem))
+        {
+            UpdateFileStatus(fileItem, "Обработка...", 0.0, FileProcessingState.Processing, null);
+        }
         UpdateProgressState(
             session,
             index,
@@ -951,12 +1133,15 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
                         return;
                     }
 
-                    UpdateFileStatus(
-                        fileItem,
-                        msg,
-                        percentValue,
-                        FileProcessingState.Processing,
-                        null);
+                    if (!IsItemDetached(fileItem))
+                    {
+                        UpdateFileStatus(
+                            fileItem,
+                            msg,
+                            percentValue,
+                            FileProcessingState.Processing,
+                            null);
+                    }
                     UpdateProgressState(
                         session,
                         index,
@@ -964,9 +1149,7 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
                         $"Файл {index + 1} из {total} ({percentValue:F0}%)",
                         percentValue,
                         fps,
-                        bitrate,
-                        syncScriptState: false);
-                    script.RaiseStateChanged();
+                        bitrate);
                 };
 
             ExecutionResult? result = await script.ExecuteSingleAsync(
@@ -976,12 +1159,22 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
                 progressCallback,
                 index,
                 total,
-                context);
+                context,
+                itemToken).ConfigureAwait(false);
 
             double measuredMs = System.Diagnostics.Stopwatch.GetElapsedTime(startedTimestamp).TotalMilliseconds;
             result = NormalizeResult(result, context, script);
             result = WithMeasuredDuration(result, context, measuredMs);
             RecordTerminalResult(session, fileItem, index, total, context, result);
+        }
+        catch (OperationCanceledException)
+        {
+            ExecutionResult cancelled = ExecutionResult.Cancelled(
+                context,
+                new[] { "Обработка элемента отменена." },
+                errorCode: "cancelled",
+                cleanupState: CleanupState.Partial);
+            RecordTerminalResult(session, fileItem, index, total, context, cancelled);
         }
         catch (Exception ex)
         {
@@ -1104,15 +1297,22 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
 
         AppendJournalMessages(session.Script, context, result);
         WriteItemEvent(fileItem, context, ItemEventId(result.Status), ItemLevel(result.Status), result.LogStatus, "Элемент очереди завершён", result, result.DurationMs);
-        RunOnUi(() => fileItem.ApplyExecutionResult(result));
+        if (!IsItemDetached(fileItem))
+        {
+            RunOnUi(() =>
+            {
+                if (!IsItemDetached(fileItem))
+                {
+                    fileItem.ApplyExecutionResult(result);
+                }
+            });
+        }
         UpdateProgressState(
             session,
             index,
             total,
             $"Файл {index + 1} из {total} завершён",
-            100.0,
-            syncScriptState: false);
-        session.Script.RaiseStateChanged();
+            100.0);
     }
 
     private ExecutionResult NormalizeResult(
@@ -1322,32 +1522,43 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
             {
                 IsProcessing = false;
                 IsLogExpanded = hasProblems || aggregateStatus != ExecutionStatus.Succeeded;
-                StatusText = finalStatus;
-                GlobalProgressValue = allTerminal ? 100 : 0;
+                ProjectExecutionState(script);
             }
         });
-        if (!HasOtherActiveSessions(session))
-        {
-            ReportTaskbarFinished(failed > 0 || partial > 0, allTerminal ? 100.0 : 0.0);
-        }
+        ReportTaskbarFinished(failed > 0 || partial > 0, allTerminal ? 100.0 : 0.0, session.BatchContext.OperationId);
         script.RaiseStateChanged();
-    }
 
-    /// <summary>
-    /// Проверяет, остались ли другие незавершённые сессии кроме указанной.
-    /// Панель задач сбрасывается только после финиша последней очереди.
-    /// </summary>
-    private bool HasOtherActiveSessions(QueueExecutionSession finished)
-    {
-        foreach (var pair in _sessions)
+        lock (session.ItemSources)
         {
-            if (!ReferenceEquals(pair.Value, finished) && pair.Value.Script.IsProcessing)
+            foreach (CancellationTokenSource source in session.ItemSources.Values)
             {
-                return true;
+                try
+                {
+                    source.Dispose();
+                }
+                catch (ObjectDisposedException)
+                {
+                }
+            }
+
+            session.ItemSources.Clear();
+        }
+
+        try
+        {
+            session.BatchCts.Dispose();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+
+        lock (_detachedLock)
+        {
+            foreach (FileQueueItem item in session.Files)
+            {
+                _detachedItems.Remove(item);
             }
         }
-
-        return false;
     }
 
     private static LogLevel QueueEventLevel(ExecutionStatus status)
@@ -1395,7 +1606,7 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
         script.IsProcessing = false;
         script.SavedStatusText = "Очередь пуста";
         script.SavedGlobalProgress = 0;
-        _taskbarProgress?.Clear();
+        ReportTaskbarFinished(hasErrors: false, finalPercent: 0.0, session.BatchContext.OperationId);
         script.RaiseStateChanged();
         if (ReferenceEquals(ActiveScript, script))
         {
@@ -1403,8 +1614,7 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
             {
                 IsProcessing = false;
                 IsLogExpanded = true;
-                StatusText = "Очередь пуста";
-                GlobalProgressValue = 0;
+                ProjectExecutionState(script);
             });
         }
     }
@@ -1496,10 +1706,7 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
 
         FinalizeExecution(session);
         script.SavedGlobalProgress = 0;
-        if (ReferenceEquals(ActiveScript, script))
-        {
-            RunOnUi(() => GlobalProgressValue = 0);
-        }
+        RunOnUi(() => ProjectExecutionState(script));
     }
 
     /// <summary>
@@ -1692,6 +1899,26 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
         }
     }
 
+    /// <summary>
+    /// Проецирует сохранённое состояние прогресса скрипта на свойства ViewModel (ишью #121).
+    /// Единственная точка записи StatusText/GlobalProgressValue/IsProcessing из состояния
+    /// скрипта: завершения очереди, восстановление и обработчик StateChanged идут через неё,
+    /// поэтому переключение вкладок и параллельные сессии не рассинхронизируют UI.
+    /// Вызывать только в UI-потоке (внутри RunOnUi или синхронных обработчиков).
+    /// Для чужого (неактивного) скрипта ничего не делает.
+    /// </summary>
+    private void ProjectExecutionState(AbstractScript script)
+    {
+        if (!ReferenceEquals(ActiveScript, script))
+        {
+            return;
+        }
+
+        StatusText = script.SavedStatusText;
+        GlobalProgressValue = script.SavedGlobalProgress;
+        IsProcessing = script.IsProcessing;
+    }
+
     private void OnScriptStateChanged(object? sender, EventArgs e)
     {
         RunOnUi(() =>
@@ -1704,9 +1931,7 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
             {
                 LogText = savedLogText;
             }
-            StatusText = ActiveScript.SavedStatusText;
-            GlobalProgressValue = ActiveScript.SavedGlobalProgress;
-            IsProcessing = ActiveScript.IsProcessing;
+            ProjectExecutionState(ActiveScript);
             IsStartButtonEnabled = !IsProcessing && CheckDependencies();
         });
     }
@@ -1753,8 +1978,18 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
         FileProcessingState? state = null,
         AbstractScript? notifyScript = null)
     {
+        if (IsItemDetached(fileItem))
+        {
+            return;
+        }
+
         RunOnUi(() =>
         {
+            if (IsItemDetached(fileItem))
+            {
+                return;
+            }
+
             fileItem.Status = status;
             fileItem.Progress = progress;
             if (state.HasValue)
@@ -1766,6 +2001,11 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
         notifyScript?.RaiseStateChanged();
     }
 
+    /// <summary>
+    /// Обновляет инкрементальный прогресс сессии, публикует итог в сохранённое
+    /// состояние скрипта и оповещает подписчиков единственным вызовом RaiseStateChanged,
+    /// через который ViewModel проецирует прогресс в UI (ишью #121).
+    /// </summary>
     private void UpdateProgressState(
         QueueExecutionSession session,
         int fileIndex,
@@ -1773,8 +2013,7 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
         string status,
         double filePercent,
         double? fps = null,
-        string? bitrate = null,
-        bool syncScriptState = true)
+        string? bitrate = null)
     {
         AbstractScript script = session.Script;
         if (totalCount <= 0) return;
@@ -1890,62 +2129,197 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
             script.SavedGlobalProgress = overallPercent;
         }
 
-        ReportTaskbarProgress(overallPercent);
+        ReportTaskbarProgress(overallPercent, session.BatchContext.OperationId);
 
-        if (syncScriptState)
-        {
-            script.RaiseStateChanged();
-        }
+        script.RaiseStateChanged();
     }
 
     /// <summary>
     /// Дублирует общий прогресс очереди в иконку панели задач (зелёное состояние).
     /// Служба сама троттлит вызовы и молча пропускает их без окна.
+    /// При параллельных сессиях индикатор ведёт самая ранняя живая сессия
+    /// (ишью #123): отчёты чужой операции запоминаются, но значок не трогают.
     /// </summary>
-    private void ReportTaskbarProgress(double overallPercent)
+    private void ReportTaskbarProgress(double overallPercent, string operationId)
     {
-        _taskbarProgress?.SetProgress(overallPercent);
+        bool forward;
+        lock (_taskbarLock)
+        {
+            if (!_taskbarRefCounts.ContainsKey(operationId))
+            {
+                _taskbarRefCounts[operationId] = 1;
+                _taskbarOrder.Add(operationId);
+            }
+
+            _taskbarPercents[operationId] = overallPercent;
+            if (_taskbarOwnerId is null || !_taskbarRefCounts.ContainsKey(_taskbarOwnerId))
+            {
+                _taskbarOwnerId = operationId;
+            }
+
+            forward = string.Equals(_taskbarOwnerId, operationId, StringComparison.Ordinal);
+        }
+
+        if (forward)
+        {
+            _taskbarProgress?.SetProgress(overallPercent);
+        }
     }
 
     /// <summary>
     /// Синхронизирует иконку панели задач с итогом очереди:
     /// красное состояние только при ошибках элементов, иначе сброс индикатора
     /// (успех, отмена и пропуск без отказов не являются ошибкой).
+    /// Снятие владельца по идентификатору операции (ишью #123): пока жива хоть
+    /// одна сессия, индикатор не сбрасывается — владение переходит следующей
+    /// сессии с повторной публикацией её последнего процента.
     /// </summary>
-    private void ReportTaskbarFinished(bool hasErrors, double finalPercent)
+    private void ReportTaskbarFinished(bool hasErrors, double finalPercent, string operationId)
     {
-        if (_taskbarProgress is null)
+        double? adoptedPercent = null;
+        bool forwardError = false;
+        bool forwardClear = false;
+        lock (_taskbarLock)
         {
-            return;
+            if (_taskbarRefCounts.TryGetValue(operationId, out int refs))
+            {
+                refs--;
+                if (refs > 0)
+                {
+                    _taskbarRefCounts[operationId] = refs;
+                    return;
+                }
+
+                _taskbarRefCounts.Remove(operationId);
+                _taskbarPercents.Remove(operationId);
+                _taskbarOrder.Remove(operationId);
+            }
+            else if (_taskbarOrder.Count > 0)
+            {
+                // Чужой финиш без регистрации при живых владельцах: значок не трогаем.
+                return;
+            }
+
+            if (_taskbarOrder.Count == 0)
+            {
+                _taskbarOwnerId = null;
+                if (hasErrors)
+                {
+                    forwardError = true;
+                }
+                else
+                {
+                    forwardClear = true;
+                }
+            }
+            else if (string.Equals(_taskbarOwnerId, operationId, StringComparison.Ordinal))
+            {
+                _taskbarOwnerId = _taskbarOrder[0];
+                adoptedPercent = _taskbarPercents.TryGetValue(_taskbarOwnerId, out double percent)
+                    ? percent
+                    : 0.0;
+            }
         }
 
-        if (hasErrors)
+        if (adoptedPercent.HasValue)
         {
+            _taskbarProgress?.SetProgress(adoptedPercent.Value);
+        }
+        else if (forwardError)
+        {
+            if (_taskbarProgress is null)
+            {
+                return;
+            }
+
             _taskbarProgress.SetError(finalPercent);
         }
-        else
+        else if (forwardClear)
         {
-            _taskbarProgress.Clear();
+            _taskbarProgress?.Clear();
+        }
+    }
+
+    /// <summary>
+    /// Проверяет, отсоединён ли элемент от очереди (удалён во время обработки).
+    /// </summary>
+    private bool IsItemDetached(FileQueueItem item)
+    {
+        lock (_detachedLock)
+        {
+            return _detachedItems.Contains(item);
+        }
+    }
+
+    /// <summary>
+    /// Пересоздаёт источник отмены фоновых зондов, гася предыдущие.
+    /// </summary>
+    private void ResetProbeCts()
+    {
+        CancellationTokenSource previous = _probeCts;
+        _probeCts = new CancellationTokenSource();
+        try
+        {
+            previous.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+
+        try
+        {
+            previous.Dispose();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }
+
+    /// <summary>
+    /// Помечает элемент отсоединённым и гасит его per-item токен (ишью #122).
+    /// </summary>
+    private void DetachQueueItem(FileQueueItem item)
+    {
+        lock (_detachedLock)
+        {
+            _detachedItems.Add(item);
+        }
+
+        foreach (var pair in _sessions)
+        {
+            QueueExecutionSession session = pair.Value;
+            for (int i = 0; i < session.Files.Count; i++)
+            {
+                if (ReferenceEquals(session.Files[i], item))
+                {
+                    session.TryCancelItem(i);
+                }
+            }
         }
     }
 
     /// <summary>
     /// Запускает фоновый асинхронный технический анализ медиафайла,
     /// если он не был восстановлен из кэшированного состояния.
+    /// Результат не записывается в отсоединённые элементы.
     /// </summary>
     private void StartAsyncAnalysis(FileQueueItem item)
     {
+        CancellationToken token = _probeCts.Token;
         _ = Task.Run(async () =>
         {
             try
             {
                 var structure = await _mediaProbeService
-                    .ProbeAsync(item.FilePath);
-                if (structure != null)
+                    .ProbeAsync(item.FilePath, token).ConfigureAwait(false);
+                if (structure != null && !IsItemDetached(item))
                 {
                     RunOnUi(() =>
                     {
-                        item.MediaInfo = structure;
+                        if (!IsItemDetached(item))
+                        {
+                            item.MediaInfo = structure;
+                        }
                     });
                 }
             }
@@ -1958,7 +2332,82 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
 
     private void OnFilesCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
+        if (e.Action == NotifyCollectionChangedAction.Remove && e.OldItems != null)
+        {
+            foreach (FileQueueItem item in e.OldItems)
+            {
+                DetachQueueItem(item);
+            }
+        }
+        else if (e.Action == NotifyCollectionChangedAction.Replace)
+        {
+            if (e.OldItems != null)
+            {
+                foreach (FileQueueItem item in e.OldItems)
+                {
+                    DetachQueueItem(item);
+                }
+            }
+
+            if (e.NewItems != null)
+            {
+                lock (_detachedLock)
+                {
+                    foreach (FileQueueItem item in e.NewItems)
+                    {
+                        _detachedItems.Remove(item);
+                    }
+                }
+            }
+        }
+        else if (e.Action == NotifyCollectionChangedAction.Reset)
+        {
+            CancelActiveBatchOnClear();
+        }
+        else if (e.Action == NotifyCollectionChangedAction.Add && e.NewItems != null)
+        {
+            lock (_detachedLock)
+            {
+                foreach (FileQueueItem item in e.NewItems)
+                {
+                    _detachedItems.Remove(item);
+                }
+            }
+        }
+
         UpdateOutputPathPlaceholder();
+    }
+
+    /// <summary>
+    /// Гасит батч активной очереди при очистке списка файлов:
+    /// нечему дописывать результаты, процессы останавливаются сразу.
+    /// </summary>
+    private void CancelActiveBatchOnClear()
+    {
+        AbstractScript? active = ActiveScript;
+        if (active is null)
+        {
+            return;
+        }
+
+        if (_sessions.TryGetValue(active, out QueueExecutionSession? session) && session is not null)
+        {
+            lock (_detachedLock)
+            {
+                foreach (FileQueueItem item in session.Files)
+                {
+                    _detachedItems.Add(item);
+                }
+            }
+
+            try
+            {
+                session.BatchCts.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        }
     }
 
     public void UpdateOutputPathPlaceholder()
@@ -2015,6 +2464,37 @@ public partial class WorkPanelViewModel : ThreadSafeViewModel
         }
 
         OutputPathPlaceholder = $"По умолчанию: {baseDir}";
+    }
+
+    private bool _disposed;
+
+    /// <summary>
+    /// Детерминированно снимает подписки WeakReferenceMessenger (ишью #125).
+    /// Без вызова Transient-VM оставалась получателем сообщений до сборки мусора.
+    /// </summary>
+    public void Dispose()
+    {
+        Dispose(true);
+        GC.SuppressFinalize(this);
+    }
+
+    /// <summary>
+    /// Освобождает подписки мессенджера. Повторные вызовы безопасны.
+    /// </summary>
+    /// <param name="disposing">Признак явного освобождения управляемых ресурсов.</param>
+    protected virtual void Dispose(bool disposing)
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        if (disposing)
+        {
+            WeakReferenceMessenger.Default.UnregisterAll(this);
+        }
+
+        _disposed = true;
     }
 }
 

@@ -1,6 +1,7 @@
 ﻿// -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -12,6 +13,11 @@ namespace KTools_App.Encoders;
 
 public class NvencEncoder : IVideoEncoder
 {
+    /// <summary>
+    /// Ключ настройки выбора кодека NVENC.
+    /// </summary>
+    public const string CodecSettingKey = "nvenc_codec";
+
     private readonly Dictionary<string, INvencCodecCapabilities> _capabilitiesMap;
     private readonly INvencCodecCapabilities _defaultCapabilities;
 
@@ -47,7 +53,13 @@ public class NvencEncoder : IVideoEncoder
 
     public string GetPixelFormat(EncoderSharedContext context)
     {
-        return context.Force10Bit ? "p010le" : "yuv420p";
+        // Кодек резолвится из контекста тем же правилом, что и остальные методы:
+        // пустое имя даёт дефолт HEVC для старых конфигураций без ключа nvenc_codec.
+        Dictionary<string, object>? settings = string.IsNullOrEmpty(context.CodecName)
+            ? null
+            : new Dictionary<string, object> { { CodecSettingKey, context.CodecName } };
+        var cap = GetCapabilityProvider(settings);
+        return cap.GetPixelFormat(context.Force10Bit);
     }
 
     public List<SettingField> GetEncoderSettings(Dictionary<string, object>? currentSettings = null, IHardwareCapabilityCache? hardwareCache = null)
@@ -75,14 +87,6 @@ public class NvencEncoder : IVideoEncoder
 
     private INvencCodecCapabilities GetCapabilityProvider(Dictionary<string, object>? settings)
     {
-        if (settings != null && settings.TryGetValue("nvenc_codec", out object? codecObj) && codecObj != null)
-        {
-            string codecStr = KTools_App.Core.SettingValue.AsString(codecObj, "");
-            if (_capabilitiesMap.TryGetValue(codecStr, out var cap))
-            {
-                return cap;
-            }
-        }
-        return _defaultCapabilities;
+        return EncoderCapabilitySelector.Resolve(settings, CodecSettingKey, _capabilitiesMap, _defaultCapabilities);
     }
 }

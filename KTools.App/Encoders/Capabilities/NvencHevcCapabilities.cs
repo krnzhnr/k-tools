@@ -10,10 +10,6 @@ namespace KTools_App.Encoders.Capabilities;
 /// </summary>
 public class NvencHevcCapabilities : BaseNvencCapabilities
 {
-    // === Конфигурация вариантов HEVC в начале файла ===
-    private static readonly List<string> BRefOptions = new() { "disabled", "each", "middle" };
-    private const string BRefComment = "Использование B-кадров как опорных (middle - B-pyramid, each - каждый, disabled - выключено)";
-
     public override string CodecName => "HEVC / H.265";
     public override string FfmpegCodecName => "hevc_nvenc";
     public override bool Supports10Bit => true;
@@ -22,46 +18,17 @@ public class NvencHevcCapabilities : BaseNvencCapabilities
     {
         return new List<SettingField>
         {
-            new SettingField(
-                "nv_b_ref_mode",
-                "Опорные B-кадры",
-                SettingType.Combo,
-                "middle",
-                "Видео:Расширенные параметры",
-                options: BRefOptions,
-                comment: BRefComment,
-                column: 1,
-                colSpan: 1,
-                disableConditions: new List<SettingDisableCondition>
-                {
-                    new("lossless", "True")
-                }
-            )
+            BRefModeHelper.CreateSettingField(BRefModeHelper.GetOptions(supportEach: true), BRefModeHelper.DefaultComment)
         };
     }
 
     protected override void AppendCodecSpecificArguments(Dictionary<string, object> settings, EncoderSharedContext context, List<string> args)
     {
-        // В lossless rate control отключён (constqp, qp 0), поэтому B-пирамида
-        // не влияет на результат и лишь замедляет кодирование.
-        if (context.IsLossless)
-        {
-            return;
-        }
-
-        string bRefMode = GetSettingValue(settings, "nv_b_ref_mode", "middle");
-        if (!string.IsNullOrEmpty(bRefMode))
-        {
-            args.AddRange(new[] { "-b_ref_mode", bRefMode });
-        }
+        BRefModeHelper.AppendArguments(settings, context, args, normalizeEachToMiddle: false);
     }
 
     public override string? GetContainerTag(Dictionary<string, object> settings, EncoderSharedContext context)
     {
-        if (context.ContainerExtension.EndsWith("mp4", System.StringComparison.OrdinalIgnoreCase))
-        {
-            return "hvc1";
-        }
-        return null;
+        return ContainerTagHelper.GetHevcContainerTag(context.ContainerExtension);
     }
 }

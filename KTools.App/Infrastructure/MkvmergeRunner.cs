@@ -28,6 +28,11 @@ public sealed class MkvmergeRunner : AbstractProcessRunner, IMkvmergeRunner
     public const int MaxWarningExitCode = 1;
 
     /// <summary>
+    /// Предельное время зондирования mkvmerge --identify: зависший разбор не ждёт вечно.
+    /// </summary>
+    private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(60);
+
+    /// <summary>
     /// Инициализирует новый экземпляр MkvmergeRunner с внедрением зависимостей.
     /// </summary>
     /// <param name="logService">Сервис логирования.</param>
@@ -77,17 +82,17 @@ public sealed class MkvmergeRunner : AbstractProcessRunner, IMkvmergeRunner
                 "Не переданы входные файлы для сборки в mkvmerge");
         }
 
-        // Базовые аргументы: выходной файл
+        // Базовые аргументы: выходной файл (сырые значения, квотирует CliArgument).
         var argsList = new List<string>
         {
-            "--output", $"\"{outputPath}\""
+            "--output", outputPath
         };
 
         // Глобальный заголовок контейнера
         if (!string.IsNullOrWhiteSpace(title))
         {
             argsList.Add("--title");
-            argsList.Add($"\"{title}\"");
+            argsList.Add(title);
         }
 
         // Глобальные аргументы
@@ -104,10 +109,10 @@ public sealed class MkvmergeRunner : AbstractProcessRunner, IMkvmergeRunner
                 argsList.AddRange(input.Args);
             }
 
-            argsList.Add($"\"{input.Path}\"");
+            argsList.Add(input.Path);
         }
 
-        string arguments = string.Join(" ", argsList);
+        string arguments = CliArgument.Join(argsList);
 
         Log.Write(
             ProcessEventIds.Started,
@@ -198,7 +203,7 @@ public sealed class MkvmergeRunner : AbstractProcessRunner, IMkvmergeRunner
     /// <returns>Документ JsonDocument со свойствами дорожек и вложений, или null.</returns>
     public async Task<JsonDocument?> IdentifyAsync(string filePath, ProcessExecutionContext? context = null)
     {
-        string arguments = $"--identify --identification-format json \"{filePath}\"";
+        string arguments = CliArgument.Join(new[] { "--identify", "--identification-format", "json", filePath });
         string fileName = Path.GetFileName(filePath);
         ProcessExecutionContext executionContext = context ?? ProcessExecutionContext.NewOperation("mkvmerge");
         var outputLines = new List<string>();
@@ -212,7 +217,8 @@ public sealed class MkvmergeRunner : AbstractProcessRunner, IMkvmergeRunner
             CancellationToken.None,
             context: executionContext,
             maxSuccessExitCode: MaxWarningExitCode,
-            verifyParseResult: () => outputLines.Count > 0);
+            verifyParseResult: () => outputLines.Count > 0,
+            timeout: ProbeTimeout);
 
         if (!result.IsSuccess)
         {

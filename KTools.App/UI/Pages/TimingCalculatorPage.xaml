@@ -47,6 +47,7 @@
                                     Width="36"
                                     Height="32"
                                     Padding="0"
+                                    AutomationProperties.Name="Вставить исходное время из буфера обмена"
                                     ToolTipService.ToolTip="Вставить из буфера обмена"
                                     Style="{ThemeResource DefaultButtonStyle}">
                                 <FontIcon Glyph="&#xE77F;" FontSize="14" />
@@ -83,6 +84,7 @@
                                     Width="36"
                                     Height="32"
                                     Padding="0"
+                                    AutomationProperties.Name="Вставить целевое время из буфера обмена"
                                     ToolTipService.ToolTip="Вставить из буфера обмена"
                                     Style="{ThemeResource DefaultButtonStyle}">
                                 <FontIcon Glyph="&#xE77F;" FontSize="14" />
@@ -128,6 +130,7 @@
                                 
                                 <Button Click="CopyResult_Click" 
                                         VerticalAlignment="Center" 
+                                        AutomationProperties.Name="Скопировать результат сдвига"
                                         Style="{ThemeResource AccentButtonStyle}">
                                     <StackPanel Orientation="Horizontal" Spacing="8">
                                         <FontIcon Glyph="&#xE8C8;" FontSize="16" />
@@ -167,6 +170,7 @@
                                            Foreground="{ThemeResource TextFillColorPrimaryBrush}" 
                                            VerticalAlignment="Center" />
                                 <Button Click="CopyMs_Click" 
+                                        AutomationProperties.Name="Скопировать сдвиг в миллисекундах"
                                         Style="{ThemeResource DefaultButtonStyle}">
                                     <StackPanel Orientation="Horizontal" Spacing="8">
                                         <FontIcon Glyph="&#xE8C8;" FontSize="16" />

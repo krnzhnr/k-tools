@@ -37,6 +37,7 @@ public sealed class EmergencyLogSink
 
     private long _writtenCount;
     private long _droppedCount;
+    private long _duplicateCount;
 
     public EmergencyLogSink(string? directory = null, LogServiceOptions? options = null)
     {
@@ -57,6 +58,8 @@ public sealed class EmergencyLogSink
 
     public long DroppedCount => Interlocked.Read(ref _droppedCount);
 
+    public long DuplicateCount => Interlocked.Read(ref _duplicateCount);
+
     public string? TargetDirectory => _directory;
 
     public int MaxFileBytes => _maxFileBytes;
@@ -69,9 +72,12 @@ public sealed class EmergencyLogSink
         Guid sessionId,
         LogLevel level = LogLevel.Error)
     {
+        // safeCrashId объявлен до try: даже непредвиденный сбой после TryRemember
+        // обязан освободить CrashId для повтора, иначе авария теряется молча.
+        string safeCrashId = string.Empty;
         try
         {
-            string safeCrashId = SafeCrashId(crashId);
+            safeCrashId = SafeCrashId(crashId);
             if (string.IsNullOrWhiteSpace(safeCrashId) || string.Equals(safeCrashId, LogRedactor.UnknownIdentifier, StringComparison.Ordinal))
             {
                 Interlocked.Increment(ref _droppedCount);
@@ -80,6 +86,8 @@ public sealed class EmergencyLogSink
 
             if (!TryRemember(safeCrashId))
             {
+                // Повтор подтверждённой аварии: второй копии нет, но подавление измеряется.
+                Interlocked.Increment(ref _duplicateCount);
                 Interlocked.Increment(ref _droppedCount);
                 return false;
             }
@@ -87,6 +95,7 @@ public sealed class EmergencyLogSink
             string? target = ResolveDirectory();
             if (target is null)
             {
+                Forget(safeCrashId);
                 Interlocked.Increment(ref _droppedCount);
                 return false;
             }
@@ -94,6 +103,7 @@ public sealed class EmergencyLogSink
             string? payload = BuildPayload(reason, exception, source, safeCrashId, sessionId, level);
             if (payload is null || Encoding.UTF8.GetByteCount(payload) > _maxFileBytes)
             {
+                Forget(safeCrashId);
                 Interlocked.Increment(ref _droppedCount);
                 return false;
             }
@@ -103,13 +113,23 @@ public sealed class EmergencyLogSink
                 $"{FileNamePrefix}{DateTime.UtcNow:yyyyMMdd'T'HHmmss.fffffff'Z'}_{Safe(safeCrashId, 32)}{FileNameExtension}");
             string path = Path.Combine(target, fileName);
 
-            File.WriteAllText(path, payload, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-            Interlocked.Increment(ref _writtenCount);
-            ApplyRetention(target);
-            return true;
+            try
+            {
+                File.WriteAllText(path, payload, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+                Interlocked.Increment(ref _writtenCount);
+                ApplyRetention(target);
+                return true;
+            }
+            catch (Exception)
+            {
+                Forget(safeCrashId);
+                Interlocked.Increment(ref _droppedCount);
+                return false;
+            }
         }
         catch (Exception)
         {
+            Forget(safeCrashId);
             Interlocked.Increment(ref _droppedCount);
             return false;
         }
@@ -484,6 +504,21 @@ public sealed class EmergencyLogSink
             }
 
             return true;
+        }
+    }
+
+    private void Forget(string crashId)
+    {
+        if (string.IsNullOrEmpty(crashId))
+        {
+            return;
+        }
+
+        lock (_lock)
+        {
+            // Запись в очереди остаётся: она ограничена RememberedCrashIds
+            // и вымывается лениво, как и вытеснённые подтверждения.
+            _seenCrashIds.Remove(crashId);
         }
     }
 

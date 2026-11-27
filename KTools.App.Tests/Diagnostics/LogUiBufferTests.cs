@@ -154,4 +154,15 @@ public class LogUiBufferTests
         batch.Should().OnlyContain(item => item.Kind == LogItemKind.Event && item.HasStructuredEvent);
         batch[0].Message.Should().Contain("событие");
     }
+
+    [TestMethod]
+    public void Add_OversizedEvent_DoesNotReserveDedupSlot()
+    {
+        var buffer = new LogUiBuffer(capacity: 16, maxBytes: 64 * 1024);
+
+        buffer.Add(CreateEvent(1, text: new string('я', 100_000))).Should().BeFalse();
+        buffer.Add(CreateEvent(1)).Should().BeTrue("сброшенное событие не представлено в очереди и не занимает слот дедупликации");
+        buffer.Count.Should().Be(1);
+        buffer.DroppedCount.Should().Be(1);
+    }
 }

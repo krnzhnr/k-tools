@@ -359,10 +359,16 @@ public class LogRedactorTests
     public void IsValidEventId_AcceptsStableTokensAndRejectsEverythingElse()
     {
         LogRedactor.IsValidEventId("exec.item.succeeded").Should().BeTrue();
-        LogRedactor.IsValidEventId("EXEC_QUEUE_STARTED").Should().BeTrue();
         LogRedactor.IsValidEventId("legacy.settingsmanager.info").Should().BeTrue();
         LogRedactor.IsValidEventId("app.started").Should().BeTrue();
+        LogRedactor.IsValidEventId("app.startup_failed").Should().BeTrue();
+        LogRedactor.IsValidEventId("script.audio-speed.started").Should().BeTrue("дефис разрешён нормой LOGGING.md п.3");
 
+        LogRedactor.IsValidEventId("EXEC_QUEUE_STARTED").Should().BeFalse("норма требует только строчные буквы");
+        LogRedactor.IsValidEventId("App.Started").Should().BeFalse("норма требует только строчные буквы");
+        LogRedactor.IsValidEventId("apptoken").Should().BeFalse("норма требует минимум один разделитель");
+        LogRedactor.IsValidEventId("app.started.").Should().BeFalse();
+        LogRedactor.IsValidEventId("app..started").Should().BeFalse();
         LogRedactor.IsValidEventId(null).Should().BeFalse();
         LogRedactor.IsValidEventId("").Should().BeFalse();
         LogRedactor.IsValidEventId("has space").Should().BeFalse();

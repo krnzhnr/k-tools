@@ -1,6 +1,7 @@
 // -*- coding: utf-8 -*-
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using KTools_App.Core;
 using KTools_App.Models;
@@ -19,6 +20,16 @@ public sealed class StubScript : AbstractScript
     /// Делегат обработки файла. Если не задан, используется <see cref="DefaultExecuteHandler"/>.
     /// </summary>
     public Func<string, Dictionary<string, object>, ExecutionContext, Task<ExecutionResult>>? ExecuteHandler
+    {
+        get;
+        set;
+    }
+
+    /// <summary>
+    /// Делегат обработки файла со сквозным токеном отмены (ишью #122).
+    /// Если задан, имеет приоритет над <see cref="ExecuteHandler"/>.
+    /// </summary>
+    public Func<string, Dictionary<string, object>, ExecutionContext, CancellationToken, Task<ExecutionResult>>? ExecuteHandlerWithToken
     {
         get;
         set;
@@ -51,6 +62,19 @@ public sealed class StubScript : AbstractScript
             ? base.GetProcessableFiles(allFiles)
             : ProcessableFilesFilter(allFiles);
     }
+
+    /// <summary>
+    /// Необязательное переопределение схемы настроек для тестов адаптеров:
+    /// если задано, <see cref="SettingsSchema"/> возвращает его вместо базовой схемы.
+    /// </summary>
+    public List<SettingField>? SchemaOverride
+    {
+        get;
+        set;
+    }
+
+    /// <inheritdoc/>
+    public override List<SettingField> SettingsSchema => SchemaOverride ?? base.SettingsSchema;
 
     /// <summary>
     /// Имя скрипта по умолчанию для StubScript.
@@ -122,9 +146,15 @@ public sealed class StubScript : AbstractScript
         ScriptProgressCallback progressCallback,
         int fileIndex,
         int totalCount,
-        ExecutionContext context)
+        ExecutionContext context,
+        CancellationToken cancellationToken = default)
     {
         ProgressHandler?.Invoke(progressCallback, fileIndex, totalCount);
+
+        if (ExecuteHandlerWithToken is not null)
+        {
+            return ExecuteHandlerWithToken(filePath, settings, context, cancellationToken);
+        }
 
         var handler = ExecuteHandler ?? DefaultExecuteHandler;
         return handler(filePath, settings, context);

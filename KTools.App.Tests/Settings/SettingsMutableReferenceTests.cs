@@ -411,6 +411,7 @@ public class SettingsMutableReferenceTests
     private SettingsManager CreateManager()
     {
         var manager = new SettingsManager(_logService, _pathManagerMock.Object);
+        manager.InitializeAsync().GetAwaiter().GetResult();
         _managers.Add(manager);
         return manager;
     }

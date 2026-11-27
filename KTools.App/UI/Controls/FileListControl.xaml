@@ -39,6 +39,7 @@
                         VerticalAlignment="Center"
                         Style="{ThemeResource BodyTextBlockStyle}" />
                     <InfoBadge
+                       
                         Grid.Column="1"
                         Margin="8,0,0,0"
                         VerticalAlignment="Center"
@@ -55,6 +56,7 @@
                         Style="{ThemeResource CaptionTextBlockStyle}"
                         Visibility="{x:Bind ShowTitleHint, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
                     <TextBox
+                       
                         Grid.Column="2"
                         Text="{x:Bind File.MuxAudioTitle, Mode=TwoWay}"
                         PlaceholderText="{x:Bind AudioTitlePlaceholder, Mode=OneWay}"
@@ -66,6 +68,7 @@
                         ToolTipService.ToolTip="Заголовок аудиодорожки в сборке (пусто — из метаданных или имени файла)"
                         Visibility="{x:Bind IsAudioTrack, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
                     <Button
+                       
                         Grid.Column="3"
                         Click="RenameMuxTrackTitle_Click"
                         Background="Transparent"
@@ -83,6 +86,7 @@
                         <FontIcon FontSize="14" Glyph="&#xE70F;" FontFamily="{ThemeResource SymbolThemeFontFamily}" />
                     </Button>
                     <Button
+                       
                         Grid.Column="4"
                         Click="RemoveMuxTrack_Click"
                         Background="Transparent"
@@ -100,6 +104,7 @@
                     </Button>
                 </Grid>
                 <TextBlock
+                   
                     Grid.Column="1"
                     Text="Осн."
                     Margin="8,0,0,0"
@@ -109,6 +114,7 @@
                     Style="{ThemeResource CaptionTextBlockStyle}"
                     Visibility="{x:Bind IsMainTrack, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
                 <TextBlock
+                   
                     Grid.Column="2"
                     Text="• вручную"
                     Margin="8,0,0,0"
@@ -117,6 +123,7 @@
                     Style="{ThemeResource CaptionTextBlockStyle}"
                     Visibility="{x:Bind IsPinned, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
                 <ComboBox
+                   
                     Grid.Column="3"
                     SelectedIndex="{x:Bind RoleOptionIndex, Mode=OneWay}"
                     SelectionChanged="TrackRole_SelectionChanged"
@@ -134,6 +141,7 @@
                     <ComboBoxItem Content="Другие" />
                 </ComboBox>
                 <Button
+                   
                     Grid.Column="4"
                     Content="Открепить"
                     Click="UnpinMuxTrack_Click"
@@ -146,6 +154,7 @@
                     ToolTipService.ToolTip="Вернуть автосопоставление по имени файла"
                     Visibility="{x:Bind IsPinned, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
                 <Button
+                   
                     Grid.Column="5"
                     Click="RemoveMuxTrack_Click"
                     Background="Transparent"
@@ -157,6 +166,8 @@
                     MinHeight="0"
                     Margin="4,0,0,0"
                     VerticalAlignment="Center"
+                    AutomationProperties.Name="Убрать дорожку из очереди"
+                    AutomationProperties.AutomationId="RemoveMuxTrackButton"
                     ToolTipService.ToolTip="Убрать дорожку из очереди">
                     <FontIcon FontSize="14" Glyph="&#xE711;" FontFamily="{ThemeResource SymbolThemeFontFamily}" />
                 </Button>
@@ -180,6 +191,7 @@
         <!-- Предупреждение о правах администратора (влияет на Drag & Drop) -->
         <InfoBar Grid.Row="0"
                  x:Name="AdminWarningBar"
+                 
                  Severity="Warning"
                  Title="Запуск от имени администратора"
                  Message="Перетаскивание файлов (Drag-and-Drop) заблокировано безопасностью Windows из-за повышенных привилегий приложения. Пожалуйста, используйте кнопку «Добавить файлы» ниже."
@@ -208,12 +220,14 @@
                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" 
                               HorizontalAlignment="Center" />
                     <TextBlock x:Name="DragDropPromptTextBlock"
+                                
                                 Text="Перетащите файлы сюда или используйте кнопку ниже" 
                                 FontSize="15" 
                                 FontWeight="SemiBold"
                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                 HorizontalAlignment="Center" />
                     <TextBlock x:Name="DragDropSubPromptTextBlock"
+                                
                                 Text="Поддерживаются файлы медиаформатов для выбранного скрипта" 
                                 FontSize="12" 
                                 Foreground="{ThemeResource TextFillColorTertiaryBrush}"
@@ -267,13 +281,16 @@
                                        Style="{ThemeResource BodyTextBlockStyle}"
                                        VerticalAlignment="Center"/>
                             <local:AccentBadge Text="{x:Bind CropBadgeText, Mode=OneWay}"
+                                               
                                                ToolTipService.ToolTip="Автоматическая обрезка черных полос (Crop)"
                                                VerticalAlignment="Center"/>
                             <local:AccentBadge Text="{x:Bind FrameRateBadgeText, Mode=OneWay}"
+                                               
                                                ToolTipService.ToolTip="Частота кадров видео"
                                                AutomationProperties.Name="Частота кадров"
                                                VerticalAlignment="Center"/>
                             <local:AccentBadge Text="{x:Bind FrameModeBadgeText, Mode=OneWay}"
+                                               
                                                ToolTipService.ToolTip="Режим частоты кадров: постоянный (CFR) или переменный (VFR)"
                                                AutomationProperties.Name="Режим частоты кадров"
                                                VerticalAlignment="Center"/>
@@ -322,7 +339,9 @@
                                 VerticalAlignment="Center"
                                 HorizontalContentAlignment="Center"
                                 VerticalContentAlignment="Center"
+                               
                                 Click="OpenBitrateGraphButton_Click"
+                                AutomationProperties.Name="Открыть GPU-график битрейта (Win2D)"
                                 ToolTipService.ToolTip="Открыть GPU-график битрейта (Win2D)"
                                 Visibility="{x:Bind HasBitrateData, Mode=OneWay}">
                             <FontIcon FontSize="16" Glyph="&#xE9D2;"
@@ -336,6 +355,7 @@
                         <Button Grid.Column="3" 
                                 Grid.RowSpan="2"
                                 x:Name="DeleteButton"
+                                
                                 Background="Transparent"
                                 BorderThickness="0"
                                 Padding="0"
@@ -348,6 +368,8 @@
                                 HorizontalContentAlignment="Center"
                                 VerticalContentAlignment="Center"
                                 Click="DeleteButton_Click"
+                                AutomationProperties.Name="Удалить из списка"
+                                AutomationProperties.AutomationId="DeleteQueueFileButton"
                                 ToolTipService.ToolTip="Удалить из списка"
                                 IsEnabled="{x:Bind IsDeleteEnabled, Mode=OneWay}">
                             <FontIcon FontSize="20" Glyph="&#xE711;"
@@ -571,7 +593,10 @@
 
                                         <!-- Кнопка удаления -->
                                         <Button Grid.Column="1" 
+                                               
                                                 Click="DeleteMuxingRow_Click"
+                                                AutomationProperties.Name="Удалить из списка"
+                                                AutomationProperties.AutomationId="DeleteMuxingRowButton"
                                                 Background="Transparent"
                                                 BorderThickness="0"
                                                 Padding="0"
@@ -606,13 +631,18 @@
                                     Padding="8">
                                     <StackPanel Spacing="4">
                                         <TextBlock
+                                           
                                             Text="Аудио"
                                             FontWeight="SemiBold"
                                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                             Style="{ThemeResource CaptionTextBlockStyle}" />
-                                        <ItemsControl ItemsSource="{x:Bind AudioTracks, Mode=OneWay}" ItemTemplate="{StaticResource MuxTrackTemplate}">
-                                        </ItemsControl>
+                                        <ItemsRepeater ItemsSource="{x:Bind AudioTracks, Mode=OneWay}" ItemTemplate="{StaticResource MuxTrackTemplate}">
+                                            <ItemsRepeater.Layout>
+                                                <StackLayout Orientation="Vertical" />
+                                            </ItemsRepeater.Layout>
+                                        </ItemsRepeater>
                                         <TextBlock
+                                           
                                             Text="Озвучки группы: первая — основная, остальные — дополнительные"
                                             Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                                             Style="{ThemeResource CaptionTextBlockStyle}" />
@@ -628,14 +658,18 @@
                                     Padding="8">
                                     <StackPanel Spacing="4">
                                         <TextBlock
+                                           
                                             Text="Надписи (.signs)"
                                             FontWeight="SemiBold"
                                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                             Style="{ThemeResource CaptionTextBlockStyle}" />
-                                        <ItemsControl ItemsSource="{x:Bind SignsSubsTracks, Mode=OneWay}" ItemTemplate="{StaticResource MuxTrackTemplate}">
-
-                                        </ItemsControl>
+                                        <ItemsRepeater ItemsSource="{x:Bind SignsSubsTracks, Mode=OneWay}" ItemTemplate="{StaticResource MuxTrackTemplate}">
+                                            <ItemsRepeater.Layout>
+                                                <StackLayout Orientation="Vertical" />
+                                            </ItemsRepeater.Layout>
+                                        </ItemsRepeater>
                                         <TextBlock
+                                           
                                             Text="Файлы .signs и с ролью «Надписи» (дроп-зона «Надписи» вверху)"
                                             Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                                             Style="{ThemeResource CaptionTextBlockStyle}" />
@@ -651,14 +685,18 @@
                                     Padding="8">
                                     <StackPanel Spacing="4">
                                         <TextBlock
+                                           
                                             Text="Полные субтитры (.full)"
                                             FontWeight="SemiBold"
                                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                             Style="{ThemeResource CaptionTextBlockStyle}" />
-                                        <ItemsControl ItemsSource="{x:Bind FullSubsTracks, Mode=OneWay}" ItemTemplate="{StaticResource MuxTrackTemplate}">
-
-                                        </ItemsControl>
+                                        <ItemsRepeater ItemsSource="{x:Bind FullSubsTracks, Mode=OneWay}" ItemTemplate="{StaticResource MuxTrackTemplate}">
+                                            <ItemsRepeater.Layout>
+                                                <StackLayout Orientation="Vertical" />
+                                            </ItemsRepeater.Layout>
+                                        </ItemsRepeater>
                                         <TextBlock
+                                           
                                             Text="Файлы .full и с ролью «Полные» (дроп-зона «Субтитры» вверху)"
                                             Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                                             Style="{ThemeResource CaptionTextBlockStyle}" />
@@ -674,14 +712,18 @@
                                     Padding="8">
                                     <StackPanel Spacing="4">
                                         <TextBlock
+                                           
                                             Text="Другие субтитры"
                                             FontWeight="SemiBold"
                                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                             Style="{ThemeResource CaptionTextBlockStyle}" />
-                                        <ItemsControl ItemsSource="{x:Bind OtherSubsTracks, Mode=OneWay}" ItemTemplate="{StaticResource MuxTrackTemplate}">
-
-                                        </ItemsControl>
+                                        <ItemsRepeater ItemsSource="{x:Bind OtherSubsTracks, Mode=OneWay}" ItemTemplate="{StaticResource MuxTrackTemplate}">
+                                            <ItemsRepeater.Layout>
+                                                <StackLayout Orientation="Vertical" />
+                                            </ItemsRepeater.Layout>
+                                        </ItemsRepeater>
                                         <TextBlock
+                                           
                                             Text="Сюда попадают языковые и прочие субтитры без меток .full / .signs"
                                             Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                                             Style="{ThemeResource CaptionTextBlockStyle}" />
@@ -797,7 +839,9 @@
                                 VerticalAlignment="Center"
                                 HorizontalContentAlignment="Center"
                                 VerticalContentAlignment="Center"
+                               
                                 Click="RetryDownloadButton_Click"
+                                AutomationProperties.Name="Скачать заново"
                                 ToolTipService.ToolTip="Скачать заново"
                                 Visibility="{x:Bind IsRetryVisible, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
                             <FontIcon FontSize="18" Glyph="&#xE72C;"
@@ -821,7 +865,9 @@
                                 VerticalAlignment="Center"
                                 HorizontalContentAlignment="Center"
                                 VerticalContentAlignment="Center"
+                               
                                 Click="CopyUrlButton_Click"
+                                AutomationProperties.Name="Скопировать ссылку в буфер обмена"
                                 ToolTipService.ToolTip="Скопировать ссылку в буфер обмена">
                             <FontIcon FontSize="18" Glyph="&#xE8C8;"
                                       HorizontalAlignment="Center"
@@ -831,6 +877,7 @@
 
                         <!-- Кнопка удаления из списка -->
                         <Button Grid.Column="4" Grid.RowSpan="2"
+                               
                                 Background="Transparent"
                                 BorderThickness="0"
                                 Padding="0"
@@ -843,6 +890,8 @@
                                 HorizontalContentAlignment="Center"
                                 VerticalContentAlignment="Center"
                                 Click="DeleteButton_Click"
+                                AutomationProperties.Name="Удалить из списка"
+                                AutomationProperties.AutomationId="DeleteDownloadFileButton"
                                 ToolTipService.ToolTip="Удалить из списка"
                                 IsEnabled="{x:Bind IsDeleteEnabled, Mode=OneWay}">
                             <FontIcon FontSize="20" Glyph="&#xE711;"
@@ -854,7 +903,7 @@
                 </DataTemplate>
             </ListView.ItemTemplate>
         </ListView>
- 
+
         <!-- Тулбар списка файлов снизу -->
         <CommandBar Grid.Row="2" 
                     DefaultLabelPosition="Right"

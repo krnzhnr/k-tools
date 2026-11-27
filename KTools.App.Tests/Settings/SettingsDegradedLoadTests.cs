@@ -139,7 +139,7 @@ public class SettingsDegradedLoadTests
         var manager = CreateManager();
 
         // Act
-        PersistenceResult result = manager.InitializeDefaults(new List<AbstractScript>());
+        PersistenceResult result = manager.InitializeDefaults(StubSettingsDefaultsProvider.Empty);
 
         // Assert
         result.IsFailure.Should().BeTrue("деградированная загрузка не превращается в успешную запись");
@@ -170,7 +170,7 @@ public class SettingsDegradedLoadTests
         };
 
         // Act
-        PersistenceResult result = manager.ResetToDefaults(new List<AbstractScript>(), defaults);
+        PersistenceResult result = manager.ResetToDefaults(StubSettingsDefaultsProvider.Empty, defaults);
 
         // Assert
         result.IsSuccess.Should().BeTrue();
@@ -185,7 +185,7 @@ public class SettingsDegradedLoadTests
         File.ReadAllText(_tempSettingsFile).Should().Contain("Light");
 
         // Повторная инициализация по умолчанию больше не блокируется деградацией
-        PersistenceResult second = manager.InitializeDefaults(new List<AbstractScript>());
+        PersistenceResult second = manager.InitializeDefaults(StubSettingsDefaultsProvider.Empty);
         second.ErrorCode.Should().NotBe(PersistenceErrorCodes.DegradedLoad);
     }
 
@@ -205,7 +205,7 @@ public class SettingsDegradedLoadTests
         {
             // Act
             PersistenceResult failed = manager.ResetToDefaults(
-                new List<AbstractScript>(),
+                StubSettingsDefaultsProvider.Empty,
                 new List<KeyValuePair<string, object?>> { new("General/Theme", "Dark") });
 
             // Assert
@@ -316,14 +316,14 @@ public class SettingsDegradedLoadTests
         // Arrange
         var manager = CreateManager();
         manager.SaveSettings();
-        manager.InitializeDefaults(new List<AbstractScript>());
+        manager.InitializeDefaults(StubSettingsDefaultsProvider.Empty);
 
         // Блокируем файл, чтобы отложенная пакетная запись не могла завершиться успехом
         using FileStream locked = new(_tempSettingsFile, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
 
         // Act
         manager.SetSetting("Script_Dirty", "crf", 18);
-        PersistenceResult result = manager.InitializeDefaults(new List<AbstractScript>());
+        PersistenceResult result = manager.InitializeDefaults(StubSettingsDefaultsProvider.Empty);
 
         // Assert
         result.Persisted.Should().BeFalse("диск не совпадает с кэшем — persisted был бы ложью");
@@ -339,10 +339,10 @@ public class SettingsDegradedLoadTests
     {
         // Arrange
         var manager = CreateManager();
-        manager.InitializeDefaults(new List<AbstractScript>());
+        manager.InitializeDefaults(StubSettingsDefaultsProvider.Empty);
 
         // Act
-        PersistenceResult result = manager.InitializeDefaults(new List<AbstractScript>());
+        PersistenceResult result = manager.InitializeDefaults(StubSettingsDefaultsProvider.Empty);
 
         // Assert
         result.IsSuccess.Should().BeTrue();
@@ -1068,6 +1068,7 @@ public class SettingsDegradedLoadTests
     private SettingsManager CreateManager()
     {
         var manager = new SettingsManager(_logService, _pathManagerMock.Object);
+        manager.InitializeAsync().GetAwaiter().GetResult();
         _managers.Add(manager);
         return manager;
     }

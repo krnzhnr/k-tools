@@ -17,23 +17,12 @@ namespace KTools_App.Tests.ViewModels;
 /// <summary>
 /// Юнит-тесты DependencySetupViewModel — модели страницы установки зависимостей.
 ///
-/// ОГРАНИЧЕНИЕ ИНФРАСТРУКТУРЫ (эмпирически подтверждено):
-/// DependencySetupViewModel.LoadDependencies() создаёт конкретный класс DependencyVM
-/// для каждой зависимости реестра, а конструктор DependencyVM (KTools.App\Models\DependencyVM.cs:173)
-/// вызывает DispatcherQueue.GetForCurrentThread() БЕЗ try/catch. В headless-процессе
-/// dotnet test WinAppSDK runtime не инициализирован (нет package identity), поэтому вызов
-/// активации WinRT-статики падает с COMException 0x80040154 ("Требуемый класс отсутствует
-/// в ClassFactory"). Попытки инициализации WinAppSDK Bootstrap в testhost-процессе
-/// (MddBootstrapInitialize, Bootstrap.Net TryInitialize) завершились с ошибками
-/// EntryPointNotFound / 0x80670016 — runtime требует package identity приложения.
-///
-/// ПОТЕНЦИАЛЬНЫЙ БАГ ПРИЛОЖЕНИЯ: в отличие от FileQueueItem (FileQueueItem.cs:56-63)
-/// и ThreadSafeViewModel (ThreadSafeViewModel.cs:23-31), где GetForCurrentThread()
-/// обёрнут в try/catch, DependencyVM не защищён и крашит любой не-XAML-сценарий создания.
-///
-/// Следствие: тесты, которым нужен непустой реестр зависимостей (создание DependencyVM),
-/// выполняются только в XAML-среде и помечены [Ignore]. Тесты с пустым реестром,
-/// null-защита и команды с null-аргументами полностью покрыты без ограничений.
+/// ПРИМЕЧАНИЕ: раньше конструктор DependencyVM вызывал DispatcherQueue.GetForCurrentThread()
+/// без try/catch и падал в headless-процессе, поэтому тесты с непустым реестром
+/// помечены [Ignore]. Ишью #141 убрал захват очереди из конструктора
+/// (уведомления маршалит базовый ThreadSafeViewModel), и новые тесты
+/// DependencyProgressMarshalingTests проверяют создание DependencyVM с реестром
+/// без ограничений среды; старые [Ignore] оставлены без изменений.
 /// Все комментарии выполнены на русском языке.
 /// </summary>
 [TestClass]
@@ -243,8 +232,7 @@ public class DependencySetupViewModelTests
 
         // Assert
         _dependencyManagerMock.Verify(d => d.InstallDependencyAsync(It.IsAny<string>()), Times.Never);
-        _logServiceMock.Verify(l => l.Info(It.IsAny<string>(), It.IsAny<string>()), Times.Never,
-            "лог о ручной установке не пишется для null-аргумента");
+        _logServiceMock.VerifyNoEvents();
     }
 
     /// <summary>
@@ -261,7 +249,7 @@ public class DependencySetupViewModelTests
 
         // Assert
         _dependencyManagerMock.Verify(d => d.CancelInstallation(It.IsAny<string>()), Times.Never);
-        _logServiceMock.Verify(l => l.Warn(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+        _logServiceMock.VerifyNoEvents();
     }
 
     /// <summary>
@@ -278,7 +266,7 @@ public class DependencySetupViewModelTests
 
         // Assert
         _dependencyManagerMock.Verify(d => d.RemoveDependencyAsync(It.IsAny<string>()), Times.Never);
-        _logServiceMock.Verify(l => l.Warn(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+        _logServiceMock.VerifyNoEvents();
     }
 
     /// <summary>

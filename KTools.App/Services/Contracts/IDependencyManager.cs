@@ -59,6 +59,38 @@ public interface IDependencyManager
     bool IsUpdateAvailable(string key);
 
     /// <summary>
+    /// Получить источник исполняемого файла зависимости (ишью 54).
+    /// </summary>
+    BinarySource GetBinarySource(string key);
+
+    /// <summary>
+    /// Получить путь к исполняемому файлу, указанный вручную, или null.
+    /// </summary>
+    string? GetCustomBinaryPath(string key);
+
+    /// <summary>
+    /// Получить текущий эффективный путь к исполняемому файлу зависимости
+    /// с учётом источника: свой путь, резолв PATH или встроенный bin/.
+    /// </summary>
+    string GetEffectiveBinaryPath(string key);
+
+    /// <summary>
+    /// Задать путь к исполняемому файлу зависимости вручную (ишью 54).
+    /// Путь сохраняется в настройках, кэш версий и резолва инвалидируется.
+    /// </summary>
+    PersistenceResult SetCustomBinaryPath(string key, string fullPath);
+
+    /// <summary>
+    /// Включить или выключить поиск исполняемого файла в системном PATH (ишью 54).
+    /// </summary>
+    PersistenceResult SetBinaryUseSystemPath(string key, bool enabled);
+
+    /// <summary>
+    /// Сбросить источник зависимости к встроенным бинарникам (ишью 54).
+    /// </summary>
+    PersistenceResult ClearBinarySource(string key);
+
+    /// <summary>
     /// Проверить, установлены ли все обязательные зависимости (ffmpeg, mkvtoolnix).
     /// </summary>
     bool AreRequiredDependenciesInstalled();
@@ -79,19 +111,9 @@ public interface IDependencyManager
     Task<bool> RemoveDependencyAsync(string key);
 
     /// <summary>
-    /// Синхронная обёртка удаления файлов зависимости.
-    /// </summary>
-    bool RemoveDependency(string key);
-
-    /// <summary>
     /// Получить определенную версию установленной зависимости (например "7.1.0" или "v93.0").
     /// </summary>
     Task<string> GetInstalledVersionAsync(string key);
-
-    /// <summary>
-    /// Синхронная обёртка получения версии установленной зависимости.
-    /// </summary>
-    string GetInstalledVersion(string key);
 
     /// <summary>
     /// Опрашивает версии всех зарегистрированных бинарных зависимостей по текущим путям,

@@ -762,6 +762,21 @@ public sealed class CrashLifecycleTests
     }
 
     [TestMethod]
+    public void TryRecordUnobservedTaskException_WithoutLogService_FallsBackToEmergencySink()
+    {
+        using var scope = new TempDirectoryScope();
+        using var coordinator = new CrashCoordinator(CreateSink(scope));
+
+        bool observed = coordinator.TryRecordUnobservedTaskException(
+            new AggregateException(new InvalidOperationException("фоновая задача")),
+            out CrashWriteResult result);
+
+        observed.Should().BeFalse("без структурного канала подтверждение доставки невозможно");
+        result.StructuredWriteSucceeded.Should().BeFalse();
+        EmergencyFileCount(scope).Should().Be(1, "фоновая ошибка без сервиса обязана оставить след в аварийном канале");
+    }
+
+    [TestMethod]
     public void UnobservedTaskException_IsNotObservedWhenFlushFails()
     {
         using var scope = new TempDirectoryScope();
@@ -884,12 +899,13 @@ public sealed class CrashLifecycleTests
             {
                 stages.Add("settings-resolve");
                 resolved = new SettingsManager(log, pathManager.Object);
+                resolved.InitializeAsync().GetAwaiter().GetResult();
                 log.Write(
                     "app.started",
                     LogLevel.Info,
+                    LogStatus.None,
                     "Application startup started",
-                    "App",
-                    context: null);
+                    source: "App");
                 return resolved;
             });
 

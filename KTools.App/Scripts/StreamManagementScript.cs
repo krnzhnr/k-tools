@@ -120,8 +120,17 @@ public sealed class StreamManagementScript : AbstractScript
         ScriptProgressCallback progressCallback,
         int fileIndex,
         int totalCount,
-        ExecutionContext context)
+        ExecutionContext context,
+        CancellationToken cancellationToken = default)
     {
+        if (IsCancellationRequested(cancellationToken))
+        {
+            return ExecutionResult.Cancelled(
+                context,
+                new[] { "Обработка отменена до запуска элемента." },
+                errorCode: "cancelled-before-start",
+                cleanupState: CleanupState.NotStarted);
+        }
         var results = new List<string>();
 
         _logService.Write("script.stream_management.started", LogLevel.Debug, LogStatus.Running, $"Начато управление дорожками файла '{LogProps.FileName(filePath)}'", source: Name, properties: LogProps.Create("InputName", LogProps.FileName(filePath)));
@@ -147,7 +156,7 @@ public sealed class StreamManagementScript : AbstractScript
         MediaStructure? structure;
         try
         {
-            structure = await _mediaProbeService.ProbeAsync(filePath);
+            structure = await _mediaProbeService.ProbeAsync(filePath, cancellationToken);
         }
         catch (Exception ex)
         {
@@ -288,7 +297,7 @@ public sealed class StreamManagementScript : AbstractScript
         // 6. Запуск процесса сборки
         progressCallback(fileIndex, totalCount, $"Обработка: {stem}...", 0.0);
 
-        using var cts = new CancellationTokenSource();
+        using var cts = CreateLinkedCancellationSource(cancellationToken);
         var cancelMonitorTask = Task.Run(async () =>
         {
             while (!IsCancelled && !cts.IsCancellationRequested)

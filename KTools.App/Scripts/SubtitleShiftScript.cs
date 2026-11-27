@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 
 using KTools_App.Core;
@@ -81,9 +82,9 @@ public sealed class SubtitleShiftScript : AbstractScript
             "ShiftDirection",
             "Направление сдвига",
             SettingType.Combo,
-            "Вперед",
+            ShiftDirectionLabels.Forward,
             "Настройки сдвига",
-            options: new List<string> { "Вперед", "Назад" })
+            options: new List<string> { ShiftDirectionLabels.Forward, ShiftDirectionLabels.Backward })
     };
 
     /// <summary>
@@ -96,8 +97,17 @@ public sealed class SubtitleShiftScript : AbstractScript
         ScriptProgressCallback progressCallback,
         int fileIndex,
         int totalCount,
-        ExecutionContext context)
+        ExecutionContext context,
+        CancellationToken cancellationToken = default)
     {
+        if (IsCancellationRequested(cancellationToken))
+        {
+            return ExecutionResult.Cancelled(
+                context,
+                new[] { "Обработка отменена до запуска элемента." },
+                errorCode: "cancelled-before-start",
+                cleanupState: CleanupState.NotStarted);
+        }
         var results = new List<string>();
         string originalName = Path.GetFileName(filePath);
         string originalExt = Path.GetExtension(filePath);
@@ -106,9 +116,10 @@ public sealed class SubtitleShiftScript : AbstractScript
         progressCallback(fileIndex, totalCount, "Чтение файла...", 0.0);
         object shiftMsRaw = GetSettingValue(settings, "ShiftMs", (object)"1000");
         int shiftMs = ParseShiftValue(shiftMsRaw);
-        string direction = GetSettingValue(settings, "ShiftDirection", "Вперед");
+        ShiftDirection direction = ShiftDirectionLabels.Parse(GetSettingValue(settings, "ShiftDirection", ShiftDirectionLabels.Forward));
+        string directionLabel = ShiftDirectionLabels.GetLabel(direction);
 
-        _logService.Write("script.subtitle_shift.parameters", LogLevel.Debug, LogStatus.Running, $"Параметры сдвига: {shiftMs} мс, направление {LogRedactor.CompactSafeToken(direction)}", source: Name, properties: LogProps.Create("DurationMs", (double)shiftMs).With("InputName", LogProps.FileName(filePath)));
+        _logService.Write("script.subtitle_shift.parameters", LogLevel.Debug, LogStatus.Running, $"Параметры сдвига: {shiftMs} мс, направление {LogRedactor.CompactSafeToken(directionLabel)}", source: Name, properties: LogProps.Create("DurationMs", (double)shiftMs).With("InputName", LogProps.FileName(filePath)));
 
         // Определение целевой директории
         string targetDir = string.IsNullOrEmpty(outputPath)
@@ -148,6 +159,7 @@ public sealed class SubtitleShiftScript : AbstractScript
                          originalExt.Equals(".ssa", StringComparison.OrdinalIgnoreCase);
 
             int totalLines = lines.Length;
+            int removedCues = 0;
             for (int i = 0; i < totalLines; i++)
             {
                 if (IsCancelled)
@@ -157,16 +169,34 @@ public sealed class SubtitleShiftScript : AbstractScript
 
                 string line = lines[i];
 
-                if (isAss)
+                string? processed = isAss
+                    ? ProcessAssLine(line, shiftMs, direction)
+                    : ProcessSrtVttLine(line, shiftMs, direction);
+
+                if (processed is null)
                 {
-                    line = ProcessAssLine(line, shiftMs, direction);
+                    // Реплика целиком ушла в минус: удаляем её, а не клампим в ноль.
+                    removedCues++;
+                    if (!isAss)
+                    {
+                        // Откатываем уже добавленный номер реплики до пустого разделителя блоков.
+                        int lastBlank = updatedLines.FindLastIndex(l => string.IsNullOrWhiteSpace(l));
+                        if (lastBlank >= 0)
+                        {
+                            updatedLines.RemoveRange(lastBlank + 1, updatedLines.Count - lastBlank - 1);
+                        }
+
+                        // Пропускаем строки текста реплики до пустого разделителя блоков.
+                        while (i + 1 < totalLines && !string.IsNullOrWhiteSpace(lines[i + 1]))
+                        {
+                            i++;
+                        }
+                    }
                 }
                 else
                 {
-                    line = ProcessSrtVttLine(line, shiftMs, direction);
+                    updatedLines.Add(processed);
                 }
-
-                updatedLines.Add(line);
 
                 if (i % 100 == 0 || i == totalLines - 1)
                 {
@@ -191,9 +221,9 @@ public sealed class SubtitleShiftScript : AbstractScript
             // Запись результата в UTF-8
             await File.WriteAllLinesAsync(outputFilePath, updatedLines, Encoding.UTF8);
 
-            _logService.Write("script.subtitle_shift.completed", LogLevel.Info, LogStatus.Succeeded, $"Файл субтитров сохранён: '{LogProps.FileName(outputFilePath)}'", source: Name, properties: LogProps.Create("OutputName", LogProps.FileName(outputFilePath)).With("Verified", true));
+            _logService.Write("script.subtitle_shift.completed", LogLevel.Info, LogStatus.Succeeded, $"Файл субтитров сохранён: '{LogProps.FileName(outputFilePath)}', удалено ушедших в минус реплик: {removedCues}", source: Name, properties: LogProps.Create("OutputName", LogProps.FileName(outputFilePath)).With("Verified", true).With("Count", removedCues));
             progressCallback(fileIndex, totalCount, "Завершено", 100.0);
-            results.Add($"✔ Сдвиг выполнен успешно: {outputName}");
+            results.Add(removedCues > 0 ? $"✔ Сдвиг выполнен успешно: {outputName} (удалено реплик: {removedCues})" : $"✔ Сдвиг выполнен успешно: {outputName}");
             return ExecutionResult.Succeeded(
                 context,
                 results,
@@ -228,7 +258,7 @@ public sealed class SubtitleShiftScript : AbstractScript
             outputExists: File.Exists(outputFilePath));
     }
 
-    private string ProcessSrtVttLine(string line, int shiftMs, string direction)
+    private string? ProcessSrtVttLine(string line, int shiftMs, ShiftDirection direction)
     {
         var match = SrtVttTimeRegex.Match(line);
         if (!match.Success)
@@ -245,16 +275,18 @@ public sealed class SubtitleShiftScript : AbstractScript
         TimeSpan startTs = ParseSrtVttTime(startStr);
         TimeSpan endTs = ParseSrtVttTime(endStr);
 
-        startTs = ShiftTime(startTs, shiftMs, direction);
-        endTs = ShiftTime(endTs, shiftMs, direction);
+        if (!TryShiftCue(startTs, endTs, shiftMs, direction, out TimeSpan newStart, out TimeSpan newEnd))
+        {
+            return null;
+        }
 
-        string newStart = FormatSrtVttTime(startTs, separator);
-        string newEnd = FormatSrtVttTime(endTs, separator);
+        string newStartText = FormatSrtVttTime(newStart, separator);
+        string newEndText = FormatSrtVttTime(newEnd, separator);
 
-        return $"{newStart} --> {newEnd}{remainder}";
+        return $"{newStartText} --> {newEndText}{remainder}";
     }
 
-    private string ProcessAssLine(string line, int shiftMs, string direction)
+    private string? ProcessAssLine(string line, int shiftMs, ShiftDirection direction)
     {
         string prefix = string.Empty;
         if (line.StartsWith("Dialogue:", StringComparison.OrdinalIgnoreCase))
@@ -284,20 +316,37 @@ public sealed class SubtitleShiftScript : AbstractScript
         TimeSpan startTs = ParseAssTime(startStr);
         TimeSpan endTs = ParseAssTime(endStr);
 
-        startTs = ShiftTime(startTs, shiftMs, direction);
-        endTs = ShiftTime(endTs, shiftMs, direction);
+        if (!TryShiftCue(startTs, endTs, shiftMs, direction, out TimeSpan newStart, out TimeSpan newEnd))
+        {
+            return null;
+        }
 
-        fields[1] = FormatAssTime(startTs);
-        fields[2] = FormatAssTime(endTs);
+        fields[1] = FormatAssTime(newStart);
+        fields[2] = FormatAssTime(newEnd);
 
         return $"{prefix}{string.Join(',', fields)}";
     }
 
-    private TimeSpan ShiftTime(TimeSpan original, int shiftMs, string direction)
+    /// <summary>
+    /// Сдвигает границы реплики; реплика, целиком ушедшая в минус (конец не позже нуля),
+    /// отбрасывается (false). Частично ушедшее начало ограничивается нулём.
+    /// </summary>
+    private static bool TryShiftCue(TimeSpan start, TimeSpan end, int shiftMs, ShiftDirection direction, out TimeSpan shiftedStart, out TimeSpan shiftedEnd)
     {
         TimeSpan shift = TimeSpan.FromMilliseconds(shiftMs);
-        TimeSpan result = direction == "Вперед" ? original + shift : original - shift;
-        return result < TimeSpan.Zero ? TimeSpan.Zero : result;
+        shiftedStart = direction == ShiftDirection.Forward ? start + shift : start - shift;
+        shiftedEnd = direction == ShiftDirection.Forward ? end + shift : end - shift;
+        if (shiftedEnd <= TimeSpan.Zero)
+        {
+            return false;
+        }
+
+        if (shiftedStart < TimeSpan.Zero)
+        {
+            shiftedStart = TimeSpan.Zero;
+        }
+
+        return true;
     }
 
     private TimeSpan ParseSrtVttTime(string timeStr)

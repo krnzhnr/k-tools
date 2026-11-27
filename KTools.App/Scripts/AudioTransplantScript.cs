@@ -45,6 +45,9 @@ public sealed class AudioTransplantScript : AbstractScript
     /// <summary>Сессионный путь к файлу субтитров (в памяти до перезапуска приложения).</summary>
     public string SubtitlesFilePath { get; set; } = string.Empty;
 
+    /// <summary>Сессионный заголовок дорожки надписей (в памяти до перезапуска приложения).</summary>
+    public string SubsSignsTitle { get; set; } = "Надписи";
+
     /// <summary>Сессионный индекс дорожки источника.</summary>
     public int SourceTrackIndex { get; set; } = 0;
 
@@ -97,7 +100,15 @@ public sealed class AudioTransplantScript : AbstractScript
     public override bool SupportsParallel => false; // Только последовательно для диалогов UI
 
     /// <inheritdoc />
-    public override List<SettingField> SettingsSchema => new();
+    public override List<SettingField> SettingsSchema => new()
+    {
+        new SettingField(
+            "subs_signs_title",
+            "Заголовок надписей",
+            SettingType.Text,
+            "Надписи",
+            "Субтитры"),
+    };
 
     /// <inheritdoc />
     public override async Task<ExecutionResult> ExecuteSingleAsync(
@@ -107,8 +118,17 @@ public sealed class AudioTransplantScript : AbstractScript
         ScriptProgressCallback progressCallback,
         int fileIndex,
         int totalCount,
-        ExecutionContext context)
+        ExecutionContext context,
+        CancellationToken cancellationToken = default)
     {
+        if (IsCancellationRequested(cancellationToken))
+        {
+            return ExecutionResult.Cancelled(
+                context,
+                new[] { "Обработка отменена до запуска элемента." },
+                errorCode: "cancelled-before-start",
+                cleanupState: CleanupState.NotStarted);
+        }
         var results = new List<string>();
         string destFileName = Path.GetFileName(filePath);
 
@@ -157,7 +177,7 @@ public sealed class AudioTransplantScript : AbstractScript
         string sourceCodec = string.Empty;
         try
         {
-            var sourceStructure = await _mediaProbeService.ProbeAsync(sourceFilePath);
+            var sourceStructure = await _mediaProbeService.ProbeAsync(sourceFilePath, cancellationToken);
             var audioTracks = sourceStructure?.GetAudioTracks();
             if (audioTracks != null && sourceTrackIndex < audioTracks.Count)
             {
@@ -335,26 +355,13 @@ public sealed class AudioTransplantScript : AbstractScript
                 })
             };
 
-            // Вшивание внешних субтитров (если указаны)
-            string subtitlesFile = GetSettingValue(settings, "SubtitlesFile", SubtitlesFilePath);
-            if (string.IsNullOrWhiteSpace(subtitlesFile)) subtitlesFile = SubtitlesFilePath;
-            if (!string.IsNullOrWhiteSpace(subtitlesFile) && File.Exists(subtitlesFile))
-            {
-                mkvInputs.Add(new MkvInputSource(subtitlesFile, new List<string>
-                {
-                    "--track-name", "0:[Надписи]",
-                    "--language", "0:rus",
-                    "--default-track-flag", "0:yes",
-                    "--forced-display-flag", "0:yes",
-                    "--sub-charset", "0:utf-8"
-                }));
-            }
-
-            // Готовим аргументы снятия флагов по умолчанию с оригинальных аудио и субтитров
+            // Готовим аргументы снятия флагов по умолчанию с оригинальных аудио и субтитров,
+            // а также собираем заголовки существующих субтитров для разрешения конфликта имён.
             var destExtraArgs = new List<string>();
+            var existingSubsTitles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             try
             {
-                var mediaStructure = await _mediaProbeService.ProbeAsync(filePath);
+                var mediaStructure = await _mediaProbeService.ProbeAsync(filePath, cancellationToken);
                 if (mediaStructure != null)
                 {
                     foreach (var track in mediaStructure.Tracks)
@@ -366,6 +373,12 @@ public sealed class AudioTransplantScript : AbstractScript
                             destExtraArgs.Add($"{track.TrackId}:no");
                             destExtraArgs.Add("--forced-display-flag");
                             destExtraArgs.Add($"{track.TrackId}:no");
+                        }
+
+                        if (track.TrackType.Equals("subtitles", StringComparison.OrdinalIgnoreCase) &&
+                            !string.IsNullOrWhiteSpace(track.Name))
+                        {
+                            existingSubsTitles.Add(track.Name.Trim());
                         }
                     }
                 }
@@ -382,6 +395,46 @@ public sealed class AudioTransplantScript : AbstractScript
                 properties: LogProps
                     .Create("OutputName", destFileName)
                     .With("ErrorCode", "TARGET_FLAGS_PROBE_FAILED"));
+            }
+
+            // Вшивание внешних субтитров (если указаны)
+            string subtitlesFile = GetSettingValue(settings, "SubtitlesFile", SubtitlesFilePath);
+            if (string.IsNullOrWhiteSpace(subtitlesFile)) subtitlesFile = SubtitlesFilePath;
+            if (!string.IsNullOrWhiteSpace(subtitlesFile) && File.Exists(subtitlesFile))
+            {
+                string requestedTitle = GetSettingValue(settings, "subs_signs_title", SubsSignsTitle);
+                if (string.IsNullOrWhiteSpace(requestedTitle)) requestedTitle = SubsSignsTitle;
+                requestedTitle = SanitizeTrackTitle(requestedTitle);
+                string resolvedTitle = ResolveUniqueSubsTitle(requestedTitle, existingSubsTitles);
+                if (!resolvedTitle.Equals(requestedTitle, StringComparison.Ordinal))
+                {
+                    _logService.Write(
+                        "script.audio_transplant.subs_title_conflict",
+                        LogLevel.Warning,
+                        LogStatus.Changed,
+                        $"Дорожка надписей с заголовком '{requestedTitle}' уже есть в файле, применён заголовок '{resolvedTitle}'",
+                        source: Name,
+                        properties: LogProps
+                            .Create("Key", "subs_signs_title")
+                            .With("Value", resolvedTitle)
+                            .With("OutputName", destFileName));
+                }
+
+                var subsArgs = new List<string>();
+                if (!string.IsNullOrWhiteSpace(resolvedTitle))
+                {
+                    subsArgs.Add("--track-name");
+                    subsArgs.Add($"0:{resolvedTitle}");
+                }
+
+                subsArgs.AddRange(new[]
+                {
+                    "--language", "0:rus",
+                    "--default-track-flag", "0:yes",
+                    "--forced-display-flag", "0:yes",
+                    "--sub-charset", "0:utf-8"
+                });
+                mkvInputs.Add(new MkvInputSource(subtitlesFile, subsArgs));
             }
 
             mkvInputs.Add(new MkvInputSource(filePath, destExtraArgs));
@@ -459,6 +512,69 @@ public sealed class AudioTransplantScript : AbstractScript
                 catch { }
             }
         }
+    }
+
+    /// <summary>
+    /// Чистит заголовок дорожки надписей: обрезка пробелов и замена кавычек,
+    /// так как заголовок подставляется в аргументы mkvmerge.
+    /// Пустой вход даёт пустую строку.
+    /// </summary>
+    /// <param name="title">Исходный заголовок из настроек.</param>
+    /// <returns>Очищенный заголовок без кавычек.</returns>
+    private static string SanitizeTrackTitle(string? title)
+    {
+        if (string.IsNullOrWhiteSpace(title))
+        {
+            return string.Empty;
+        }
+
+        return title.Trim().Replace("\"", "'", StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Подбирает свободный заголовок дорожки надписей: при совпадении с заголовком
+    /// существующей дорожки субтитров в контейнере добавляет числовой суффикс вида «_1», «_2»
+    /// (единообразно с правилом GetSafeOutputPath), существующая дорожка не перезаписывается.
+    /// Сравнение без учёта регистра. Пустой вход даёт пустую строку.
+    /// </summary>
+    /// <param name="desiredTitle">Запрошенный заголовок дорожки надписей.</param>
+    /// <param name="existingTitles">Заголовки существующих дорожек субтитров контейнера.</param>
+    /// <returns>Исходный заголовок либо заголовок с числовым суффиксом.</returns>
+    public static string ResolveUniqueSubsTitle(string? desiredTitle, IEnumerable<string> existingTitles)
+    {
+        string title = SanitizeTrackTitle(desiredTitle);
+        if (string.IsNullOrEmpty(title))
+        {
+            return string.Empty;
+        }
+
+        var taken = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (existingTitles != null)
+        {
+            foreach (string existing in existingTitles)
+            {
+                if (!string.IsNullOrWhiteSpace(existing))
+                {
+                    taken.Add(existing.Trim());
+                }
+            }
+        }
+
+        if (!taken.Contains(title))
+        {
+            return title;
+        }
+
+        int counter = 1;
+        string candidate;
+        do
+        {
+            candidate = $"{title}_{counter.ToString(CultureInfo.InvariantCulture)}";
+            counter++;
+        }
+        while (taken.Contains(candidate));
+
+        return candidate;
     }
 
     /// <summary>

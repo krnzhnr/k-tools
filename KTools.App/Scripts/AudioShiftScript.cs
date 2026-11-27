@@ -67,6 +67,7 @@ public sealed class AudioShiftScript : AbstractScript
     /// </summary>
     public override string[] FileExtensions => AppConstants.AudioStreams
         .Concat(AppConstants.AudioContainers)
+        .Concat(AppConstants.VideoContainers)
         .ToArray();
 
     /// <summary>
@@ -95,9 +96,9 @@ public sealed class AudioShiftScript : AbstractScript
             "ShiftDirection",
             "Направление сдвига",
             SettingType.Combo,
-            "Вперед",
+            ShiftDirectionLabels.Forward,
             "Настройки сдвига",
-            options: new List<string> { "Вперед", "Назад" }),
+            options: new List<string> { ShiftDirectionLabels.Forward, ShiftDirectionLabels.Backward }),
 
         new SettingField(
             "OutputFormat",
@@ -118,8 +119,17 @@ public sealed class AudioShiftScript : AbstractScript
         ScriptProgressCallback progressCallback,
         int fileIndex,
         int totalCount,
-        ExecutionContext context)
+        ExecutionContext context,
+        CancellationToken cancellationToken = default)
     {
+        if (IsCancellationRequested(cancellationToken))
+        {
+            return ExecutionResult.Cancelled(
+                context,
+                new[] { "Обработка отменена до запуска элемента." },
+                errorCode: "cancelled-before-start",
+                cleanupState: CleanupState.NotStarted);
+        }
         var results = new List<string>();
         string originalName = Path.GetFileName(filePath);
 
@@ -133,14 +143,15 @@ public sealed class AudioShiftScript : AbstractScript
         progressCallback(fileIndex, totalCount, "Чтение метаданных длительности...", 0.0);
 
         int shiftMs = GetSettingValue(settings, "ShiftMs", 1000);
-        string direction = GetSettingValue(settings, "ShiftDirection", "Вперед");
+        ShiftDirection direction = ShiftDirectionLabels.Parse(GetSettingValue(settings, "ShiftDirection", ShiftDirectionLabels.Forward));
+        string directionLabel = ShiftDirectionLabels.GetLabel(direction);
         string format = GetSettingValue(settings, "OutputFormat", "eac3to Bitstream (Без перекодирования)");
 
         _logService.Write(
             "script.audio_shift.parameters",
             LogLevel.Debug,
             LogStatus.Running,
-            $"Параметры сдвига: {shiftMs} мс, направление {direction}, режим {LogRedactor.CompactSafeToken(format)}",
+            $"Параметры сдвига: {shiftMs} мс, направление {directionLabel}, режим {LogRedactor.CompactSafeToken(format)}",
             source: Name,
             properties: LogProps
                 .Create("InputName", LogProps.FileName(filePath))
@@ -187,7 +198,7 @@ public sealed class AudioShiftScript : AbstractScript
                 outputExists: true);
         }
 
-        int signedShiftMs = direction == "Назад" ? -Math.Abs(shiftMs) : Math.Abs(shiftMs);
+        int signedShiftMs = direction == ShiftDirection.Backward ? -Math.Abs(shiftMs) : Math.Abs(shiftMs);
 
         // 2. Обработка через eac3to Bitstream (без перекодирования)
         if (isPassthrough)
@@ -196,7 +207,7 @@ public sealed class AudioShiftScript : AbstractScript
 
             // eac3to не декодирует Opus/Vorbis и ряд других кодеков — останавливаемся сразу
             // с понятным сообщением вместо неинформативной ошибки внешнего процесса.
-            string? unsupportedCodec = await FindUnsupportedEac3toCodecAsync(filePath);
+            string? unsupportedCodec = await FindUnsupportedEac3toCodecAsync(filePath, cancellationToken);
             if (unsupportedCodec is not null)
             {
                 string codecMsg = $"❌ Аудиокодек '{unsupportedCodec}' не поддерживается eac3to в режиме Bitstream (без перекодирования). Выберите режим FLAC или WAV.";
@@ -233,7 +244,7 @@ public sealed class AudioShiftScript : AbstractScript
                 "-log=nul"
             };
 
-            using var ctsEac3 = new CancellationTokenSource();
+            using var ctsEac3 = CreateLinkedCancellationSource(cancellationToken);
             var eac3Task = _eac3toRunner.RunAsync(
                 args: eac3toArgs,
                 onProgress: pct =>
@@ -342,7 +353,7 @@ public sealed class AudioShiftScript : AbstractScript
         double duration = 0.0;
         try
         {
-            var structure = await _mediaProbeService.ProbeAsync(filePath);
+            var structure = await _mediaProbeService.ProbeAsync(filePath, cancellationToken);
             if (structure != null)
             {
                 duration = structure.Duration;
@@ -366,7 +377,7 @@ public sealed class AudioShiftScript : AbstractScript
         // 4. Формирование аргументов FFmpeg
         var extraArgs = new List<string>();
 
-        if (direction == "Вперед")
+        if (direction == ShiftDirection.Forward)
         {
             extraArgs.Add("-af");
             extraArgs.Add($"adelay={shiftMs}:all=1");
@@ -391,7 +402,7 @@ public sealed class AudioShiftScript : AbstractScript
         }
 
         progressCallback(fileIndex, totalCount, "Запуск FFmpeg обработки...", 0.0);
-        using var cts = new CancellationTokenSource();
+        using var cts = CreateLinkedCancellationSource(cancellationToken);
 
         var runTask = _ffmpegRunner.RunAsync(
             inputPath: filePath,
@@ -508,9 +519,9 @@ public sealed class AudioShiftScript : AbstractScript
     /// </summary>
     /// <param name="filePath">Путь к проверяемому медиафайлу.</param>
     /// <returns>Название неподдерживаемого кодека либо null, если запрет не требуется.</returns>
-    private async Task<string?> FindUnsupportedEac3toCodecAsync(string filePath)
+    private async Task<string?> FindUnsupportedEac3toCodecAsync(string filePath, CancellationToken cancellationToken = default)
     {
-        MediaStructure? structure = await _mediaProbeService.ProbeAsync(filePath);
+        MediaStructure? structure = await _mediaProbeService.ProbeAsync(filePath, cancellationToken);
         var audioTracks = structure?.GetAudioTracks();
         if (audioTracks is null || audioTracks.Count == 0)
         {

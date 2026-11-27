@@ -291,11 +291,21 @@ public sealed class SpeechRecognitionScript : AbstractScript
         ScriptProgressCallback progressCallback,
         int fileIndex,
         int totalCount,
-        ExecutionContext context)
+        ExecutionContext context,
+        CancellationToken cancellationToken = default)
     {
+        if (IsCancellationRequested(cancellationToken))
+        {
+            return ExecutionResult.Cancelled(
+                context,
+                new[] { "Обработка отменена до запуска элемента." },
+                errorCode: "cancelled-before-start",
+                cleanupState: CleanupState.NotStarted);
+        }
         var resultMessages = new List<string>();
         double lastDownloadPercent = 5.0;
         double lastTranscribePercent = 20.0;
+        using var modelDownloadCts = CreateLinkedCancellationSource(cancellationToken);
 
         if (!File.Exists(filePath))
         {
@@ -361,7 +371,7 @@ public sealed class SpeechRecognitionScript : AbstractScript
                 progressCallback(fileIndex, totalCount, $"Скачивание модели '{modelKey}' ({s})...", lastDownloadPercent);
             });
 
-            bool downloaded = await _modelManager.DownloadModelAsync(modelKey, downloadProgress, speedProgress, CancellationToken);
+            bool downloaded = await _modelManager.DownloadModelAsync(modelKey, downloadProgress, speedProgress, modelDownloadCts.Token);
             if (!downloaded || !_modelManager.IsModelDownloaded(modelKey))
             {
                 string failMsg = $"Не удалось загрузить модель Whisper '{modelKey}'. Проверьте сетевое подключение.";

@@ -1,10 +1,13 @@
 name: Upload Dependencies to GitHub Release
 
+# Стабильный канал зависимостей: тег deps-v1 обновляется только с main.
+# Пуш в develop его не трогает, чтобы стабильные пользователи не тянули
+# непроверенные артефакты. Хеши архивов публикуются в SHA256SUMS.txt
+# и переносятся в поле Sha256 реестра зависимостей.
 on:
   push:
     branches:
       - main
-      - develop
     paths:
       - 'bin/**'
   workflow_dispatch:
@@ -12,10 +15,9 @@ on:
       branch:
         description: 'Branch to checkout dependencies from'
         required: true
-        default: 'develop'
+        default: 'main'
         type: choice
         options:
-          - develop
           - main
 
 permissions:
@@ -56,6 +58,12 @@ jobs:
         Archive-Folder "eac3to" "eac3to.tar.xz"
         Archive-Folder "DEE" "dee.tar.xz"
         Archive-Folder "eac3to_decoders" "eac3to_decoders.tar.xz"
+
+        # Публикуем контрольные суммы: источник хешей для поля Sha256 реестра
+        Get-ChildItem temp_archives/*.tar.xz | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($_.Name)"
+        } | Out-File -FilePath temp_archives/SHA256SUMS.txt -Encoding utf8
 
     - name: Detect Binary Versions
       id: detect_versions
@@ -113,6 +121,8 @@ jobs:
         body_path: release_body.txt
         prerelease: false
         make_latest: false
-        files: temp_archives/*.tar.xz
+        files: |
+          temp_archives/*.tar.xz
+          temp_archives/SHA256SUMS.txt
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

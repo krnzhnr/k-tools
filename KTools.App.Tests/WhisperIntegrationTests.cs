@@ -166,4 +166,105 @@ public class WhisperIntegrationTests
         modelField.Options.Should().NotContain("tiny");
         modelField.Options.Should().NotContain("large-v3-turbo");
     }
+
+    /// <summary>
+    /// Проверяет, что процент выше 100 ограничивается верхней границей диапазона.
+    /// </summary>
+    [TestMethod]
+    public void TryParseProgress_OutOfRangeValue_ReturnsClampedPercent()
+    {
+        // Arrange
+        string line = "whisper_print_progress_callback: progress = 142%";
+
+        // Act
+        bool success = WhisperOutputParser.TryParseProgress(line, out int percent);
+
+        // Assert
+        success.Should().BeTrue();
+        percent.Should().Be(100);
+    }
+
+    /// <summary>
+    /// Проверяет, что пустые и пробельные строки не распознаются как прогресс.
+    /// </summary>
+    [TestMethod]
+    public void TryParseProgress_NullOrEmpty_ReturnsFalse()
+    {
+        // Act & Assert
+        WhisperOutputParser.TryParseProgress(null!, out int nullPercent).Should().BeFalse();
+        nullPercent.Should().Be(0);
+
+        WhisperOutputParser.TryParseProgress(string.Empty, out int emptyPercent).Should().BeFalse();
+        emptyPercent.Should().Be(0);
+
+        WhisperOutputParser.TryParseProgress("   ", out int whitespacePercent).Should().BeFalse();
+        whitespacePercent.Should().Be(0);
+    }
+
+    /// <summary>
+    /// Проверяет, что мусорные и неполные строки не распознаются как сегменты субтитров.
+    /// </summary>
+    [TestMethod]
+    public void TryParseSegment_InvalidLines_ReturnsFalse()
+    {
+        // Act & Assert
+        WhisperOutputParser.TryParseSegment(string.Empty, out _, out _, out _).Should().BeFalse();
+        WhisperOutputParser.TryParseSegment("просто текст без таймкодов", out _, out _, out _).Should().BeFalse();
+        WhisperOutputParser.TryParseSegment("00:01:23 --> 00:01:28 без скобок", out _, out _, out _).Should().BeFalse();
+        WhisperOutputParser.TryParseSegment("[99:99:99.999 --> 00:01:28.100] Невозможное время", out _, out _, out _).Should().BeFalse();
+    }
+
+    /// <summary>
+    /// Проверяет, что автоматический бэкенд отображается на имена CPU-варианта.
+    /// </summary>
+    [TestMethod]
+    public void WhisperBackendDetector_AutoBackend_MapsToCpuNames()
+    {
+        // Act & Assert
+        WhisperBackendDetector.GetSubfolderName(WhisperBackend.Auto).Should().Be("whisper-cpu");
+        WhisperBackendDetector.GetDependencyKey(WhisperBackend.Auto).Should().Be("whisper_cpu");
+    }
+
+    /// <summary>
+    /// Проверяет, что без установленных рантаймов выбирается CPU-бэкенд.
+    /// </summary>
+    [TestMethod]
+    public void WhisperBackendDetector_NoInstallations_ReturnsCpu()
+    {
+        // Arrange
+        var depManagerMock = new Mock<IDependencyManager>();
+        depManagerMock.Setup(d => d.IsInstalled(It.IsAny<string>())).Returns(false);
+
+        // Act
+        WhisperBackend backend = WhisperBackendDetector.DetectBestBackend(depManagerMock.Object);
+
+        // Assert
+        backend.Should().Be(WhisperBackend.Cpu);
+    }
+
+    /// <summary>
+    /// Проверяет значения по умолчанию опций транскрибации Whisper.
+    /// </summary>
+    [TestMethod]
+    public void WhisperTranscribeOptions_DefaultValues_MatchExpectedDefaults()
+    {
+        // Arrange & Act
+        var options = new WhisperTranscribeOptions();
+
+        // Assert
+        options.Language.Should().Be("auto");
+        options.Backend.Should().Be(WhisperBackend.Cpu);
+        options.OutputSrt.Should().BeTrue();
+        options.OutputTxt.Should().BeTrue();
+        options.OutputVtt.Should().BeFalse();
+        options.OutputLrc.Should().BeFalse();
+        options.OutputJson.Should().BeFalse();
+        options.MaxSegmentLength.Should().Be(35);
+        options.SplitOnWord.Should().BeTrue();
+        options.MaxContext.Should().Be(0);
+        options.Threads.Should().Be(4);
+        options.NoSpeechThreshold.Should().BeApproximately(0.65, 1e-9);
+        options.SuppressNonSpeechTokens.Should().BeTrue();
+        options.EnableVad.Should().BeFalse();
+    }
 }

@@ -88,10 +88,10 @@ public static class MockBuilders
 
         mock.Setup(m => m.SaveSettings())
             .Returns(() => PersistenceResult.Succeeded());
-        mock.Setup(m => m.InitializeDefaults(It.IsAny<List<AbstractScript>>()))
+        mock.Setup(m => m.InitializeDefaults(It.IsAny<ISettingsDefaultsProvider>()))
             .Returns(() => PersistenceResult.Succeeded());
         mock.Setup(m => m.ResetToDefaults(
-                It.IsAny<List<AbstractScript>>(),
+                It.IsAny<ISettingsDefaultsProvider>(),
                 It.IsAny<IReadOnlyList<KeyValuePair<string, object?>>?>()))
             .Returns(() => PersistenceResult.Succeeded());
         mock.Setup(m => m.SetLogDirectory(It.IsAny<string>()))
@@ -195,15 +195,15 @@ public static class MockBuilders
         mock.Setup(d => d.RefreshAllStatuses());
         mock.Setup(d => d.GetStatus(It.IsAny<string>()))
             .Returns(DependencyStatus.NotInstalled);
-        mock.Setup(d => d.GetInstalledVersion(It.IsAny<string>()))
-            .Returns(string.Empty);
+        mock.Setup(d => d.GetInstalledVersionAsync(It.IsAny<string>()))
+            .ReturnsAsync(string.Empty);
         mock.Setup(d => d.CheckAllDependencyUpdatesAsync(It.IsAny<bool>()))
             .Returns(Task.CompletedTask);
         mock.Setup(d => d.CheckAndUpdateYtDlpAsync(It.IsAny<bool>()))
             .Returns(Task.CompletedTask);
         mock.Setup(d => d.InstallDependencyAsync(It.IsAny<string>()))
             .Returns(Task.CompletedTask);
-        mock.Setup(d => d.RemoveDependency(It.IsAny<string>())).Returns(true);
+        mock.Setup(d => d.RemoveDependencyAsync(It.IsAny<string>())).ReturnsAsync(true);
         return mock;
     }
 
@@ -215,7 +215,7 @@ public static class MockBuilders
     public static Mock<IMediaProbeService> CreateMediaProbeMock(MediaStructure? structure = null)
     {
         var mock = new Mock<IMediaProbeService>();
-        mock.Setup(p => p.ProbeAsync(It.IsAny<string>()))
+        mock.Setup(p => p.ProbeAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(structure);
         mock.Setup(p => p.EnrichTrackNamesAsync(It.IsAny<MediaStructure>()))
             .Returns(Task.CompletedTask);

@@ -42,7 +42,7 @@ public class LogServiceReadTests
     {
         using var scope = new TempDirectoryScope();
         using LogService service = CreateService(scope);
-        service.Info("будет прочитано", "ReadTest");
+        service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, "будет прочитано", source: "ReadTest");
         service.Flush(TimeSpan.FromSeconds(30)).Should().BeTrue();
         service.Dispose();
 
@@ -80,7 +80,7 @@ public class LogServiceReadTests
         using LogService service = CreateService(scope, options => options.MaxRecentReadBytes = 16 * 1024);
         for (int index = 0; index < 500; index++)
         {
-            service.Info(new string('я', 200) + " " + index, "WindowTest");
+            service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, new string('я', 200) + " " + index, source: "WindowTest");
         }
 
         service.Flush(TimeSpan.FromSeconds(20)).Should().BeTrue();
@@ -97,7 +97,7 @@ public class LogServiceReadTests
     {
         using var scope = new TempDirectoryScope();
         using LogService service = CreateService(scope);
-        service.Info("событие", "ReadTest");
+        service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, "событие", source: "ReadTest");
         service.Flush(TimeSpan.FromSeconds(30)).Should().BeTrue();
 
         service.ReadRecentEvents(0).Should().BeEmpty();
@@ -152,7 +152,7 @@ public class LogServiceReadTests
         const int count = 120;
         for (int index = 0; index < count; index++)
         {
-            service.Info("запись " + index, "Compat");
+            service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, "запись " + index, source: "Compat");
         }
 
         service.Flush(TimeSpan.FromSeconds(10)).Should().BeTrue();
@@ -178,7 +178,7 @@ public class LogServiceReadTests
             exception = caught;
         }
 
-        service.Exception(exception, "контекст сбоя", "Integration");
+        service.Write("test.event.failed", LogLevel.Error, LogStatus.Failed, "контекст сбоя", exception, source: "Integration");
         service.Flush(TimeSpan.FromSeconds(30)).Should().BeTrue();
         string export = service.ReadCurrentLog();
 
@@ -195,7 +195,7 @@ public class LogServiceReadTests
     {
         using var scope = new TempDirectoryScope();
         using LogService service = CreateService(scope);
-        service.Info("валидная запись", "Compat");
+        service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, "валидная запись", source: "Compat");
         service.Flush(TimeSpan.FromSeconds(30)).Should().BeTrue();
 
         AppendRaw(
@@ -214,7 +214,7 @@ public class LogServiceReadTests
     {
         using var scope = new TempDirectoryScope();
         using LogService service = CreateService(scope);
-        service.Info("первая новая запись", "Compat");
+        service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, "первая новая запись", source: "Compat");
         service.Flush(TimeSpan.FromSeconds(30)).Should().BeTrue();
 
         AppendRaw(service.CurrentLogFile!, "2024-01-01 10:00:00 | INFO | старая запись password=SENTINEL-OLD\n");
@@ -239,7 +239,7 @@ public class LogServiceReadTests
         const int count = 20;
         for (int index = 0; index < count; index++)
         {
-            service.Info(payload + " " + index, "Segments");
+            service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, payload + " " + index, source: "Segments");
         }
 
         service.Flush(TimeSpan.FromSeconds(20)).Should().BeTrue();
@@ -260,7 +260,7 @@ public class LogServiceReadTests
         using LogService service = CreateService(scope, options => options.MaxExportLines = 20);
         for (int index = 0; index < 100; index++)
         {
-            service.Info("запись " + index, "Bounded");
+            service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, "запись " + index, source: "Bounded");
         }
 
         service.Flush(TimeSpan.FromSeconds(10)).Should().BeTrue();

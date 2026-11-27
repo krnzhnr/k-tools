@@ -30,6 +30,10 @@ public sealed class CrashCoordinator : ICrashCoordinator, IDisposable
 
     private static readonly TimeSpan StructuredFlushTimeout = TimeSpan.FromMilliseconds(300);
     private static readonly TimeSpan ShutdownStageTimeout = TimeSpan.FromSeconds(2);
+    // Отдельный бюджет стадии завершения процессов: 2-3 висящих ffmpeg
+    // требуют 6-9 с (по 3 с ожидания на процесс), общий лимит 2 с резал
+    // стадию и оставлял сирот. Минимум по issue #114 — 10-15 с.
+    private static readonly TimeSpan ProcessTerminationStageTimeout = TimeSpan.FromSeconds(15);
 
     private readonly EmergencyLogSink _emergencySink;
     private readonly ILogService? _logService;
@@ -225,7 +229,15 @@ public sealed class CrashCoordinator : ICrashCoordinator, IDisposable
             LogLevel.Error,
             CrashEventKind.UnobservedTask,
             emergencyRequired: false);
-        result = RecordCore(record, flushStructured: true, BuildProperties(record));
+        CrashWriteResult recorded = RecordCore(record, flushStructured: true, BuildProperties(record));
+        if (!recorded.StructuredWriteSucceeded)
+        {
+            // Структурный канал недоступен (нет сервиса, сбой сброса):
+            // фоновая ошибка обязана оставить след в аварийном канале.
+            WriteUnobservedFallback(record);
+        }
+
+        result = recorded;
         return result.StructuredWriteSucceeded;
     }
 
@@ -728,6 +740,31 @@ public sealed class CrashCoordinator : ICrashCoordinator, IDisposable
         }
     }
 
+    private void WriteUnobservedFallback(CrashRecord record)
+    {
+        Interlocked.Increment(ref _emergencyAttempts);
+        bool written = false;
+        try
+        {
+            written = _emergencySink.Write(
+                record.Reason,
+                record.Exception,
+                record.Source,
+                record.CrashId,
+                _sessionId,
+                record.Level);
+        }
+        catch (Exception)
+        {
+            written = false;
+        }
+
+        if (!written)
+        {
+            Interlocked.Increment(ref _emergencyFailures);
+        }
+    }
+
     private bool WriteStructured(
         CrashRecord record,
         IReadOnlyDictionary<string, object?> properties,
@@ -1084,7 +1121,7 @@ public sealed class CrashCoordinator : ICrashCoordinator, IDisposable
         {
             task = operation(cancellationToken) ?? Task.FromResult(
                 ProcessTerminationSummary.Unavailable(CrashShutdownResult.ErrorStageUnavailable));
-            Task completed = await WhenBoundedAsync(task, cancellationToken).ConfigureAwait(false);
+            Task completed = await WhenBoundedAsync(task, cancellationToken, ProcessTerminationStageTimeout).ConfigureAwait(false);
             if (!ReferenceEquals(completed, task))
             {
                 Observe(task);
@@ -1161,9 +1198,9 @@ public sealed class CrashCoordinator : ICrashCoordinator, IDisposable
         }
     }
 
-    private static Task<Task> WhenBoundedAsync(Task task, CancellationToken cancellationToken)
+    private static Task<Task> WhenBoundedAsync(Task task, CancellationToken cancellationToken, TimeSpan? bound = null)
     {
-        return Task.WhenAny(task, Task.Delay(ShutdownStageTimeout, cancellationToken));
+        return Task.WhenAny(task, Task.Delay(bound ?? ShutdownStageTimeout, cancellationToken));
     }
 
     private static void Observe(Task? task)

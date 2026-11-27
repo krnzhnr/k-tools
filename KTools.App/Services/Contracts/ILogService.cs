@@ -15,31 +15,7 @@ public interface ILogService : IDisposable
 
     void InitializeLogFile(string? customLogDir);
 
-    void Log(LogLevel level, string message, string source = "System");
-
-    void DebugLog(string message, string source = "System");
-
-    void Info(string message, string source = "System");
-
-    void Warn(string message, string source = "System");
-
-    void Error(string message, string source = "System");
-
-    void Fatal(string message, string source = "System");
-
-    void Exception(Exception ex, string message, string source = "System");
-
     void Write(LogEvent logEvent);
-
-    void Write(
-        string eventId,
-        LogLevel level,
-        string message,
-        string source = "System",
-        LogStatus status = LogStatus.None,
-        LogContext? context = null,
-        IReadOnlyDictionary<string, object?>? properties = null,
-        Exception? exception = null);
 
     void Write(
         string eventId,

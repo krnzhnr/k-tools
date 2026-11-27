@@ -72,13 +72,10 @@ public class PrivacySentinelCorpusTests
         using var scope = new TempDirectoryScope();
         using LogService service = CreateService(scope);
 
-        service.Info($"Загрузка ссылки {QueryUrl}", "Privacy");
-        service.Warn($"{AuthorizationHeader}; {CookieHeader}", "Privacy");
-        service.Error($"Файл пользователя {UserPath} и аргументы {PasswordAssignment}", "Privacy");
-        service.Exception(
-            new InvalidOperationException($"доступ запрещён: {PasswordAssignment}"),
-            "Ошибка аутентификации",
-            "Privacy");
+        service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, $"Загрузка ссылки {QueryUrl}", source: "Privacy");
+        service.Write("test.event.recorded", LogLevel.Warning, LogStatus.None, $"{AuthorizationHeader}; {CookieHeader}", source: "Privacy");
+        service.Write("test.event.failed", LogLevel.Error, LogStatus.Failed, $"Файл пользователя {UserPath} и аргументы {PasswordAssignment}", source: "Privacy");
+        service.Write("test.event.failed", LogLevel.Error, LogStatus.Failed, "Ошибка аутентификации", new InvalidOperationException($"доступ запрещён: {PasswordAssignment}"), source: "Privacy");
 
         service.Flush(TimeSpan.FromSeconds(10)).Should().BeTrue();
         string jsonl = ReadAllShared(service.CurrentLogFile!);
@@ -94,12 +91,7 @@ public class PrivacySentinelCorpusTests
         using var scope = new TempDirectoryScope();
         using LogService service = CreateService(scope);
 
-        service.Write(
-            "privacy.property_allowlist",
-            LogLevel.Warning,
-            "Проверка allowlist",
-            "Privacy",
-            properties: new Dictionary<string, object?>(StringComparer.Ordinal)
+        service.Write("privacy.property_allowlist", LogLevel.Warning, LogStatus.None, "Проверка allowlist", source: "Privacy", properties: new Dictionary<string, object?>(StringComparer.Ordinal)
             {
                 ["Password"] = PasswordMarker,
                 ["ApiKey"] = AuthorizationMarker,
@@ -125,8 +117,9 @@ public class PrivacySentinelCorpusTests
         service.Write(
             "privacy.unlisted_property",
             LogLevel.Info,
+            LogStatus.None,
             "Неизвестное свойство",
-            "Privacy",
+            source: "Privacy",
             properties: new Dictionary<string, object?>(StringComparer.Ordinal)
             {
                 ["MyCustomPayload"] = QueryUrl,
@@ -229,9 +222,9 @@ public class PrivacySentinelCorpusTests
         using var scope = new TempDirectoryScope();
         using LogService service = CreateService(scope);
 
-        service.Info($"Загрузка {QueryUrl}", "Privacy");
-        service.Warn(CookieHeader, "Privacy");
-        service.Error($"Файл {UserPath}", "Privacy");
+        service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, $"Загрузка {QueryUrl}", source: "Privacy");
+        service.Write("test.event.recorded", LogLevel.Warning, LogStatus.None, CookieHeader, source: "Privacy");
+        service.Write("test.event.failed", LogLevel.Error, LogStatus.Failed, $"Файл {UserPath}", source: "Privacy");
         service.Flush(TimeSpan.FromSeconds(10)).Should().BeTrue();
 
         string export = service.ReadCurrentLog();
@@ -275,8 +268,8 @@ public class PrivacySentinelCorpusTests
 
         using (LogService service = new(options))
         {
-            service.Info("Загрузка " + QueryUrl, "Privacy");
-            service.Error("сбой " + PasswordAssignment, "Privacy");
+            service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, "Загрузка " + QueryUrl, source: "Privacy");
+            service.Write("test.event.failed", LogLevel.Error, LogStatus.Failed, "сбой " + PasswordAssignment, source: "Privacy");
             service.Flush(TimeSpan.FromSeconds(30));
         }
 
@@ -304,12 +297,13 @@ public class PrivacySentinelCorpusTests
         using var scope = new TempDirectoryScope();
         using LogService service = CreateService(scope);
 
-        service.Info($"Файл для обработки: {UserPath}", "Privacy");
+        service.Write("test.event.recorded", LogLevel.Info, LogStatus.None, $"Файл для обработки: {UserPath}", source: "Privacy");
         service.Write(
             "privacy.artifact",
             LogLevel.Info,
+            LogStatus.None,
             "Артефакт",
-            "Privacy",
+            source: "Privacy",
             properties: new Dictionary<string, object?>(StringComparer.Ordinal)
             {
                 ["FileName"] = "movie.mkv",

@@ -13,6 +13,7 @@ public sealed record ProcessResult
     public const string ErrorBinaryMissing = "binary-missing";
     public const string ErrorStartFailed = "start-failed";
     public const string ErrorCancelled = "cancelled";
+    public const string ErrorTimeoutExceeded = "timeout-exceeded";
     public const string ErrorTerminationUnverified = "termination-unverified";
     public const string ErrorNonZeroExit = "nonzero-exit";
     public const string ErrorArtifactMissing = "artifact-missing";
@@ -22,6 +23,7 @@ public sealed record ProcessResult
     public const string ErrorWarningsOnly = "warnings-only";
     public const string MessageSucceeded = "Внешний процесс завершён успешно";
     public const string MessageCancelled = "Выполнение внешнего процесса отменено";
+    public const string MessageTimeoutExceeded = "Превышено ограничение времени выполнения внешнего процесса";
     public const string MessageUnverifiedTermination = "Отмена запрошена, но факт выхода процесса не подтверждён";
     public const string MessageArtifactMissing = "Процесс завершён без кода ошибки, но ожидаемый артефакт не найден";
 

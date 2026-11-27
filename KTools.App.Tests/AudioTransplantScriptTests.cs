@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -9,6 +10,7 @@ using FluentAssertions;
 using Moq;
 using KTools_App.Scripts;
 using KTools_App.Core;
+using KTools_App.Diagnostics;
 using KTools_App.Infrastructure;
 using KTools_App.Models;
 using KTools_App.Services.Contracts;
@@ -93,6 +95,316 @@ public class AudioTransplantScriptTests
             Channels = 2
         });
         return structure;
+    }
+
+    /// <summary>
+    /// Создаёт структуру целевого файла с видеодорожкой, аудиодорожкой и субтитрами с заданными заголовками.
+    /// </summary>
+    private static MediaStructure CreateDestStructureWithSubs(string filePath, params string[] subsTitles)
+    {
+        var structure = new MediaStructure { FilePath = filePath };
+        structure.Tracks.Add(new MediaTrack
+        {
+            TrackId = 0,
+            TrackType = "video",
+            Codec = "h264"
+        });
+        structure.Tracks.Add(new MediaTrack
+        {
+            TrackId = 1,
+            TrackType = "audio",
+            Codec = "ac3"
+        });
+        int id = 2;
+        foreach (string title in subsTitles)
+        {
+            structure.Tracks.Add(new MediaTrack
+            {
+                TrackId = id++,
+                TrackType = "subtitles",
+                Codec = "ass",
+                Name = title
+            });
+        }
+
+        return structure;
+    }
+
+    /// <summary>
+    /// Настраивает мок FFmpeg на успешное создание выходного файла.
+    /// </summary>
+    private void SetupFfmpegSuccess(List<List<string>>? capturedArgs = null)
+    {
+        _ffmpegRunnerMock
+            .Setup(f => f.RunAsync(
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<List<string>?>(),
+                It.IsAny<List<string>?>(),
+                It.IsAny<bool>(),
+                It.IsAny<double>(),
+                It.IsAny<Action<ProgressInfo>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<ProcessExecutionContext?>()))
+            .Callback<string, string?, List<string>?, List<string>?, bool, double, Action<ProgressInfo>?, CancellationToken, ProcessExecutionContext?>(
+                (inputPath, outputPath, extraArgs, inputArgs, overwrite, duration, onProgress, ct, ctx) =>
+                {
+                    if (capturedArgs != null && extraArgs != null)
+                    {
+                        capturedArgs.Add(new List<string>(extraArgs));
+                    }
+
+                    if (!string.IsNullOrEmpty(outputPath))
+                    {
+                        File.WriteAllText(outputPath, "shifted");
+                    }
+                })
+            .ReturnsAsync(MockBuilders.ProcessSucceeded());
+    }
+
+    /// <summary>
+    /// Настраивает мок mkvmerge на успешное создание выходного файла с захватом входных источников.
+    /// </summary>
+    private void SetupMkvmergeCapture(Action<List<MkvInputSource>> onInputs)
+    {
+        _mkvmergeRunnerMock
+            .Setup(m => m.RunAsync(
+                It.IsAny<string>(),
+                It.IsAny<List<MkvInputSource>>(),
+                It.IsAny<string?>(),
+                It.IsAny<List<string>?>(),
+                It.IsAny<Action<double>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<ProcessExecutionContext?>()))
+            .Callback<string, List<MkvInputSource>, string?, List<string>?, Action<double>?, CancellationToken, ProcessExecutionContext?>(
+                (outputPath, inputs, title, extraArgs, onProgress, ct, ctx) =>
+                {
+                    onInputs(inputs);
+                    File.WriteAllText(outputPath, "mkv");
+                })
+            .ReturnsAsync(MockBuilders.ProcessSucceeded());
+    }
+
+    /// <summary>
+    /// Проверяет, что схема содержит поле заголовка дорожки надписей с дефолтом «Надписи».
+    /// </summary>
+    [TestMethod]
+    public void SettingsSchema_ContainsSubsSignsTitle()
+    {
+        // Act
+        SettingField field = _script.SettingsSchema.Single(f => f.Key == "subs_signs_title");
+
+        // Assert
+        field.Label.Should().Be("Заголовок надписей");
+        field.DefaultValue.Should().Be("Надписи");
+    }
+
+    /// <summary>
+    /// Проверяет, что свободный заголовок возвращается без изменений.
+    /// </summary>
+    [TestMethod]
+    public void ResolveUniqueSubsTitle_NoConflict_ReturnsDesiredTitle()
+    {
+        // Act
+        string actual = AudioTransplantScript.ResolveUniqueSubsTitle("Надписи", Array.Empty<string>());
+
+        // Assert
+        actual.Should().Be("Надписи");
+    }
+
+    /// <summary>
+    /// Проверяет, что занятый заголовок получает числовой суффикс в стиле GetSafeOutputPath.
+    /// </summary>
+    [TestMethod]
+    public void ResolveUniqueSubsTitle_ExistingSameTitle_AppendsNumericSuffix()
+    {
+        // Act
+        string actual = AudioTransplantScript.ResolveUniqueSubsTitle("Надписи", new[] { "Надписи" });
+
+        // Assert
+        actual.Should().Be("Надписи_1");
+    }
+
+    /// <summary>
+    /// Проверяет, что суффикс наращивается, пока заголовок занят.
+    /// </summary>
+    [TestMethod]
+    public void ResolveUniqueSubsTitle_MultipleCollisions_IncrementsSuffix()
+    {
+        // Act
+        string actual = AudioTransplantScript.ResolveUniqueSubsTitle(
+            "Надписи",
+            new[] { "Надписи", "Надписи_1" });
+
+        // Assert
+        actual.Should().Be("Надписи_2");
+    }
+
+    /// <summary>
+    /// Проверяет, что сравнение заголовков не зависит от регистра.
+    /// </summary>
+    [TestMethod]
+    public void ResolveUniqueSubsTitle_CaseInsensitiveConflict_AppendsNumericSuffix()
+    {
+        // Act
+        string actual = AudioTransplantScript.ResolveUniqueSubsTitle("Надписи", new[] { "НАДПИСИ" });
+
+        // Assert
+        actual.Should().Be("Надписи_1");
+    }
+
+    /// <summary>
+    /// Проверяет, что пустой заголовок не переименовывается, а возвращается пустым.
+    /// </summary>
+    [TestMethod]
+    public void ResolveUniqueSubsTitle_EmptyTitle_ReturnsEmpty()
+    {
+        // Act
+        string actual = AudioTransplantScript.ResolveUniqueSubsTitle("   ", new[] { "Надписи" });
+
+        // Assert
+        actual.Should().BeEmpty();
+    }
+
+    /// <summary>
+    /// Проверяет, что заданный заголовок надписей подставляется в аргументы mkvmerge.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_CustomSubsTitle_UsesProvidedTrackName()
+    {
+        // Arrange
+        string tempDir = Path.Combine(Path.GetTempPath(), "KTools_TransplantSubsTitle_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        string destFile = Path.Combine(tempDir, "dest.mkv");
+        string sourceFile = Path.Combine(tempDir, "source.mp4");
+        string subsFile = Path.Combine(tempDir, "signs.ass");
+        await File.WriteAllTextAsync(destFile, "fake video");
+        await File.WriteAllTextAsync(sourceFile, "fake audio");
+        await File.WriteAllTextAsync(subsFile, "fake subs");
+
+        _script.SourceFilePath = sourceFile;
+        _script.SubtitlesFilePath = subsFile;
+        _script.ShiftMs = 100;
+
+        _mediaProbeServiceMock
+            .Setup(p => p.ProbeAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((string path, CancellationToken _) => path == sourceFile
+                ? CreateAudioStructure(path, "opus")
+                : CreateDestStructureWithSubs(path, "Субтитры"));
+
+        SetupFfmpegSuccess();
+        List<MkvInputSource>? capturedInputs = null;
+        SetupMkvmergeCapture(inputs => capturedInputs = inputs);
+
+        var settings = new Dictionary<string, object>
+        {
+            { "subs_signs_title", "Мои надписи" }
+        };
+
+        try
+        {
+            // Act
+            ExecutionResult result = await _script.ExecuteSingleAsync(
+                destFile,
+                settings,
+                tempDir,
+                (fIdx, total, status, progress, fps, bitrate) => { },
+                0,
+                1);
+
+            // Assert
+            result.Status.Should().Be(ExecutionStatus.Succeeded);
+            capturedInputs.Should().NotBeNull();
+            MkvInputSource subsInput = capturedInputs!.First(i => i.Path == subsFile);
+            subsInput.Args.Should().Contain("0:Мои надписи");
+            _logServiceMock.Verify(l => l.Write(
+                "script.audio_transplant.subs_title_conflict",
+                It.IsAny<LogLevel>(),
+                It.IsAny<LogStatus>(),
+                It.IsAny<string>(),
+                It.IsAny<Exception>(),
+                It.IsAny<string>(),
+                It.IsAny<LogContext>(),
+                It.IsAny<IReadOnlyDictionary<string, object?>>()), Times.Never);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, true);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Проверяет, что при совпадении заголовка с существующей дорожкой применяется суффикс и предупреждение в журнале.
+    /// </summary>
+    [TestMethod]
+    public async Task ExecuteSingleAsync_SubsTitleConflict_RenamesWithSuffixAndLogsWarning()
+    {
+        // Arrange
+        string tempDir = Path.Combine(Path.GetTempPath(), "KTools_TransplantSubsConflict_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        string destFile = Path.Combine(tempDir, "dest.mkv");
+        string sourceFile = Path.Combine(tempDir, "source.mp4");
+        string subsFile = Path.Combine(tempDir, "signs.ass");
+        await File.WriteAllTextAsync(destFile, "fake video");
+        await File.WriteAllTextAsync(sourceFile, "fake audio");
+        await File.WriteAllTextAsync(subsFile, "fake subs");
+
+        _script.SourceFilePath = sourceFile;
+        _script.SubtitlesFilePath = subsFile;
+        _script.ShiftMs = 100;
+
+        _mediaProbeServiceMock
+            .Setup(p => p.ProbeAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((string path, CancellationToken _) => path == sourceFile
+                ? CreateAudioStructure(path, "opus")
+                : CreateDestStructureWithSubs(path, "Надписи"));
+
+        SetupFfmpegSuccess();
+        List<MkvInputSource>? capturedInputs = null;
+        SetupMkvmergeCapture(inputs => capturedInputs = inputs);
+
+        var settings = new Dictionary<string, object>
+        {
+            { "subs_signs_title", "Надписи" }
+        };
+
+        try
+        {
+            // Act
+            ExecutionResult result = await _script.ExecuteSingleAsync(
+                destFile,
+                settings,
+                tempDir,
+                (fIdx, total, status, progress, fps, bitrate) => { },
+                0,
+                1);
+
+            // Assert
+            result.Status.Should().Be(ExecutionStatus.Succeeded);
+            capturedInputs.Should().NotBeNull();
+            MkvInputSource subsInput = capturedInputs!.First(i => i.Path == subsFile);
+            subsInput.Args.Should().Contain("0:Надписи_1");
+            subsInput.Args.Should().NotContain("0:Надписи");
+            _logServiceMock.Verify(l => l.Write(
+                "script.audio_transplant.subs_title_conflict",
+                LogLevel.Warning,
+                LogStatus.Changed,
+                It.IsAny<string>(),
+                It.IsAny<Exception>(),
+                It.IsAny<string>(),
+                It.IsAny<LogContext>(),
+                It.IsAny<IReadOnlyDictionary<string, object?>>()), Times.Once);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, true);
+            }
+        }
     }
 
     /// <summary>
@@ -185,8 +497,8 @@ public class AudioTransplantScriptTests
         _script.ShiftMs = 100;
 
         _mediaProbeServiceMock
-            .Setup(p => p.ProbeAsync(It.IsAny<string>()))
-            .ReturnsAsync((string path) => CreateAudioStructure(path, path == sourceFile ? "opus" : "ac3"));
+            .Setup(p => p.ProbeAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((string path, CancellationToken _) => CreateAudioStructure(path, path == sourceFile ? "opus" : "ac3"));
 
         var ffmpegExtraArgs = new List<List<string>>();
         _ffmpegRunnerMock
@@ -277,8 +589,8 @@ public class AudioTransplantScriptTests
         _script.ShiftMs = 100;
 
         _mediaProbeServiceMock
-            .Setup(p => p.ProbeAsync(It.IsAny<string>()))
-            .ReturnsAsync((string path) => CreateAudioStructure(path, "ac3"));
+            .Setup(p => p.ProbeAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((string path, CancellationToken _) => CreateAudioStructure(path, "ac3"));
 
         int ffmpegCalls = 0;
         _ffmpegRunnerMock
@@ -378,8 +690,8 @@ public class AudioTransplantScriptTests
         _script.ShiftMs = -100;
 
         _mediaProbeServiceMock
-            .Setup(p => p.ProbeAsync(It.IsAny<string>()))
-            .ReturnsAsync((string path) => CreateAudioStructure(path, "ac3"));
+            .Setup(p => p.ProbeAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((string path, CancellationToken _) => CreateAudioStructure(path, "ac3"));
 
         var ffmpegExtraArgs = new List<List<string>>();
         _ffmpegRunnerMock

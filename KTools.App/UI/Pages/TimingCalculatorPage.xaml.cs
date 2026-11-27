@@ -48,11 +48,11 @@ public sealed class TimingHistoryEntry
 
     /// <summary>Признак сдвига вперёд (для показа зелёной стрелки).</summary>
     [JsonIgnore]
-    public bool IsForward => Direction == "Вперёд";
+    public bool IsForward => ShiftDirectionLabels.IsForwardLabel(Direction);
 
     /// <summary>Признак сдвига назад (для показа жёлтой стрелки).</summary>
     [JsonIgnore]
-    public bool IsBackward => Direction == "Назад";
+    public bool IsBackward => Direction == ShiftDirectionLabels.Backward;
 
     /// <summary>Признак совпадения (для показа нейтральной галки).</summary>
     [JsonIgnore]
@@ -686,9 +686,9 @@ public sealed partial class TimingCalculatorPage
     /// </summary>
     public static string GetDirectionLabel(long diffMs)
     {
-        if (diffMs > 0) return "Вперёд";
-        if (diffMs < 0) return "Назад";
-        return "Совпадает";
+        if (diffMs > 0) return ShiftDirectionLabels.Forward;
+        if (diffMs < 0) return ShiftDirectionLabels.Backward;
+        return ShiftDirectionLabels.Match;
     }
 
     /// <summary>
@@ -810,10 +810,10 @@ public sealed partial class TimingCalculatorPage
         {
             if (diffMs > 0)
             {
-                // Вперед
+                // Вперёд
                 DirectionIcon.Glyph = "\uE72A"; // Forward
                 DirectionIcon.Foreground = (Brush)Application.Current.Resources["SystemFillColorSuccessBrush"];
-                DirectionTextBlock.Text = "Вперед";
+                DirectionTextBlock.Text = ShiftDirectionLabels.Forward;
             }
             else if (diffMs < 0)
             {

@@ -408,8 +408,12 @@ public sealed class QaacRunner
         }
 
         stopwatch.Stop();
-        ActiveProcessTracker.Unregister(ffmpegProc);
-        ActiveProcessTracker.Unregister(qaacProc);
+
+        if (!cancelled)
+        {
+            ActiveProcessTracker.Unregister(ffmpegProc);
+            ActiveProcessTracker.Unregister(qaacProc);
+        }
 
         int? ffmpegExit = SafeExitCode(ffmpegProc);
         int? qaacExit = SafeExitCode(qaacProc);
@@ -458,13 +462,19 @@ public sealed class QaacRunner
 
         if (cancelled)
         {
-            TryTerminate(ffmpegProc);
-            TryTerminate(qaacProc);
+            bool terminationVerified = await TerminatePipelineAsync(
+                ffmpegProc,
+                qaacProc,
+                pipeTask,
+                ffmpegErrorTask,
+                qaacErrorTask).ConfigureAwait(false);
+            ffmpegExit = SafeExitCode(ffmpegProc);
+            qaacExit = SafeExitCode(qaacProc);
             DeletePartialOutput(outputPath, outputName, executionContext, pipelineId);
             CleanupTempDir(tempDir, executionContext);
             return ProcessResult.Cancelled(
                 executionContext,
-                ProcessResult.MessageCancelled,
+                terminationVerified ? ProcessResult.MessageCancelled : ProcessResult.MessageUnverifiedTermination,
                 pipelineId,
                 SafePid(ffmpegProc),
                 qaacExit ?? ffmpegExit,
@@ -474,7 +484,8 @@ public sealed class QaacRunner
                 qaacErrors.Truncated,
                 ProcessOutputPolicy.CountWarnings(qaacErrors.Snapshot()),
                 ProcessOutputPolicy.CountErrors(qaacErrors.Snapshot()),
-                terminationVerified: true);
+                terminationVerified: terminationVerified,
+                errorCode: terminationVerified ? ProcessResult.ErrorCancelled : ProcessResult.ErrorTerminationUnverified);
         }
 
         bool artifactExists = FileExistsNonEmpty(outputPath);
@@ -631,6 +642,7 @@ public sealed class QaacRunner
     {
         return new Dictionary<string, object?>(StringComparer.Ordinal)
         {
+            ["CommandLine"] = $"\"{binaryPath}\" {arguments}",
             ["ArgumentCount"] = ProcessExecutionContext.CountArguments(arguments),
             ["WorkingDirLabel"] = ProcessExecutionContext.LabelDirectory(Path.GetDirectoryName(binaryPath))
         };
@@ -725,14 +737,60 @@ public sealed class QaacRunner
         }
     }
 
-    private static void TryTerminate(Process process)
+    /// <summary>
+    /// Принудительно завершает процесс конвейера и доказывает факт его выхода ожиданием.
+    /// Сам по себе вызов Kill успехом не считается: результат содержит признак доказанного выхода.
+    /// </summary>
+    /// <param name="process">Процесс, который требуется завершить.</param>
+    /// <returns>Типизированный результат завершения с признаком доказанного выхода.</returns>
+    private static ProcessTerminationResult TryTerminate(Process process)
     {
         try
         {
-            if (!process.HasExited)
-            {
-                process.Kill(entireProcessTree: true);
-            }
+            return ActiveProcessTracker.TerminateProcess(process, TimeSpan.FromSeconds(5));
+        }
+        catch (Exception)
+        {
+            return new ProcessTerminationResult("proc-unknown", 0, true, false, true, false, null, null);
+        }
+    }
+
+    /// <summary>
+    /// Завершает оба процесса конвейера AAC с доказанным выходом, дожидается ридеров
+    /// конвейера и только после этого снимает процессы с учёта в трекере.
+    /// </summary>
+    /// <param name="ffmpegProc">Процесс декодера.</param>
+    /// <param name="qaacProc">Процесс кодировщика.</param>
+    /// <param name="pipeTask">Задача перекачки данных между процессами.</param>
+    /// <param name="ffmpegErrorTask">Задача чтения ошибок декодера.</param>
+    /// <param name="qaacErrorTask">Задача чтения ошибок кодировщика.</param>
+    /// <returns>Признак доказанного выхода обоих процессов.</returns>
+    private static async Task<bool> TerminatePipelineAsync(
+        Process ffmpegProc,
+        Process qaacProc,
+        Task pipeTask,
+        Task ffmpegErrorTask,
+        Task qaacErrorTask)
+    {
+        ProcessTerminationResult ffmpegTermination = TryTerminate(ffmpegProc);
+        ProcessTerminationResult qaacTermination = TryTerminate(qaacProc);
+        await WaitForPipelineReadersAsync(pipeTask, ffmpegErrorTask, qaacErrorTask).ConfigureAwait(false);
+        ActiveProcessTracker.Unregister(ffmpegProc);
+        ActiveProcessTracker.Unregister(qaacProc);
+        return ffmpegTermination.Verified && qaacTermination.Verified;
+    }
+
+    /// <summary>
+    /// Дожидается завершения ридеров конвейера с ограничением по времени,
+    /// чтобы отмена не зависала на незакрытых потоках.
+    /// </summary>
+    private static async Task WaitForPipelineReadersAsync(Task pipeTask, Task ffmpegErrorTask, Task qaacErrorTask)
+    {
+        try
+        {
+            await Task.WhenAll(pipeTask, ffmpegErrorTask, qaacErrorTask)
+                .WaitAsync(TimeSpan.FromSeconds(5))
+                .ConfigureAwait(false);
         }
         catch (Exception)
         {

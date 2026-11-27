@@ -275,8 +275,17 @@ public sealed class AudioEncodingScript : AbstractScript
         ScriptProgressCallback progressCallback,
         int fileIndex,
         int totalCount,
-        ExecutionContext context)
+        ExecutionContext context,
+        CancellationToken cancellationToken = default)
     {
+        if (IsCancellationRequested(cancellationToken))
+        {
+            return ExecutionResult.Cancelled(
+                context,
+                new[] { "Обработка отменена до запуска элемента." },
+                errorCode: "cancelled-before-start",
+                cleanupState: CleanupState.NotStarted);
+        }
         var results = new List<string>();
 
         // 1. Извлекаем настройки пользователя
@@ -349,7 +358,7 @@ public sealed class AudioEncodingScript : AbstractScript
         int audioChannels = 0;
         try
         {
-            var structure = await _mediaProbeService.ProbeAsync(filePath);
+            var structure = await _mediaProbeService.ProbeAsync(filePath, cancellationToken);
             if (structure != null)
             {
                 duration = structure.Duration;
@@ -419,7 +428,7 @@ public sealed class AudioEncodingScript : AbstractScript
         _logService.Write("media.metadata.detected", LogLevel.Debug, LogStatus.Succeeded, $"Медиафайл '{originalName}': длительность {duration:F2} с, аудиоканалов: {audioChannels}", source: Name, properties: LogProps.Create("InputName", LogProps.FileName(filePath)).With("DurationMs", duration * 1000d).With("AudioChannels", audioChannels));
 
         // 7. Подготавливаем процесс кодирования
-        var cts = new CancellationTokenSource();
+        var cts = CreateLinkedCancellationSource(cancellationToken);
         ProcessResult? success = null;
 
         if (targetFormat.Equals("QAAC", StringComparison.OrdinalIgnoreCase))

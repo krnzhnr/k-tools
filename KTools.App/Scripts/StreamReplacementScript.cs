@@ -88,8 +88,17 @@ public sealed class StreamReplacementScript : AbstractScript
         ScriptProgressCallback progressCallback,
         int fileIndex,
         int totalCount,
-        ExecutionContext context)
+        ExecutionContext context,
+        CancellationToken cancellationToken = default)
     {
+        if (IsCancellationRequested(cancellationToken))
+        {
+            return ExecutionResult.Cancelled(
+                context,
+                new[] { "Обработка отменена до запуска элемента." },
+                errorCode: "cancelled-before-start",
+                cleanupState: CleanupState.NotStarted);
+        }
         var results = new List<string>();
 
         _logService.Write("script.stream_replacement.started", LogLevel.Debug, LogStatus.Running, $"Начата подмена дорожек файла '{LogProps.FileName(filePath)}'", source: Name, properties: LogProps.Create("InputName", LogProps.FileName(filePath)));
@@ -144,7 +153,7 @@ public sealed class StreamReplacementScript : AbstractScript
         MediaStructure? structure;
         try
         {
-            structure = await _mediaProbeService.ProbeAsync(filePath);
+            structure = await _mediaProbeService.ProbeAsync(filePath, cancellationToken);
         }
         catch (Exception ex)
         {
@@ -200,7 +209,7 @@ public sealed class StreamReplacementScript : AbstractScript
 
         progressCallback(fileIndex, totalCount, $"Сборка {stem}...", 0.0);
 
-        using var cts = new CancellationTokenSource();
+        using var cts = CreateLinkedCancellationSource(cancellationToken);
         var cancelMonitorTask = Task.Run(async () =>
         {
             while (!IsCancelled && !cts.IsCancellationRequested)
@@ -462,8 +471,9 @@ public sealed class StreamReplacementScript : AbstractScript
         var inputArgs = new List<string>();
         foreach (var inp in extraInputs)
         {
+            // Сырой путь без ручных кавычек: квотирование выполняет CliArgument в раннере.
             inputArgs.Add("-i");
-            inputArgs.Add($"\"{inp}\"");
+            inputArgs.Add(inp);
         }
 
         return inputArgs.Concat(extraArgs).ToList();
@@ -478,8 +488,9 @@ public sealed class StreamReplacementScript : AbstractScript
         }
         if (!string.IsNullOrEmpty(track.Name))
         {
+            // Сырое название без ручных кавычек: квотирование выполняет CliArgument в раннере.
             args.Add($"-metadata:s:{streamIdx}");
-            args.Add($"title=\"{track.Name}\"");
+            args.Add($"title={track.Name}");
         }
 
         var dispositions = new List<string>();
@@ -638,8 +649,9 @@ public sealed class StreamReplacementScript : AbstractScript
         }
         if (!string.IsNullOrEmpty(track.Name))
         {
+            // Сырое название без ручных кавычек: квотирование выполняет CliArgument в раннере.
             args.Add("--track-name");
-            args.Add($"\"{srcId}:{track.Name}\"");
+            args.Add($"{srcId}:{track.Name}");
         }
 
         // Перенос флагов

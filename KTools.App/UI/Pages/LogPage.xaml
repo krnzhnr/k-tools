@@ -80,6 +80,7 @@
             Margin="0,0,0,16">
             <Button 
                 x:Name="CopyAllButton" 
+               
                 Command="{x:Bind ViewModel.CopyAllLogsCommand}"
                 ToolTipService.ToolTip="Копировать все логи в буфер обмена Windows">
                 <StackPanel Orientation="Horizontal" Spacing="8">
@@ -89,6 +90,7 @@
             </Button>
             <Button 
                 x:Name="OpenLogDirButton" 
+               
                 Command="{x:Bind ViewModel.OpenLogDirectoryCommand}"
                 ToolTipService.ToolTip="Открыть папку с логами в Проводнике Windows">
                 <StackPanel Orientation="Horizontal" Spacing="8">
@@ -98,6 +100,7 @@
             </Button>
             <Button 
                 x:Name="ClearLogButton" 
+               
                 Command="{x:Bind ViewModel.ClearLogsCommand}"
                 ToolTipService.ToolTip="Очистить текущее окно отображения журналов">
                 <StackPanel Orientation="Horizontal" Spacing="8">

@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Specialized;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -108,6 +109,13 @@ public sealed class VideoEncodingScript : AbstractScript
     public override string[] FileExtensions => AppConstants.VideoContainers.ToArray();
     public override string[] RequiredDependencies => new[] { "ffmpeg" };
 
+    /// <summary>
+    /// Видеокодирование поддерживает параллельную обработку очереди,
+    /// но со своим лимитом одновременных кодирований (ишью #145):
+    /// несколько NVENC-сессий драйвер сам раскладывает по движкам GPU.
+    /// </summary>
+    public override bool SupportsParallel => true;
+
     public override List<SettingField> GetSettingsSchema(Dictionary<string, object>? currentSettings = null)
     {
         return GetSettingsSchemaInternal(currentSettings);
@@ -161,6 +169,9 @@ public sealed class VideoEncodingScript : AbstractScript
             ),
 
             // --- Вкладка Видео: Битрейт ---
+            // Lossless отключается при кодеке AV1 (NVENC): av1_nvenc отклоняет
+            // tune lossless на старте энкодера, скрытый nvenc_codec игнорируется
+            // оценщиком условий для CPU.
             new SettingField(
                 "lossless",
                 "Режим Lossless",
@@ -168,7 +179,11 @@ public sealed class VideoEncodingScript : AbstractScript
                 false,
                 "Видео:Битрейт",
                 column: 0,
-                colSpan: 1
+                colSpan: 1,
+                disableConditions: new List<SettingDisableCondition>
+                {
+                    new("nvenc_codec", "AV1")
+                }
             )
         };
 
@@ -489,8 +504,17 @@ public sealed class VideoEncodingScript : AbstractScript
         ScriptProgressCallback progressCallback,
         int fileIndex,
         int totalCount,
-        ExecutionContext context)
+        ExecutionContext context,
+        CancellationToken cancellationToken = default)
     {
+        if (IsCancellationRequested(cancellationToken))
+        {
+            return ExecutionResult.Cancelled(
+                context,
+                new[] { "Обработка отменена до запуска элемента." },
+                errorCode: "cancelled-before-start",
+                cleanupState: CleanupState.NotStarted);
+        }
         var results = new List<string>();
 
         _logService.Write("script.video_encoding.started", LogLevel.Debug, LogStatus.Running, $"Начато кодирование видео файла '{LogProps.FileName(filePath)}'", source: Name, properties: LogProps.Create("InputName", LogProps.FileName(filePath)));
@@ -503,7 +527,7 @@ public sealed class VideoEncodingScript : AbstractScript
         MediaStructure? structure;
         try
         {
-            structure = await _mediaProbeService.ProbeAsync(filePath);
+            structure = await _mediaProbeService.ProbeAsync(filePath, cancellationToken);
         }
         catch (Exception ex)
         {
@@ -838,14 +862,39 @@ public sealed class VideoEncodingScript : AbstractScript
 
             if (encoderInstance == null)
             {
-                throw new InvalidOperationException($"Энкодер '{encoderId}' не найден или не поддерживается оборудованием.");
+                // Фолбэк: очередь с encoder=nvenc на машине без NVENC кодируется программным CPU,
+                // а не роняет задачу. Предупреждение фиксируется в журнале.
+                if (encoderId.Equals("nvenc", StringComparison.OrdinalIgnoreCase))
+                {
+                    encoderInstance = _encoderRegistry.GetEncoderById("cpu")
+                        ?? _encoderRegistry.GetAvailableEncoders().FirstOrDefault(e => e.DisplayName == "CPU");
+                }
+
+                if (encoderInstance == null)
+                {
+                    throw new InvalidOperationException($"Энкодер '{encoderId}' не найден или не поддерживается оборудованием.");
+                }
+
+                _logService.Write(
+                    "script.video_encoding.encoder_fallback",
+                    LogLevel.Warning,
+                    LogStatus.PartiallySucceeded,
+                    $"Аппаратный энкодер '{encoderId}' недоступен на текущем оборудовании, кодирование продолжится программным энкодером CPU",
+                    source: Name,
+                    properties: LogProps.Create("ErrorCode", "ENCODER_FALLBACK_CPU").With("Value", "cpu"));
             }
+
+            // Активный кодек пробрасываем из настройки того энкодера, который реально выбран:
+            // иначе NVENC всегда получал бы пустое имя и резолвился в HEVC-дефолт.
+            string codecKey = encoderInstance.StableId.Equals("nvenc", StringComparison.OrdinalIgnoreCase)
+                ? NvencEncoder.CodecSettingKey
+                : CpuEncoder.CodecSettingKey;
 
             var encoderContext = new KTools_App.Encoders.EncoderSharedContext(
                 IsLossless: lossless,
                 Force10Bit: force10Bit,
                 ContainerExtension: containerExt,
-                CodecName: GetSettingValue(settings, "cpu_codec", string.Empty)
+                CodecName: GetSettingValue(settings, codecKey, string.Empty)
             );
 
             var encoderArgs = encoderInstance.BuildEncoderArguments(settings, encoderContext);
@@ -1116,8 +1165,11 @@ public sealed class VideoEncodingScript : AbstractScript
             {
                 await CleanupFailedOutputFileAsync(_finalOutputFileForCleanup);
             }
+            // Ошибка конфигурации (например, Lossless + AV1) не лечится повтором:
+            // InvalidOperationException из валидации кодеков помечаем как неповторяемую.
+            bool retryable = ex is not InvalidOperationException;
             string runErr = $"❌ Критическая ошибка при кодировании видео для '{Path.GetFileName(filePath)}'";
-            _logService.Write("script.video_encoding.failed", LogLevel.Error, LogStatus.Failed, $"Кодирование видео '{LogProps.FileName(filePath)}' не выполнено", ex, Name, properties: LogProps.Create("ErrorCode", "VIDEO_ENCODING_FAILED").With("InputName", LogProps.FileName(filePath)).With("Retryable", true));
+            _logService.Write("script.video_encoding.failed", LogLevel.Error, LogStatus.Failed, $"Кодирование видео '{LogProps.FileName(filePath)}' не выполнено", ex, Name, properties: LogProps.Create("ErrorCode", "VIDEO_ENCODING_FAILED").With("InputName", LogProps.FileName(filePath)).With("Retryable", retryable));
             results.Add(runErr);
             return ExecutionResult.FromException(
                 context,
@@ -1922,7 +1974,7 @@ public sealed class VideoEncodingScript : AbstractScript
                 MediaStructure? probed = null;
                 try
                 {
-                    probed = await _mediaProbeService.ProbeAsync(path).ConfigureAwait(false);
+                    probed = await _mediaProbeService.ProbeAsync(path, token).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
                 {

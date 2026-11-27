@@ -2,6 +2,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using FluentAssertions;
 using Moq;
 using KTools_App.Core;
@@ -229,6 +231,207 @@ public class HomeViewModelTests
     }
 
     /// <summary>
+    /// Проверяет, что ResolveDropScript возвращает null для null-карточки.
+    /// </summary>
+    [TestMethod]
+    public void ResolveDropScript_NullInfo_ReturnsNull()
+    {
+        // Arrange
+        var vm = new HomeViewModel(_navigationMock.Object, _scriptRegistryMock.Object);
+
+        // Act
+        var result = vm.ResolveDropScript(null);
+
+        // Assert
+        result.Should().BeNull();
+    }
+
+    /// <summary>
+    /// Проверяет, что недоступная карточка дроп не принимает.
+    /// </summary>
+    [TestMethod]
+    public void ResolveDropScript_UnavailableCard_ReturnsNull()
+    {
+        // Arrange
+        var script = new NamedStubScript(AppConstants.ScriptCategory.Video, "Видеоскрипт");
+        _scriptRegistryMock = MockBuilders.CreateScriptRegistryMock(script);
+        var vm = new HomeViewModel(_navigationMock.Object, _scriptRegistryMock.Object);
+        var info = new ScriptInfo { Name = "Видеоскрипт", IsAvailable = false };
+
+        // Act
+        var result = vm.ResolveDropScript(info);
+
+        // Assert
+        result.Should().BeNull();
+    }
+
+    /// <summary>
+    /// Проверяет, что синтетическая карточка калькулятора дроп не принимает.
+    /// </summary>
+    [TestMethod]
+    public void ResolveDropScript_CalculatorCard_ReturnsNull()
+    {
+        // Arrange
+        var vm = new HomeViewModel(_navigationMock.Object, _scriptRegistryMock.Object);
+        var calculatorInfo = vm.ToolScripts[0];
+
+        // Act
+        var result = vm.ResolveDropScript(calculatorInfo);
+
+        // Assert
+        calculatorInfo.Name.Should().Be("Калькулятор сдвига");
+        result.Should().BeNull();
+    }
+
+    /// <summary>
+    /// Проверяет, что карточка неизвестного скрипта дроп не принимает.
+    /// </summary>
+    [TestMethod]
+    public void ResolveDropScript_UnknownName_ReturnsNull()
+    {
+        // Arrange
+        var vm = new HomeViewModel(_navigationMock.Object, _scriptRegistryMock.Object);
+        var unknown = new ScriptInfo { Name = "Призрачный скрипт" };
+
+        // Act
+        var result = vm.ResolveDropScript(unknown);
+
+        // Assert
+        result.Should().BeNull();
+    }
+
+    /// <summary>
+    /// Проверяет, что карточка известного доступного скрипта разрешается в скрипт реестра.
+    /// </summary>
+    [TestMethod]
+    public void ResolveDropScript_KnownScript_ReturnsScript()
+    {
+        // Arrange
+        var script = new NamedStubScript(AppConstants.ScriptCategory.Video, "Видеоскрипт");
+        _scriptRegistryMock = MockBuilders.CreateScriptRegistryMock(script);
+        var vm = new HomeViewModel(_navigationMock.Object, _scriptRegistryMock.Object);
+        var info = vm.VideoScripts.Single();
+
+        // Act
+        var result = vm.ResolveDropScript(info);
+
+        // Assert
+        result.Should().BeSameAs(script);
+    }
+
+    /// <summary>
+    /// Проверяет, что фильтр оставляет только файлы с допустимыми расширениями без учёта регистра.
+    /// </summary>
+    [TestMethod]
+    public void FilterDropPaths_MixedExtensions_ReturnsOnlyCompatible()
+    {
+        // Arrange
+        var script = new NamedStubScript(AppConstants.ScriptCategory.Video, "Видеоскрипт");
+        _scriptRegistryMock = MockBuilders.CreateScriptRegistryMock(script);
+        var vm = new HomeViewModel(_navigationMock.Object, _scriptRegistryMock.Object);
+        var paths = new[] { "film.MKV", "clip.mp4", "notes.txt", "безрасширения", string.Empty, "   " };
+
+        // Act
+        var result = vm.FilterDropPaths(script, paths);
+
+        // Assert
+        result.Should().BeEquivalentTo("film.MKV", "clip.mp4");
+    }
+
+    /// <summary>
+    /// Проверяет, что скрипт без списка расширений принимает все непустые пути.
+    /// </summary>
+    [TestMethod]
+    public void FilterDropPaths_ScriptWithoutExtensions_ReturnsAllPaths()
+    {
+        // Arrange
+        var script = new NamedStubScript(AppConstants.ScriptCategory.Video, "Всеядный", Array.Empty<string>());
+        _scriptRegistryMock = MockBuilders.CreateScriptRegistryMock(script);
+        var vm = new HomeViewModel(_navigationMock.Object, _scriptRegistryMock.Object);
+        var paths = new[] { "film.mkv", "notes.txt" };
+
+        // Act
+        var result = vm.FilterDropPaths(script, paths);
+
+        // Assert
+        result.Should().BeEquivalentTo("film.mkv", "notes.txt");
+    }
+
+    /// <summary>
+    /// Проверяет, что совместимые пути запоминаются для забора рабочей панелью.
+    /// </summary>
+    [TestMethod]
+    public void TryStageCardDrop_CompatiblePaths_StagesPendingForTake()
+    {
+        // Arrange
+        const string scriptName = "Видеоскрипт47Совместимый";
+        var script = new NamedStubScript(AppConstants.ScriptCategory.Video, scriptName);
+        _scriptRegistryMock = MockBuilders.CreateScriptRegistryMock(script);
+        var vm = new HomeViewModel(_navigationMock.Object, _scriptRegistryMock.Object);
+        var info = new ScriptInfo { Name = scriptName };
+
+        try
+        {
+            // Act
+            bool staged = vm.TryStageCardDrop(info, new[] { "film.mkv", "notes.txt" });
+
+            // Assert
+            staged.Should().BeTrue();
+            CardDropHandoff.Take(scriptName).Should().BeEquivalentTo("film.mkv");
+        }
+        finally
+        {
+            CardDropHandoff.Take(scriptName);
+        }
+    }
+
+    /// <summary>
+    /// Проверяет, что полностью несовместимый набор файлов не запоминается.
+    /// </summary>
+    [TestMethod]
+    public void TryStageCardDrop_IncompatiblePaths_ReturnsFalseAndStagesNothing()
+    {
+        // Arrange
+        const string scriptName = "Видеоскрипт47Несовместимый";
+        var script = new NamedStubScript(AppConstants.ScriptCategory.Video, scriptName);
+        _scriptRegistryMock = MockBuilders.CreateScriptRegistryMock(script);
+        var vm = new HomeViewModel(_navigationMock.Object, _scriptRegistryMock.Object);
+        var info = new ScriptInfo { Name = scriptName };
+
+        try
+        {
+            // Act
+            bool staged = vm.TryStageCardDrop(info, new[] { "notes.txt", "image.png" });
+
+            // Assert
+            staged.Should().BeFalse();
+            CardDropHandoff.Take(scriptName).Should().BeNull();
+        }
+        finally
+        {
+            CardDropHandoff.Take(scriptName);
+        }
+    }
+
+    /// <summary>
+    /// Проверяет, что сброс на карточку калькулятора ничего не запоминает.
+    /// </summary>
+    [TestMethod]
+    public void TryStageCardDrop_CalculatorCard_ReturnsFalse()
+    {
+        // Arrange
+        var vm = new HomeViewModel(_navigationMock.Object, _scriptRegistryMock.Object);
+        var calculatorInfo = vm.ToolScripts[0];
+
+        // Act
+        bool staged = vm.TryStageCardDrop(calculatorInfo, new[] { "film.mkv" });
+
+        // Assert
+        staged.Should().BeFalse();
+        CardDropHandoff.Take("Калькулятор сдвига").Should().BeNull();
+    }
+
+    /// <summary>
     /// Проверяет, что неподдерживаемый тип аргумента (число) игнорируется.
     /// </summary>
     [TestMethod]
@@ -252,8 +455,9 @@ public class HomeViewModelTests
     {
         private readonly string _name;
         private readonly string _category;
+        private readonly string[] _extensions;
 
-        public NamedStubScript(string category, string? name = null)
+        public NamedStubScript(string category, string? name = null, string[]? extensions = null)
             : base(
                 MockBuilders.CreateLogServiceMock().Object,
                 MockBuilders.CreateSettingsManagerMock().Object,
@@ -261,13 +465,14 @@ public class HomeViewModelTests
         {
             _category = category;
             _name = name ?? "Тестовый скрипт";
+            _extensions = extensions ?? new[] { ".mkv", ".mp4" };
         }
 
         public override string Name => _name;
         public override string Description => "Тестовый скрипт для юнит-тестов";
         public override string Category => _category;
         public override string IconName => "TestIcon";
-        public override string[] FileExtensions => new[] { ".mkv", ".mp4" };
+        public override string[] FileExtensions => _extensions;
 
         public override Task<ExecutionResult> ExecuteSingleAsync(
             string filePath,
@@ -276,7 +481,8 @@ public class HomeViewModelTests
             ScriptProgressCallback progressCallback,
             int fileIndex,
             int totalCount,
-            ExecutionContext context)
+            ExecutionContext context,
+            CancellationToken cancellationToken = default)
         {
             return Task.FromResult(ExecutionResult.Succeeded(context, $"Готово: {filePath}"));
         }

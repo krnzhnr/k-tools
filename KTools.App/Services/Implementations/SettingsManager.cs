@@ -5,11 +5,13 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Reflection;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
+using System.Threading.Tasks;
 
 using KTools_App.Diagnostics;
 using KTools_App.Services.Contracts;
@@ -54,9 +56,21 @@ public sealed class SettingsManager : ISettingsManager
     private readonly ReaderWriterLockSlim _lock = new(LockRecursionPolicy.NoRecursion);
     private readonly object _saveGate = new();
     private readonly object _saveTimerLock = new();
-    private readonly string _settingsFilePath;
-    private readonly string _settingsTempFilePath;
-    private readonly Dictionary<string, Dictionary<string, object>> _cache = new();
+
+    /// <summary>
+    /// Путь к файлу настроек вычисляется при каждом обращении из актуального
+    /// каталога IPathManager (ишью 142): смена базового каталога после создания
+    /// менеджера (миграция, откат) не оставляет запись в устаревшем месте.
+    /// </summary>
+    private string SettingsFilePath => Path.Combine(_pathManager.GetSettingsDirectory(), SettingsFileName);
+
+    /// <summary>
+    /// Путь к временному файлу атомарной записи, всегда рядом с актуальным файлом настроек.
+    /// </summary>
+    private string SettingsTempFilePath => SettingsFilePath + TempFileSuffix;
+    // Единая политика регистра ключей: OrdinalIgnoreCase во всём кэше и в схеме
+    // (SettingsSchemaComparer), чтобы «CRF» и «crf» были одним слотом, а не дублями.
+    private readonly Dictionary<string, Dictionary<string, object>> _cache = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _pendingChanges = new(StringComparer.Ordinal);
 
     private Timer? _saveTimer;
@@ -67,21 +81,37 @@ public sealed class SettingsManager : ISettingsManager
     private int _persistInFlight;
     private int _resetWriteAuthorized;
     private int _failedBatchRetries;
+    private int _initialized;
     private long _cacheVersion;
     private long _persistedVersion;
 
     /// <summary>
     /// Инициализирует новый экземпляр класса SettingsManager с внедрением зависимостей.
+    /// Конструктор выполняет только сторожевые проверки и не имеет побочек
+    /// (ишью 142): ни чтения диска, ни разрешения путей, ни перенастройки журнала.
+    /// Вся инициализация — в <see cref="InitializeAsync"/>, который вызывается
+    /// после миграции данных.
     /// </summary>
     public SettingsManager(ILogService logService, IPathManager pathManager)
     {
         _logService = logService ?? throw new ArgumentNullException(nameof(logService));
         _pathManager = pathManager ?? throw new ArgumentNullException(nameof(pathManager));
-
-        string settingsDir = _pathManager.GetSettingsDirectory();
-        _settingsFilePath = Path.Combine(settingsDir, SettingsFileName);
-        _settingsTempFilePath = _settingsFilePath + TempFileSuffix;
         _lastDiskSaveTick = Environment.TickCount64 - SaveDebounceMilliseconds;
+    }
+
+    /// <summary>
+    /// Явная инициализация после миграции данных (ишью 142): читает settings.json
+    /// из актуального каталога, настраивает каталог журнала и сообщает итоги загрузки.
+    /// Вызывается один раз после IUserDataMigrator.EnsureMigrated; повторные вызовы
+    /// безопасны и ничего не меняют. До вызова кэш пуст и возвращаются значения
+    /// по умолчанию.
+    /// </summary>
+    public Task InitializeAsync()
+    {
+        if (Interlocked.CompareExchange(ref _initialized, 1, 0) != 0)
+        {
+            return Task.CompletedTask;
+        }
 
         TryDeleteTempFile();
 
@@ -95,6 +125,7 @@ public sealed class SettingsManager : ISettingsManager
         ReportDirectoryConfigured(configuredLogDir);
         ReportCorruptBackup(corruptBackupCreated);
         ReportLoadOutcome(loadResult);
+        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -474,11 +505,19 @@ public sealed class SettingsManager : ISettingsManager
                             // Конвертация типов JsonElement в нативные типы C#
                             if (typeof(T) == typeof(bool))
                             {
-                                return (T)(object)jsonElem.GetBoolean();
+                                // Строковые значения ("false"/"true") разбираются через канонический
+                                // хелпер: прямой GetBoolean бросает исключение на строках и молча
+                                // возвращает дефолт, инвертируя смысл настройки.
+                                bool fallback = (bool)(object)defaultValue!;
+                                return (T)(object)SettingValue.AsBool(jsonElem, fallback);
                             }
                             if (typeof(T) == typeof(int))
                             {
-                                return (T)(object)jsonElem.GetInt32();
+                                // Строковые числа ("23") разбираются через канонический хелпер:
+                                // прямой GetInt32 бросает исключение на строках и молча
+                                // возвращает дефолт вместо сохранённого значения.
+                                int fallback = (int)(object)defaultValue!;
+                                return (T)(object)SettingValue.AsInt(jsonElem, fallback);
                             }
                             if (typeof(T) == typeof(string))
                             {
@@ -607,7 +646,7 @@ public sealed class SettingsManager : ISettingsManager
         _lock.EnterReadLock();
         try
         {
-            var result = new Dictionary<string, object>(StringComparer.Ordinal);
+            var result = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
             if (_cache.TryGetValue(group, out var groupDict))
             {
                 foreach (var kvp in groupDict)
@@ -629,16 +668,20 @@ public sealed class SettingsManager : ISettingsManager
 
     /// <summary>
     /// Инициализировать настройки по умолчанию на основе схемы скриптов.
-    /// Успех возвращается только после подтверждённой записи на диск.
+    /// Схемы поступают через поставщика поверх реестра скриптов, поэтому уровень
+    /// настроек не зависит от конкретных скриптов. Успех возвращается только после
+    /// подтверждённой записи на диск.
     /// Если предыдущая загрузка была деградированной, значения по умолчанию применяются
     /// только в памяти и никогда не записываются поверх повреждённого файла:
     /// для этого существует явный <see cref="ResetToDefaults"/>.
+    /// Секции, не связанные с зарегистрированными скриптами, не удаляются,
+    /// а фиксируются в журнале событием mismatch.
     /// </summary>
-    /// <param name="scripts">Скрипты, для которых создаются значения по умолчанию.</param>
+    /// <param name="defaultsProvider">Поставщик значений по умолчанию зарегистрированных скриптов.</param>
     /// <returns>Результат операции сохранения.</returns>
-    public PersistenceResult InitializeDefaults(List<AbstractScript> scripts)
+    public PersistenceResult InitializeDefaults(ISettingsDefaultsProvider defaultsProvider)
     {
-        ArgumentNullException.ThrowIfNull(scripts);
+        ArgumentNullException.ThrowIfNull(defaultsProvider);
 
         if (IsDisposed)
         {
@@ -648,8 +691,10 @@ public sealed class SettingsManager : ISettingsManager
         }
 
         List<string> removedKeys;
-        int appliedCount = ApplyDefaultsNoLock(scripts, out removedKeys);
+        List<string> unknownGroups;
+        int appliedCount = ApplyDefaultsNoLock(defaultsProvider, out removedKeys, out unknownGroups);
         ReportNormalized(removedKeys);
+        ReportProviderMismatch(unknownGroups);
 
         if (IsDegradedLoad)
         {
@@ -704,17 +749,17 @@ public sealed class SettingsManager : ISettingsManager
     /// Только этот сценарий разрешает запись поверх деградированной (повреждённой) загрузки,
     /// потому что он инициирован пользователем.
     /// </summary>
-    /// <param name="scripts">Скрипты, для которых восстанавливаются значения по умолчанию.</param>
+    /// <param name="defaultsProvider">Поставщик значений по умолчанию зарегистрированных скриптов.</param>
     /// <param name="applicationDefaults">
     /// Явные значения в формате «группа/ключ» — «значение».
     /// Ключи без разделителя игнорируются.
     /// </param>
     /// <returns>Результат операции сохранения.</returns>
     public PersistenceResult ResetToDefaults(
-        List<AbstractScript> scripts,
+        ISettingsDefaultsProvider defaultsProvider,
         IReadOnlyList<KeyValuePair<string, object?>>? applicationDefaults)
     {
-        ArgumentNullException.ThrowIfNull(scripts);
+        ArgumentNullException.ThrowIfNull(defaultsProvider);
 
         if (IsDisposed)
         {
@@ -748,8 +793,10 @@ public sealed class SettingsManager : ISettingsManager
             }
 
             List<string> removedKeys;
-            ApplyDefaultsNoLock(scripts, out removedKeys);
+            List<string> unknownGroups;
+            ApplyDefaultsNoLock(defaultsProvider, out removedKeys, out unknownGroups);
             ReportNormalized(removedKeys);
+            ReportProviderMismatch(unknownGroups);
             appliedKeys.AddRange(removedKeys);
 
             CancelPendingSave();
@@ -791,15 +838,41 @@ public sealed class SettingsManager : ISettingsManager
 
     /// <summary>
     /// Нормализовать имя скрипта для использования в качестве имени секции (группы) JSON.
+    /// Имена с разделителями («A/B») и без них («A_B») дают разные секции:
+    /// при наличии «/» или «\» добавляется детерминированный суффикс стабильного
+    /// хэша исходного имени, иначе значения скриптов затирали бы друг друга.
+    /// Имена без этих символов сохраняют прежнее отображение для совместимости
+    /// существующих файлов settings.json.
     /// </summary>
     public string GetSafeGroupName(string scriptName)
     {
+        ArgumentException.ThrowIfNullOrEmpty(scriptName);
+
         // Нормализация имени группы
-        return "Script_" + scriptName
+        string baseName = "Script_" + scriptName
             .Replace("/", "_")
             .Replace("\\", "_")
             .Replace(" ", "_")
             .Replace("→", "_");
+
+        // Разрешение коллизии: суффикс детерминирован (SHA-256 исходного имени),
+        // поэтому одинаков во всех запусках и на всех машинах.
+        if (scriptName.Contains('/') || scriptName.Contains('\\'))
+        {
+            baseName += "_" + GetStableNameHash(scriptName);
+        }
+
+        return baseName;
+    }
+
+    /// <summary>
+    /// Вычислить короткий стабильный хэш имени (8 hex-символов SHA-256 в UTF-8).
+    /// В отличие от string.GetHashCode не зависит от запуска процесса.
+    /// </summary>
+    private static string GetStableNameHash(string value)
+    {
+        byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(value));
+        return Convert.ToHexString(hash, 0, 4).ToLowerInvariant();
     }
 
     /// <summary>
@@ -843,11 +916,25 @@ public sealed class SettingsManager : ISettingsManager
 
         try
         {
-            if (File.Exists(_settingsFilePath))
+            if (File.Exists(SettingsFilePath))
             {
-                string json = File.ReadAllText(_settingsFilePath, FileEncoding);
-                loaded = JsonSerializer.Deserialize<Dictionary<string, Dictionary<string, object>>>(json)
-                    ?? new Dictionary<string, Dictionary<string, object>>();
+                // Защита от OOM: раздутый файл не читается в память,
+                // а сразу переходит в деградированную загрузку зеркально лимиту записи.
+                if (new FileInfo(SettingsFilePath).Length > MaxSettingsFileBytes)
+                {
+                    failure = PersistenceResult.Failed(
+                        PersistenceErrorCodes.SnapshotTooLarge,
+                        PersistenceSummaries.ReadFailure,
+                        null,
+                        degraded: true,
+                        source: PersistenceSource.Fallback);
+                }
+                else
+                {
+                    string json = File.ReadAllText(SettingsFilePath, FileEncoding);
+                    loaded = JsonSerializer.Deserialize<Dictionary<string, Dictionary<string, object>>>(json)
+                        ?? new Dictionary<string, Dictionary<string, object>>();
+                }
             }
             else
             {
@@ -909,9 +996,24 @@ public sealed class SettingsManager : ISettingsManager
             {
                 foreach (KeyValuePair<string, Dictionary<string, object>> group in data)
                 {
-                    if (group.Value != null)
+                    if (group.Value == null)
                     {
-                        _cache[group.Key] = group.Value;
+                        continue;
+                    }
+
+                    // Единая политика регистра: загруженные группы переупаковываются
+                    // в регистронезависимые словари, как и весь остальной кэш.
+                    // Файл прошлой версии может содержать дубли «CRF»/«crf»: схлопываем
+                    // в один слот, первое вхождение побеждает как более старое.
+                    if (!_cache.TryGetValue(group.Key, out var existingGroup))
+                    {
+                        existingGroup = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+                        _cache[group.Key] = existingGroup;
+                    }
+
+                    foreach (KeyValuePair<string, object> entry in group.Value)
+                    {
+                        existingGroup.TryAdd(entry.Key, entry.Value);
                     }
                 }
             }
@@ -1030,7 +1132,7 @@ public sealed class SettingsManager : ISettingsManager
 
     private bool TryBackupCorruptSettingsFile()
     {
-        if (!File.Exists(_settingsFilePath))
+        if (!File.Exists(SettingsFilePath))
         {
             return false;
         }
@@ -1048,12 +1150,12 @@ public sealed class SettingsManager : ISettingsManager
                 suffix,
                 CorruptBackupSuffix);
             string backupPath = Path.Combine(
-                Path.GetDirectoryName(_settingsFilePath) ?? string.Empty,
+                Path.GetDirectoryName(SettingsFilePath) ?? string.Empty,
                 backupName);
 
             try
             {
-                File.Copy(_settingsFilePath, backupPath, overwrite: false);
+                File.Copy(SettingsFilePath, backupPath, overwrite: false);
                 PruneCorruptBackups();
                 return true;
             }
@@ -1082,7 +1184,7 @@ public sealed class SettingsManager : ISettingsManager
     {
         try
         {
-            string? directory = Path.GetDirectoryName(_settingsFilePath);
+            string? directory = Path.GetDirectoryName(SettingsFilePath);
             if (string.IsNullOrEmpty(directory))
             {
                 return;
@@ -1179,13 +1281,18 @@ public sealed class SettingsManager : ISettingsManager
     {
         string? effective = ReadEffectiveLogDirectory();
         bool applied = IsLogDirectoryApplied(requested, effective);
-        var properties = new Dictionary<string, object?>(6, StringComparer.Ordinal)
+        string displayValue = string.IsNullOrWhiteSpace(requested)
+            ? string.Empty
+            : LogProps.FileName(requested);
+        var properties = new Dictionary<string, object?>(8, StringComparer.Ordinal)
         {
             ["Persisted"] = false,
             ["Status"] = applied ? "Succeeded" : "Failed",
             ["Succeeded"] = applied,
             ["Failed"] = !applied,
             ["Reason"] = applied ? "configured" : "log_dir_not_applied",
+            ["Key"] = "LogDir",
+            ["Value"] = displayValue,
             ["ValueHash"] = PersistenceValueHash.Compute(requested)
         };
 
@@ -1258,6 +1365,41 @@ public sealed class SettingsManager : ISettingsManager
             properties);
     }
 
+    /// <summary>
+    /// Фиксирует в журнале секции настроек, не связанные ни с одним
+    /// зарегистрированным скриптом. Значения не удаляются, только журналируются:
+    /// молчаливое хранение маскировало бы незарегистрированный скрипт.
+    /// </summary>
+    private void ReportProviderMismatch(IReadOnlyList<string> unknownGroups)
+    {
+        if (unknownGroups.Count == 0)
+        {
+            return;
+        }
+
+        var orderedGroups = new List<string>(unknownGroups);
+        orderedGroups.Sort(StringComparer.Ordinal);
+
+        var properties = new Dictionary<string, object?>(5, StringComparer.Ordinal)
+        {
+            ["Count"] = unknownGroups.Count,
+            ["Changed"] = false,
+            ["Persisted"] = false,
+            ["Status"] = "Skipped",
+            ["Group"] = string.Join(";", orderedGroups)
+        };
+
+        _logService.Write(
+            SettingsEventIds.DefaultsMismatch,
+            LogLevel.Warning,
+            LogStatus.Skipped,
+            "В файле настроек найдены секции, не связанные с зарегистрированными скриптами, значения сохранены без изменений",
+            null,
+            SettingsEventIds.Source,
+            null,
+            properties);
+    }
+
     private PersistenceResult ReportDefaultsDeferred(int appliedCount, IReadOnlyList<string> removedKeys)
     {
         var properties = new Dictionary<string, object?>(6, StringComparer.Ordinal)
@@ -1301,7 +1443,8 @@ public sealed class SettingsManager : ISettingsManager
                     return CacheApplyOutcome.Rejected;
                 }
 
-                groupDict = new Dictionary<string, object>();
+                // Единая политика регистра: слот группы регистронезависимый, как схема.
+                groupDict = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
                 _cache[group] = groupDict;
             }
 
@@ -1636,10 +1779,10 @@ public sealed class SettingsManager : ISettingsManager
 
     private Dictionary<string, Dictionary<string, object>> CreateSnapshotNoLock()
     {
-        var snapshot = new Dictionary<string, Dictionary<string, object>>(_cache.Count, StringComparer.Ordinal);
+        var snapshot = new Dictionary<string, Dictionary<string, object>>(_cache.Count, StringComparer.OrdinalIgnoreCase);
         foreach (KeyValuePair<string, Dictionary<string, object>> group in _cache)
         {
-            var groupCopy = new Dictionary<string, object>(group.Value.Count, StringComparer.Ordinal);
+            var groupCopy = new Dictionary<string, object>(group.Value.Count, StringComparer.OrdinalIgnoreCase);
             foreach (KeyValuePair<string, object> entry in group.Value)
             {
                 object? cloned = SettingsValueSnapshot.Clone(entry.Value);
@@ -1691,7 +1834,7 @@ public sealed class SettingsManager : ISettingsManager
 
         try
         {
-            string? directory = Path.GetDirectoryName(_settingsFilePath);
+            string? directory = Path.GetDirectoryName(SettingsFilePath);
             if (!string.IsNullOrEmpty(directory))
             {
                 Directory.CreateDirectory(directory);
@@ -1714,7 +1857,7 @@ public sealed class SettingsManager : ISettingsManager
     private void WriteTempFile(byte[] payload)
     {
         using (var stream = new FileStream(
-            _settingsTempFilePath,
+            SettingsTempFilePath,
             FileMode.Create,
             FileAccess.Write,
             FileShare.None,
@@ -1730,7 +1873,7 @@ public sealed class SettingsManager : ISettingsManager
     {
         try
         {
-            File.Move(_settingsTempFilePath, _settingsFilePath, overwrite: true);
+            File.Move(SettingsTempFilePath, SettingsFilePath, overwrite: true);
             return;
         }
         catch (Exception primary) when (primary is IOException or UnauthorizedAccessException or NotSupportedException)
@@ -1746,14 +1889,14 @@ public sealed class SettingsManager : ISettingsManager
 
     private bool TryCommitWithReplace()
     {
-        if (!File.Exists(_settingsFilePath))
+        if (!File.Exists(SettingsFilePath))
         {
             return false;
         }
 
         try
         {
-            File.Replace(_settingsTempFilePath, _settingsFilePath, destinationBackupFileName: null, ignoreMetadataErrors: true);
+            File.Replace(SettingsTempFilePath, SettingsFilePath, destinationBackupFileName: null, ignoreMetadataErrors: true);
             return true;
         }
         catch (Exception ex)
@@ -1789,9 +1932,9 @@ public sealed class SettingsManager : ISettingsManager
     {
         try
         {
-            if (File.Exists(_settingsTempFilePath))
+            if (File.Exists(SettingsTempFilePath))
             {
-                File.Delete(_settingsTempFilePath);
+                File.Delete(SettingsTempFilePath);
             }
         }
         catch (Exception)
@@ -1863,7 +2006,55 @@ public sealed class SettingsManager : ISettingsManager
     private void LogChangedPersisted(IReadOnlyList<KeyValuePair<string, string>> drained)
     {
         bool single = drained.Count == 1;
-        var properties = new Dictionary<string, object?>(6, StringComparer.Ordinal)
+        string displayValue = string.Empty;
+        string singleGroup = string.Empty;
+        string singleKey = string.Empty;
+        if (single)
+        {
+            SplitCompositeKey(drained[0].Key, out singleGroup, out singleKey);
+            try
+            {
+                _lock.EnterReadLock();
+                try
+                {
+                    if (_cache.TryGetValue(singleGroup, out Dictionary<string, object>? groupDict)
+                        && groupDict.TryGetValue(singleKey, out object? raw))
+                    {
+                        if (raw is string text)
+                        {
+                            displayValue = text ?? string.Empty;
+                        }
+                        else if (raw is JsonElement element)
+                        {
+                            displayValue = element.ValueKind == JsonValueKind.String
+                                ? element.GetString() ?? string.Empty
+                                : element.GetRawText();
+                        }
+                        else if (raw is not null)
+                        {
+                            try
+                            {
+                                displayValue = raw.ToString() ?? string.Empty;
+                            }
+                            catch (Exception)
+                            {
+                                displayValue = string.Empty;
+                            }
+                        }
+                    }
+                }
+                finally
+                {
+                    _lock.ExitReadLock();
+                }
+            }
+            catch (Exception)
+            {
+                displayValue = string.Empty;
+            }
+        }
+
+        var properties = new Dictionary<string, object?>(8, StringComparer.Ordinal)
         {
             ["Count"] = drained.Count,
             ["Changed"] = true,
@@ -1873,12 +2064,32 @@ public sealed class SettingsManager : ISettingsManager
             ["ValueHash"] = single ? drained[0].Value : PersistenceValueHash.Combine(drained)
         };
 
-        string message = single ? "Настройка сохранена на диск" : "Настройки сохранены на диск";
+        string message;
         if (single)
         {
-            SplitCompositeKey(drained[0].Key, out string group, out string key);
-            properties["Group"] = group;
-            properties["Key"] = key;
+            properties["Group"] = singleGroup;
+            properties["Key"] = singleKey;
+            // Приватность важнее открытости значения (ишью #129): значения чувствительных
+            // параметров и свободных CLI-аргументов (туда регулярно попадают токены и пароли)
+            // в журнал не пишутся — только маркер редактуры и ValueHash.
+            bool sensitive = LogRedactor.IsSensitiveKeyName(singleKey)
+                || singleKey.Equals("AdditionalArgs", StringComparison.OrdinalIgnoreCase);
+            if (sensitive)
+            {
+                properties["Value"] = LogRedactor.RedactedMarker;
+                message = $"Параметр '{singleKey}' сохранён в настройках";
+            }
+            else
+            {
+                properties["Value"] = displayValue;
+                message = string.IsNullOrEmpty(displayValue)
+                    ? $"Параметр '{singleKey}' сохранён в настройках"
+                    : $"Параметр '{singleKey}' сохранён в настройках: '{displayValue}'";
+            }
+        }
+        else
+        {
+            message = "Настройки сохранены на диск";
         }
 
         _logService.Write(
@@ -1953,10 +2164,15 @@ public sealed class SettingsManager : ISettingsManager
         key = compositeKey[(separator + 1)..];
     }
 
-    private int ApplyDefaultsNoLock(List<AbstractScript> scripts, out List<string> removedKeys)
+    private int ApplyDefaultsNoLock(
+        ISettingsDefaultsProvider defaultsProvider,
+        out List<string> removedKeys,
+        out List<string> unknownGroups)
     {
         removedKeys = new List<string>();
+        unknownGroups = new List<string>();
         int applied = 0;
+        var knownGroups = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         _lock.EnterWriteLock();
         try
@@ -2002,6 +2218,10 @@ public sealed class SettingsManager : ISettingsManager
             {
                 applied++;
             }
+            if (SetDefaultIfMissing("General", "RememberOutputPaths", true))
+            {
+                applied++;
+            }
             if (SetDefaultIfMissing("General", "ShowFrameRateBadge", false))
             {
                 applied++;
@@ -2031,6 +2251,14 @@ public sealed class SettingsManager : ISettingsManager
                 applied++;
             }
             if (SetDefaultIfMissing("General", "RenameCaseSensitive", false))
+            {
+                applied++;
+            }
+            if (SetDefaultIfMissing("General", "SearchTemplates", SettingsDefaults.GetDefaultSearchTemplates()))
+            {
+                applied++;
+            }
+            if (SetDefaultIfMissing("General", "ReplaceTemplates", SettingsDefaults.GetDefaultReplaceTemplates()))
             {
                 applied++;
             }
@@ -2066,23 +2294,46 @@ public sealed class SettingsManager : ISettingsManager
             {
                 applied++;
             }
-
-            // Инициализация настроек для каждого скрипта
-            foreach (var script in scripts)
+            if (SetDefaultIfMissing("Debug", "DebugDisableUpdateAction", false))
             {
-                string groupName = GetSafeGroupName(script.Name);
-                foreach (var field in script.SettingsSchema)
+                applied++;
+            }
+
+            // Инициализация настроек для каждого скрипта: уровень настроек работает
+            // только с абстракцией поставщика и не знает конкретных скриптов.
+            foreach (ScriptSettingsDefaults script in defaultsProvider.GetScriptDefaults())
+            {
+                if (script is null)
                 {
-                    if (field.Type != SettingType.Subtitle && SetDefaultIfMissing(groupName, field.Key, field.DefaultValue))
+                    continue;
+                }
+
+                ArgumentException.ThrowIfNullOrEmpty(script.ScriptName);
+
+                string groupName = GetSafeGroupName(script.ScriptName);
+                knownGroups.Add(groupName);
+                foreach (SettingDefaultValue field in script.Fields)
+                {
+                    if (field is null)
+                    {
+                        continue;
+                    }
+
+                    if (SetDefaultIfMissing(groupName, field.Key, field.DefaultValue))
                     {
                         applied++;
                     }
 
-                    if (field.ChildFields != null && field.ChildFields.Count > 0)
+                    if (field.Children != null && field.Children.Count > 0)
                     {
-                        foreach (var child in field.ChildFields)
+                        foreach (SettingDefaultValue child in field.Children)
                         {
-                            if (child.Type != SettingType.Subtitle && SetDefaultIfMissing(groupName, child.Key, child.DefaultValue))
+                            if (child is null)
+                            {
+                                continue;
+                            }
+
+                            if (SetDefaultIfMissing(groupName, child.Key, child.DefaultValue))
                             {
                                 applied++;
                             }
@@ -2094,20 +2345,24 @@ public sealed class SettingsManager : ISettingsManager
                 if (_cache.TryGetValue(groupName, out var groupDict))
                 {
                     var validKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                    foreach (var field in script.SettingsSchema)
+                    foreach (SettingDefaultValue field in script.Fields)
                     {
-                        if (field.Type != SettingType.Subtitle)
+                        if (field is null)
                         {
-                            validKeys.Add(field.Key);
+                            continue;
                         }
-                        if (field.ChildFields != null && field.ChildFields.Count > 0)
+
+                        validKeys.Add(field.Key);
+                        if (field.Children != null && field.Children.Count > 0)
                         {
-                            foreach (var child in field.ChildFields)
+                            foreach (SettingDefaultValue child in field.Children)
                             {
-                                if (child.Type != SettingType.Subtitle)
+                                if (child is null)
                                 {
-                                    validKeys.Add(child.Key);
+                                    continue;
                                 }
+
+                                validKeys.Add(child.Key);
                             }
                         }
                     }
@@ -2127,6 +2382,18 @@ public sealed class SettingsManager : ISettingsManager
                         removedKeys.Add(groupName + "/" + key);
                         applied++;
                     }
+                }
+            }
+
+            // Секции незарегистрированных скриптов не удаляются (потеря данных),
+            // а возвращаются вызывающему коду для фиксации в журнале как mismatch:
+            // молчаливое хранение чужих секций маскировало бы отсутствующий скрипт.
+            foreach (string cachedGroup in _cache.Keys)
+            {
+                if (cachedGroup.StartsWith("Script_", StringComparison.OrdinalIgnoreCase)
+                    && !knownGroups.Contains(cachedGroup))
+                {
+                    unknownGroups.Add(cachedGroup);
                 }
             }
 
@@ -2164,7 +2431,8 @@ public sealed class SettingsManager : ISettingsManager
     {
         if (!_cache.TryGetValue(group, out var groupDict))
         {
-            groupDict = new Dictionary<string, object>();
+            // Единая политика регистра: слот группы регистронезависимый, как схема.
+            groupDict = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
             _cache[group] = groupDict;
         }
 
@@ -2536,7 +2804,56 @@ public static class SettingsValueSnapshot
             }
         }
 
-        return value;
+        // Обобщённые коллекции (HashSet<T>, Queue<T> и прочие): копия того же типа
+        // через метод Add, чтобы мутация выданной копии не меняла кэш в обход AreEqual.
+        if (!type.IsAbstract && !type.IsInterface)
+        {
+            try
+            {
+                object? target = Activator.CreateInstance(type);
+                if (target is IList targetList)
+                {
+                    int count = 0;
+                    foreach (object? item in sequence)
+                    {
+                        if (count >= MaxCollectionItems)
+                        {
+                            break;
+                        }
+
+                        targetList.Add(CloneCore(item, depth + 1));
+                        count++;
+                    }
+
+                    return targetList;
+                }
+
+                MethodInfo? addMethod = type.GetMethod("Add");
+                if (target != null && addMethod != null && addMethod.GetParameters().Length == 1)
+                {
+                    int count = 0;
+                    foreach (object? item in sequence)
+                    {
+                        if (count >= MaxCollectionItems)
+                        {
+                            break;
+                        }
+
+                        addMethod.Invoke(target, new[] { CloneCore(item, depth + 1) });
+                        count++;
+                    }
+
+                    return target;
+                }
+            }
+            catch (Exception)
+            {
+                // Ниже — JSON-fallback для типов без конструктора без параметров.
+            }
+        }
+
+        // JSON-fallback для всех прочих IEnumerable: глубокая копия через сериализацию.
+        return ClonePoco(value, type);
     }
 
     private static object ClonePoco(object value, Type type)

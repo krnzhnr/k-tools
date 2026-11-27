@@ -413,6 +413,101 @@ public class EncoderArgumentMatrixTests
     }
 
     [TestMethod]
+    public void BuildEncoderArguments_EmptySettings_UsesSingleDefaultPreset()
+    {
+        // Arrange: дефолт пресетов единый — пустые настройки обязаны давать пресет
+        // из схемы настроек (p4), а не расходящийся p7 (issue #119).
+        var encoder = new NvencEncoder();
+
+        // Act & Assert
+        foreach (string codec in new[] { "HEVC / H.265", "AVC / H.264", "AV1" })
+        {
+            var args = encoder.BuildEncoderArguments(NvencSettings(codec, new Dictionary<string, object>()), Mkv);
+            args.Should().ContainInOrder(new[] { "-preset", "p4" }, $"пустые настройки обязаны давать единый дефолт p4 ({codec})");
+        }
+    }
+
+    [TestMethod]
+    public void GetCodecSettings_DefaultPreset_MatchesCliDefault()
+    {
+        // Arrange: схема настроек и командная строка обязаны использовать один дефолт пресетов.
+        INvencCodecCapabilities[] capabilities = { new NvencHevcCapabilities(), new NvencH264Capabilities(), new NvencAv1Capabilities() };
+
+        // Act & Assert
+        foreach (var cap in capabilities)
+        {
+            string? uiDefault = cap.GetCodecSettings().Find(f => f.Key == "nvenc_preset")?.DefaultValue as string;
+            uiDefault.Should().Be("p4", $"схема настроек обязана отдавать единый дефолт p4 ({cap.CodecName})");
+            var args = cap.BuildCodecArguments(new Dictionary<string, object>(), Mkv);
+            args.Should().ContainInOrder(new[] { "-preset", "p4" }, $"командная строка обязана совпадать со схемой ({cap.CodecName})");
+        }
+    }
+
+    [TestMethod]
+    public void BuildEncoderArguments_LosslessEmptySettings_UsesLosslessDefaultPreset()
+    {
+        // Arrange: в lossless схема отдаёт p1 — командная строка обязана совпадать (AV1 в lossless
+        // бросает понятное исключение, поэтому проверяется только HEVC/H.264).
+        INvencCodecCapabilities[] capabilities = { new NvencHevcCapabilities(), new NvencH264Capabilities() };
+        var lossless = new EncoderSharedContext(IsLossless: true, Force10Bit: false, ContainerExtension: ".mkv");
+
+        // Act & Assert
+        foreach (var cap in capabilities)
+        {
+            string? uiDefault = cap.GetCodecSettings(new Dictionary<string, object> { { "lossless", true } })
+                .Find(f => f.Key == "nvenc_preset")?.DefaultValue as string;
+            uiDefault.Should().Be("p1", $"схема настроек в lossless обязана отдавать p1 ({cap.CodecName})");
+            var args = cap.BuildCodecArguments(new Dictionary<string, object>(), lossless);
+            args.Should().ContainInOrder(new[] { "-preset", "p1" }, $"командная строка в lossless обязана совпадать со схемой ({cap.CodecName})");
+        }
+    }
+
+    [TestMethod]
+    public void BuildEncoderArguments_CbrWithAutoBitrate_EmitsConstantBitrate()
+    {
+        // Arrange: CBR с автовычислением границ обязан давать постоянный битрейт —
+        // min/max/bufsize равны целевому битрейту, а не maxrate 2x (issue #119).
+        var encoder = new NvencEncoder();
+
+        // Act & Assert
+        foreach (string codec in new[] { "HEVC / H.265", "AVC / H.264", "AV1" })
+        {
+            var settings = NvencSettings(codec, new Dictionary<string, object>
+            {
+                { "nvenc_rc", "cbr" },
+                { "v_bitrate", 3000 }
+            });
+            var args = encoder.BuildEncoderArguments(settings, Mkv);
+            args.Should().ContainInOrder(new[] { "-b:v", "3000k" }, $"целевой битрейт потерян ({codec})");
+            args.Should().ContainInOrder(new[] { "-minrate", "3000k" }, $"CBR обязан фиксировать минимум ({codec})");
+            args.Should().ContainInOrder(new[] { "-maxrate", "3000k" }, $"CBR обязан фиксировать максимум ({codec})");
+            args.Should().ContainInOrder(new[] { "-bufsize", "3000k" }, $"CBR обязан фиксировать буфер ({codec})");
+        }
+    }
+
+    [TestMethod]
+    public void BuildEncoderArguments_VbrWithAutoBitrate_KeepsVariableBounds()
+    {
+        // Arrange: VBR с автовычислением сохраняет переменные границы (сторожевой тест).
+        var encoder = new NvencEncoder();
+
+        // Act & Assert
+        foreach (string codec in new[] { "HEVC / H.265", "AVC / H.264", "AV1" })
+        {
+            var settings = NvencSettings(codec, new Dictionary<string, object>
+            {
+                { "nvenc_rc", "vbr" },
+                { "v_bitrate", 3000 }
+            });
+            var args = encoder.BuildEncoderArguments(settings, Mkv);
+            args.Should().ContainInOrder(new[] { "-b:v", "3000k" }, $"целевой битрейт потерян ({codec})");
+            args.Should().ContainInOrder(new[] { "-minrate", "3000k" }, $"VBR минимум ({codec})");
+            args.Should().ContainInOrder(new[] { "-maxrate", "6000k" }, $"VBR максимум ({codec})");
+            args.Should().ContainInOrder(new[] { "-bufsize", "12000k" }, $"VBR буфер ({codec})");
+        }
+    }
+
+    [TestMethod]
     [DataRow(0)]
     [DataRow(51)]
     public void Nvenc_QpBoundaries_PassThrough(int qp)
@@ -682,6 +777,5 @@ public class EncoderArgumentMatrixTests
         }
         return settings;
     }
-
     private static string StringJoin(List<string> args) => string.Join(" ", args);
 }

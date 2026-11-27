@@ -53,6 +53,8 @@ public class DependencyManager : IDependencyManager
     private readonly IHardwareCapabilityCache _hardwareCache;
 
     private const string DepsReleaseTag = "deps-v1";
+    // Стабильный канал зависимостей: тег обновляется только сборкой с main
+    // (см. .github/workflows/upload-dependencies.yml), пуш в develop его не трогает.
     private const string DepsBaseUrl = $"https://github.com/krnzhnr/k-tools/releases/download/{DepsReleaseTag}";
 
     /// <summary>
@@ -71,6 +73,12 @@ public class DependencyManager : IDependencyManager
     /// Группа настроек для персистентного кэша версий зависимостей.
     /// </summary>
     private const string VersionCacheGroup = "DependencyVersions";
+
+    /// <summary>
+    /// Группа настроек для источника бинарников зависимостей (ишью 54).
+    /// Ключи: «&lt;ключ зависимости&gt;.Path» (строка) и «&lt;ключ зависимости&gt;.UseSystemPath» (флаг).
+    /// </summary>
+    public const string BinarySourceSettingsGroup = "BinarySources";
 
     /// <summary>
     /// Текущий каталог bin. Запрашивается через IPathManager при каждом обращении,
@@ -123,6 +131,7 @@ public class DependencyManager : IDependencyManager
         }
 
         InitializeRegistry();
+        LoadBinarySourceOverrides();
         RefreshAllStatuses();
     }
 
@@ -386,6 +395,382 @@ public class DependencyManager : IDependencyManager
     }
 
     /// <summary>
+    /// Возвращает источник исполняемого файла зависимости (ишью 54).
+    /// Неизвестный ключ считается встроенным: поведение не меняется.
+    /// </summary>
+    /// <param name="key">Уникальный ключ зависимости.</param>
+    /// <returns>Текущий источник бинарника.</returns>
+    public BinarySource GetBinarySource(string key)
+    {
+        var dep = _registry.FirstOrDefault(d => d.Key.Equals(key, StringComparison.OrdinalIgnoreCase));
+        if (dep == null)
+        {
+            return BinarySource.Builtin;
+        }
+
+        string custom = _settingsManager.GetSetting(BinarySourceSettingsGroup, dep.Key + ".Path", string.Empty) ?? string.Empty;
+        if (!string.IsNullOrWhiteSpace(custom))
+        {
+            return BinarySource.Custom;
+        }
+
+        bool useSystemPath = _settingsManager.GetSetting(BinarySourceSettingsGroup, dep.Key + ".UseSystemPath", false);
+        return useSystemPath ? BinarySource.SystemPath : BinarySource.Builtin;
+    }
+
+    /// <summary>
+    /// Возвращает путь к исполняемому файлу, указанный вручную, или null.
+    /// </summary>
+    /// <param name="key">Уникальный ключ зависимости.</param>
+    /// <returns>Сохранённый путь или null, если свой путь не задан.</returns>
+    public string? GetCustomBinaryPath(string key)
+    {
+        var dep = _registry.FirstOrDefault(d => d.Key.Equals(key, StringComparison.OrdinalIgnoreCase));
+        if (dep == null)
+        {
+            return null;
+        }
+
+        string custom = _settingsManager.GetSetting(BinarySourceSettingsGroup, dep.Key + ".Path", string.Empty) ?? string.Empty;
+        return string.IsNullOrWhiteSpace(custom) ? null : custom;
+    }
+
+    /// <summary>
+    /// Возвращает текущий эффективный путь к исполняемому файлу зависимости
+    /// с учётом источника: свой путь, резолв PATH или встроенный bin/.
+    /// Для системного компонента без бинарника и неизвестного ключа — пустая строка.
+    /// </summary>
+    /// <param name="key">Уникальный ключ зависимости.</param>
+    /// <returns>Эффективный путь или пустая строка.</returns>
+    public string GetEffectiveBinaryPath(string key)
+    {
+        var dep = _registry.FirstOrDefault(d => d.Key.Equals(key, StringComparison.OrdinalIgnoreCase));
+        if (dep == null || IsSystemComponentWithoutBinary(dep))
+        {
+            return string.Empty;
+        }
+
+        if (GetBinarySource(key) == BinarySource.Custom)
+        {
+            return GetCustomBinaryPath(key) ?? string.Empty;
+        }
+
+        string resolved = _pathManager.GetBinaryPath(dep.VerifyBinary);
+        if (GetBinarySource(key) == BinarySource.SystemPath && !File.Exists(resolved))
+        {
+            return string.Empty;
+        }
+
+        return resolved;
+    }
+
+    /// <summary>
+    /// Задаёт путь к исполняемому файлу зависимости вручную (ишью 54).
+    /// Путь сохраняется в настройках и переживает перезапуск, переопределение
+    /// применяется к PathManager, кэши версий и резолва инвалидируются.
+    /// </summary>
+    /// <param name="key">Уникальный ключ зависимости.</param>
+    /// <param name="fullPath">Абсолютный путь к исполняемому файлу.</param>
+    /// <returns>Результат операции сохранения.</returns>
+    public PersistenceResult SetCustomBinaryPath(string key, string fullPath)
+    {
+        if (string.IsNullOrWhiteSpace(key))
+        {
+            throw new ArgumentException("Ключ зависимости не задан.", nameof(key));
+        }
+
+        var dep = _registry.FirstOrDefault(d => d.Key.Equals(key, StringComparison.OrdinalIgnoreCase));
+        if (dep == null)
+        {
+            _logService.Write(
+                "dependency.binary_source.unknown_key",
+                LogLevel.Error,
+                LogStatus.Failed,
+                $"Не удалось задать свой путь: зависимость '{LogRedactor.CompactSafeToken(key)}' не найдена в реестре",
+                source: SourceName,
+                properties: LogProps
+                    .Create("Key", LogRedactor.CompactSafeToken(key))
+                    .With("ErrorCode", "DEPENDENCY_NOT_IN_MANIFEST"));
+            return PersistenceResult.Failed(
+                PersistenceErrorCodes.NotApplied,
+                "Зависимость не найдена в реестре компонентов.",
+                null);
+        }
+
+        if (IsSystemComponentWithoutBinary(dep))
+        {
+            _logService.Write(
+                "dependency.binary_source.unsupported",
+                LogLevel.Warning,
+                LogStatus.Skipped,
+                $"Для системного компонента '{dep.DisplayName}' свой путь не задаётся",
+                source: SourceName,
+                properties: LogProps
+                    .Create("Key", LogRedactor.CompactSafeToken(dep.Key))
+                    .With("ErrorCode", "BINARY_SOURCE_UNSUPPORTED"));
+            return PersistenceResult.Failed(
+                PersistenceErrorCodes.NotApplied,
+                "Для системного компонента свой путь не задаётся.",
+                null);
+        }
+
+        if (string.IsNullOrWhiteSpace(fullPath))
+        {
+            return PersistenceResult.Failed(
+                PersistenceErrorCodes.InvalidPath,
+                "Путь к исполняемому файлу не задан.",
+                null);
+        }
+
+        string normalized;
+        try
+        {
+            normalized = Path.GetFullPath(fullPath);
+        }
+        catch (Exception ex)
+        {
+            _logService.Write(
+                "dependency.binary_source.invalid_path",
+                LogLevel.Warning,
+                LogStatus.Failed,
+                $"Указанный путь зависимости '{dep.DisplayName}' некорректен",
+                ex,
+                SourceName,
+                properties: LogProps
+                    .Create("Key", LogRedactor.CompactSafeToken(dep.Key))
+                    .With("ErrorCode", "BINARY_SOURCE_INVALID_PATH"));
+            return PersistenceResult.Failed(
+                PersistenceErrorCodes.InvalidPath,
+                "Указанный путь некорректен.",
+                ex);
+        }
+
+        if (!File.Exists(normalized))
+        {
+            _logService.Write(
+                "dependency.binary_source.missing_file",
+                LogLevel.Warning,
+                LogStatus.Skipped,
+                $"Указанный файл зависимости '{dep.DisplayName}' отсутствует на диске, статус — «Не установлено»",
+                source: SourceName,
+                properties: LogProps
+                    .Create("Key", LogRedactor.CompactSafeToken(dep.Key))
+                    .With("FileName", LogProps.FileName(normalized)));
+        }
+
+        PersistenceResult stored = PersistenceResult.Normalize(
+            _settingsManager.SetSetting(BinarySourceSettingsGroup, dep.Key + ".Path", normalized));
+        if (stored.IsFailure)
+        {
+            return stored;
+        }
+
+        // Свой путь имеет высший приоритет: флаг PATH гасится, чтобы после
+        // сброса к встроенным не всплывал неожиданный источник.
+        _settingsManager.SetSetting(BinarySourceSettingsGroup, dep.Key + ".UseSystemPath", false);
+        _pathManager.SetCustomBinaryPath(dep.VerifyBinary, normalized);
+        InvalidateVersionCache(dep.Key);
+
+        _logService.Write(
+            SettingsEventIds.Changed,
+            LogLevel.Info,
+            LogStatus.Changed,
+            $"Источник зависимости '{dep.DisplayName}' переключён на путь, указанный вручную",
+            source: SourceName,
+            properties: LogProps
+                .Create("Key", LogRedactor.CompactSafeToken(dep.Key))
+                .With("Value", LogProps.FileName(normalized)));
+
+        RefreshAllStatuses();
+        StatusChanged?.Invoke(key, GetStatus(key));
+        return stored;
+    }
+
+    /// <summary>
+    /// Включает или выключает поиск исполняемого файла в системном PATH (ишью 54).
+    /// Настройка сохраняется, кэши версий и резолва инвалидируются.
+    /// </summary>
+    /// <param name="key">Уникальный ключ зависимости.</param>
+    /// <param name="enabled">True — искать в системном PATH.</param>
+    /// <returns>Результат операции сохранения.</returns>
+    public PersistenceResult SetBinaryUseSystemPath(string key, bool enabled)
+    {
+        if (string.IsNullOrWhiteSpace(key))
+        {
+            throw new ArgumentException("Ключ зависимости не задан.", nameof(key));
+        }
+
+        var dep = _registry.FirstOrDefault(d => d.Key.Equals(key, StringComparison.OrdinalIgnoreCase));
+        if (dep == null)
+        {
+            return PersistenceResult.Failed(
+                PersistenceErrorCodes.NotApplied,
+                "Зависимость не найдена в реестре компонентов.",
+                null);
+        }
+
+        if (IsSystemComponentWithoutBinary(dep))
+        {
+            return PersistenceResult.Failed(
+                PersistenceErrorCodes.NotApplied,
+                "Для системного компонента поиск в PATH не задаётся.",
+                null);
+        }
+
+        PersistenceResult stored = PersistenceResult.Normalize(
+            _settingsManager.SetSetting(BinarySourceSettingsGroup, dep.Key + ".UseSystemPath", enabled));
+        if (stored.IsFailure)
+        {
+            return stored;
+        }
+
+        _pathManager.SetUseSystemPath(dep.VerifyBinary, enabled);
+        InvalidateVersionCache(dep.Key);
+
+        _logService.Write(
+            SettingsEventIds.Changed,
+            LogLevel.Info,
+            LogStatus.Changed,
+            enabled
+                ? $"Источник зависимости '{dep.DisplayName}' переключён на системный PATH"
+                : $"Источник зависимости '{dep.DisplayName}' сброшен к встроенным из bin/",
+            source: SourceName,
+            properties: LogProps
+                .Create("Key", LogRedactor.CompactSafeToken(dep.Key))
+                .With("Mode", enabled ? "system" : "builtin"));
+
+        RefreshAllStatuses();
+        StatusChanged?.Invoke(key, GetStatus(key));
+        return stored;
+    }
+
+    /// <summary>
+    /// Сбрасывает источник зависимости к встроенным бинарникам (ишью 54):
+    /// свой путь и флаг PATH очищаются, кэши инвалидируются.
+    /// </summary>
+    /// <param name="key">Уникальный ключ зависимости.</param>
+    /// <returns>Результат операции сохранения.</returns>
+    public PersistenceResult ClearBinarySource(string key)
+    {
+        if (string.IsNullOrWhiteSpace(key))
+        {
+            throw new ArgumentException("Ключ зависимости не задан.", nameof(key));
+        }
+
+        var dep = _registry.FirstOrDefault(d => d.Key.Equals(key, StringComparison.OrdinalIgnoreCase));
+        if (dep == null)
+        {
+            return PersistenceResult.Failed(
+                PersistenceErrorCodes.NotApplied,
+                "Зависимость не найдена в реестре компонентов.",
+                null);
+        }
+
+        PersistenceResult stored = PersistenceResult.Normalize(
+            _settingsManager.SetSetting(BinarySourceSettingsGroup, dep.Key + ".Path", string.Empty));
+        if (stored.IsFailure)
+        {
+            return stored;
+        }
+
+        _settingsManager.SetSetting(BinarySourceSettingsGroup, dep.Key + ".UseSystemPath", false);
+        _pathManager.SetCustomBinaryPath(dep.VerifyBinary, null);
+        _pathManager.SetUseSystemPath(dep.VerifyBinary, false);
+        InvalidateVersionCache(dep.Key);
+
+        _logService.Write(
+            SettingsEventIds.Changed,
+            LogLevel.Info,
+            LogStatus.Changed,
+            $"Источник зависимости '{dep.DisplayName}' сброшен к встроенным из bin/",
+            source: SourceName,
+            properties: LogProps
+                .Create("Key", LogRedactor.CompactSafeToken(dep.Key))
+                .With("Mode", "builtin"));
+
+        RefreshAllStatuses();
+        StatusChanged?.Invoke(key, GetStatus(key));
+        return stored;
+    }
+
+    /// <summary>
+    /// Восстанавливает сохранённые источники бинарников в PathManager (ишью 54):
+    /// пути переживают перезапуск приложения.
+    /// </summary>
+    private void LoadBinarySourceOverrides()
+    {
+        foreach (var dep in _registry)
+        {
+            try
+            {
+                if (IsSystemComponentWithoutBinary(dep))
+                {
+                    continue;
+                }
+
+                string custom = _settingsManager.GetSetting(BinarySourceSettingsGroup, dep.Key + ".Path", string.Empty) ?? string.Empty;
+                if (!string.IsNullOrWhiteSpace(custom))
+                {
+                    _pathManager.SetCustomBinaryPath(dep.VerifyBinary, custom);
+                }
+
+                bool useSystemPath = _settingsManager.GetSetting(BinarySourceSettingsGroup, dep.Key + ".UseSystemPath", false);
+                if (useSystemPath)
+                {
+                    _pathManager.SetUseSystemPath(dep.VerifyBinary, true);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logService.Write(
+                    "dependency.binary_source.load_failed",
+                    LogLevel.Warning,
+                    LogStatus.Skipped,
+                    $"Не удалось восстановить источник бинарника зависимости '{dep.DisplayName}'",
+                    ex,
+                    SourceName,
+                    properties: LogProps
+                        .Create("Key", LogRedactor.CompactSafeToken(dep.Key))
+                        .With("ErrorCode", "BINARY_SOURCE_LOAD_FAILED"));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Проверяет, является ли зависимость системным компонентом без исполняемого
+    /// файла (декодеры eac3to — DirectShow-фильтры): свой источник для неё бессмысленен.
+    /// </summary>
+    /// <param name="dep">Запись реестра зависимости.</param>
+    /// <returns>True для системного компонента без бинарника.</returns>
+    private static bool IsSystemComponentWithoutBinary(DependencyInfo dep)
+    {
+        return dep.Key.Equals("eac3to_decoders", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Сбрасывает закэшированную версию зависимости (память и диск):
+    /// смена бинарника обязана инвалидировать прошлый опрос версии.
+    /// </summary>
+    /// <param name="key">Уникальный ключ зависимости.</param>
+    private void InvalidateVersionCache(string key)
+    {
+        lock (_cachedVersions)
+        {
+            _cachedVersions.Remove(key);
+            if (key.Equals("ffmpeg", StringComparison.OrdinalIgnoreCase))
+            {
+                _cachedVersions.Remove("qaac");
+            }
+        }
+
+        InvalidatePersistentCachedVersion(key);
+        if (key.Equals("ffmpeg", StringComparison.OrdinalIgnoreCase))
+        {
+            InvalidatePersistentCachedVersion("qaac");
+        }
+    }
+
+    /// <summary>
     /// Проверяет, выполняются ли в данный момент какие-либо активные операции скачивания или распаковки зависимостей.
     /// </summary>
     public bool HasActiveOperations
@@ -464,22 +849,6 @@ public class DependencyManager : IDependencyManager
     }
 
     private readonly Dictionary<string, string> _cachedVersions = new();
-
-    /// <summary>
-    /// Определяет и возвращает строку версии установленной зависимости.
-    /// </summary>
-    public string GetInstalledVersion(string key)
-    {
-        return GetInstalledVersionAsync(key).GetAwaiter().GetResult();
-    }
-
-    /// <summary>
-    /// Синхронная обёртка удаления файлов зависимости.
-    /// </summary>
-    public bool RemoveDependency(string key)
-    {
-        return RemoveDependencyAsync(key).GetAwaiter().GetResult();
-    }
 
     /// <summary>
     /// Определяет и возвращает строку версии установленной зависимости.
@@ -1037,6 +1406,21 @@ public class DependencyManager : IDependencyManager
             return;
         }
 
+        if (GetBinarySource(key) != BinarySource.Builtin)
+        {
+            _logService.Write(
+                "dependency.install.skipped",
+                LogLevel.Info,
+                LogStatus.Skipped,
+                $"Установка зависимости '{dep.DisplayName}' пропущена: задан свой источник бинарника",
+                source: SourceName,
+                properties: LogProps
+                    .Create("Key", LogRedactor.CompactSafeToken(dep.Key))
+                    .With("ErrorCode", "BINARY_SOURCE_CUSTOM"));
+            InstallFinished?.Invoke(key, false, "Для зависимости задан свой путь или поиск в PATH: сначала сбросьте источник к встроенным.");
+            return;
+        }
+
         lock (_activeDownloads)
         {
             if (_activeDownloads.ContainsKey(key))
@@ -1118,12 +1502,13 @@ public class DependencyManager : IDependencyManager
                     ["HostLabel"] = SafeHostLabel(downloadUrl),
                     ["FileName"] = dep.ArchiveName
                 });
-            using (var response = await _httpClient.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead))
+            var downloadToken = _activeDownloads[key].Token;
+            using (var response = await _httpClient.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead, downloadToken))
             {
                 response.EnsureSuccessStatusCode();
                 long? totalBytes = response.Content.Headers.ContentLength;
 
-                using (var contentStream = await response.Content.ReadAsStreamAsync())
+                using (var contentStream = await response.Content.ReadAsStreamAsync(downloadToken))
                 using (var fileStream = new FileStream(tempArchivePath, FileMode.Create, FileAccess.Write, FileShare.None, 8192, true))
                 {
                     var buffer = new byte[8192];
@@ -1133,7 +1518,7 @@ public class DependencyManager : IDependencyManager
                     long lastBytesRead = 0;
                     var lastSpeedUpdate = DateTime.UtcNow;
 
-                    var token = _activeDownloads[key].Token;
+                    var token = downloadToken;
 
                     while ((bytesRead = await contentStream.ReadAsync(buffer, token)) != 0)
                     {
@@ -1187,6 +1572,64 @@ public class DependencyManager : IDependencyManager
                     ["Stage"] = "download",
                     ["FileName"] = dep.ArchiveName
                 });
+
+            // Сверка целостности до распаковки и запуска: подмена детектируется здесь,
+            // отбракованный файл удаляется и установка прерывается с понятной ошибкой.
+            if (!string.IsNullOrWhiteSpace(dep.Sha256))
+            {
+                try
+                {
+                    FileIntegrity.VerifySha256(tempArchivePath, dep.Sha256);
+                    _logService.Write(
+                        "dependency.hash.verified",
+                        LogLevel.Debug,
+                        LogStatus.Succeeded,
+                        "Контрольная сумма скачанного файла совпала с ожидаемой",
+                        source: SourceName,
+                        properties: LogProps
+                            .Create("Key", LogRedactor.CompactSafeToken(dep.Key))
+                            .With("FileName", LogProps.FileName(dep.ArchiveName))
+                            .With("Fingerprint", LogProps.Fingerprint(dep.Sha256)));
+                }
+                catch (Exception ex) when (ex is InvalidDataException || ex is FileNotFoundException || ex is IOException || ex is UnauthorizedAccessException)
+                {
+                    try
+                    {
+                        if (File.Exists(tempArchivePath))
+                        {
+                            File.Delete(tempArchivePath);
+                        }
+                    }
+                    catch { /* Игнорируем ошибки удаления отбракованного файла */ }
+                    SetStatus(key, DependencyStatus.Error);
+                    _logService.Write(
+                        "dependency.hash.mismatch",
+                        LogLevel.Error,
+                        LogStatus.Failed,
+                        "Скачанный файл не прошёл проверку целостности и удалён, установка прервана",
+                        ex,
+                        SourceName,
+                        properties: LogProps
+                            .Create("Key", LogRedactor.CompactSafeToken(dep.Key))
+                            .With("FileName", LogProps.FileName(dep.ArchiveName))
+                            .With("ErrorCode", "DEPENDENCY_HASH_MISMATCH"));
+                    InstallFinished?.Invoke(key, false, "Скачанный файл не прошёл проверку целостности (хеш SHA-256 не совпал). Файл удалён, повторите попытку позже.");
+                    return;
+                }
+            }
+            else
+            {
+                _logService.Write(
+                    "dependency.hash.skipped",
+                    LogLevel.Warning,
+                    LogStatus.Skipped,
+                    "Для зависимости не задан ожидаемый хеш, проверка целостности пропущена",
+                    source: SourceName,
+                    properties: LogProps
+                        .Create("Key", LogRedactor.CompactSafeToken(dep.Key))
+                        .With("FileName", LogProps.FileName(dep.ArchiveName))
+                        .With("Reason", "HashNotPinned"));
+            }
 
             string destinationFolder = Path.Combine(BinDir, dep.Subfolder);
 
@@ -1576,6 +2019,12 @@ public class DependencyManager : IDependencyManager
 
             bool isZip = archivePath.EndsWith(".zip", StringComparison.OrdinalIgnoreCase);
             int extractedEntries = 0;
+            int skippedEntries = 0;
+
+            // Канонический путь назначения: все извлекаемые файлы обязаны оставаться внутри него.
+            string destinationFull = Path.GetFullPath(destinationDir);
+            string destinationPrefix = destinationFull.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                + Path.DirectorySeparatorChar;
 
             using var fileStream = File.OpenRead(archivePath);
             using var xzStream = isZip ? null : new XZStream(fileStream);
@@ -1590,6 +2039,14 @@ public class DependencyManager : IDependencyManager
                     string? entryKey = reader.Entry.Key;
                     if (string.IsNullOrEmpty(entryKey)) continue;
 
+                    // Отбрасываем абсолютные пути до срезки верхней папки.
+                    if (IsUnsafeEntryKey(entryKey))
+                    {
+                        skippedEntries++;
+                        LogSkippedEntry(archivePath, entryKey);
+                        continue;
+                    }
+
                     if (dep.StripTopLevelFolder)
                     {
                         int slashIndex = entryKey.IndexOf('/');
@@ -1598,10 +2055,47 @@ public class DependencyManager : IDependencyManager
                         {
                             entryKey = entryKey.Substring(slashIndex + 1);
                         }
+
+                        if (string.IsNullOrEmpty(entryKey)) continue;
+
+                        // Срезка могла оголить абсолютный путь или выход наверх — проверяем повторно.
+                        if (IsUnsafeEntryKey(entryKey))
+                        {
+                            skippedEntries++;
+                            LogSkippedEntry(archivePath, entryKey);
+                            continue;
+                        }
+                    }
+
+                    // Отбрасываем записи с выходом наверх: ни один сегмент не должен быть "..".
+                    if (ContainsParentSegment(entryKey))
+                    {
+                        skippedEntries++;
+                        LogSkippedEntry(archivePath, entryKey);
+                        continue;
+                    }
+
+                    // Канонизация итогового пути и проверка префикса назначения.
+                    string targetPath;
+                    try
+                    {
+                        targetPath = Path.GetFullPath(Path.Combine(destinationFull, entryKey));
+                    }
+                    catch (Exception ex) when (ex is ArgumentException || ex is NotSupportedException || ex is PathTooLongException)
+                    {
+                        skippedEntries++;
+                        LogSkippedEntry(archivePath, entryKey);
+                        continue;
+                    }
+
+                    if (!targetPath.StartsWith(destinationPrefix, StringComparison.OrdinalIgnoreCase))
+                    {
+                        skippedEntries++;
+                        LogSkippedEntry(archivePath, entryKey);
+                        continue;
                     }
 
                     extractedEntries++;
-                    string targetPath = Path.Combine(destinationDir, entryKey);
                     string? dir = Path.GetDirectoryName(targetPath);
                     if (dir != null && !Directory.Exists(dir))
                     {
@@ -1622,8 +2116,60 @@ public class DependencyManager : IDependencyManager
                 source: SourceName,
                 properties: LogProps
                     .Create("FileName", LogProps.FileName(archivePath))
-                    .With("Count", extractedEntries));
+                    .With("Count", extractedEntries)
+                    .With("Skipped", skippedEntries));
         }, cancellationToken);
+    }
+
+    /// <summary>
+    /// Определяет, является ли имя записи архива заведомо опасным: абсолютный путь
+    /// или путь с ведущим разделителем каталога.
+    /// </summary>
+    private static bool IsUnsafeEntryKey(string entryKey)
+    {
+        return entryKey.Length == 0
+            || Path.IsPathRooted(entryKey)
+            || entryKey[0] == '/'
+            || entryKey[0] == '\\';
+    }
+
+    /// <summary>
+    /// Проверяет, содержит ли имя записи сегмент выхода наверх ("..").
+    /// </summary>
+    private static bool ContainsParentSegment(string entryKey)
+    {
+        string[] segments = entryKey.Split(new[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length == 0)
+        {
+            return true;
+        }
+
+        foreach (string segment in segments)
+        {
+            if (segment == "..")
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Фиксирует в журнале пропуск опасной записи архива, выходящей за пределы папки назначения.
+    /// </summary>
+    private void LogSkippedEntry(string archivePath, string entryKey)
+    {
+        _logService.Write(
+            "dependency.archive.entry_skipped",
+            LogLevel.Warning,
+            LogStatus.Skipped,
+            "Пропущена опасная запись архива: путь выходит за пределы папки назначения",
+            source: SourceName,
+            properties: LogProps
+                .Create("FileName", LogProps.FileName(archivePath))
+                .With("Value", LogProps.FileName(entryKey))
+                .With("ErrorCode", "PATH_TRAVERSAL_BLOCKED"));
     }
 
     /// <summary>
@@ -1644,6 +2190,23 @@ public class DependencyManager : IDependencyManager
                     .Create("Key", LogRedactor.CompactSafeToken(key))
                     .With("ErrorCode", "DEPENDENCY_NOT_IN_MANIFEST"));
             return false;
+        }
+
+        if (GetBinarySource(key) != BinarySource.Builtin)
+        {
+            // Свой файл пользователя никогда не удаляется: встроенной папки
+            // может не быть, статус пересчитывается по фактическому наличию файла.
+            _logService.Write(
+                "dependency.remove.custom_source_skipped",
+                LogLevel.Info,
+                LogStatus.Skipped,
+                $"Удаление зависимости '{dep.DisplayName}' пропущено: задан свой источник бинарника",
+                source: SourceName,
+                properties: LogProps
+                    .Create("Key", LogRedactor.CompactSafeToken(dep.Key))
+                    .With("ErrorCode", "BINARY_SOURCE_CUSTOM"));
+            RefreshAllStatuses();
+            return true;
         }
 
         _logService.Write(

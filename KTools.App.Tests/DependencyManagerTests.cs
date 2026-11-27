@@ -153,7 +153,7 @@ public class DependencyManagerTests
     /// Проверяет удаление директории зависимости с диска.
     /// </summary>
     [TestMethod]
-    public void RemoveDependency_WhenDirectoryExists_DeletesDirectoryAndUpdatesStatus()
+    public async Task RemoveDependency_WhenDirectoryExists_DeletesDirectoryAndUpdatesStatus()
     {
         // Arrange
         string ffmpegFolder = Path.Combine(_tempBinDir, "ffmpeg");
@@ -165,7 +165,7 @@ public class DependencyManagerTests
         manager.IsInstalled("ffmpeg").Should().BeTrue();
 
         // Act
-        bool result = manager.RemoveDependency("ffmpeg");
+        bool result = await manager.RemoveDependencyAsync("ffmpeg");
 
         // Assert
         result.Should().BeTrue();
@@ -177,7 +177,7 @@ public class DependencyManagerTests
     /// Проверяет удаление legacy-остатка при побайтовой идентичности канонической копии.
     /// </summary>
     [TestMethod]
-    public void RemoveDependency_LegacyIdentical_DeletesBothAndReturnsTrue()
+    public async Task RemoveDependency_LegacyIdentical_DeletesBothAndReturnsTrue()
     {
         // Arrange — одинаковое содержимое в обоих местах.
         string canonicalFile = Path.Combine(_tempBinDir, "ffmpeg", "kt-ffmpeg.exe");
@@ -190,7 +190,7 @@ public class DependencyManagerTests
         var manager = new DependencyManager(_logServiceMock.Object, _pathManagerMock.Object, _httpClientFactoryMock.Object, _settingsManagerMock.Object, _hardwareCacheMock.Object);
 
         // Act
-        bool result = manager.RemoveDependency("ffmpeg");
+        bool result = await manager.RemoveDependencyAsync("ffmpeg");
 
         // Assert — идентичный остаток удаляется вместе с канонической копией.
         result.Should().BeTrue();
@@ -202,7 +202,7 @@ public class DependencyManagerTests
     /// Проверяет сохранение расходящегося legacy-остатка: молча не трём чужие данные.
     /// </summary>
     [TestMethod]
-    public void RemoveDependency_LegacyDiverged_KeepsLegacyAndReturnsFalse()
+    public async Task RemoveDependency_LegacyDiverged_KeepsLegacyAndReturnsFalse()
     {
         // Arrange — содержимое различается (конфликт после миграции).
         string canonicalFile = Path.Combine(_tempBinDir, "ffmpeg", "kt-ffmpeg.exe");
@@ -215,7 +215,7 @@ public class DependencyManagerTests
         var manager = new DependencyManager(_logServiceMock.Object, _pathManagerMock.Object, _httpClientFactoryMock.Object, _settingsManagerMock.Object, _hardwareCacheMock.Object);
 
         // Act
-        bool result = manager.RemoveDependency("ffmpeg");
+        bool result = await manager.RemoveDependencyAsync("ffmpeg");
 
         // Assert — каноническая копия удалена, расходящийся исходник оставлен.
         result.Should().BeFalse("неполное удаление обязано сигнализировать сбоем");
@@ -227,7 +227,7 @@ public class DependencyManagerTests
     /// Проверяет удаление единственной legacy-копии при отсутствии канонической.
     /// </summary>
     [TestMethod]
-    public void RemoveDependency_CanonicalMissing_DeletesLegacyOnly()
+    public async Task RemoveDependency_CanonicalMissing_DeletesLegacyOnly()
     {
         // Arrange — файлы только в каталоге установки (состояние до миграции).
         string legacyFile = Path.Combine(_tempBaseDir, "bin", "ffmpeg", "kt-ffmpeg.exe");
@@ -237,7 +237,7 @@ public class DependencyManagerTests
         var manager = new DependencyManager(_logServiceMock.Object, _pathManagerMock.Object, _httpClientFactoryMock.Object, _settingsManagerMock.Object, _hardwareCacheMock.Object);
 
         // Act
-        bool result = manager.RemoveDependency("ffmpeg");
+        bool result = await manager.RemoveDependencyAsync("ffmpeg");
 
         // Assert — единственная копия удалена по запросу пользователя.
         result.Should().BeTrue();
@@ -497,6 +497,64 @@ public class DependencyManagerTests
 
         // Assert
         afterChange.Should().NotBe(seededVersion, "смена бинарника инвалидирует запись персистентного кэша");
+    }
+
+    /// <summary>
+    /// Проверяет, что отмена во время ожидания ответа сервера прерывает загрузку сразу.
+    /// </summary>
+    [TestMethod]
+    public async Task InstallDependencyAsync_CancelDuringResponseHeaders_AbortsDownload()
+    {
+        // Arrange — обработчик виснет в SendAsync, пока не отменят токен из GetAsync.
+        var blockingHandler = new BlockingDownloadHttpMessageHandler();
+        _httpClientFactoryMock
+            .Setup(f => f.CreateClient(It.IsAny<string>()))
+            .Returns(new HttpClient(blockingHandler));
+        var manager = new DependencyManager(_logServiceMock.Object, _pathManagerMock.Object, _httpClientFactoryMock.Object, _settingsManagerMock.Object, _hardwareCacheMock.Object);
+        bool? finishedSuccess = null;
+        manager.InstallFinished += (key, success, _) =>
+        {
+            if (key == "ffmpeg")
+            {
+                finishedSuccess = success;
+            }
+        };
+
+        // Act — запускаем установку и отменяем, пока GetAsync ждёт заголовки ответа.
+        Task installTask = manager.InstallDependencyAsync("ffmpeg");
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (!blockingHandler.SendStarted && sw.Elapsed < TimeSpan.FromSeconds(10))
+        {
+            await Task.Delay(50);
+        }
+
+        blockingHandler.SendStarted.Should().BeTrue("загрузка должна дойти до ожидания ответа сервера");
+        manager.CancelInstallation("ffmpeg");
+        Task completed = await Task.WhenAny(installTask, Task.Delay(TimeSpan.FromSeconds(10)));
+
+        // Assert — отмена во время DNS/connect/ожидания заголовков прерывает загрузку сразу.
+        completed.Should().Be(installTask, "отмена обязана прервать ожидание ответа сервера");
+        await installTask;
+        finishedSuccess.Should().BeFalse("отменённая установка не считается успешной");
+        manager.GetStatus("ffmpeg").Should().Be(DependencyStatus.NotInstalled);
+    }
+
+    /// <summary>
+    /// Обработчик, бесконечно ждущий ответа сервера, пока не отменят токен из GetAsync.
+    /// Если токен не передан в GetAsync, ожидание никогда не прерывается.
+    /// </summary>
+    private sealed class BlockingDownloadHttpMessageHandler : HttpMessageHandler
+    {
+        public volatile bool SendStarted;
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            SendStarted = true;
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.OK);
+        }
     }
 
     /// <summary>
